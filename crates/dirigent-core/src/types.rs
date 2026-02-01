@@ -52,6 +52,28 @@ pub enum SessionStatus {
     Error,
 }
 
+/// Context threshold state for context window tracking.
+///
+/// Represents the current state relative to configured thresholds.
+///
+/// # Example
+///
+/// ```
+/// use dirigent_core::ContextThresholdState;
+///
+/// assert_eq!(ContextThresholdState::default(), ContextThresholdState::Normal);
+/// ```
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub enum ContextThresholdState {
+    /// Below warning threshold.
+    #[default]
+    Normal,
+    /// At or above warning threshold, below critical.
+    Warning,
+    /// At or above critical threshold.
+    Critical,
+}
+
 /// Task priority levels.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum TaskPriority {
@@ -1617,5 +1639,52 @@ mod tests {
         let debug_str = format!("{:?}", opts);
         assert!(debug_str.contains("WorktreeCreateOptions"));
         assert!(debug_str.contains("feature"));
+    }
+
+    // ContextThresholdState tests
+    #[test]
+    fn test_context_threshold_state_default() {
+        assert_eq!(
+            ContextThresholdState::default(),
+            ContextThresholdState::Normal
+        );
+    }
+
+    #[test]
+    fn test_context_threshold_state_equality() {
+        assert_eq!(ContextThresholdState::Normal, ContextThresholdState::Normal);
+        assert_ne!(ContextThresholdState::Normal, ContextThresholdState::Warning);
+        assert_ne!(
+            ContextThresholdState::Warning,
+            ContextThresholdState::Critical
+        );
+    }
+
+    #[test]
+    fn test_context_threshold_state_serialization() {
+        let states = [
+            ContextThresholdState::Normal,
+            ContextThresholdState::Warning,
+            ContextThresholdState::Critical,
+        ];
+        for state in states {
+            let json = serde_json::to_string(&state).unwrap();
+            let parsed: ContextThresholdState = serde_json::from_str(&json).unwrap();
+            assert_eq!(state, parsed);
+        }
+    }
+
+    #[test]
+    fn test_context_threshold_state_clone_copy() {
+        let state = ContextThresholdState::Warning;
+        let cloned = state;
+        assert_eq!(state, cloned);
+    }
+
+    #[test]
+    fn test_context_threshold_state_debug() {
+        let state = ContextThresholdState::Critical;
+        let debug_str = format!("{:?}", state);
+        assert!(debug_str.contains("Critical"));
     }
 }
