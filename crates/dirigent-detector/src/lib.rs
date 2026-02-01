@@ -1,19 +1,50 @@
 //! Dirigent Detector
 //!
-//! Process monitoring and status detection crate providing platform-specific
-//! process state monitoring, output pattern matching, and CLI-specific
-//! heuristics for detecting session status in Dirigent.
+//! Process monitoring, input detection, and status tracking for sessions.
+//!
+//! This crate provides the core detection functionality for Dirigent,
+//! determining when AI CLI sessions (Claude Code, Codex CLI, Gemini CLI)
+//! are waiting for user input.
 //!
 //! # Overview
 //!
-//! This crate provides the foundation for detecting when AI CLI sessions
-//! (Claude Code, Codex CLI, Gemini CLI) are waiting for user input. It uses
-//! a combination of:
+//! The detector uses a combination of strategies:
 //!
-//! - Platform-specific process monitoring (via `/proc` on Linux, `libproc` on
-//!   macOS, and Win32 APIs on Windows)
-//! - Output pattern matching to detect common input prompts
-//! - Timing heuristics to identify idle processes
+//! - **Platform-specific process monitoring** via `/proc` on Linux,
+//!   `libproc` on macOS, and Win32 APIs on Windows
+//! - **Output pattern matching** to detect common input prompts
+//! - **Timing heuristics** to identify idle processes
+//!
+//! # Modules
+//!
+//! - [`platform`] - Platform-specific process monitoring
+//! - [`patterns`] - Input prompt pattern matching
+//! - [`detector`] - Main input detector implementation
+//! - [`notification`] - Desktop notification support
+//!
+//! # Quick Start
+//!
+//! ```no_run
+//! use dirigent_detector::{InputDetector, DetectorConfig};
+//! use dirigent_core::{DefaultEventBus, SessionId, ProcessMonitor};
+//! use std::sync::Arc;
+//!
+//! // Create an event bus
+//! let event_bus = Arc::new(DefaultEventBus::new(16));
+//!
+//! // Create the detector
+//! let mut detector = InputDetector::new(DetectorConfig::default(), event_bus);
+//!
+//! // Start monitoring a session
+//! detector.start_monitoring(SessionId(1), 12345).unwrap();
+//!
+//! // Process output from the session
+//! detector.process_output(SessionId(1), b"Continue? [y/n] ");
+//!
+//! // Check the detected status
+//! use dirigent_core::SessionStatus;
+//! assert_eq!(detector.get_status(SessionId(1)), Some(SessionStatus::WaitingForInput));
+//! ```
 //!
 //! # Platform Support
 //!
@@ -23,34 +54,44 @@
 //! - **macOS**: Uses `libproc` for BSD process information
 //! - **Windows**: Uses Win32 APIs (ToolHelp32, process status)
 //!
-//! # Example
+//! # Pattern Detection
+//!
+//! The detector recognizes common input prompts:
+//!
+//! - Yes/No confirmations: `[y/n]`, `[Y/n]`, `[yes/no]`, `(y/N)`
+//! - Question prompts: `? ` at end of line
+//! - Shell/REPL prompts: `> ` at end of line
+//! - Press Enter prompts
+//! - Continue prompts
+//! - Password prompts
+//!
+//! Custom patterns can be added via [`InputDetector::add_pattern`] or
+//! through [`DetectorConfig::custom_patterns`].
+//!
+//! # Notifications
+//!
+//! The crate can send desktop notifications when sessions require input:
 //!
 //! ```no_run
-//! use dirigent_detector::{NativeMonitor, PlatformMonitor, ProcessState};
+//! use dirigent_detector::notification::notify_input_required;
+//! use dirigent_core::SessionId;
 //!
-//! let monitor = NativeMonitor::new();
-//! let pid = std::process::id();
-//!
-//! // Get process state
-//! let state = monitor.get_process_state(pid).unwrap();
-//! println!("Current process state: {}", state);
-//!
-//! // Get detailed process info
-//! let info = monitor.get_process_info(pid).unwrap();
-//! println!("Process: {} (PID: {})", info.command.unwrap_or_default(), info.pid);
+//! notify_input_required(SessionId(1), "Claude Code");
 //! ```
 
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
+pub mod detector;
+pub mod notification;
+pub mod patterns;
 pub mod platform;
 
 // Re-export main types for convenience
-pub use platform::{PlatformMonitor, ProcessInfo, ProcessState};
-
-// Re-export the native monitor for the current platform
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
-pub use platform::NativeMonitor;
+pub use detector::{DetectorConfig, InputDetector};
+pub use notification::{notify_error, notify_input_required, notify_task_completed, send_notification};
+pub use patterns::DEFAULT_PATTERNS;
+pub use platform::{NativeMonitor, PlatformMonitor, ProcessInfo, ProcessState};
 
 // Re-export the factory function
 #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
@@ -59,6 +100,8 @@ pub use platform::create_native_monitor;
 #[cfg(test)]
 mod tests {
     use super::*;
+    use dirigent_core::{DefaultEventBus, ProcessMonitor, SessionId, SessionStatus};
+    use std::sync::Arc;
 
     #[test]
     fn test_process_state_reexport() {
@@ -105,5 +148,113 @@ mod tests {
 
         let monitor = NativeMonitor::new();
         assert!(use_monitor(&monitor));
+    }
+
+    #[test]
+    fn test_default_patterns_reexport() {
+        // Verify DEFAULT_PATTERNS is accessible
+        assert!(!DEFAULT_PATTERNS.is_empty());
+    }
+
+    #[test]
+    fn test_detector_config_reexport() {
+        // Verify DetectorConfig is accessible
+        let config = DetectorConfig::default();
+        assert!(config.notifications_enabled);
+    }
+
+    #[test]
+    fn test_input_detector_reexport() {
+        // Verify InputDetector is accessible and usable
+        let event_bus = Arc::new(DefaultEventBus::new(16));
+        let mut detector = InputDetector::new(DetectorConfig::default(), event_bus);
+
+        detector.start_monitoring(SessionId(1), 1234).unwrap();
+        assert!(detector.get_status(SessionId(1)).is_some());
+    }
+
+    #[test]
+    fn test_notification_functions_reexport() {
+        // Verify notification functions are accessible
+        send_notification("Test", "Test");
+        notify_input_required(SessionId(1), "Test");
+        notify_task_completed(SessionId(1), "Test", true);
+        notify_error(SessionId(1), "Test", "Error");
+    }
+
+    #[test]
+    fn test_full_detection_workflow() {
+        // Integration test for the full detection workflow
+        let event_bus = Arc::new(DefaultEventBus::new(16));
+        let mut detector = InputDetector::new(DetectorConfig::default(), event_bus);
+
+        // Start monitoring
+        detector.start_monitoring(SessionId(1), std::process::id()).unwrap();
+
+        // Initial status should be Idle or Working depending on process state
+        let initial_status = detector.get_status(SessionId(1));
+        assert!(initial_status.is_some());
+
+        // Process output with pattern
+        detector.process_output(SessionId(1), b"Continue? [y/n]");
+
+        // Should detect WaitingForInput
+        assert_eq!(detector.get_status(SessionId(1)), Some(SessionStatus::WaitingForInput));
+
+        // Stop monitoring
+        detector.stop_monitoring(SessionId(1));
+        assert!(detector.get_status(SessionId(1)).is_none());
+    }
+
+    #[test]
+    fn test_custom_pattern_workflow() {
+        let event_bus = Arc::new(DefaultEventBus::new(16));
+        let mut detector = InputDetector::new(DetectorConfig::default(), event_bus);
+
+        // Add custom pattern
+        detector.add_pattern(r"custom-prompt>".to_string());
+
+        detector.start_monitoring(SessionId(1), std::process::id()).unwrap();
+
+        // Process output with custom pattern
+        detector.process_output(SessionId(1), b"custom-prompt>");
+
+        // Should detect WaitingForInput
+        assert_eq!(detector.get_status(SessionId(1)), Some(SessionStatus::WaitingForInput));
+    }
+
+    #[test]
+    fn test_detector_with_custom_config() {
+        let config = DetectorConfig::with_patterns(vec![r"my-prompt:".to_string()]);
+        let event_bus = Arc::new(DefaultEventBus::new(16));
+        let mut detector = InputDetector::new(config, event_bus);
+
+        detector.start_monitoring(SessionId(1), std::process::id()).unwrap();
+        detector.process_output(SessionId(1), b"my-prompt:");
+
+        assert_eq!(detector.get_status(SessionId(1)), Some(SessionStatus::WaitingForInput));
+    }
+
+    #[test]
+    fn test_multiple_sessions() {
+        let event_bus = Arc::new(DefaultEventBus::new(16));
+        let mut detector = InputDetector::new(DetectorConfig::default(), event_bus);
+
+        // Start multiple sessions
+        detector.start_monitoring(SessionId(1), 1234).unwrap();
+        detector.start_monitoring(SessionId(2), 5678).unwrap();
+        detector.start_monitoring(SessionId(3), 9012).unwrap();
+
+        assert_eq!(detector.session_count(), 3);
+
+        // Process different outputs
+        detector.process_output(SessionId(1), b"Continue? [y/n]");
+        detector.process_output(SessionId(2), b"Working...");
+
+        assert_eq!(detector.get_status(SessionId(1)), Some(SessionStatus::WaitingForInput));
+
+        // Stop one session
+        detector.stop_monitoring(SessionId(2));
+        assert_eq!(detector.session_count(), 2);
     }
 }
