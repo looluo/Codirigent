@@ -30,11 +30,11 @@
 //! }
 //! ```
 
-use anyhow::{Context, Result};
-use dirigent_core::Worktree;
+use anyhow::{bail, Context, Result};
+use dirigent_core::{Worktree, WorktreeCreateOptions};
 use git2::Repository;
 use std::path::{Path, PathBuf};
-use tracing::debug;
+use tracing::{debug, info};
 
 /// Git worktree manager.
 ///
@@ -199,6 +199,164 @@ impl WorktreeManager {
         debug!(count = self.worktrees.len(), "Refreshed worktree list");
         Ok(())
     }
+
+    /// Create a new worktree.
+    ///
+    /// Creates a new worktree with the specified options. If the branch doesn't
+    /// exist, it will be created from the base branch (or HEAD if not specified).
+    ///
+    /// # Arguments
+    ///
+    /// * `options` - Configuration for the new worktree
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The repository cannot be opened
+    /// - The branch cannot be created or found
+    /// - The worktree directory already exists
+    /// - Git worktree creation fails
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use dirigent_session::WorktreeManager;
+    /// use dirigent_core::WorktreeCreateOptions;
+    /// use std::path::Path;
+    ///
+    /// let mut manager = WorktreeManager::new(Path::new("/path/to/repo")).unwrap();
+    /// let options = WorktreeCreateOptions::new("feature-branch".to_string())
+    ///     .with_base_branch("main".to_string());
+    /// let worktree = manager.create(options).unwrap();
+    /// ```
+    pub fn create(&mut self, options: WorktreeCreateOptions) -> Result<Worktree> {
+        let repo = Repository::open(&self.repo_path)?;
+
+        let worktree_path = options.path.unwrap_or_else(|| {
+            self.repo_path.join("worktrees").join(&options.branch)
+        });
+
+        // Create parent directory if needed
+        if let Some(parent) = worktree_path.parent() {
+            std::fs::create_dir_all(parent)
+                .context("Failed to create worktree parent directory")?;
+        }
+
+        info!(branch = %options.branch, path = ?worktree_path, "Creating worktree");
+
+        // Check if branch exists, create if not
+        let branch_exists = repo
+            .find_branch(&options.branch, git2::BranchType::Local)
+            .is_ok();
+
+        if !branch_exists {
+            // Create branch from base
+            let base = options.base_branch.as_deref().unwrap_or("HEAD");
+            let commit = repo
+                .revparse_single(base)
+                .context("Failed to find base branch")?
+                .peel_to_commit()
+                .context("Failed to peel to commit")?;
+            repo.branch(&options.branch, &commit, false)
+                .context("Failed to create branch")?;
+        }
+
+        // Get the reference for the branch
+        let reference_name = format!("refs/heads/{}", options.branch);
+        let reference = repo
+            .find_reference(&reference_name)
+            .context("Failed to find branch reference")?;
+
+        // Create the worktree
+        let mut add_options = git2::WorktreeAddOptions::new();
+        add_options.reference(Some(&reference));
+        repo.worktree(&options.branch, &worktree_path, Some(&add_options))
+            .context("Failed to create worktree")?;
+
+        // Refresh to pick up new worktree
+        self.refresh()?;
+
+        // Find and return the new worktree
+        // The path might have been canonicalized, so compare canonical forms
+        let canonical_path = worktree_path
+            .canonicalize()
+            .unwrap_or_else(|_| worktree_path.clone());
+
+        self.worktrees
+            .iter()
+            .find(|wt| wt.path == canonical_path || wt.path == worktree_path)
+            .cloned()
+            .context("Failed to find created worktree")
+    }
+
+    /// Remove a worktree.
+    ///
+    /// Removes the specified worktree from the repository. The main worktree
+    /// cannot be removed.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Path to the worktree to remove
+    /// * `force` - If true, remove even if the worktree has uncommitted changes
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The worktree is not found
+    /// - Attempting to remove the main worktree
+    /// - Git worktree removal fails
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use dirigent_session::WorktreeManager;
+    /// use std::path::Path;
+    ///
+    /// let mut manager = WorktreeManager::new(Path::new("/path/to/repo")).unwrap();
+    /// manager.remove(Path::new("/path/to/repo/worktrees/feature"), false).unwrap();
+    /// ```
+    pub fn remove(&mut self, path: &Path, force: bool) -> Result<()> {
+        let repo = Repository::open(&self.repo_path)?;
+
+        // Find worktree in our list
+        let wt = self
+            .worktrees
+            .iter()
+            .find(|w| w.path == path)
+            .context("Worktree not found")?;
+
+        if wt.is_main {
+            bail!("Cannot remove main worktree");
+        }
+
+        info!(path = ?path, force, "Removing worktree");
+
+        // Find and prune the worktree
+        if let Ok(wt_names) = repo.worktrees() {
+            for name in wt_names.iter().flatten() {
+                if let Ok(git_wt) = repo.find_worktree(name) {
+                    if git_wt.path() == path {
+                        if force {
+                            // Remove directory first
+                            std::fs::remove_dir_all(path).ok();
+                        }
+                        git_wt
+                            .prune(Some(
+                                git2::WorktreePruneOptions::new()
+                                    .working_tree(true)
+                                    .valid(force)
+                                    .locked(force),
+                            ))
+                            .context("Failed to prune worktree")?;
+                        break;
+                    }
+                }
+            }
+        }
+
+        self.refresh()?;
+        Ok(())
+    }
 }
 
 #[cfg(test)]
@@ -358,5 +516,176 @@ mod tests {
             "Expected 'master' or 'main', got '{}'",
             main_wt.branch
         );
+    }
+
+    // Create worktree tests
+    #[test]
+    fn test_create_worktree() {
+        let (_temp, path) = setup_test_repo();
+        let mut manager = WorktreeManager::new(&path).unwrap();
+
+        let options = WorktreeCreateOptions::new("feature-test".to_string())
+            .with_base_branch("HEAD".to_string());
+
+        let result = manager.create(options);
+        assert!(result.is_ok());
+
+        let wt = result.unwrap();
+        assert_eq!(wt.branch, "feature-test");
+        assert!(!wt.is_main);
+    }
+
+    #[test]
+    fn test_create_worktree_adds_to_list() {
+        let (_temp, path) = setup_test_repo();
+        let mut manager = WorktreeManager::new(&path).unwrap();
+
+        let initial_count = manager.list().len();
+
+        let options = WorktreeCreateOptions::new("feature-add".to_string());
+        manager.create(options).unwrap();
+
+        assert_eq!(manager.list().len(), initial_count + 1);
+    }
+
+    #[test]
+    fn test_create_worktree_custom_path() {
+        let (_temp, path) = setup_test_repo();
+        let mut manager = WorktreeManager::new(&path).unwrap();
+
+        let custom_path = path.join("custom-worktree");
+        let options = WorktreeCreateOptions::new("feature-custom".to_string())
+            .with_path(custom_path.clone());
+
+        let wt = manager.create(options).unwrap();
+        // Path might be canonicalized
+        let expected = custom_path.canonicalize().unwrap();
+        assert_eq!(wt.path, expected);
+    }
+
+    #[test]
+    fn test_create_worktree_default_path() {
+        let (_temp, path) = setup_test_repo();
+        let mut manager = WorktreeManager::new(&path).unwrap();
+
+        let options = WorktreeCreateOptions::new("feature-default".to_string());
+        let wt = manager.create(options).unwrap();
+
+        // Default path should be in worktrees/<branch>
+        // Path might be canonicalized on macOS
+        let expected_path = path.join("worktrees").join("feature-default");
+        let expected = expected_path.canonicalize().unwrap();
+        assert_eq!(wt.path, expected);
+    }
+
+    #[test]
+    fn test_create_worktree_with_existing_branch() {
+        let (_temp, path) = setup_test_repo();
+        let repo = Repository::open(&path).unwrap();
+
+        // Create a branch first
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch("existing-branch", &head, false).unwrap();
+
+        let mut manager = WorktreeManager::new(&path).unwrap();
+        let options = WorktreeCreateOptions::new("existing-branch".to_string());
+        let result = manager.create(options);
+
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_create_worktree_creates_parent_dirs() {
+        let (_temp, path) = setup_test_repo();
+        let mut manager = WorktreeManager::new(&path).unwrap();
+
+        let deep_path = path.join("deep").join("nested").join("path").join("wt");
+        let options = WorktreeCreateOptions::new("feature-deep".to_string())
+            .with_path(deep_path.clone());
+
+        let result = manager.create(options);
+        assert!(result.is_ok());
+        assert!(deep_path.exists());
+    }
+
+    // Remove worktree tests
+    #[test]
+    fn test_remove_worktree() {
+        let (_temp, path) = setup_test_repo();
+        let mut manager = WorktreeManager::new(&path).unwrap();
+
+        // Create a worktree first
+        let options = WorktreeCreateOptions::new("to-remove".to_string());
+        let wt = manager.create(options).unwrap();
+        let wt_path = wt.path.clone();
+
+        // To use non-force remove, the worktree must be "invalid" (dir removed)
+        // So first remove the directory manually
+        std::fs::remove_dir_all(&wt_path).unwrap();
+
+        // Now remove without force should work
+        let result = manager.remove(&wt_path, false);
+        assert!(result.is_ok());
+
+        // Should no longer be in list
+        let found = manager.list().iter().any(|w| w.path == wt_path);
+        assert!(!found);
+    }
+
+    #[test]
+    fn test_remove_worktree_force() {
+        let (_temp, path) = setup_test_repo();
+        let mut manager = WorktreeManager::new(&path).unwrap();
+
+        // Create a worktree
+        let options = WorktreeCreateOptions::new("to-force-remove".to_string());
+        let wt = manager.create(options).unwrap();
+        let wt_path = wt.path.clone();
+
+        // Remove with force
+        let result = manager.remove(&wt_path, true);
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_remove_main_worktree_fails() {
+        let (_temp, path) = setup_test_repo();
+        let mut manager = WorktreeManager::new(&path).unwrap();
+
+        let canonical_path = path.canonicalize().unwrap();
+        let result = manager.remove(&canonical_path, false);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("main worktree"));
+    }
+
+    #[test]
+    fn test_remove_nonexistent_worktree_fails() {
+        let (_temp, path) = setup_test_repo();
+        let mut manager = WorktreeManager::new(&path).unwrap();
+
+        let fake_path = path.join("nonexistent-worktree");
+        let result = manager.remove(&fake_path, false);
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_remove_worktree_updates_list() {
+        let (_temp, path) = setup_test_repo();
+        let mut manager = WorktreeManager::new(&path).unwrap();
+
+        // Create a worktree
+        let options = WorktreeCreateOptions::new("to-update-remove".to_string());
+        let wt = manager.create(options).unwrap();
+        let wt_path = wt.path.clone();
+
+        let count_before = manager.list().len();
+
+        // Remove it
+        manager.remove(&wt_path, true).unwrap();
+
+        assert_eq!(manager.list().len(), count_before - 1);
     }
 }
