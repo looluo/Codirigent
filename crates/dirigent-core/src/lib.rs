@@ -19,6 +19,7 @@
 //! - [`persistence`] - Session persistence types
 //! - [`persistence_service`] - Persistence service trait and implementation
 //! - [`auto_save`] - Automatic state saving manager
+//! - [`assignment`] - Task assignment management and routing
 //! - [`error`] - Error types
 //!
 //! ## Quick Start
@@ -70,6 +71,7 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
+pub mod assignment;
 pub mod auto_save;
 pub mod change_summary;
 pub mod config;
@@ -116,3 +118,9 @@ pub use verification::{
 pub use auto_save::AutoSaveManager;
 pub use persistence::{Checkpoint, PersistentSession, PersistentState, RecoveryResult};
 pub use persistence_service::{AutoSaveConfig, DefaultPersistenceService, PersistenceService};
+
+// Re-export assignment types
+pub use assignment::{
+    AssignmentAction, AssignmentConfig, AssignmentManager, AssignmentService,
+    PendingAssignment, DEFAULT_PROMPT_TEMPLATE,
+};
