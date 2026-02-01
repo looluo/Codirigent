@@ -12,8 +12,13 @@ use dirigent_core::{
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::{Arc, Mutex};
-use tracing::{debug, info};
+use std::sync::{Arc, Mutex, MutexGuard};
+use tracing::{debug, info, warn};
+
+/// Default terminal height in rows.
+const DEFAULT_PTY_ROWS: u16 = 24;
+/// Default terminal width in columns.
+const DEFAULT_PTY_COLS: u16 = 80;
 
 /// Default implementation of [`SessionManager`].
 ///
@@ -64,6 +69,18 @@ impl DefaultSessionManager {
         }
     }
 
+    /// Acquire the sessions lock, recovering from mutex poisoning if needed.
+    ///
+    /// If another thread panicked while holding the lock, this method will
+    /// recover the lock and log a warning. The data may be in an inconsistent
+    /// state, but we prioritize availability over strict consistency.
+    fn lock_sessions(&self) -> MutexGuard<'_, HashMap<SessionId, SessionState>> {
+        self.sessions.lock().unwrap_or_else(|poisoned| {
+            warn!("Sessions mutex was poisoned, recovering lock");
+            poisoned.into_inner()
+        })
+    }
+
     /// Generate a unique session ID.
     fn next_session_id(&self) -> SessionId {
         SessionId(self.next_id.fetch_add(1, Ordering::SeqCst))
@@ -86,7 +103,7 @@ impl DefaultSessionManager {
     where
         F: FnOnce(&mut SessionState) -> T,
     {
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = self.lock_sessions();
         sessions.get_mut(&id).map(f)
     }
 
@@ -107,7 +124,7 @@ impl DefaultSessionManager {
     where
         F: FnOnce(&SessionState) -> T,
     {
-        let sessions = self.sessions.lock().unwrap();
+        let sessions = self.lock_sessions();
         sessions.get(&id).map(f)
     }
 
@@ -121,7 +138,7 @@ impl DefaultSessionManager {
     ///
     /// * `id` - The session ID to drain output from
     pub fn try_drain_output(&self, id: SessionId) -> Option<Vec<u8>> {
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = self.lock_sessions();
         let state = sessions.get_mut(&id)?;
         let mut output = Vec::new();
 
@@ -143,41 +160,37 @@ impl DefaultSessionManager {
 
     /// Get the number of active sessions.
     pub fn session_count(&self) -> usize {
-        self.sessions.lock().unwrap().len()
+        self.lock_sessions().len()
     }
 
     /// Check if a session exists.
     pub fn session_exists(&self, id: SessionId) -> bool {
-        self.sessions.lock().unwrap().contains_key(&id)
+        self.lock_sessions().contains_key(&id)
     }
 
     /// Get all session IDs.
     pub fn session_ids(&self) -> Vec<SessionId> {
-        self.sessions.lock().unwrap().keys().copied().collect()
+        self.lock_sessions().keys().copied().collect()
     }
 
     /// Get the child PID for a session.
     ///
     /// Returns the process ID of the PTY child process for the given session.
     pub fn get_child_pid(&self, id: SessionId) -> Option<u32> {
-        self.sessions.lock().unwrap().get(&id).map(|s| s.child_pid())
+        self.lock_sessions().get(&id).map(|s| s.child_pid())
     }
 }
 
 impl SessionManager for DefaultSessionManager {
     fn list_sessions(&self) -> Vec<Session> {
-        self.sessions
-            .lock()
-            .unwrap()
+        self.lock_sessions()
             .values()
             .map(|s| s.session.clone())
             .collect()
     }
 
     fn get_session(&self, id: SessionId) -> Option<Session> {
-        self.sessions
-            .lock()
-            .unwrap()
+        self.lock_sessions()
             .get(&id)
             .map(|s| s.session.clone())
     }
@@ -186,9 +199,23 @@ impl SessionManager for DefaultSessionManager {
         let id = self.next_session_id();
         info!(%id, %name, ?working_dir, "Creating session");
 
-        // Spawn PTY
-        let mut pty =
-            PtyHandle::spawn(&working_dir, 24, 80).context("Failed to spawn PTY")?;
+        // Validate working directory exists and is a directory
+        if !working_dir.exists() {
+            return Err(anyhow!(
+                "Working directory does not exist: {}",
+                working_dir.display()
+            ));
+        }
+        if !working_dir.is_dir() {
+            return Err(anyhow!(
+                "Working directory path is not a directory: {}",
+                working_dir.display()
+            ));
+        }
+
+        // Spawn PTY with default terminal size
+        let mut pty = PtyHandle::spawn(&working_dir, DEFAULT_PTY_ROWS, DEFAULT_PTY_COLS)
+            .context("Failed to spawn PTY")?;
 
         // Take reader and spawn output task
         let reader = pty
@@ -201,7 +228,7 @@ impl SessionManager for DefaultSessionManager {
 
         // Create session state
         let state = SessionState::new(session, pty, output_rx);
-        self.sessions.lock().unwrap().insert(id, state);
+        self.lock_sessions().insert(id, state);
 
         // Publish event
         self.publish(DirigentEvent::SessionCreated { id });
@@ -213,9 +240,7 @@ impl SessionManager for DefaultSessionManager {
         info!(%id, "Closing session");
 
         let _state = self
-            .sessions
-            .lock()
-            .unwrap()
+            .lock_sessions()
             .remove(&id)
             .ok_or_else(|| anyhow!("Session not found: {}", id))?;
 
@@ -227,7 +252,7 @@ impl SessionManager for DefaultSessionManager {
     }
 
     fn send_input(&self, id: SessionId, input: &[u8]) -> Result<()> {
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = self.lock_sessions();
         let state = sessions
             .get_mut(&id)
             .ok_or_else(|| anyhow!("Session not found: {}", id))?;
@@ -241,7 +266,7 @@ impl SessionManager for DefaultSessionManager {
     }
 
     fn resize(&self, id: SessionId, rows: u16, cols: u16) -> Result<()> {
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = self.lock_sessions();
         let state = sessions
             .get_mut(&id)
             .ok_or_else(|| anyhow!("Session not found: {}", id))?;
@@ -255,7 +280,7 @@ impl SessionManager for DefaultSessionManager {
     }
 
     fn update_status(&self, id: SessionId, status: SessionStatus) {
-        let mut sessions = self.sessions.lock().unwrap();
+        let mut sessions = self.lock_sessions();
         if let Some(state) = sessions.get_mut(&id) {
             let old = state.status();
             if old != status {
@@ -273,8 +298,10 @@ impl SessionManager for DefaultSessionManager {
     }
 
     fn rename_session(&self, id: SessionId, new_name: String) -> Result<()> {
+        info!(%id, %new_name, "Renaming session");
+
         let old_name = {
-            let mut sessions = self.sessions.lock().unwrap();
+            let mut sessions = self.lock_sessions();
             let state = sessions
                 .get_mut(&id)
                 .ok_or_else(|| anyhow!("Session not found: {}", id))?;
@@ -283,6 +310,8 @@ impl SessionManager for DefaultSessionManager {
             state.session.name = new_name.clone();
             old_name
         };
+
+        debug!(%id, %old_name, %new_name, "Session renamed successfully");
 
         self.publish(DirigentEvent::SessionRenamed {
             id,
@@ -299,8 +328,10 @@ impl SessionManager for DefaultSessionManager {
         group: Option<String>,
         color: Option<String>,
     ) -> Result<()> {
+        info!(%id, ?group, ?color, "Setting session group");
+
         {
-            let mut sessions = self.sessions.lock().unwrap();
+            let mut sessions = self.lock_sessions();
             let state = sessions
                 .get_mut(&id)
                 .ok_or_else(|| anyhow!("Session not found: {}", id))?;
@@ -308,6 +339,8 @@ impl SessionManager for DefaultSessionManager {
             state.session.group = group.clone();
             state.session.color = color.clone();
         }
+
+        debug!(%id, ?group, ?color, "Session group updated successfully");
 
         self.publish(DirigentEvent::SessionGroupChanged { id, group, color });
 
@@ -818,5 +851,43 @@ mod tests {
 
         assert_eq!(id1.0 + 1, id2.0);
         assert_eq!(id2.0 + 1, id3.0);
+    }
+
+    #[test]
+    fn test_create_session_with_nonexistent_working_dir() {
+        let manager = create_manager();
+
+        let result = manager.create_session(
+            "Test".to_string(),
+            PathBuf::from("/nonexistent/path/that/does/not/exist"),
+        );
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("does not exist"));
+    }
+
+    #[test]
+    fn test_create_session_with_file_as_working_dir() {
+        use std::io::Write;
+
+        let manager = create_manager();
+
+        // Create a temporary file (not a directory)
+        let temp_dir = std::env::temp_dir();
+        let temp_file = temp_dir.join(format!("dirigent_test_file_{}", std::process::id()));
+        {
+            let mut file = std::fs::File::create(&temp_file).unwrap();
+            file.write_all(b"test").unwrap();
+        }
+
+        let result = manager.create_session("Test".to_string(), temp_file.clone());
+
+        // Clean up
+        let _ = std::fs::remove_file(&temp_file);
+
+        assert!(result.is_err());
+        let err = result.unwrap_err().to_string();
+        assert!(err.contains("not a directory"));
     }
 }
