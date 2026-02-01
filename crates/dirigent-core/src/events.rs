@@ -145,6 +145,35 @@ pub enum DirigentEvent {
         /// The path that was dragged.
         path: PathBuf,
     },
+
+    // === Worktree Events ===
+    /// A new worktree was created.
+    WorktreeCreated {
+        /// Absolute path to the worktree directory.
+        path: PathBuf,
+        /// Branch name associated with this worktree.
+        branch: String,
+    },
+
+    /// A worktree was removed.
+    WorktreeRemoved {
+        /// Absolute path to the removed worktree.
+        path: PathBuf,
+    },
+
+    /// A session was bound to a worktree.
+    SessionBoundToWorktree {
+        /// The session ID.
+        session_id: SessionId,
+        /// Absolute path to the worktree.
+        worktree_path: PathBuf,
+    },
+
+    /// A session was unbound from its worktree.
+    SessionUnboundFromWorktree {
+        /// The session ID.
+        session_id: SessionId,
+    },
 }
 
 #[cfg(test)]
@@ -367,6 +396,62 @@ mod tests {
     }
 
     #[test]
+    fn test_worktree_created_event() {
+        let event = DirigentEvent::WorktreeCreated {
+            path: PathBuf::from("/repo/worktrees/feature"),
+            branch: "feature-branch".to_string(),
+        };
+        if let DirigentEvent::WorktreeCreated { path, branch } = event {
+            assert_eq!(path, PathBuf::from("/repo/worktrees/feature"));
+            assert_eq!(branch, "feature-branch");
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_worktree_removed_event() {
+        let event = DirigentEvent::WorktreeRemoved {
+            path: PathBuf::from("/repo/worktrees/feature"),
+        };
+        if let DirigentEvent::WorktreeRemoved { path } = event {
+            assert_eq!(path, PathBuf::from("/repo/worktrees/feature"));
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_session_bound_to_worktree_event() {
+        let event = DirigentEvent::SessionBoundToWorktree {
+            session_id: SessionId(1),
+            worktree_path: PathBuf::from("/repo/worktrees/feature"),
+        };
+        if let DirigentEvent::SessionBoundToWorktree {
+            session_id,
+            worktree_path,
+        } = event
+        {
+            assert_eq!(session_id, SessionId(1));
+            assert_eq!(worktree_path, PathBuf::from("/repo/worktrees/feature"));
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_session_unbound_from_worktree_event() {
+        let event = DirigentEvent::SessionUnboundFromWorktree {
+            session_id: SessionId(1),
+        };
+        if let DirigentEvent::SessionUnboundFromWorktree { session_id } = event {
+            assert_eq!(session_id, SessionId(1));
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
     fn test_event_clone() {
         let event = DirigentEvent::SessionFocused { id: SessionId(1) };
         let cloned = event.clone();
@@ -431,6 +516,20 @@ mod tests {
             DirigentEvent::PathDraggedToSession {
                 session_id: SessionId(1),
                 path: PathBuf::from("/tmp"),
+            },
+            DirigentEvent::WorktreeCreated {
+                path: PathBuf::from("/repo/worktrees/feature"),
+                branch: "feature".to_string(),
+            },
+            DirigentEvent::WorktreeRemoved {
+                path: PathBuf::from("/repo/worktrees/feature"),
+            },
+            DirigentEvent::SessionBoundToWorktree {
+                session_id: SessionId(1),
+                worktree_path: PathBuf::from("/repo/worktrees/feature"),
+            },
+            DirigentEvent::SessionUnboundFromWorktree {
+                session_id: SessionId(1),
             },
         ];
 

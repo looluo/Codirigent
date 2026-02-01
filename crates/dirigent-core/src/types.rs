@@ -958,4 +958,132 @@ mod tests {
             LayoutMode::Grid { rows: 1, cols: 2 }
         ));
     }
+
+    // Worktree tests
+    #[test]
+    fn test_worktree_new() {
+        let wt = Worktree::new(
+            PathBuf::from("/repo/worktrees/feature"),
+            "feature-branch".to_string(),
+            false,
+        );
+        assert_eq!(wt.path, PathBuf::from("/repo/worktrees/feature"));
+        assert_eq!(wt.branch, "feature-branch");
+        assert!(!wt.is_main);
+        assert!(wt.head_sha.is_none());
+        assert!(wt.bound_session.is_none());
+    }
+
+    #[test]
+    fn test_worktree_main() {
+        let wt = Worktree::new(PathBuf::from("/repo"), "main".to_string(), true);
+        assert!(wt.is_main);
+        assert_eq!(wt.branch, "main");
+    }
+
+    #[test]
+    fn test_worktree_with_head_sha() {
+        let wt = Worktree::new(PathBuf::from("/repo"), "main".to_string(), true)
+            .with_head_sha("abc12345".to_string());
+        assert_eq!(wt.head_sha, Some("abc12345".to_string()));
+    }
+
+    #[test]
+    fn test_worktree_serialization() {
+        let wt = Worktree::new(PathBuf::from("/repo"), "main".to_string(), true)
+            .with_head_sha("abc12345".to_string());
+        let json = serde_json::to_string(&wt).unwrap();
+        let parsed: Worktree = serde_json::from_str(&json).unwrap();
+        assert_eq!(wt.branch, parsed.branch);
+        assert_eq!(wt.head_sha, parsed.head_sha);
+        assert_eq!(wt.is_main, parsed.is_main);
+    }
+
+    #[test]
+    fn test_worktree_equality() {
+        let wt1 = Worktree::new(PathBuf::from("/repo"), "main".to_string(), true);
+        let wt2 = Worktree::new(PathBuf::from("/repo"), "main".to_string(), true);
+        // Note: created_at will differ, but we compare specific fields
+        assert_eq!(wt1.branch, wt2.branch);
+        assert_eq!(wt1.path, wt2.path);
+        assert_eq!(wt1.is_main, wt2.is_main);
+    }
+
+    #[test]
+    fn test_worktree_with_bound_session() {
+        let mut wt = Worktree::new(PathBuf::from("/repo"), "feature".to_string(), false);
+        wt.bound_session = Some(SessionId(42));
+        assert_eq!(wt.bound_session, Some(SessionId(42)));
+
+        let json = serde_json::to_string(&wt).unwrap();
+        let parsed: Worktree = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.bound_session, Some(SessionId(42)));
+    }
+
+    #[test]
+    fn test_worktree_clone() {
+        let wt = Worktree::new(PathBuf::from("/repo"), "main".to_string(), true);
+        let cloned = wt.clone();
+        assert_eq!(wt.branch, cloned.branch);
+        assert_eq!(wt.path, cloned.path);
+    }
+
+    #[test]
+    fn test_worktree_debug() {
+        let wt = Worktree::new(PathBuf::from("/repo"), "main".to_string(), true);
+        let debug_str = format!("{:?}", wt);
+        assert!(debug_str.contains("Worktree"));
+        assert!(debug_str.contains("main"));
+    }
+
+    // WorktreeCreateOptions tests
+    #[test]
+    fn test_worktree_create_options_new() {
+        let opts = WorktreeCreateOptions::new("feature".to_string());
+        assert_eq!(opts.branch, "feature");
+        assert!(opts.base_branch.is_none());
+        assert!(opts.path.is_none());
+    }
+
+    #[test]
+    fn test_worktree_create_options_with_base_branch() {
+        let opts =
+            WorktreeCreateOptions::new("feature".to_string()).with_base_branch("main".to_string());
+        assert_eq!(opts.branch, "feature");
+        assert_eq!(opts.base_branch, Some("main".to_string()));
+    }
+
+    #[test]
+    fn test_worktree_create_options_with_path() {
+        let opts = WorktreeCreateOptions::new("feature".to_string())
+            .with_path(PathBuf::from("/custom/path"));
+        assert_eq!(opts.path, Some(PathBuf::from("/custom/path")));
+    }
+
+    #[test]
+    fn test_worktree_create_options_all_fields() {
+        let opts = WorktreeCreateOptions::new("feature".to_string())
+            .with_base_branch("develop".to_string())
+            .with_path(PathBuf::from("/worktrees/feature"));
+        assert_eq!(opts.branch, "feature");
+        assert_eq!(opts.base_branch, Some("develop".to_string()));
+        assert_eq!(opts.path, Some(PathBuf::from("/worktrees/feature")));
+    }
+
+    #[test]
+    fn test_worktree_create_options_clone() {
+        let opts = WorktreeCreateOptions::new("feature".to_string())
+            .with_base_branch("main".to_string());
+        let cloned = opts.clone();
+        assert_eq!(opts.branch, cloned.branch);
+        assert_eq!(opts.base_branch, cloned.base_branch);
+    }
+
+    #[test]
+    fn test_worktree_create_options_debug() {
+        let opts = WorktreeCreateOptions::new("feature".to_string());
+        let debug_str = format!("{:?}", opts);
+        assert!(debug_str.contains("WorktreeCreateOptions"));
+        assert!(debug_str.contains("feature"));
+    }
 }
