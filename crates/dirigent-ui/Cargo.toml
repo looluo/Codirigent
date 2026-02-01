@@ -6,17 +6,29 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = []
+# Full GPUI support (requires Rust 1.75+)
+gpui-full = ["dep:gpui"]
+# Terminal rendering (requires Rust 1.75+ for alacritty_terminal 0.25+)
+terminal = ["dep:alacritty_terminal"]
+
 [dependencies]
 dirigent-core.workspace = true
 dirigent-session.workspace = true
 dirigent-detector.workspace = true
-dirigent-filetree.workspace = true
 anyhow.workspace = true
 thiserror.workspace = true
 serde.workspace = true
 tokio.workspace = true
 tracing.workspace = true
+chrono.workspace = true
 
-# TODO(Stage 9): Enable GPUI dependency
-# gpui = { git = "https://github.com/zed-industries/zed", package = "gpui" }
-alacritty_terminal.workspace = true
+# GPUI - Community Edition (requires Rust 1.75+)
+gpui = { package = "gpui-ce", version = "0.3", optional = true }
+
+# Terminal rendering (requires Rust 1.75+ for latest version)
+alacritty_terminal = { version = "0.24", optional = true }
+
+[dev-dependencies]
+tempfile.workspace = true
