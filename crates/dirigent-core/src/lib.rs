@@ -15,6 +15,7 @@
 //! - [`config`] - Configuration types (ProjectConfig, UserSettings)
 //! - [`config_service`] - Configuration loading and saving service
 //! - [`skill`] - Skill management types (Skill, SkillPreset, TokenBudget)
+//! - [`change_summary`] - Change detection and risk assessment types
 //! - [`error`] - Error types
 //!
 //! ## Quick Start
@@ -66,6 +67,7 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
+pub mod change_summary;
 pub mod config;
 pub mod config_service;
 pub mod context;
@@ -81,6 +83,10 @@ pub mod types;
 pub mod verification;
 
 // Re-export commonly used items
+pub use change_summary::{
+    ChangeDetector, ChangeSummary, ChangeType, FileCategory, FileChange, RiskAssessment,
+    RiskAssessor, RiskLevel,
+};
 pub use config::{ProjectConfig, UserSettings};
 pub use config_service::{ConfigChange, ConfigService, DefaultConfigService, EffectiveConfig};
 pub use context::{ContextConfig, ContextPattern, ContextTracker, ContextTrackingService, ContextUsage};

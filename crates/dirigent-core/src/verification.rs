@@ -20,6 +20,7 @@
 //! - [`VerificationEvent`] - Events emitted by the verification system
 
 use crate::types::{SessionId, TaskId};
+use async_trait::async_trait;
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -499,6 +500,844 @@ pub enum VerificationEvent {
         /// List of failures that could not be resolved.
         failures: Vec<VerificationFailure>,
     },
+}
+
+// === Test Command Detection ===
+
+/// A rule for detecting test commands in a project directory.
+///
+/// Detection rules check for the presence of a marker file (like `Cargo.toml`
+/// or `package.json`) and optionally verify specific targets in that file.
+///
+/// # Example
+///
+/// ```
+/// use dirigent_core::verification::DetectionRule;
+///
+/// let rule = DetectionRule {
+///     marker_file: "Cargo.toml".to_string(),
+///     command: "cargo test".to_string(),
+///     make_target: None,
+/// };
+/// assert_eq!(rule.marker_file, "Cargo.toml");
+/// ```
+#[derive(Debug, Clone)]
+pub struct DetectionRule {
+    /// File to check for (e.g., "package.json", "Cargo.toml").
+    pub marker_file: String,
+    /// Command to run if marker exists (e.g., "npm test", "cargo test").
+    pub command: String,
+    /// Optional Makefile target to verify exists.
+    pub make_target: Option<String>,
+}
+
+impl DetectionRule {
+    /// Create a new detection rule.
+    ///
+    /// # Arguments
+    ///
+    /// * `marker_file` - File to check for
+    /// * `command` - Command to run if marker exists
+    pub fn new(marker_file: impl Into<String>, command: impl Into<String>) -> Self {
+        Self {
+            marker_file: marker_file.into(),
+            command: command.into(),
+            make_target: None,
+        }
+    }
+
+    /// Create a rule with a Makefile target check.
+    ///
+    /// # Arguments
+    ///
+    /// * `marker_file` - File to check for (typically "Makefile")
+    /// * `command` - Command to run (e.g., "make test")
+    /// * `target` - Target to verify exists in the Makefile
+    pub fn with_target(
+        marker_file: impl Into<String>,
+        command: impl Into<String>,
+        target: impl Into<String>,
+    ) -> Self {
+        Self {
+            marker_file: marker_file.into(),
+            command: command.into(),
+            make_target: Some(target.into()),
+        }
+    }
+}
+
+/// Test command detector for auto-detecting verification commands.
+///
+/// Analyzes a project directory to determine the appropriate test command
+/// based on the presence of configuration files like `package.json`,
+/// `Cargo.toml`, `pyproject.toml`, etc.
+///
+/// # Example
+///
+/// ```
+/// use dirigent_core::verification::TestCommandDetector;
+/// use std::path::Path;
+///
+/// let detector = TestCommandDetector::new();
+/// // detector.detect(Path::new("/path/to/project"));
+/// ```
+#[derive(Debug, Clone)]
+pub struct TestCommandDetector {
+    /// Detection rules in priority order.
+    rules: Vec<DetectionRule>,
+}
+
+impl Default for TestCommandDetector {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl TestCommandDetector {
+    /// Create a new detector with default rules.
+    ///
+    /// The default rules detect common project types:
+    /// - Node.js (package.json) -> `npm test`
+    /// - Rust (Cargo.toml) -> `cargo test`
+    /// - Python (pyproject.toml, setup.py) -> `pytest`
+    /// - Go (go.mod) -> `go test ./...`
+    /// - Make (Makefile with test target) -> `make test`
+    pub fn new() -> Self {
+        Self {
+            rules: vec![
+                // Node.js / npm
+                DetectionRule::new("package.json", "npm test"),
+                // Rust / Cargo
+                DetectionRule::new("Cargo.toml", "cargo test"),
+                // Python / pytest
+                DetectionRule::new("pyproject.toml", "pytest"),
+                DetectionRule::new("setup.py", "pytest"),
+                // Go
+                DetectionRule::new("go.mod", "go test ./..."),
+                // Makefile with test target
+                DetectionRule::with_target("Makefile", "make test", "test"),
+            ],
+        }
+    }
+
+    /// Add a custom detection rule.
+    ///
+    /// Custom rules are inserted at the beginning of the rule list,
+    /// giving them priority over default rules.
+    ///
+    /// # Arguments
+    ///
+    /// * `rule` - The detection rule to add
+    pub fn add_rule(&mut self, rule: DetectionRule) {
+        self.rules.insert(0, rule); // Custom rules take priority
+    }
+
+    /// Get all detection rules.
+    pub fn rules(&self) -> &[DetectionRule] {
+        &self.rules
+    }
+
+    /// Detect test command for a directory.
+    ///
+    /// Iterates through detection rules in priority order and returns
+    /// the first matching command.
+    ///
+    /// # Arguments
+    ///
+    /// * `working_dir` - Directory to analyze
+    ///
+    /// # Returns
+    ///
+    /// The detected test command, or `None` if no rule matched.
+    pub fn detect(&self, working_dir: &std::path::Path) -> Option<String> {
+        for rule in &self.rules {
+            let marker_path = working_dir.join(&rule.marker_file);
+            if marker_path.exists() {
+                // Check Makefile target if specified
+                if let Some(ref target) = rule.make_target {
+                    if self.has_makefile_target(&marker_path, target) {
+                        return Some(rule.command.clone());
+                    }
+                } else {
+                    return Some(rule.command.clone());
+                }
+            }
+        }
+        None
+    }
+
+    /// Check if a Makefile has a specific target.
+    ///
+    /// Performs a simple check by looking for "target:" at the start of a line.
+    fn has_makefile_target(&self, makefile_path: &std::path::Path, target: &str) -> bool {
+        if let Ok(content) = std::fs::read_to_string(makefile_path) {
+            // Simple check: look for "target:" at start of line
+            let pattern = format!("{}:", target);
+            content.lines().any(|line| line.starts_with(&pattern))
+        } else {
+            false
+        }
+    }
+}
+
+// === Output Parser ===
+
+/// Test output parsers for different test frameworks.
+///
+/// Provides specialized parsing for common test frameworks (Jest, Cargo, pytest)
+/// and a generic fallback parser.
+///
+/// # Example
+///
+/// ```
+/// use dirigent_core::verification::OutputParser;
+///
+/// let output = "test result: ok. 15 passed; 0 failed; 2 ignored";
+/// let results = OutputParser::parse_cargo(output).unwrap();
+/// assert_eq!(results.passed, 15);
+/// assert_eq!(results.failed, 0);
+/// assert_eq!(results.skipped, 2);
+/// ```
+pub struct OutputParser;
+
+impl OutputParser {
+    /// Parse Jest/npm test output.
+    ///
+    /// Looks for patterns like:
+    /// - "Tests: X failed, Y passed, Z total"
+    /// - "Test Suites: X failed, Y passed, Z total"
+    ///
+    /// # Arguments
+    ///
+    /// * `output` - Combined stdout/stderr from test run
+    ///
+    /// # Returns
+    ///
+    /// Parsed test results if a recognized pattern was found.
+    pub fn parse_jest(output: &str) -> Option<ParsedTestResults> {
+        // Pattern: "Tests: X failed, Y passed, Z total"
+        let re = regex::Regex::new(
+            r"Tests?:\s*(?:(\d+)\s+failed,\s*)?(\d+)\s+passed(?:,\s*(\d+)\s+total)?"
+        ).ok()?;
+
+        if let Some(caps) = re.captures(output) {
+            let failed = caps.get(1).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
+            let passed: u32 = caps.get(2)?.as_str().parse().ok()?;
+            let total = caps.get(3).and_then(|m| m.as_str().parse().ok()).unwrap_or(passed + failed);
+
+            let failures = Self::extract_jest_failures(output);
+
+            return Some(ParsedTestResults {
+                total,
+                passed,
+                failed,
+                skipped: total.saturating_sub(passed + failed),
+                failures,
+            });
+        }
+
+        None
+    }
+
+    /// Extract failure names from Jest output.
+    fn extract_jest_failures(output: &str) -> Vec<ParsedTestFailure> {
+        let mut failures = Vec::new();
+
+        // Pattern: "x test_name" or "✗ test_name"
+        let fail_re = regex::Regex::new(r"(?m)^\s*[x\u2717]\s+(.+)$").ok();
+
+        if let Some(re) = fail_re {
+            for cap in re.captures_iter(output) {
+                if let Some(name) = cap.get(1) {
+                    failures.push(ParsedTestFailure {
+                        name: name.as_str().trim().to_string(),
+                        message: String::new(),
+                    });
+                }
+            }
+        }
+
+        failures
+    }
+
+    /// Parse Cargo test output.
+    ///
+    /// Looks for patterns like:
+    /// - "test result: ok. X passed; Y failed; Z ignored"
+    ///
+    /// # Arguments
+    ///
+    /// * `output` - Combined stdout/stderr from cargo test
+    ///
+    /// # Returns
+    ///
+    /// Parsed test results if a recognized pattern was found.
+    pub fn parse_cargo(output: &str) -> Option<ParsedTestResults> {
+        // Pattern: "test result: ok. X passed; Y failed; Z ignored"
+        let re = regex::Regex::new(
+            r"test result: \w+\.\s*(\d+)\s+passed;\s*(\d+)\s+failed;\s*(\d+)\s+ignored"
+        ).ok()?;
+
+        if let Some(caps) = re.captures(output) {
+            let passed: u32 = caps.get(1)?.as_str().parse().ok()?;
+            let failed: u32 = caps.get(2)?.as_str().parse().ok()?;
+            let skipped: u32 = caps.get(3)?.as_str().parse().ok()?;
+
+            let failures = Self::extract_cargo_failures(output);
+
+            return Some(ParsedTestResults {
+                total: passed + failed + skipped,
+                passed,
+                failed,
+                skipped,
+                failures,
+            });
+        }
+
+        None
+    }
+
+    /// Extract failure names from Cargo output.
+    fn extract_cargo_failures(output: &str) -> Vec<ParsedTestFailure> {
+        let mut failures = Vec::new();
+
+        // Pattern: "---- test_name stdout ----"
+        let fail_re = regex::Regex::new(r"---- (\S+) stdout ----").ok();
+
+        if let Some(re) = fail_re {
+            for cap in re.captures_iter(output) {
+                if let Some(name) = cap.get(1) {
+                    failures.push(ParsedTestFailure {
+                        name: name.as_str().to_string(),
+                        message: String::new(),
+                    });
+                }
+            }
+        }
+
+        failures
+    }
+
+    /// Parse pytest output.
+    ///
+    /// Looks for patterns like:
+    /// - "X passed, Y failed, Z skipped"
+    /// - "=== X passed in Y.Zs ==="
+    ///
+    /// # Arguments
+    ///
+    /// * `output` - Combined stdout/stderr from pytest
+    ///
+    /// # Returns
+    ///
+    /// Parsed test results if a recognized pattern was found.
+    pub fn parse_pytest(output: &str) -> Option<ParsedTestResults> {
+        // Pattern: "X passed, Y failed, Z skipped"
+        let re = regex::Regex::new(
+            r"(\d+)\s+passed(?:,\s*(\d+)\s+failed)?(?:,\s*(\d+)\s+skipped)?"
+        ).ok()?;
+
+        if let Some(caps) = re.captures(output) {
+            let passed: u32 = caps.get(1)?.as_str().parse().ok()?;
+            let failed = caps.get(2).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
+            let skipped = caps.get(3).and_then(|m| m.as_str().parse().ok()).unwrap_or(0);
+
+            let failures = Self::extract_pytest_failures(output);
+
+            return Some(ParsedTestResults {
+                total: passed + failed + skipped,
+                passed,
+                failed,
+                skipped,
+                failures,
+            });
+        }
+
+        None
+    }
+
+    /// Extract failure names from pytest output.
+    fn extract_pytest_failures(output: &str) -> Vec<ParsedTestFailure> {
+        let mut failures = Vec::new();
+
+        // Pattern: "FAILED test_file.py::test_name"
+        let fail_re = regex::Regex::new(r"FAILED\s+(\S+)").ok();
+
+        if let Some(re) = fail_re {
+            for cap in re.captures_iter(output) {
+                if let Some(name) = cap.get(1) {
+                    failures.push(ParsedTestFailure {
+                        name: name.as_str().to_string(),
+                        message: String::new(),
+                    });
+                }
+            }
+        }
+
+        failures
+    }
+
+    /// Parse generic test output (fallback).
+    ///
+    /// Counts occurrences of common pass/fail indicators in the output.
+    ///
+    /// # Arguments
+    ///
+    /// * `output` - Test output to analyze
+    ///
+    /// # Returns
+    ///
+    /// Best-effort test results based on keyword counting.
+    pub fn parse_generic(output: &str) -> ParsedTestResults {
+        // Count lines containing common pass/fail indicators
+        let passed = output.matches("PASS").count()
+            + output.matches("pass").count()
+            + output.matches("ok").count();
+        let failed = output.matches("FAIL").count()
+            + output.matches("fail").count()
+            + output.matches("error").count();
+
+        ParsedTestResults {
+            total: (passed + failed) as u32,
+            passed: passed as u32,
+            failed: failed as u32,
+            skipped: 0,
+            failures: vec![],
+        }
+    }
+
+    /// Auto-detect parser based on command.
+    ///
+    /// Tries framework-specific parsers based on the command, then falls back
+    /// to generic parsing.
+    ///
+    /// # Arguments
+    ///
+    /// * `output` - Test output to parse
+    /// * `command` - The command that was run (used to select parser)
+    pub fn auto_parse(output: &str, command: &str) -> ParsedTestResults {
+        // Try framework-specific parsers based on command
+        if command.contains("npm") || command.contains("jest") || command.contains("vitest") {
+            if let Some(results) = Self::parse_jest(output) {
+                return results;
+            }
+        }
+
+        if command.contains("cargo") {
+            if let Some(results) = Self::parse_cargo(output) {
+                return results;
+            }
+        }
+
+        if command.contains("pytest") {
+            if let Some(results) = Self::parse_pytest(output) {
+                return results;
+            }
+        }
+
+        // Try all parsers as fallback
+        if let Some(results) = Self::parse_cargo(output) {
+            return results;
+        }
+        if let Some(results) = Self::parse_jest(output) {
+            return results;
+        }
+        if let Some(results) = Self::parse_pytest(output) {
+            return results;
+        }
+
+        // Generic fallback
+        Self::parse_generic(output)
+    }
+}
+
+/// Parsed test results from output.
+///
+/// Intermediate representation of test results extracted from output,
+/// before conversion to [`VerificationResult`].
+#[derive(Debug, Clone, Default)]
+pub struct ParsedTestResults {
+    /// Total tests run.
+    pub total: u32,
+    /// Tests passed.
+    pub passed: u32,
+    /// Tests failed.
+    pub failed: u32,
+    /// Tests skipped.
+    pub skipped: u32,
+    /// Extracted failure information.
+    pub failures: Vec<ParsedTestFailure>,
+}
+
+/// Parsed test failure from output.
+#[derive(Debug, Clone)]
+pub struct ParsedTestFailure {
+    /// Test name or path.
+    pub name: String,
+    /// Error message if extracted.
+    pub message: String,
+}
+
+// === Verification Runner ===
+
+/// Configuration for the verification runner.
+///
+/// Controls timeout, auto-detection, and retry behavior.
+///
+/// # Example
+///
+/// ```
+/// use dirigent_core::verification::VerificationRunnerConfig;
+/// use std::time::Duration;
+///
+/// let config = VerificationRunnerConfig::default();
+/// assert_eq!(config.default_timeout, Duration::from_secs(300));
+/// assert!(config.auto_detect);
+/// assert_eq!(config.max_retries, 3);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct VerificationRunnerConfig {
+    /// Default timeout for verification commands.
+    #[serde(with = "humantime_serde")]
+    pub default_timeout: std::time::Duration,
+
+    /// Whether to auto-detect test commands.
+    pub auto_detect: bool,
+
+    /// Maximum retries before marking as blocked.
+    pub max_retries: u32,
+}
+
+impl Default for VerificationRunnerConfig {
+    fn default() -> Self {
+        Self {
+            default_timeout: std::time::Duration::from_secs(300),
+            auto_detect: true,
+            max_retries: 3,
+        }
+    }
+}
+
+/// Verification runner executes tests and parses results.
+///
+/// Combines command detection, execution, and output parsing into
+/// a single verification workflow.
+///
+/// # Example
+///
+/// ```
+/// use dirigent_core::verification::{VerificationRunner, VerificationRunnerConfig};
+///
+/// let runner = VerificationRunner::new(VerificationRunnerConfig::default());
+/// ```
+pub struct VerificationRunner {
+    /// Runner configuration.
+    config: VerificationRunnerConfig,
+    /// Test command detector.
+    detector: TestCommandDetector,
+}
+
+impl VerificationRunner {
+    /// Create a new verification runner.
+    ///
+    /// # Arguments
+    ///
+    /// * `config` - Runner configuration
+    pub fn new(config: VerificationRunnerConfig) -> Self {
+        Self {
+            config,
+            detector: TestCommandDetector::new(),
+        }
+    }
+
+    /// Get the runner configuration.
+    pub fn config(&self) -> &VerificationRunnerConfig {
+        &self.config
+    }
+
+    /// Get the test command detector.
+    pub fn detector(&self) -> &TestCommandDetector {
+        &self.detector
+    }
+
+    /// Get a mutable reference to the detector for adding custom rules.
+    pub fn detector_mut(&mut self) -> &mut TestCommandDetector {
+        &mut self.detector
+    }
+
+    /// Get or detect verification command for a task.
+    ///
+    /// First checks the task's explicit verification config, then falls back
+    /// to auto-detection if enabled.
+    ///
+    /// # Arguments
+    ///
+    /// * `commands` - Optional explicit verification commands
+    /// * `working_dir` - Directory to detect commands for
+    ///
+    /// # Returns
+    ///
+    /// The verification command if found.
+    pub fn get_command(
+        &self,
+        commands: Option<&VerificationCommands>,
+        working_dir: &std::path::Path,
+    ) -> Option<String> {
+        // First check explicit command
+        if let Some(cmds) = commands {
+            if let Some(ref unit) = cmds.unit {
+                return Some(unit.clone());
+            }
+        }
+
+        // Auto-detect if enabled
+        if self.config.auto_detect {
+            self.detector.detect(working_dir)
+        } else {
+            None
+        }
+    }
+
+    /// Run verification for a task.
+    ///
+    /// Executes the verification command and parses the output.
+    ///
+    /// # Arguments
+    ///
+    /// * `command` - Command to execute
+    /// * `working_dir` - Directory to run in
+    /// * `timeout` - Optional timeout override
+    ///
+    /// # Returns
+    ///
+    /// The verification result.
+    pub async fn run(
+        &self,
+        command: &str,
+        working_dir: &std::path::Path,
+        timeout: Option<std::time::Duration>,
+    ) -> anyhow::Result<VerificationResult> {
+        use tokio::process::Command;
+        use std::process::Stdio;
+
+        let timeout_duration = timeout.unwrap_or(self.config.default_timeout);
+        let start = std::time::Instant::now();
+
+        // Parse command into program and args using shell
+        // Use shell to handle complex commands with pipes, redirects, etc.
+        #[cfg(unix)]
+        let output = tokio::time::timeout(
+            timeout_duration,
+            Command::new("sh")
+                .args(["-c", command])
+                .current_dir(working_dir)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("Verification timed out after {:?}", timeout_duration))?
+        .map_err(|e| anyhow::anyhow!("Failed to execute verification command: {}", e))?;
+
+        #[cfg(windows)]
+        let output = tokio::time::timeout(
+            timeout_duration,
+            Command::new("cmd")
+                .args(["/C", command])
+                .current_dir(working_dir)
+                .stdout(Stdio::piped())
+                .stderr(Stdio::piped())
+                .output(),
+        )
+        .await
+        .map_err(|_| anyhow::anyhow!("Verification timed out after {:?}", timeout_duration))?
+        .map_err(|e| anyhow::anyhow!("Failed to execute verification command: {}", e))?;
+
+        let duration = start.elapsed();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        let combined_output = format!("{}\n{}", stdout, stderr);
+
+        // Parse the output
+        let parsed = OutputParser::auto_parse(&combined_output, command);
+
+        // Convert to VerificationResult
+        let failures: Vec<VerificationFailure> = parsed
+            .failures
+            .into_iter()
+            .map(|f| VerificationFailure::new(f.name, f.message))
+            .collect();
+
+        let mut result = if output.status.success() && parsed.failed == 0 {
+            VerificationResult::passed(VerificationCheckType::UnitTest, duration.as_millis() as u64)
+        } else {
+            VerificationResult::failed(VerificationCheckType::UnitTest, failures, duration.as_millis() as u64)
+        };
+
+        // Add counts if available
+        if parsed.total > 0 {
+            result = result.with_counts(parsed.passed, parsed.total);
+        }
+
+        // Add raw output
+        result = result.with_raw_output(combined_output);
+
+        Ok(result)
+    }
+
+    /// Format verification failure as markdown for sending back to session.
+    ///
+    /// Creates a clear, actionable message describing what failed and how many
+    /// retries remain.
+    ///
+    /// # Arguments
+    ///
+    /// * `result` - The verification result containing failures
+    /// * `retry_count` - Current retry count
+    /// * `max_retries` - Maximum allowed retries
+    ///
+    /// # Returns
+    ///
+    /// Formatted markdown string.
+    pub fn format_failure_message(
+        &self,
+        result: &VerificationResult,
+        retry_count: u32,
+        max_retries: u32,
+    ) -> String {
+        let mut message = String::new();
+
+        message.push_str("## Verification Failed\n\n");
+
+        // Test results summary
+        if let (Some(passed), Some(total)) = (result.passed_count, result.total_count) {
+            let failed = total.saturating_sub(passed);
+            message.push_str(&format!(
+                "**Test Results:** {} passed, {} failed\n\n",
+                passed, failed
+            ));
+        }
+
+        // List failures
+        if !result.failures.is_empty() {
+            message.push_str("### Failures:\n\n");
+            for (i, failure) in result.failures.iter().enumerate() {
+                message.push_str(&format!("**{}. {}**\n", i + 1, failure.name));
+                if !failure.message.is_empty() {
+                    message.push_str(&format!("```\n{}\n```\n", failure.message));
+                }
+                message.push('\n');
+            }
+        }
+
+        // Include raw output if no structured failures and output is reasonable size
+        if result.failures.is_empty() {
+            if let Some(ref output) = result.raw_output {
+                if !output.is_empty() && output.len() < 2000 {
+                    message.push_str("### Output:\n\n");
+                    message.push_str("```\n");
+                    message.push_str(output);
+                    message.push_str("\n```\n\n");
+                }
+            }
+        }
+
+        // Retry info
+        message.push_str("---\n\n");
+        message.push_str(&format!(
+            "Please fix the above issues and complete the task again.\n\n*Retry: {}/{}*",
+            retry_count, max_retries
+        ));
+
+        message
+    }
+}
+
+/// Trait for verification service implementations.
+///
+/// Provides a high-level interface for verification operations.
+#[async_trait]
+pub trait VerificationService: Send + Sync {
+    /// Run verification for a task.
+    ///
+    /// # Arguments
+    ///
+    /// * `commands` - Optional verification commands
+    /// * `working_dir` - Directory to run verification in
+    async fn verify(
+        &self,
+        commands: Option<&VerificationCommands>,
+        working_dir: &std::path::Path,
+    ) -> anyhow::Result<VerificationResult>;
+
+    /// Check if verification should run.
+    ///
+    /// # Arguments
+    ///
+    /// * `commands` - Optional verification commands
+    /// * `working_dir` - Directory to check
+    fn should_verify(
+        &self,
+        commands: Option<&VerificationCommands>,
+        working_dir: &std::path::Path,
+    ) -> bool;
+
+    /// Format failure for retry.
+    ///
+    /// # Arguments
+    ///
+    /// * `result` - Verification result to format
+    /// * `retry_count` - Current retry count
+    /// * `max_retries` - Maximum retries allowed
+    fn format_failure(
+        &self,
+        result: &VerificationResult,
+        retry_count: u32,
+        max_retries: u32,
+    ) -> String;
+}
+
+#[async_trait]
+impl VerificationService for VerificationRunner {
+    async fn verify(
+        &self,
+        commands: Option<&VerificationCommands>,
+        working_dir: &std::path::Path,
+    ) -> anyhow::Result<VerificationResult> {
+        let command = self
+            .get_command(commands, working_dir)
+            .ok_or_else(|| anyhow::anyhow!("No verification command found"))?;
+
+        self.run(&command, working_dir, None).await
+    }
+
+    fn should_verify(
+        &self,
+        commands: Option<&VerificationCommands>,
+        working_dir: &std::path::Path,
+    ) -> bool {
+        // Verify if commands are provided or if auto-detect finds something
+        if let Some(cmds) = commands {
+            if cmds.has_any() {
+                return true;
+            }
+        }
+
+        if self.config.auto_detect {
+            return self.detector.detect(working_dir).is_some();
+        }
+
+        false
+    }
+
+    fn format_failure(
+        &self,
+        result: &VerificationResult,
+        retry_count: u32,
+        max_retries: u32,
+    ) -> String {
+        self.format_failure_message(result, retry_count, max_retries)
+    }
 }
 
 #[cfg(test)]
@@ -983,5 +1822,183 @@ mod tests {
         };
         let cloned = event.clone();
         assert!(matches!(cloned, VerificationEvent::Passed { .. }));
+    }
+
+    // TestCommandDetector tests
+
+    #[test]
+    fn test_detection_rule_new() {
+        let rule = DetectionRule::new("package.json", "npm test");
+        assert_eq!(rule.marker_file, "package.json");
+        assert_eq!(rule.command, "npm test");
+        assert!(rule.make_target.is_none());
+    }
+
+    #[test]
+    fn test_detection_rule_with_target() {
+        let rule = DetectionRule::with_target("Makefile", "make test", "test");
+        assert_eq!(rule.marker_file, "Makefile");
+        assert_eq!(rule.command, "make test");
+        assert_eq!(rule.make_target, Some("test".to_string()));
+    }
+
+    #[test]
+    fn test_detection_rule_clone() {
+        let rule = DetectionRule::new("Cargo.toml", "cargo test");
+        let cloned = rule.clone();
+        assert_eq!(cloned.marker_file, "Cargo.toml");
+        assert_eq!(cloned.command, "cargo test");
+    }
+
+    #[test]
+    fn test_detection_rule_debug() {
+        let rule = DetectionRule::new("go.mod", "go test ./...");
+        let debug_str = format!("{:?}", rule);
+        assert!(debug_str.contains("go.mod"));
+        assert!(debug_str.contains("go test"));
+    }
+
+    #[test]
+    fn test_test_command_detector_new() {
+        let detector = TestCommandDetector::new();
+        assert!(!detector.rules().is_empty());
+        // Should have default rules for common project types
+        let rules = detector.rules();
+        assert!(rules.iter().any(|r| r.marker_file == "package.json"));
+        assert!(rules.iter().any(|r| r.marker_file == "Cargo.toml"));
+        assert!(rules.iter().any(|r| r.marker_file == "pyproject.toml"));
+        assert!(rules.iter().any(|r| r.marker_file == "go.mod"));
+    }
+
+    #[test]
+    fn test_test_command_detector_default() {
+        let detector = TestCommandDetector::default();
+        assert!(!detector.rules().is_empty());
+    }
+
+    #[test]
+    fn test_detect_npm() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::write(temp.path().join("package.json"), "{}").unwrap();
+
+        let detector = TestCommandDetector::new();
+        assert_eq!(detector.detect(temp.path()), Some("npm test".to_string()));
+    }
+
+    #[test]
+    fn test_detect_cargo() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::write(temp.path().join("Cargo.toml"), "[package]").unwrap();
+
+        let detector = TestCommandDetector::new();
+        assert_eq!(detector.detect(temp.path()), Some("cargo test".to_string()));
+    }
+
+    #[test]
+    fn test_detect_pyproject() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::write(temp.path().join("pyproject.toml"), "[project]").unwrap();
+
+        let detector = TestCommandDetector::new();
+        assert_eq!(detector.detect(temp.path()), Some("pytest".to_string()));
+    }
+
+    #[test]
+    fn test_detect_setup_py() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::write(temp.path().join("setup.py"), "from setuptools import setup").unwrap();
+
+        let detector = TestCommandDetector::new();
+        assert_eq!(detector.detect(temp.path()), Some("pytest".to_string()));
+    }
+
+    #[test]
+    fn test_detect_go() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::write(temp.path().join("go.mod"), "module test").unwrap();
+
+        let detector = TestCommandDetector::new();
+        assert_eq!(detector.detect(temp.path()), Some("go test ./...".to_string()));
+    }
+
+    #[test]
+    fn test_detect_makefile_with_test_target() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::write(temp.path().join("Makefile"), "test:\n\techo test").unwrap();
+
+        let detector = TestCommandDetector::new();
+        assert_eq!(detector.detect(temp.path()), Some("make test".to_string()));
+    }
+
+    #[test]
+    fn test_detect_makefile_without_test_target() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::write(temp.path().join("Makefile"), "build:\n\techo build").unwrap();
+
+        let detector = TestCommandDetector::new();
+        // Should not match because there's no "test:" target
+        assert!(detector.detect(temp.path()).is_none());
+    }
+
+    #[test]
+    fn test_detect_nothing() {
+        let temp = tempfile::TempDir::new().unwrap();
+
+        let detector = TestCommandDetector::new();
+        assert!(detector.detect(temp.path()).is_none());
+    }
+
+    #[test]
+    fn test_detect_priority() {
+        let temp = tempfile::TempDir::new().unwrap();
+        // Create both package.json and Cargo.toml
+        std::fs::write(temp.path().join("package.json"), "{}").unwrap();
+        std::fs::write(temp.path().join("Cargo.toml"), "[package]").unwrap();
+
+        let detector = TestCommandDetector::new();
+        // package.json comes first in the default rules
+        assert_eq!(detector.detect(temp.path()), Some("npm test".to_string()));
+    }
+
+    #[test]
+    fn test_custom_rule_priority() {
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::write(temp.path().join("custom.toml"), "").unwrap();
+        std::fs::write(temp.path().join("package.json"), "{}").unwrap();
+
+        let mut detector = TestCommandDetector::new();
+        detector.add_rule(DetectionRule::new("custom.toml", "custom-test"));
+
+        // Custom rule should match first
+        assert_eq!(detector.detect(temp.path()), Some("custom-test".to_string()));
+    }
+
+    #[test]
+    fn test_add_multiple_rules() {
+        let mut detector = TestCommandDetector::new();
+        let initial_count = detector.rules().len();
+
+        detector.add_rule(DetectionRule::new("first.toml", "first-test"));
+        detector.add_rule(DetectionRule::new("second.toml", "second-test"));
+
+        assert_eq!(detector.rules().len(), initial_count + 2);
+        // Most recently added rule should be first
+        assert_eq!(detector.rules()[0].marker_file, "second.toml");
+        assert_eq!(detector.rules()[1].marker_file, "first.toml");
+    }
+
+    #[test]
+    fn test_detector_clone() {
+        let detector = TestCommandDetector::new();
+        let cloned = detector.clone();
+        assert_eq!(detector.rules().len(), cloned.rules().len());
+    }
+
+    #[test]
+    fn test_detector_debug() {
+        let detector = TestCommandDetector::new();
+        let debug_str = format!("{:?}", detector);
+        assert!(debug_str.contains("TestCommandDetector"));
+        assert!(debug_str.contains("rules"));
     }
 }
