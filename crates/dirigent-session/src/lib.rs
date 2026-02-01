@@ -1,19 +1,20 @@
 //! Dirigent Session
 //!
 //! Session management crate providing PTY abstraction, process tree
-//! management, and session state tracking for Dirigent.
+//! management, session state tracking, and skill management for Dirigent.
 //!
 //! # Overview
 //!
-//! This crate provides the foundational PTY (pseudo-terminal) handling
-//! and session management for Dirigent. Each session represents a terminal
-//! running an AI coding CLI tool.
+//! This crate provides the foundational PTY (pseudo-terminal) handling,
+//! session management, and skill loading for Dirigent. Each session represents
+//! a terminal running an AI coding CLI tool.
 //!
 //! # Modules
 //!
 //! - [`pty`] - PTY creation, I/O, and async output reading
 //! - [`session`] - Internal session state combining metadata with runtime handles
 //! - [`manager`] - Session manager implementing the `SessionManager` trait
+//! - [`skill_manager`] - Skill discovery and management from filesystem
 //!
 //! # Example
 //!
@@ -46,9 +47,17 @@
 pub mod manager;
 pub mod pty;
 pub mod session;
+pub mod skill_manager;
+
+// Git worktree support (Phase 4 feature)
+#[cfg(feature = "git-worktree")]
 pub mod worktree;
 
 pub use manager::DefaultSessionManager;
 pub use pty::{spawn_output_reader, OutputReader, PtyHandle, PtySize};
 pub use session::SessionState;
+pub use skill_manager::DefaultSkillManager;
+
+// Re-export worktree when feature is enabled
+#[cfg(feature = "git-worktree")]
 pub use worktree::WorktreeManager;

@@ -6,6 +6,11 @@ edition.workspace = true
 rust-version.workspace = true
 license.workspace = true
 
+[features]
+default = []
+# Git worktree support (Phase 4 feature)
+git-worktree = ["dep:git2"]
+
 [dependencies]
 dirigent-core.workspace = true
 anyhow.workspace = true
@@ -14,7 +19,10 @@ serde.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 portable-pty.workspace = true
-git2.workspace = true
+dirs.workspace = true
+
+# Optional: Git worktree support
+git2 = { workspace = true, optional = true }
 
 [dev-dependencies]
 tempfile.workspace = true
