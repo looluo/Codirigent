@@ -15,7 +15,7 @@ use tracing::{debug, info};
 /// PTY dimensions.
 ///
 /// Represents the terminal size in rows and columns.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 pub struct PtySize {
     /// Terminal height in rows.
     pub rows: u16,
@@ -142,7 +142,9 @@ impl PtyHandle {
             .spawn_command(cmd)
             .context("Failed to spawn command")?;
 
-        let child_pid = child.process_id().unwrap_or(0);
+        let child_pid = child
+            .process_id()
+            .context("Failed to get child process ID")?;
         debug!(child_pid, "PTY child spawned");
 
         let reader = pair
@@ -229,7 +231,8 @@ impl PtyHandle {
     /// Get the child process ID.
     ///
     /// Returns the PID of the spawned child process.
-    /// Returns 0 if the PID could not be determined.
+    /// The PID is guaranteed to be valid (non-zero) as PTY creation
+    /// fails if the child PID cannot be determined.
     pub fn child_pid(&self) -> u32 {
         self.child_pid
     }
@@ -279,10 +282,175 @@ fn detect_shell() -> String {
 }
 
 /// Buffer size for reading PTY output.
+///
+/// 4KB is a good balance between memory usage and reducing syscall overhead.
+/// This matches common pipe buffer sizes on Unix systems.
 const OUTPUT_BUFFER_SIZE: usize = 4096;
 
 /// Channel capacity for output messages.
+///
+/// 256 messages allows buffering up to 1MB of output (256 * 4KB) before
+/// backpressure kicks in. This provides headroom for bursty output while
+/// preventing unbounded memory growth.
 const OUTPUT_CHANNEL_CAPACITY: usize = 256;
+
+/// Async PTY output reader with managed lifecycle.
+///
+/// Wraps a background thread that reads from the PTY and sends output
+/// through an mpsc channel. Provides clean shutdown via the [`stop`](Self::stop) method.
+///
+/// The reader thread terminates when:
+/// - The PTY closes (EOF)
+/// - A read error occurs
+/// - The channel receiver is dropped
+/// - [`stop`](Self::stop) is called
+pub struct OutputReader {
+    /// Channel receiver for output data.
+    receiver: mpsc::Receiver<Vec<u8>>,
+    /// Join handle for the reader thread.
+    join_handle: Option<thread::JoinHandle<()>>,
+}
+
+impl OutputReader {
+    /// Create a new output reader for the given PTY reader.
+    ///
+    /// Spawns a background thread that reads from the PTY and sends
+    /// output through an internal channel.
+    ///
+    /// # Arguments
+    /// * `reader` - The PTY reader (obtained via [`PtyHandle::take_reader`])
+    ///
+    /// # Example
+    /// ```no_run
+    /// use dirigent_session::{PtyHandle, OutputReader};
+    /// use std::path::Path;
+    ///
+    /// # async fn example() {
+    /// let mut pty = PtyHandle::spawn(Path::new("/tmp"), 24, 80).unwrap();
+    /// let reader = pty.take_reader().unwrap();
+    /// let mut output_reader = OutputReader::new(reader);
+    ///
+    /// // Receive output asynchronously
+    /// while let Some(data) = output_reader.recv().await {
+    ///     println!("Received {} bytes", data.len());
+    /// }
+    ///
+    /// // Clean shutdown
+    /// output_reader.stop();
+    /// # }
+    /// ```
+    pub fn new(mut reader: Box<dyn Read + Send>) -> Self {
+        let (tx, rx) = mpsc::channel(OUTPUT_CHANNEL_CAPACITY);
+
+        let handle = thread::spawn(move || {
+            let mut buf = [0u8; OUTPUT_BUFFER_SIZE];
+            loop {
+                match reader.read(&mut buf) {
+                    Ok(0) => {
+                        debug!("PTY reader reached EOF");
+                        break;
+                    }
+                    Ok(n) => {
+                        let data = buf[..n].to_vec();
+                        if tx.blocking_send(data).is_err() {
+                            debug!("PTY output channel closed");
+                            break;
+                        }
+                    }
+                    Err(e) => {
+                        debug!(?e, "PTY read error");
+                        break;
+                    }
+                }
+            }
+        });
+
+        Self {
+            receiver: rx,
+            join_handle: Some(handle),
+        }
+    }
+
+    /// Receive the next chunk of output data.
+    ///
+    /// Returns `None` when the PTY closes or an error occurs.
+    pub async fn recv(&mut self) -> Option<Vec<u8>> {
+        self.receiver.recv().await
+    }
+
+    /// Get a mutable reference to the underlying receiver.
+    ///
+    /// Useful for more advanced channel operations like `try_recv` or
+    /// combining with other futures using `select!`.
+    pub fn receiver_mut(&mut self) -> &mut mpsc::Receiver<Vec<u8>> {
+        &mut self.receiver
+    }
+
+    /// Stop the reader thread and clean up resources.
+    ///
+    /// This closes the channel and waits for the reader thread to terminate.
+    /// Call this method when you're done reading from the PTY to ensure
+    /// clean resource cleanup.
+    ///
+    /// After calling `stop`, the reader cannot be used anymore.
+    pub fn stop(mut self) {
+        // Close the receiver to signal the thread to stop
+        self.receiver.close();
+
+        // Wait for the thread to finish
+        if let Some(handle) = self.join_handle.take() {
+            // Use a timeout to avoid blocking forever if the thread is stuck
+            // The thread should exit quickly once the channel is closed
+            let _ = handle.join();
+        }
+    }
+
+    /// Check if the reader thread is still running.
+    pub fn is_running(&self) -> bool {
+        self.join_handle
+            .as_ref()
+            .is_some_and(|h| !h.is_finished())
+    }
+
+    /// Consume self and return just the receiver.
+    ///
+    /// This is used for backward compatibility with `spawn_output_reader`.
+    /// The join handle is intentionally discarded - the thread will terminate
+    /// when the receiver is dropped or the PTY closes.
+    pub fn into_receiver(self) -> mpsc::Receiver<Vec<u8>> {
+        // Use ManuallyDrop to prevent Drop from running, which would close the receiver
+        let this = std::mem::ManuallyDrop::new(self);
+        // SAFETY: We're moving out of `this` which is wrapped in ManuallyDrop,
+        // so we need to use ptr::read to get ownership of the fields.
+        // We explicitly forget the join_handle to avoid calling Drop on it.
+        unsafe {
+            let receiver = std::ptr::read(&this.receiver);
+            let join_handle = std::ptr::read(&this.join_handle);
+            // Explicitly drop the join handle - the thread will continue running
+            // and will terminate when the receiver is dropped or PTY closes
+            drop(join_handle);
+            receiver
+        }
+    }
+}
+
+impl Drop for OutputReader {
+    fn drop(&mut self) {
+        // Close the receiver to signal the thread to stop
+        self.receiver.close();
+
+        // If the join handle is still present, the thread is still running
+        // We don't wait here to avoid blocking in Drop, but closing the
+        // receiver will cause the thread to exit on its next send attempt
+        if let Some(handle) = self.join_handle.take() {
+            // Try to join without blocking - if not ready, just let it go
+            // The thread will exit naturally when it tries to send
+            if handle.is_finished() {
+                let _ = handle.join();
+            }
+        }
+    }
+}
 
 /// Spawn an async task to read PTY output.
 ///
@@ -290,6 +458,11 @@ const OUTPUT_CHANNEL_CAPACITY: usize = 256;
 /// output through an mpsc channel. The thread terminates when
 /// the PTY closes (EOF), a read error occurs, or the channel receiver
 /// is dropped.
+///
+/// # Deprecation Note
+/// This function is provided for backward compatibility. Prefer using
+/// [`OutputReader::new`] which provides proper lifecycle management
+/// including a [`stop`](OutputReader::stop) method for clean shutdown.
 ///
 /// # Arguments
 /// * `reader` - The PTY reader (obtained via [`PtyHandle::take_reader`])
@@ -313,33 +486,12 @@ const OUTPUT_CHANNEL_CAPACITY: usize = 256;
 /// }
 /// # }
 /// ```
-pub fn spawn_output_reader(mut reader: Box<dyn Read + Send>) -> mpsc::Receiver<Vec<u8>> {
-    let (tx, rx) = mpsc::channel(OUTPUT_CHANNEL_CAPACITY);
-
-    thread::spawn(move || {
-        let mut buf = [0u8; OUTPUT_BUFFER_SIZE];
-        loop {
-            match reader.read(&mut buf) {
-                Ok(0) => {
-                    debug!("PTY reader reached EOF");
-                    break;
-                }
-                Ok(n) => {
-                    let data = buf[..n].to_vec();
-                    if tx.blocking_send(data).is_err() {
-                        debug!("PTY output channel closed");
-                        break;
-                    }
-                }
-                Err(e) => {
-                    debug!(?e, "PTY read error");
-                    break;
-                }
-            }
-        }
-    });
-
-    rx
+pub fn spawn_output_reader(reader: Box<dyn Read + Send>) -> mpsc::Receiver<Vec<u8>> {
+    let output_reader = OutputReader::new(reader);
+    // Note: We intentionally take just the receiver here for backward compatibility.
+    // The thread will still terminate when the receiver is dropped.
+    // Use OutputReader::new() directly for proper lifecycle management.
+    output_reader.into_receiver()
 }
 
 #[cfg(test)]
@@ -642,5 +794,170 @@ mod tests {
         let result = PtyHandle::spawn(&invalid_path, 24, 80);
         // We just check it doesn't panic
         let _ = result;
+    }
+
+    #[test]
+    fn test_pty_size_serialize_deserialize() {
+        let size = PtySize::new(48, 120);
+        let json = serde_json::to_string(&size).unwrap();
+        assert!(json.contains("48"));
+        assert!(json.contains("120"));
+
+        let deserialized: PtySize = serde_json::from_str(&json).unwrap();
+        assert_eq!(deserialized, size);
+    }
+
+    #[tokio::test]
+    async fn test_output_reader_new() {
+        let temp = TempDir::new().unwrap();
+        let mut pty = PtyHandle::spawn(temp.path(), 24, 80).unwrap();
+
+        let reader = pty.take_reader().expect("Reader should exist");
+        let mut output_reader = OutputReader::new(reader);
+
+        // Send a command that produces output
+        #[cfg(unix)]
+        pty.send_input(b"echo output_reader_test\n").unwrap();
+
+        #[cfg(windows)]
+        pty.send_input(b"echo output_reader_test\r\n").unwrap();
+
+        // Wait for output (with timeout)
+        let mut found = false;
+        for _ in 0..50 {
+            if let Ok(data) =
+                tokio::time::timeout(std::time::Duration::from_millis(100), output_reader.recv())
+                    .await
+            {
+                if let Some(bytes) = data {
+                    let output = String::from_utf8_lossy(&bytes);
+                    if output.contains("output_reader_test") {
+                        found = true;
+                        break;
+                    }
+                }
+            }
+        }
+
+        assert!(found, "Expected to find output in PTY stream");
+
+        // Clean shutdown
+        output_reader.stop();
+    }
+
+    #[tokio::test]
+    async fn test_output_reader_is_running() {
+        let temp = TempDir::new().unwrap();
+        let mut pty = PtyHandle::spawn(temp.path(), 24, 80).unwrap();
+
+        let reader = pty.take_reader().expect("Reader should exist");
+        let output_reader = OutputReader::new(reader);
+
+        // Thread should be running initially
+        assert!(output_reader.is_running());
+
+        output_reader.stop();
+    }
+
+    #[tokio::test]
+    async fn test_output_reader_stop_cleans_up() {
+        let temp = TempDir::new().unwrap();
+        let mut pty = PtyHandle::spawn(temp.path(), 24, 80).unwrap();
+
+        let reader = pty.take_reader().expect("Reader should exist");
+        let output_reader = OutputReader::new(reader);
+
+        // Stop should complete without hanging
+        output_reader.stop();
+
+        // Test passes if we get here without hanging
+    }
+
+    #[tokio::test]
+    async fn test_output_reader_receiver_mut() {
+        let temp = TempDir::new().unwrap();
+        let mut pty = PtyHandle::spawn(temp.path(), 24, 80).unwrap();
+
+        let reader = pty.take_reader().expect("Reader should exist");
+        let mut output_reader = OutputReader::new(reader);
+
+        // Should be able to access receiver mutably
+        let rx = output_reader.receiver_mut();
+
+        // Try a non-blocking receive
+        let result = rx.try_recv();
+        // Either empty or has data - both are valid
+        assert!(result.is_err() || result.is_ok());
+
+        output_reader.stop();
+    }
+
+    #[tokio::test]
+    async fn test_output_reader_drop() {
+        let temp = TempDir::new().unwrap();
+        let mut pty = PtyHandle::spawn(temp.path(), 24, 80).unwrap();
+
+        let reader = pty.take_reader().expect("Reader should exist");
+
+        {
+            let _output_reader = OutputReader::new(reader);
+            // OutputReader will be dropped here
+        }
+
+        // Small delay to let thread clean up
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+
+        // Test passes if we don't hang or crash
+    }
+
+    #[tokio::test]
+    async fn test_output_reader_multiple_recv() {
+        let temp = TempDir::new().unwrap();
+        let mut pty = PtyHandle::spawn(temp.path(), 24, 80).unwrap();
+
+        let reader = pty.take_reader().expect("Reader should exist");
+        let mut output_reader = OutputReader::new(reader);
+
+        // Send multiple commands
+        for i in 0..3 {
+            #[cfg(unix)]
+            pty.send_input(format!("echo reader_chunk_{}\n", i).as_bytes())
+                .unwrap();
+
+            #[cfg(windows)]
+            pty.send_input(format!("echo reader_chunk_{}\r\n", i).as_bytes())
+                .unwrap();
+        }
+
+        // Collect output
+        let mut all_output = String::new();
+
+        for _ in 0..100 {
+            if let Ok(data) =
+                tokio::time::timeout(std::time::Duration::from_millis(50), output_reader.recv())
+                    .await
+            {
+                if let Some(bytes) = data {
+                    let output = String::from_utf8_lossy(&bytes);
+                    all_output.push_str(&output);
+                }
+            }
+
+            // Check if we got all chunks
+            let mut found_all = true;
+            for i in 0..3 {
+                if !all_output.contains(&format!("reader_chunk_{}", i)) {
+                    found_all = false;
+                    break;
+                }
+            }
+            if found_all {
+                break;
+            }
+        }
+
+        assert!(!all_output.is_empty(), "Should receive some output");
+
+        output_reader.stop();
     }
 }

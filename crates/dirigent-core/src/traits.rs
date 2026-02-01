@@ -72,13 +72,13 @@ pub trait EventBus: Send + Sync {
 pub trait SessionManager: Send + Sync {
     /// Get all active sessions.
     ///
-    /// Returns a list of references to all sessions currently managed.
-    fn list_sessions(&self) -> Vec<&Session>;
+    /// Returns a list of cloned sessions currently managed.
+    fn list_sessions(&self) -> Vec<Session>;
 
     /// Get a specific session by ID.
     ///
     /// Returns `None` if no session with the given ID exists.
-    fn get_session(&self, id: SessionId) -> Option<&Session>;
+    fn get_session(&self, id: SessionId) -> Option<Session>;
 
     /// Create a new session with the given name and working directory.
     ///
@@ -90,7 +90,7 @@ pub trait SessionManager: Send + Sync {
     /// # Returns
     ///
     /// The ID of the newly created session, or an error if creation failed.
-    fn create_session(&mut self, name: String, working_dir: std::path::PathBuf) -> Result<SessionId>;
+    fn create_session(&self, name: String, working_dir: std::path::PathBuf) -> Result<SessionId>;
 
     /// Close and cleanup a session.
     ///
@@ -99,7 +99,7 @@ pub trait SessionManager: Send + Sync {
     /// # Errors
     ///
     /// Returns an error if the session doesn't exist or cleanup fails.
-    fn close_session(&mut self, id: SessionId) -> Result<()>;
+    fn close_session(&self, id: SessionId) -> Result<()>;
 
     /// Send input to a session's PTY.
     ///
@@ -113,7 +113,7 @@ pub trait SessionManager: Send + Sync {
     /// # Errors
     ///
     /// Returns an error if the session doesn't exist or writing fails.
-    fn send_input(&mut self, id: SessionId, input: &[u8]) -> Result<()>;
+    fn send_input(&self, id: SessionId, input: &[u8]) -> Result<()>;
 
     /// Resize a session's PTY.
     ///
@@ -126,12 +126,12 @@ pub trait SessionManager: Send + Sync {
     /// # Errors
     ///
     /// Returns an error if the session doesn't exist or resize fails.
-    fn resize(&mut self, id: SessionId, rows: u16, cols: u16) -> Result<()>;
+    fn resize(&self, id: SessionId, rows: u16, cols: u16) -> Result<()>;
 
     /// Update session status (called by detector).
     ///
     /// This is called by the process monitor when it detects a status change.
-    fn update_status(&mut self, id: SessionId, status: SessionStatus);
+    fn update_status(&self, id: SessionId, status: SessionStatus);
 
     /// Rename a session.
     ///
@@ -143,7 +143,7 @@ pub trait SessionManager: Send + Sync {
     /// # Errors
     ///
     /// Returns an error if the session doesn't exist.
-    fn rename_session(&mut self, id: SessionId, new_name: String) -> Result<()>;
+    fn rename_session(&self, id: SessionId, new_name: String) -> Result<()>;
 
     /// Set session group and color.
     ///
@@ -159,7 +159,7 @@ pub trait SessionManager: Send + Sync {
     ///
     /// Returns an error if the session doesn't exist.
     fn set_session_group(
-        &mut self,
+        &self,
         id: SessionId,
         group: Option<String>,
         color: Option<String>,
@@ -347,61 +347,65 @@ mod tests {
     }
 
     struct MockSessionManager {
-        sessions: Vec<Session>,
+        sessions: std::sync::Mutex<Vec<Session>>,
     }
 
     impl SessionManager for MockSessionManager {
-        fn list_sessions(&self) -> Vec<&Session> {
-            self.sessions.iter().collect()
+        fn list_sessions(&self) -> Vec<Session> {
+            self.sessions.lock().unwrap().clone()
         }
 
-        fn get_session(&self, id: SessionId) -> Option<&Session> {
-            self.sessions.iter().find(|s| s.id == id)
+        fn get_session(&self, id: SessionId) -> Option<Session> {
+            self.sessions.lock().unwrap().iter().find(|s| s.id == id).cloned()
         }
 
         fn create_session(
-            &mut self,
+            &self,
             name: String,
             working_dir: std::path::PathBuf,
         ) -> Result<SessionId> {
-            let id = SessionId(self.sessions.len() as u64);
-            self.sessions.push(Session::new(id, name, working_dir));
+            let mut sessions = self.sessions.lock().unwrap();
+            let id = SessionId(sessions.len() as u64);
+            sessions.push(Session::new(id, name, working_dir));
             Ok(id)
         }
 
-        fn close_session(&mut self, id: SessionId) -> Result<()> {
-            self.sessions.retain(|s| s.id != id);
+        fn close_session(&self, id: SessionId) -> Result<()> {
+            self.sessions.lock().unwrap().retain(|s| s.id != id);
             Ok(())
         }
 
-        fn send_input(&mut self, _id: SessionId, _input: &[u8]) -> Result<()> {
+        fn send_input(&self, _id: SessionId, _input: &[u8]) -> Result<()> {
             Ok(())
         }
 
-        fn resize(&mut self, _id: SessionId, _rows: u16, _cols: u16) -> Result<()> {
+        fn resize(&self, _id: SessionId, _rows: u16, _cols: u16) -> Result<()> {
             Ok(())
         }
 
-        fn update_status(&mut self, id: SessionId, status: SessionStatus) {
-            if let Some(session) = self.sessions.iter_mut().find(|s| s.id == id) {
+        fn update_status(&self, id: SessionId, status: SessionStatus) {
+            let mut sessions = self.sessions.lock().unwrap();
+            if let Some(session) = sessions.iter_mut().find(|s| s.id == id) {
                 session.status = status;
             }
         }
 
-        fn rename_session(&mut self, id: SessionId, new_name: String) -> Result<()> {
-            if let Some(session) = self.sessions.iter_mut().find(|s| s.id == id) {
+        fn rename_session(&self, id: SessionId, new_name: String) -> Result<()> {
+            let mut sessions = self.sessions.lock().unwrap();
+            if let Some(session) = sessions.iter_mut().find(|s| s.id == id) {
                 session.name = new_name;
             }
             Ok(())
         }
 
         fn set_session_group(
-            &mut self,
+            &self,
             id: SessionId,
             group: Option<String>,
             color: Option<String>,
         ) -> Result<()> {
-            if let Some(session) = self.sessions.iter_mut().find(|s| s.id == id) {
+            let mut sessions = self.sessions.lock().unwrap();
+            if let Some(session) = sessions.iter_mut().find(|s| s.id == id) {
                 session.group = group;
                 session.color = color;
             }
@@ -411,8 +415,8 @@ mod tests {
 
     #[test]
     fn test_mock_session_manager_create_and_list() {
-        let mut manager = MockSessionManager {
-            sessions: Vec::new(),
+        let manager = MockSessionManager {
+            sessions: std::sync::Mutex::new(Vec::new()),
         };
 
         let id = manager
@@ -427,8 +431,8 @@ mod tests {
 
     #[test]
     fn test_mock_session_manager_get_session() {
-        let mut manager = MockSessionManager {
-            sessions: Vec::new(),
+        let manager = MockSessionManager {
+            sessions: std::sync::Mutex::new(Vec::new()),
         };
 
         let id = manager
@@ -441,8 +445,8 @@ mod tests {
 
     #[test]
     fn test_mock_session_manager_close_session() {
-        let mut manager = MockSessionManager {
-            sessions: Vec::new(),
+        let manager = MockSessionManager {
+            sessions: std::sync::Mutex::new(Vec::new()),
         };
 
         let id = manager
@@ -456,8 +460,8 @@ mod tests {
 
     #[test]
     fn test_mock_session_manager_update_status() {
-        let mut manager = MockSessionManager {
-            sessions: Vec::new(),
+        let manager = MockSessionManager {
+            sessions: std::sync::Mutex::new(Vec::new()),
         };
 
         let id = manager
@@ -473,8 +477,8 @@ mod tests {
 
     #[test]
     fn test_mock_session_manager_rename() {
-        let mut manager = MockSessionManager {
-            sessions: Vec::new(),
+        let manager = MockSessionManager {
+            sessions: std::sync::Mutex::new(Vec::new()),
         };
 
         let id = manager
@@ -487,8 +491,8 @@ mod tests {
 
     #[test]
     fn test_mock_session_manager_set_group() {
-        let mut manager = MockSessionManager {
-            sessions: Vec::new(),
+        let manager = MockSessionManager {
+            sessions: std::sync::Mutex::new(Vec::new()),
         };
 
         let id = manager

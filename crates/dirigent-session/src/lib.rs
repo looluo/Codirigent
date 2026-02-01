@@ -6,36 +6,47 @@
 //! # Overview
 //!
 //! This crate provides the foundational PTY (pseudo-terminal) handling
-//! for Dirigent sessions. Each session represents a terminal running
-//! an AI coding CLI tool.
+//! and session management for Dirigent. Each session represents a terminal
+//! running an AI coding CLI tool.
 //!
 //! # Modules
 //!
 //! - [`pty`] - PTY creation, I/O, and async output reading
+//! - [`session`] - Internal session state combining metadata with runtime handles
+//! - [`manager`] - Session manager implementing the `SessionManager` trait
 //!
 //! # Example
 //!
 //! ```no_run
-//! use dirigent_session::{PtyHandle, PtySize, spawn_output_reader};
+//! use dirigent_session::{DefaultSessionManager, PtyHandle, PtySize, OutputReader};
+//! use dirigent_core::{DefaultEventBus, SessionManager};
+//! use std::sync::Arc;
 //! use std::path::Path;
 //!
-//! // Spawn a PTY with the default shell
-//! let mut pty = PtyHandle::spawn(Path::new("/tmp"), 24, 80).unwrap();
+//! // Create a session manager with an event bus
+//! let event_bus = Arc::new(DefaultEventBus::new(16));
+//! let mut manager = DefaultSessionManager::new(event_bus);
 //!
-//! // Send input to the terminal
-//! pty.send_input(b"echo hello\n").unwrap();
+//! // Create a new session
+//! let id = manager.create_session(
+//!     "My Session".to_string(),
+//!     std::path::PathBuf::from("/tmp"),
+//! ).unwrap();
 //!
-//! // Take the reader for async processing
-//! let reader = pty.take_reader().unwrap();
-//! let mut rx = spawn_output_reader(reader);
+//! // Send input to the session
+//! manager.send_input(id, b"echo hello\n").unwrap();
 //!
-//! // Output can be received via the channel
-//! // rx.recv().await
+//! // Close the session when done
+//! manager.close_session(id).unwrap();
 //! ```
 
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
+pub mod manager;
 pub mod pty;
+pub mod session;
 
-pub use pty::{spawn_output_reader, PtyHandle, PtySize};
+pub use manager::DefaultSessionManager;
+pub use pty::{spawn_output_reader, OutputReader, PtyHandle, PtySize};
+pub use session::SessionState;
