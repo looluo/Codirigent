@@ -1,0 +1,5 @@
+# This directory stores Dirigent runtime state
+# - config.json: Project-level configuration
+# - state.json: Runtime state (sessions, etc.) - gitignored
+# - tasks/*.json: Task definitions
+# - queue.json: Task queue state

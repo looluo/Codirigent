@@ -1,0 +1,118 @@
+# =============================================================================
+# Dirigent Project .gitignore
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Project-Internal Files (not shared with open-source)
+# -----------------------------------------------------------------------------
+
+# Claude Code configuration and agents
+CLAUDE.md
+.claude/
+
+# Project documentation (internal spec)
+docs/
+
+# Development plans
+plans/
+
+# Code review results
+reviews/
+
+# -----------------------------------------------------------------------------
+# Rust / Cargo
+# -----------------------------------------------------------------------------
+
+# Build output
+target/
+
+# Cargo.lock is included for applications (not libraries)
+# Uncomment if you want to ignore it:
+# Cargo.lock
+
+# -----------------------------------------------------------------------------
+# IDE / Editor
+# -----------------------------------------------------------------------------
+
+# VS Code
+.vscode/
+
+# JetBrains (RustRover, IntelliJ)
+.idea/
+*.iml
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+.#*
+
+# Sublime Text
+*.sublime-workspace
+*.sublime-project
+
+# -----------------------------------------------------------------------------
+# Operating System
+# -----------------------------------------------------------------------------
+
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+._*
+.Spotlight-V100
+.Trashes
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+*.lnk
+
+# Linux
+*~
+.directory
+
+# -----------------------------------------------------------------------------
+# Dirigent Runtime (generated during use)
+# -----------------------------------------------------------------------------
+
+# Runtime state (not tracked, regenerated on start)
+.dirigent/state.json
+
+# Session notes are optional to track
+# Uncomment to ignore:
+# .dirigent/sessions/
+
+# -----------------------------------------------------------------------------
+# Miscellaneous
+# -----------------------------------------------------------------------------
+
+# Environment files (may contain secrets)
+.env
+.env.*
+*.env
+
+# Log files
+*.log
+logs/
+
+# Temporary files
+*.tmp
+*.temp
+tmp/
+temp/
+
+# Coverage reports
+coverage/
+*.lcov
+*.gcov
+
+# Profiling data
+*.profdata
+*.profraw

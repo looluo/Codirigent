@@ -1,0 +1,22 @@
+[package]
+name = "dirigent-ui"
+description = "GPUI-based user interface for Dirigent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+dirigent-core.workspace = true
+dirigent-session.workspace = true
+dirigent-detector.workspace = true
+dirigent-filetree.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+
+# TODO(Stage 9): Enable GPUI dependency
+# gpui = { git = "https://github.com/zed-industries/zed", package = "gpui" }
+alacritty_terminal.workspace = true
