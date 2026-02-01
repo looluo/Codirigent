@@ -4,7 +4,8 @@ members = [
     "crates/dirigent-core",
     "crates/dirigent-session",
     "crates/dirigent-detector",
-    "crates/dirigent-ui",
+    # TODO: Uncomment when Rust toolchain is upgraded to support 2024 edition
+    # "crates/dirigent-ui",
     "crates/dirigent-filetree",
 ]
 
@@ -29,7 +30,8 @@ chrono = { version = "0.4.43", features = ["serde"] }
 
 # PTY and terminal
 portable-pty = "0.8.1"
-alacritty_terminal = "0.25.1"
+# TODO: Uncomment when Rust toolchain is upgraded
+# alacritty_terminal = "0.25.1"
 
 # Platform-specific
 procfs = "0.18.0"
@@ -64,7 +66,8 @@ path = "src/main.rs"
 dirigent-core.workspace = true
 dirigent-session.workspace = true
 dirigent-detector.workspace = true
-dirigent-ui.workspace = true
+# TODO: Uncomment when Rust toolchain is upgraded
+# dirigent-ui.workspace = true
 dirigent-filetree.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
