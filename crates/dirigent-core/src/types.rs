@@ -4,6 +4,7 @@
 //! including identifiers, enums, and core data structures.
 
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::Duration;
 
@@ -459,6 +460,151 @@ pub struct AppState {
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
 }
 
+/// Queue state persisted to queue.json.
+///
+/// Tracks the ordered list of queued tasks and blocked task dependencies.
+/// This is used by the task scheduler to determine which tasks can be
+/// assigned to sessions.
+///
+/// # Example
+///
+/// ```
+/// use dirigent_core::{QueueState, TaskId};
+///
+/// let mut state = QueueState::default();
+/// state.order.push(TaskId("task-001".to_string()));
+/// state.order.push(TaskId("task-002".to_string()));
+///
+/// // task-003 is blocked by task-001
+/// state.blocked.insert(
+///     TaskId("task-003".to_string()),
+///     vec![TaskId("task-001".to_string())],
+/// );
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, Default, PartialEq)]
+pub struct QueueState {
+    /// Ordered list of queued task IDs (priority order).
+    pub order: Vec<TaskId>,
+
+    /// Map of blocked task ID to blocking task IDs.
+    pub blocked: HashMap<TaskId, Vec<TaskId>>,
+
+    /// Last updated timestamp.
+    pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Verification result from running tests.
+///
+/// Captures the output and results from running a verification command
+/// (typically a test suite) for a task.
+///
+/// # Example
+///
+/// ```
+/// use dirigent_core::{VerificationResult, TestResults};
+/// use std::time::Duration;
+///
+/// let result = VerificationResult {
+///     success: true,
+///     exit_code: Some(0),
+///     stdout: "All tests passed".to_string(),
+///     stderr: "".to_string(),
+///     test_results: None,
+///     duration: Duration::from_secs(5),
+///     run_at: chrono::Utc::now(),
+/// };
+/// assert!(result.success);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VerificationResult {
+    /// Whether verification passed.
+    pub success: bool,
+
+    /// Exit code of the verification command.
+    pub exit_code: Option<i32>,
+
+    /// Standard output from the command.
+    pub stdout: String,
+
+    /// Standard error from the command.
+    pub stderr: String,
+
+    /// Parsed test results if available.
+    pub test_results: Option<TestResults>,
+
+    /// Duration of the verification run.
+    #[serde(with = "humantime_serde")]
+    pub duration: Duration,
+
+    /// When verification was run.
+    pub run_at: chrono::DateTime<chrono::Utc>,
+}
+
+/// Parsed test results from verification output.
+///
+/// Contains aggregate counts and individual failure details
+/// extracted from the test runner output.
+///
+/// # Example
+///
+/// ```
+/// use dirigent_core::TestResults;
+///
+/// let results = TestResults {
+///     total: 10,
+///     passed: 8,
+///     failed: 2,
+///     skipped: 0,
+///     failures: vec![],
+/// };
+/// assert_eq!(results.total, results.passed + results.failed + results.skipped);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TestResults {
+    /// Total tests run.
+    pub total: u32,
+
+    /// Tests passed.
+    pub passed: u32,
+
+    /// Tests failed.
+    pub failed: u32,
+
+    /// Tests skipped.
+    pub skipped: u32,
+
+    /// Individual failure details.
+    pub failures: Vec<TestFailure>,
+}
+
+/// Details of a single test failure.
+///
+/// Contains information about a specific test that failed during
+/// verification, including the error message and optional stack trace.
+///
+/// # Example
+///
+/// ```
+/// use dirigent_core::TestFailure;
+///
+/// let failure = TestFailure {
+///     name: "test_user_login".to_string(),
+///     message: "Expected status 200, got 401".to_string(),
+///     stack_trace: None,
+/// };
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TestFailure {
+    /// Test name/path.
+    pub name: String,
+
+    /// Error message.
+    pub message: String,
+
+    /// Stack trace if available.
+    pub stack_trace: Option<String>,
+}
+
 /// Git worktree information.
 ///
 /// Represents a git worktree, which allows multiple working directories
@@ -868,6 +1014,170 @@ mod tests {
         };
         assert_eq!(config1, config2);
         assert_ne!(config1, config3);
+    }
+
+    // QueueState tests
+    #[test]
+    fn test_queue_state_default() {
+        let state = QueueState::default();
+        assert!(state.order.is_empty());
+        assert!(state.blocked.is_empty());
+        assert!(state.updated_at.is_none());
+    }
+
+    #[test]
+    fn test_queue_state_serialization() {
+        let mut state = QueueState::default();
+        state.order = vec![
+            TaskId("task-001".to_string()),
+            TaskId("task-002".to_string()),
+        ];
+        state.blocked.insert(
+            TaskId("task-003".to_string()),
+            vec![TaskId("task-001".to_string())],
+        );
+        state.updated_at = Some(chrono::Utc::now());
+
+        let json = serde_json::to_string_pretty(&state).unwrap();
+        let parsed: QueueState = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.order.len(), 2);
+        assert!(parsed.blocked.contains_key(&TaskId("task-003".to_string())));
+        assert!(parsed.updated_at.is_some());
+    }
+
+    #[test]
+    fn test_queue_state_equality() {
+        let state1 = QueueState::default();
+        let state2 = QueueState::default();
+        let mut state3 = QueueState::default();
+        state3.order.push(TaskId("task-001".to_string()));
+        assert_eq!(state1, state2);
+        assert_ne!(state1, state3);
+    }
+
+    // VerificationResult tests
+    #[test]
+    fn test_verification_result_success() {
+        let result = VerificationResult {
+            success: true,
+            exit_code: Some(0),
+            stdout: "All tests passed".to_string(),
+            stderr: "".to_string(),
+            test_results: None,
+            duration: Duration::from_secs(5),
+            run_at: chrono::Utc::now(),
+        };
+        assert!(result.success);
+        assert_eq!(result.exit_code, Some(0));
+    }
+
+    #[test]
+    fn test_verification_result_failure() {
+        let result = VerificationResult {
+            success: false,
+            exit_code: Some(1),
+            stdout: "21 passed, 2 failed".to_string(),
+            stderr: "".to_string(),
+            test_results: Some(TestResults {
+                total: 23,
+                passed: 21,
+                failed: 2,
+                skipped: 0,
+                failures: vec![TestFailure {
+                    name: "auth.test > should reject".to_string(),
+                    message: "Expected 401, got 200".to_string(),
+                    stack_trace: None,
+                }],
+            }),
+            duration: Duration::from_secs(15),
+            run_at: chrono::Utc::now(),
+        };
+
+        assert!(!result.success);
+        let test_results = result.test_results.unwrap();
+        assert_eq!(test_results.failed, 2);
+        assert_eq!(test_results.failures.len(), 1);
+    }
+
+    #[test]
+    fn test_verification_result_serialization() {
+        let result = VerificationResult {
+            success: false,
+            exit_code: Some(1),
+            stdout: "21 passed, 2 failed".to_string(),
+            stderr: "warning".to_string(),
+            test_results: Some(TestResults {
+                total: 23,
+                passed: 21,
+                failed: 2,
+                skipped: 0,
+                failures: vec![TestFailure {
+                    name: "auth.test > should reject".to_string(),
+                    message: "Expected 401, got 200".to_string(),
+                    stack_trace: Some("at line 42".to_string()),
+                }],
+            }),
+            duration: Duration::from_secs(15),
+            run_at: chrono::Utc::now(),
+        };
+
+        let json = serde_json::to_string(&result).unwrap();
+        let parsed: VerificationResult = serde_json::from_str(&json).unwrap();
+        assert!(!parsed.success);
+        assert_eq!(parsed.test_results.unwrap().failed, 2);
+    }
+
+    // TestResults tests
+    #[test]
+    fn test_test_results_creation() {
+        let results = TestResults {
+            total: 10,
+            passed: 8,
+            failed: 1,
+            skipped: 1,
+            failures: vec![],
+        };
+        assert_eq!(results.total, results.passed + results.failed + results.skipped);
+    }
+
+    #[test]
+    fn test_test_results_serialization() {
+        let results = TestResults {
+            total: 10,
+            passed: 10,
+            failed: 0,
+            skipped: 0,
+            failures: vec![],
+        };
+        let json = serde_json::to_string(&results).unwrap();
+        let parsed: TestResults = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.total, 10);
+        assert_eq!(parsed.passed, 10);
+    }
+
+    // TestFailure tests
+    #[test]
+    fn test_test_failure_creation() {
+        let failure = TestFailure {
+            name: "test_login".to_string(),
+            message: "assertion failed".to_string(),
+            stack_trace: Some("at main.rs:42".to_string()),
+        };
+        assert_eq!(failure.name, "test_login");
+        assert!(failure.stack_trace.is_some());
+    }
+
+    #[test]
+    fn test_test_failure_serialization() {
+        let failure = TestFailure {
+            name: "test_login".to_string(),
+            message: "assertion failed".to_string(),
+            stack_trace: None,
+        };
+        let json = serde_json::to_string(&failure).unwrap();
+        let parsed: TestFailure = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.name, "test_login");
+        assert!(parsed.stack_trace.is_none());
     }
 
     // GridPosition tests
