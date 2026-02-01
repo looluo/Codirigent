@@ -10,8 +10,8 @@ members = [
 
 [workspace.package]
 version = "0.1.0"
-edition = "2024"
-rust-version = "1.85"
+edition = "2021"
+rust-version = "1.70"
 authors = ["Dirigent Contributors"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/user/dirigent"
@@ -28,12 +28,16 @@ tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 chrono = { version = "0.4.43", features = ["serde"] }
 
 # PTY and terminal
-portable-pty = "0.9.0"
+portable-pty = "0.8.1"
 alacritty_terminal = "0.25.1"
 
 # Platform-specific
 procfs = "0.18.0"
-libproc = "0.14.11"
+libproc = "0.14.8"
+libc = "0.2.180"
+
+# Pattern matching
+regex = "1.12.2"
 
 # Internal crates
 dirigent-core = { path = "crates/dirigent-core" }
