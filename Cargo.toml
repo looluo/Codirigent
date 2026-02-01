@@ -83,7 +83,11 @@ dirigent-core.workspace = true
 dirigent-session.workspace = true
 dirigent-detector.workspace = true
 dirigent-filetree.workspace = true
+dirigent-ui.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true
