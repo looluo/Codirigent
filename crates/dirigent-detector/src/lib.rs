@@ -90,7 +90,7 @@ pub mod platform;
 // Re-export main types for convenience
 pub use detector::{DetectorConfig, InputDetector};
 pub use notification::{notify_error, notify_input_required, notify_task_completed, send_notification};
-pub use patterns::DEFAULT_PATTERNS;
+pub use patterns::{DEFAULT_PATTERNS, DEFAULT_RECENT_LINES_TO_CHECK};
 pub use platform::{NativeMonitor, PlatformMonitor, ProcessInfo, ProcessState};
 
 // Re-export the factory function

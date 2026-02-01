@@ -144,14 +144,24 @@ pub fn notify_error(session_id: SessionId, session_name: &str, error_message: &s
     send_notification(title, &body);
 }
 
+/// Sanitize a string for safe use in AppleScript.
+///
+/// Escapes backslashes and double quotes, and replaces control characters
+/// (newlines, carriage returns, tabs) with spaces to prevent injection attacks.
+fn sanitize_for_applescript(s: &str) -> String {
+    s.replace('\\', "\\\\")
+        .replace('"', "\\\"")
+        .replace(['\n', '\r', '\t'], " ")
+}
+
 /// macOS notification using osascript.
 #[cfg(target_os = "macos")]
 fn send_macos_notification(title: &str, body: &str) {
     use std::process::Command;
 
-    // Escape quotes for AppleScript
-    let escaped_title = title.replace('\\', "\\\\").replace('"', "\\\"");
-    let escaped_body = body.replace('\\', "\\\\").replace('"', "\\\"");
+    // Sanitize strings for AppleScript (escape special chars, remove control chars)
+    let escaped_title = sanitize_for_applescript(title);
+    let escaped_body = sanitize_for_applescript(body);
 
     let script = format!(
         r#"display notification "{}" with title "{}""#,
@@ -353,6 +363,60 @@ mod tests {
     #[test]
     fn test_notify_error_with_multiline_message() {
         notify_error(SessionId(1), "Test", "Error\nwith\nmultiple\nlines");
+    }
+
+    #[test]
+    fn test_sanitize_for_applescript_basic() {
+        let result = sanitize_for_applescript("hello");
+        assert_eq!(result, "hello");
+    }
+
+    #[test]
+    fn test_sanitize_for_applescript_quotes() {
+        let result = sanitize_for_applescript("hello \"world\"");
+        assert_eq!(result, "hello \\\"world\\\"");
+    }
+
+    #[test]
+    fn test_sanitize_for_applescript_backslash() {
+        let result = sanitize_for_applescript("path\\to\\file");
+        assert_eq!(result, "path\\\\to\\\\file");
+    }
+
+    #[test]
+    fn test_sanitize_for_applescript_newline() {
+        let result = sanitize_for_applescript("line1\nline2");
+        assert_eq!(result, "line1 line2");
+    }
+
+    #[test]
+    fn test_sanitize_for_applescript_carriage_return() {
+        let result = sanitize_for_applescript("line1\rline2");
+        assert_eq!(result, "line1 line2");
+    }
+
+    #[test]
+    fn test_sanitize_for_applescript_tab() {
+        let result = sanitize_for_applescript("col1\tcol2");
+        assert_eq!(result, "col1 col2");
+    }
+
+    #[test]
+    fn test_sanitize_for_applescript_all_control_chars() {
+        let result = sanitize_for_applescript("a\nb\rc\td");
+        assert_eq!(result, "a b c d");
+    }
+
+    #[test]
+    fn test_sanitize_for_applescript_combined() {
+        let result = sanitize_for_applescript("\"hello\"\nworld\\path");
+        assert_eq!(result, "\\\"hello\\\" world\\\\path");
+    }
+
+    #[test]
+    fn test_sanitize_for_applescript_empty() {
+        let result = sanitize_for_applescript("");
+        assert_eq!(result, "");
     }
 
     // Platform-specific tests

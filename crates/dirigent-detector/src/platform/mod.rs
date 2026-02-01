@@ -10,7 +10,7 @@ use anyhow::Result;
 ///
 /// Represents the current execution state of a process in a way that is
 /// meaningful across all supported platforms.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum ProcessState {
     /// Process is actively executing (on CPU or ready to run).
     Running,
@@ -21,6 +21,7 @@ pub enum ProcessState {
     /// Process has terminated (zombie or exited).
     Terminated,
     /// State could not be determined.
+    #[default]
     Unknown,
 }
 
@@ -33,12 +34,6 @@ impl std::fmt::Display for ProcessState {
             Self::Terminated => write!(f, "Terminated"),
             Self::Unknown => write!(f, "Unknown"),
         }
-    }
-}
-
-impl Default for ProcessState {
-    fn default() -> Self {
-        Self::Unknown
     }
 }
 

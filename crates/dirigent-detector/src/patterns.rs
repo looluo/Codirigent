@@ -100,10 +100,65 @@ pub fn compile_patterns(patterns: &[String]) -> Vec<Regex> {
 /// let result = find_matching_pattern(&patterns, "Install package? [y/n]");
 /// assert!(result.is_some());
 /// ```
+/// Default number of recent lines to check for pattern matching.
+///
+/// Only the most recent lines are checked for efficiency, as input
+/// prompts typically appear at the end of the output.
+///
+/// # Example
+///
+/// ```
+/// use dirigent_detector::patterns::DEFAULT_RECENT_LINES_TO_CHECK;
+///
+/// assert_eq!(DEFAULT_RECENT_LINES_TO_CHECK, 5);
+/// ```
+pub const DEFAULT_RECENT_LINES_TO_CHECK: usize = 5;
+
+/// Check if any pattern matches the output and return the matching pattern string.
+///
+/// This is a convenience wrapper around [`find_matching_pattern_with_limit`] that
+/// uses the default number of recent lines to check ([`DEFAULT_RECENT_LINES_TO_CHECK`]).
+///
+/// # Arguments
+///
+/// * `patterns` - A slice of compiled Regex patterns
+/// * `output` - The output text to check against
+///
+/// # Returns
+///
+/// The pattern string that matched, or `None` if no pattern matched.
 pub fn find_matching_pattern(patterns: &[Regex], output: &str) -> Option<String> {
+    find_matching_pattern_with_limit(patterns, output, DEFAULT_RECENT_LINES_TO_CHECK)
+}
+
+/// Check if any pattern matches the output and return the matching pattern string.
+///
+/// For efficiency, only the last `recent_lines` lines of output are checked, as input
+/// prompts typically appear at the end of the output.
+///
+/// # Arguments
+///
+/// * `patterns` - A slice of compiled Regex patterns
+/// * `output` - The output text to check against
+/// * `recent_lines` - Number of recent lines to check
+///
+/// # Returns
+///
+/// The pattern string that matched, or `None` if no pattern matched.
+pub fn find_matching_pattern_with_limit(
+    patterns: &[Regex],
+    output: &str,
+    recent_lines: usize,
+) -> Option<String> {
     // Only check the last few lines for efficiency
-    let lines: Vec<&str> = output.lines().rev().take(5).collect();
-    let recent_output = lines.into_iter().rev().collect::<Vec<_>>().join("\n");
+    // Count the lines and find the starting point
+    let line_count = output.lines().count();
+    let skip_count = line_count.saturating_sub(recent_lines);
+    let recent_output: String = output
+        .lines()
+        .skip(skip_count)
+        .collect::<Vec<_>>()
+        .join("\n");
 
     for pattern in patterns {
         if pattern.is_match(&recent_output) {
@@ -378,5 +433,43 @@ mod tests {
         assert_eq!(compiled[0].as_str(), "first");
         assert_eq!(compiled[1].as_str(), "second");
         assert_eq!(compiled[2].as_str(), "third");
+    }
+
+    #[test]
+    fn test_default_recent_lines_to_check() {
+        assert_eq!(DEFAULT_RECENT_LINES_TO_CHECK, 5);
+    }
+
+    #[test]
+    fn test_find_matching_pattern_with_limit_custom() {
+        let patterns = compile_patterns(&vec![r"\[y/n\]".to_string()]);
+        // Pattern appears in third line from end
+        let output = "line1\nline2\n[y/n]\nline4\nline5";
+
+        // With limit 3, should find it
+        let result = find_matching_pattern_with_limit(&patterns, output, 3);
+        assert!(result.is_some());
+
+        // With limit 2, should not find it (only checks last 2 lines)
+        let result = find_matching_pattern_with_limit(&patterns, output, 2);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_matching_pattern_with_limit_zero() {
+        let patterns = compile_patterns(&vec![r"\[y/n\]".to_string()]);
+        let output = "[y/n]";
+        // With limit 0, checks 0 lines, so no match
+        let result = find_matching_pattern_with_limit(&patterns, output, 0);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_find_matching_pattern_with_limit_large() {
+        let patterns = compile_patterns(&vec![r"\[y/n\]".to_string()]);
+        let output = "[y/n]\nline2";
+        // With very large limit, should still work (checks all lines)
+        let result = find_matching_pattern_with_limit(&patterns, output, 100);
+        assert!(result.is_some());
     }
 }

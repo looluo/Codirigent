@@ -34,7 +34,7 @@
 //! let status = detector.get_status(SessionId(1));
 //! ```
 
-use crate::patterns::{compile_patterns, find_matching_pattern, get_default_patterns};
+use crate::patterns::{compile_patterns, find_matching_pattern_with_limit, get_default_patterns};
 use crate::platform::{NativeMonitor, PlatformMonitor, ProcessState};
 use anyhow::Result;
 use dirigent_core::{DirigentEvent, EventBus, ProcessMonitor, SessionId, SessionStatus};
@@ -248,13 +248,23 @@ impl InputDetector {
 
             // Trim buffer if too large
             if session.output_buffer.len() > self.config.max_buffer_size {
-                let start = session.output_buffer.len() - self.config.max_buffer_size;
+                let target_start = session.output_buffer.len() - self.config.max_buffer_size;
+                // Find the next valid char boundary to avoid panic on multi-byte UTF-8
+                let start = session
+                    .output_buffer
+                    .char_indices()
+                    .find(|(i, _)| *i >= target_start)
+                    .map(|(i, _)| i)
+                    .unwrap_or(session.output_buffer.len());
                 session.output_buffer = session.output_buffer[start..].to_string();
             }
 
             // Check for patterns
-            session.pattern_matched =
-                find_matching_pattern(&self.compiled_patterns, &session.output_buffer);
+            session.pattern_matched = find_matching_pattern_with_limit(
+                &self.compiled_patterns,
+                &session.output_buffer,
+                self.config.recent_lines_to_check,
+            );
 
             // Update status
             self.update_session_status(session_id);
@@ -730,6 +740,47 @@ mod tests {
 
         // The buffer should be trimmed
         // (we can't easily inspect the buffer size, but it shouldn't panic)
+    }
+
+    #[test]
+    fn test_buffer_size_limit_with_multibyte_utf8() {
+        let config = DetectorConfig {
+            max_buffer_size: 50,
+            ..Default::default()
+        };
+        let mut detector = create_detector_with_config(config);
+        detector
+            .start_monitoring(SessionId(1), std::process::id())
+            .unwrap();
+
+        // Use multi-byte UTF-8 characters (Japanese hiragana, 3 bytes each)
+        // This ensures the trim doesn't panic on UTF-8 boundaries
+        let multibyte_data = "あいうえおかきくけこさしすせそたちつてと";
+        detector.process_output(SessionId(1), multibyte_data.as_bytes());
+
+        // Should not panic, and the detector should still work
+        let status = detector.get_status(SessionId(1));
+        assert!(status.is_some());
+    }
+
+    #[test]
+    fn test_buffer_size_limit_with_emoji() {
+        let config = DetectorConfig {
+            max_buffer_size: 20,
+            ..Default::default()
+        };
+        let mut detector = create_detector_with_config(config);
+        detector
+            .start_monitoring(SessionId(1), std::process::id())
+            .unwrap();
+
+        // Emoji are 4 bytes each in UTF-8
+        let emoji_data = "🎉🎊🎁🎂🎄🎃🎆🎇🎈🎀";
+        detector.process_output(SessionId(1), emoji_data.as_bytes());
+
+        // Should not panic
+        let status = detector.get_status(SessionId(1));
+        assert!(status.is_some());
     }
 
     // Idle time tests
