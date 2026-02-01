@@ -11,6 +11,10 @@
 //! - [`storage`] - File-based storage service
 //! - [`plugin`] - Plugin system types and traits
 //! - [`verification`] - Verification types and events
+//! - [`context`] - Context window tracking for AI sessions
+//! - [`config`] - Configuration types (ProjectConfig, UserSettings)
+//! - [`config_service`] - Configuration loading and saving service
+//! - [`skill`] - Skill management types (Skill, SkillPreset, TokenBudget)
 //! - [`error`] - Error types
 //!
 //! ## Quick Start
@@ -62,22 +66,30 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
+pub mod config;
+pub mod config_service;
+pub mod context;
 pub mod error;
 pub mod event_bus;
 pub mod events;
 pub mod plugin;
 pub mod scheduler;
+pub mod skill;
 pub mod storage;
 pub mod traits;
 pub mod types;
 pub mod verification;
 
 // Re-export commonly used items
+pub use config::{ProjectConfig, UserSettings};
+pub use config_service::{ConfigChange, ConfigService, DefaultConfigService, EffectiveConfig};
+pub use context::{ContextConfig, ContextPattern, ContextTracker, ContextTrackingService, ContextUsage};
 pub use error::{DirigentError, Result};
 pub use event_bus::DefaultEventBus;
 pub use events::DirigentEvent;
 pub use scheduler::{SchedulerConfig, SchedulerMode, TaskQueue, TaskQueueService};
+pub use skill::{Skill, SkillPreset, SkillType, TokenBudget};
 pub use storage::FileStorageService;
-pub use traits::{EventBus, ProcessMonitor, SessionManager, StorageService};
+pub use traits::{EventBus, ProcessMonitor, SessionManager, SkillManager, StorageService};
 pub use traits::{FailureFormatter, ProjectType, VerificationDetector, Verifier};
 pub use types::*;
