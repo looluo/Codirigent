@@ -144,9 +144,22 @@ impl FileStorageService {
     /// Get the path to a specific task file.
     ///
     /// Task files are named `{task_id}.json` in the tasks directory.
+    /// Uses whitelist sanitization: only alphanumeric, dash, and underscore
+    /// characters are allowed. All other characters (including null bytes,
+    /// path separators, and control characters) are replaced with underscore.
     fn task_path(&self, id: &TaskId) -> PathBuf {
-        // Sanitize task ID to prevent path traversal
-        let safe_id = id.0.replace(['/', '\\'], "_").replace("..", "_");
+        // Sanitize: only allow alphanumeric, dash, underscore (whitelist approach)
+        let safe_id: String = id
+            .0
+            .chars()
+            .map(|c| {
+                if c.is_alphanumeric() || c == '-' || c == '_' {
+                    c
+                } else {
+                    '_'
+                }
+            })
+            .collect();
         self.tasks_dir().join(format!("{}.json", safe_id))
     }
 
@@ -154,12 +167,17 @@ impl FileStorageService {
     ///
     /// Writes to a temporary file first, then renames to the target path.
     /// This prevents corruption in case of crashes during write.
+    /// If rename fails after write succeeds, the temp file is cleaned up.
     fn atomic_write(&self, path: &Path, content: &str) -> Result<()> {
         let temp_path = path.with_extension("json.tmp");
         fs::write(&temp_path, content)
             .with_context(|| format!("Failed to write temp file at {:?}", temp_path))?;
-        fs::rename(&temp_path, path)
-            .with_context(|| format!("Failed to rename temp file to {:?}", path))?;
+
+        if let Err(e) = fs::rename(&temp_path, path) {
+            // Clean up temp file if rename fails
+            let _ = fs::remove_file(&temp_path);
+            return Err(e).with_context(|| format!("Failed to rename temp file to {:?}", path));
+        }
         Ok(())
     }
 }
@@ -436,9 +454,61 @@ mod tests {
         let dangerous_id = TaskId("../../../etc/passwd".to_string());
         let path = storage.task_path(&dangerous_id);
 
-        // Should not contain path traversal
+        // Should not contain path traversal - dots and slashes replaced with underscores
         assert!(!path.to_string_lossy().contains(".."));
+        assert!(!path.to_string_lossy().contains("/etc/"));
         assert!(path.starts_with(storage.tasks_dir()));
+
+        // Verify the sanitized filename uses whitelist approach
+        // "../../../etc/passwd" -> "_________etc_passwd" (dots and slashes become underscores)
+        let filename = path.file_stem().unwrap().to_str().unwrap();
+        assert_eq!(filename, "_________etc_passwd");
+    }
+
+    #[test]
+    fn test_task_path_whitelist_sanitization() {
+        let temp = TempDir::new().unwrap();
+        let storage = FileStorageService::new(temp.path()).unwrap();
+
+        // Test various dangerous characters are sanitized
+        let test_cases = [
+            // (input, expected_sanitized_stem)
+            ("valid-task_123", "valid-task_123"),           // Valid chars unchanged
+            ("task/with/slashes", "task_with_slashes"),     // Slashes sanitized
+            ("task\\backslash", "task_backslash"),          // Backslashes sanitized
+            ("task..dots", "task__dots"),                   // Dots sanitized
+            ("task\0null", "task_null"),                    // Null bytes sanitized
+            ("task\nwith\ttabs", "task_with_tabs"),         // Control chars sanitized
+            ("task with spaces", "task_with_spaces"),       // Spaces sanitized
+            ("task:colon", "task_colon"),                   // Colons sanitized
+            ("task<>|", "task___"),                         // Special chars sanitized
+        ];
+
+        for (input, expected) in test_cases {
+            let id = TaskId(input.to_string());
+            let path = storage.task_path(&id);
+            let stem = path.file_stem().unwrap().to_str().unwrap();
+            assert_eq!(
+                stem, expected,
+                "Input '{}' should sanitize to '{}' but got '{}'",
+                input, expected, stem
+            );
+            // All paths should be within tasks_dir
+            assert!(path.starts_with(storage.tasks_dir()));
+        }
+    }
+
+    #[test]
+    fn test_task_path_preserves_valid_characters() {
+        let temp = TempDir::new().unwrap();
+        let storage = FileStorageService::new(temp.path()).unwrap();
+
+        // Valid task IDs should be preserved exactly
+        let valid_id = TaskId("task-001_feature_ABC123".to_string());
+        let path = storage.task_path(&valid_id);
+        let filename = path.file_name().unwrap().to_str().unwrap();
+
+        assert_eq!(filename, "task-001_feature_ABC123.json");
     }
 
     // ========== State Load/Save Tests ==========
@@ -906,11 +976,19 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let storage = FileStorageService::new(temp.path()).unwrap();
 
+        // Spaces in task IDs are sanitized to underscores, so the same
+        // sanitized path is used for save and load
         let task = create_test_task("task with spaces", "Spaced Task");
         storage.save_task(&task).unwrap();
 
+        // The file is saved with sanitized name "task_with_spaces.json"
+        let sanitized_path = storage.tasks_dir().join("task_with_spaces.json");
+        assert!(sanitized_path.exists());
+
+        // Loading with original ID works because both use same sanitization
         let loaded = storage.load_task(&TaskId("task with spaces".to_string())).unwrap();
         assert!(loaded.is_some());
+        assert_eq!(loaded.unwrap().title, "Spaced Task");
     }
 
     #[test]
