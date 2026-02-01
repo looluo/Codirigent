@@ -31,7 +31,7 @@
 //! ```
 
 use anyhow::{bail, Context, Result};
-use dirigent_core::{Worktree, WorktreeCreateOptions};
+use dirigent_core::{SessionId, Worktree, WorktreeCreateOptions};
 use git2::Repository;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
@@ -356,6 +356,184 @@ impl WorktreeManager {
 
         self.refresh()?;
         Ok(())
+    }
+
+    /// Bind a session to a worktree.
+    ///
+    /// Associates a session with a worktree. If the session is already bound
+    /// to another worktree, it will be unbound first.
+    ///
+    /// # Arguments
+    ///
+    /// * `worktree_path` - Path to the worktree to bind to
+    /// * `session_id` - ID of the session to bind
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The worktree is not found
+    /// - The worktree is already bound to another session
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use dirigent_session::WorktreeManager;
+    /// use dirigent_core::SessionId;
+    /// use std::path::Path;
+    ///
+    /// let mut manager = WorktreeManager::new(Path::new("/path/to/repo")).unwrap();
+    /// manager.bind_session(Path::new("/path/to/repo"), SessionId(1)).unwrap();
+    /// ```
+    pub fn bind_session(&mut self, worktree_path: &Path, session_id: SessionId) -> Result<()> {
+        // Unbind from any existing worktree first
+        self.unbind_session(session_id)?;
+
+        let wt = self
+            .worktrees
+            .iter_mut()
+            .find(|w| w.path == worktree_path)
+            .context("Worktree not found")?;
+
+        if wt.bound_session.is_some() {
+            bail!("Worktree already bound to another session");
+        }
+
+        info!(?session_id, path = ?worktree_path, "Binding session to worktree");
+        wt.bound_session = Some(session_id);
+        Ok(())
+    }
+
+    /// Unbind a session from its worktree.
+    ///
+    /// If the session is not bound to any worktree, this is a no-op.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - ID of the session to unbind
+    ///
+    /// # Errors
+    ///
+    /// This method always succeeds. If the session is not bound, it returns Ok.
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use dirigent_session::WorktreeManager;
+    /// use dirigent_core::SessionId;
+    /// use std::path::Path;
+    ///
+    /// let mut manager = WorktreeManager::new(Path::new("/path/to/repo")).unwrap();
+    /// manager.unbind_session(SessionId(1)).unwrap();
+    /// ```
+    pub fn unbind_session(&mut self, session_id: SessionId) -> Result<()> {
+        for wt in &mut self.worktrees {
+            if wt.bound_session == Some(session_id) {
+                debug!(?session_id, path = ?wt.path, "Unbinding session from worktree");
+                wt.bound_session = None;
+                return Ok(());
+            }
+        }
+        Ok(()) // Not bound to anything is fine
+    }
+
+    /// Get the worktree for a session.
+    ///
+    /// Returns the worktree that a session is bound to, if any.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - ID of the session to look up
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use dirigent_session::WorktreeManager;
+    /// use dirigent_core::SessionId;
+    /// use std::path::Path;
+    ///
+    /// let mut manager = WorktreeManager::new(Path::new("/path/to/repo")).unwrap();
+    /// if let Some(wt) = manager.get_session_worktree(SessionId(1)) {
+    ///     println!("Session 1 is on branch: {}", wt.branch);
+    /// }
+    /// ```
+    pub fn get_session_worktree(&self, session_id: SessionId) -> Option<&Worktree> {
+        self.worktrees
+            .iter()
+            .find(|wt| wt.bound_session == Some(session_id))
+    }
+
+    /// Clean up worktrees whose branches have been merged.
+    ///
+    /// Removes worktrees where the branch has been merged into the target branch
+    /// and no session is bound. This helps keep the repository clean.
+    ///
+    /// # Arguments
+    ///
+    /// * `target_branch` - The branch to check merges against (e.g., "main")
+    ///
+    /// # Returns
+    ///
+    /// A list of paths that were removed.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if:
+    /// - The repository cannot be opened
+    /// - The target branch cannot be found
+    ///
+    /// # Example
+    ///
+    /// ```no_run
+    /// use dirigent_session::WorktreeManager;
+    /// use std::path::Path;
+    ///
+    /// let mut manager = WorktreeManager::new(Path::new("/path/to/repo")).unwrap();
+    /// let removed = manager.cleanup_merged("main").unwrap();
+    /// println!("Removed {} merged worktrees", removed.len());
+    /// ```
+    pub fn cleanup_merged(&mut self, target_branch: &str) -> Result<Vec<PathBuf>> {
+        let repo = Repository::open(&self.repo_path)?;
+        let mut removed = Vec::new();
+
+        // Get target branch commit
+        let target = repo
+            .find_branch(target_branch, git2::BranchType::Local)
+            .context("Target branch not found")?;
+        let target_commit = target
+            .get()
+            .peel_to_commit()
+            .context("Failed to get target commit")?;
+
+        // Collect paths to remove (non-main, unbound worktrees whose branches are merged)
+        let paths_to_remove: Vec<_> = self
+            .worktrees
+            .iter()
+            .filter(|wt| !wt.is_main && wt.bound_session.is_none())
+            .filter_map(|wt| {
+                // Check if branch is merged into target
+                if let Ok(branch) = repo.find_branch(&wt.branch, git2::BranchType::Local) {
+                    if let Ok(branch_commit) = branch.get().peel_to_commit() {
+                        // A branch is "merged" if target contains the branch commit
+                        if repo
+                            .graph_descendant_of(target_commit.id(), branch_commit.id())
+                            .unwrap_or(false)
+                        {
+                            return Some(wt.path.clone());
+                        }
+                    }
+                }
+                None
+            })
+            .collect();
+
+        for path in paths_to_remove {
+            if self.remove(&path, true).is_ok() {
+                info!(path = ?path, "Cleaned up merged worktree");
+                removed.push(path);
+            }
+        }
+
+        Ok(removed)
     }
 }
 
@@ -687,5 +865,206 @@ mod tests {
         manager.remove(&wt_path, true).unwrap();
 
         assert_eq!(manager.list().len(), count_before - 1);
+    }
+
+    // Session binding tests
+    #[test]
+    fn test_bind_session() {
+        let (_temp, path) = setup_test_repo();
+        let mut manager = WorktreeManager::new(&path).unwrap();
+
+        let session_id = SessionId(1);
+        let main_path = manager.repo_path().to_path_buf();
+
+        let result = manager.bind_session(&main_path, session_id);
+        assert!(result.is_ok());
+
+        let wt = manager.get_session_worktree(session_id);
+        assert!(wt.is_some());
+        assert!(wt.unwrap().is_main);
+    }
+
+    #[test]
+    fn test_bind_session_nonexistent_worktree() {
+        let (_temp, path) = setup_test_repo();
+        let mut manager = WorktreeManager::new(&path).unwrap();
+
+        let fake_path = path.join("nonexistent");
+        let result = manager.bind_session(&fake_path, SessionId(1));
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_bind_session_already_bound() {
+        let (_temp, path) = setup_test_repo();
+        let mut manager = WorktreeManager::new(&path).unwrap();
+
+        let main_path = manager.repo_path().to_path_buf();
+
+        // Bind first session
+        manager.bind_session(&main_path, SessionId(1)).unwrap();
+
+        // Try to bind second session to same worktree
+        let result = manager.bind_session(&main_path, SessionId(2));
+
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("already bound"));
+    }
+
+    #[test]
+    fn test_bind_session_rebinds_from_other_worktree() {
+        let (_temp, path) = setup_test_repo();
+        let mut manager = WorktreeManager::new(&path).unwrap();
+
+        let main_path = manager.repo_path().to_path_buf();
+
+        // Create a second worktree
+        let options = WorktreeCreateOptions::new("feature-rebind".to_string());
+        let wt2 = manager.create(options).unwrap();
+        let wt2_path = wt2.path.clone();
+
+        // Bind session to main
+        manager.bind_session(&main_path, SessionId(1)).unwrap();
+
+        // Now bind to second worktree - should unbind from main
+        manager.bind_session(&wt2_path, SessionId(1)).unwrap();
+
+        // Session should be on second worktree
+        let wt = manager.get_session_worktree(SessionId(1)).unwrap();
+        assert_eq!(wt.path, wt2_path);
+
+        // Main worktree should not be bound
+        let main_wt = manager.list().iter().find(|w| w.is_main).unwrap();
+        assert!(main_wt.bound_session.is_none());
+    }
+
+    #[test]
+    fn test_unbind_session() {
+        let (_temp, path) = setup_test_repo();
+        let mut manager = WorktreeManager::new(&path).unwrap();
+
+        let session_id = SessionId(1);
+        let main_path = manager.repo_path().to_path_buf();
+
+        manager.bind_session(&main_path, session_id).unwrap();
+        let result = manager.unbind_session(session_id);
+        assert!(result.is_ok());
+
+        assert!(manager.get_session_worktree(session_id).is_none());
+    }
+
+    #[test]
+    fn test_unbind_session_not_bound() {
+        let (_temp, path) = setup_test_repo();
+        let mut manager = WorktreeManager::new(&path).unwrap();
+
+        // Unbinding a session that's not bound should succeed
+        let result = manager.unbind_session(SessionId(999));
+        assert!(result.is_ok());
+    }
+
+    #[test]
+    fn test_get_session_worktree() {
+        let (_temp, path) = setup_test_repo();
+        let mut manager = WorktreeManager::new(&path).unwrap();
+
+        let main_path = manager.repo_path().to_path_buf();
+        manager.bind_session(&main_path, SessionId(1)).unwrap();
+
+        let wt = manager.get_session_worktree(SessionId(1));
+        assert!(wt.is_some());
+        assert_eq!(wt.unwrap().path, main_path);
+    }
+
+    #[test]
+    fn test_get_session_worktree_not_found() {
+        let (_temp, path) = setup_test_repo();
+        let manager = WorktreeManager::new(&path).unwrap();
+
+        let wt = manager.get_session_worktree(SessionId(999));
+        assert!(wt.is_none());
+    }
+
+    // Cleanup merged tests
+    #[test]
+    fn test_cleanup_merged_no_merged_worktrees() {
+        let (_temp, path) = setup_test_repo();
+        let mut manager = WorktreeManager::new(&path).unwrap();
+
+        // Create a worktree (not merged)
+        let options = WorktreeCreateOptions::new("feature-not-merged".to_string());
+        manager.create(options).unwrap();
+
+        // Get main branch name
+        let main_branch = manager
+            .list()
+            .iter()
+            .find(|w| w.is_main)
+            .unwrap()
+            .branch
+            .clone();
+
+        let removed = manager.cleanup_merged(&main_branch).unwrap();
+        assert!(removed.is_empty());
+    }
+
+    #[test]
+    fn test_cleanup_merged_target_branch_not_found() {
+        let (_temp, path) = setup_test_repo();
+        let mut manager = WorktreeManager::new(&path).unwrap();
+
+        let result = manager.cleanup_merged("nonexistent-branch");
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("not found"));
+    }
+
+    #[test]
+    fn test_cleanup_merged_skips_main_worktree() {
+        let (_temp, path) = setup_test_repo();
+        let mut manager = WorktreeManager::new(&path).unwrap();
+
+        let main_branch = manager
+            .list()
+            .iter()
+            .find(|w| w.is_main)
+            .unwrap()
+            .branch
+            .clone();
+
+        // This should not try to remove the main worktree
+        let removed = manager.cleanup_merged(&main_branch).unwrap();
+        assert!(removed.is_empty());
+
+        // Main worktree should still exist
+        assert!(manager.list().iter().any(|w| w.is_main));
+    }
+
+    #[test]
+    fn test_cleanup_merged_skips_bound_worktrees() {
+        let (_temp, path) = setup_test_repo();
+        let mut manager = WorktreeManager::new(&path).unwrap();
+
+        // Create and bind a worktree
+        let options = WorktreeCreateOptions::new("feature-bound".to_string());
+        let wt = manager.create(options).unwrap();
+        manager.bind_session(&wt.path, SessionId(1)).unwrap();
+
+        let main_branch = manager
+            .list()
+            .iter()
+            .find(|w| w.is_main)
+            .unwrap()
+            .branch
+            .clone();
+
+        // Even if merged, bound worktrees should not be removed
+        let removed = manager.cleanup_merged(&main_branch).unwrap();
+
+        // The worktree should still exist because it's bound
+        let wt_exists = manager.list().iter().any(|w| w.branch == "feature-bound");
+        assert!(wt_exists);
+        assert!(removed.is_empty());
     }
 }
