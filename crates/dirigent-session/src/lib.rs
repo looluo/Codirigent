@@ -46,7 +46,9 @@
 pub mod manager;
 pub mod pty;
 pub mod session;
+pub mod worktree;
 
 pub use manager::DefaultSessionManager;
 pub use pty::{spawn_output_reader, OutputReader, PtyHandle, PtySize};
 pub use session::SessionState;
+pub use worktree::WorktreeManager;
