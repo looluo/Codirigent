@@ -5,6 +5,7 @@
 //! should happen through events, allowing modules to react to changes
 //! without tight coupling.
 
+use crate::skill::TokenBudget;
 use crate::types::*;
 use std::path::PathBuf;
 
@@ -20,6 +21,7 @@ use std::path::PathBuf;
 /// - **Layout Events**: UI layout changes
 /// - **Task Events**: Task lifecycle (Phase 2 foundation)
 /// - **File Tree Events**: File drag-and-drop operations
+/// - **Skill Events**: Skill management and token budget tracking
 ///
 /// # Example
 ///
@@ -173,6 +175,66 @@ pub enum DirigentEvent {
     SessionUnboundFromWorktree {
         /// The session ID.
         session_id: SessionId,
+    },
+
+    // === Context Tracking Events ===
+    /// Context usage was updated for a session.
+    ContextUsageUpdated {
+        /// The session ID.
+        session_id: SessionId,
+        /// Raw context usage percentage (0.0-1.0).
+        percentage: f32,
+        /// Effective context usage after MCP overhead (0.0-1.0).
+        effective_percentage: f32,
+    },
+
+    /// Context threshold was reached (warning or critical).
+    ContextThresholdReached {
+        /// The session ID.
+        session_id: SessionId,
+        /// The threshold value that was reached (0.0-1.0).
+        threshold: f32,
+        /// The threshold state (Warning or Critical).
+        state: ContextThresholdState,
+    },
+
+    // === Skill Events ===
+    /// A skill was enabled.
+    SkillEnabled {
+        /// Name of the enabled skill.
+        name: String,
+    },
+
+    /// A skill was disabled.
+    SkillDisabled {
+        /// Name of the disabled skill.
+        name: String,
+    },
+
+    /// Token budget warning threshold reached.
+    TokenBudgetWarning {
+        /// Current budget state.
+        budget: TokenBudget,
+    },
+
+    /// Token budget exceeded.
+    TokenBudgetExceeded {
+        /// Current budget state.
+        budget: TokenBudget,
+    },
+
+    /// A skill preset was applied.
+    SkillPresetApplied {
+        /// Name of the applied preset.
+        preset_name: String,
+        /// Number of skills enabled.
+        enabled_count: usize,
+    },
+
+    /// Skills were refreshed from disk.
+    SkillsRefreshed {
+        /// Total number of skills found.
+        count: usize,
     },
 }
 
@@ -467,6 +529,153 @@ mod tests {
     }
 
     #[test]
+    fn test_context_usage_updated_event() {
+        let event = DirigentEvent::ContextUsageUpdated {
+            session_id: SessionId(1),
+            percentage: 0.5,
+            effective_percentage: 0.625,
+        };
+        if let DirigentEvent::ContextUsageUpdated {
+            session_id,
+            percentage,
+            effective_percentage,
+        } = event
+        {
+            assert_eq!(session_id, SessionId(1));
+            assert!((percentage - 0.5).abs() < f32::EPSILON);
+            assert!((effective_percentage - 0.625).abs() < f32::EPSILON);
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_context_threshold_reached_event_warning() {
+        let event = DirigentEvent::ContextThresholdReached {
+            session_id: SessionId(1),
+            threshold: 0.7,
+            state: ContextThresholdState::Warning,
+        };
+        if let DirigentEvent::ContextThresholdReached {
+            session_id,
+            threshold,
+            state,
+        } = event
+        {
+            assert_eq!(session_id, SessionId(1));
+            assert!((threshold - 0.7).abs() < f32::EPSILON);
+            assert_eq!(state, ContextThresholdState::Warning);
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_context_threshold_reached_event_critical() {
+        let event = DirigentEvent::ContextThresholdReached {
+            session_id: SessionId(1),
+            threshold: 0.9,
+            state: ContextThresholdState::Critical,
+        };
+        if let DirigentEvent::ContextThresholdReached {
+            session_id,
+            threshold,
+            state,
+        } = event
+        {
+            assert_eq!(session_id, SessionId(1));
+            assert!((threshold - 0.9).abs() < f32::EPSILON);
+            assert_eq!(state, ContextThresholdState::Critical);
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_skill_enabled_event() {
+        let event = DirigentEvent::SkillEnabled {
+            name: "commit".to_string(),
+        };
+        if let DirigentEvent::SkillEnabled { name } = event {
+            assert_eq!(name, "commit");
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_skill_disabled_event() {
+        let event = DirigentEvent::SkillDisabled {
+            name: "commit".to_string(),
+        };
+        if let DirigentEvent::SkillDisabled { name } = event {
+            assert_eq!(name, "commit");
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_token_budget_warning_event() {
+        let budget = TokenBudget {
+            max_tokens: 15000,
+            used_tokens: 12500,
+            warning_threshold: 12000,
+        };
+        let event = DirigentEvent::TokenBudgetWarning { budget };
+        if let DirigentEvent::TokenBudgetWarning { budget } = event {
+            assert_eq!(budget.used_tokens, 12500);
+            assert!(budget.used_tokens >= budget.warning_threshold);
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_token_budget_exceeded_event() {
+        let budget = TokenBudget {
+            max_tokens: 15000,
+            used_tokens: 16000,
+            warning_threshold: 12000,
+        };
+        let event = DirigentEvent::TokenBudgetExceeded { budget };
+        if let DirigentEvent::TokenBudgetExceeded { budget } = event {
+            assert_eq!(budget.used_tokens, 16000);
+            assert!(budget.used_tokens > budget.max_tokens);
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_skill_preset_applied_event() {
+        let event = DirigentEvent::SkillPresetApplied {
+            preset_name: "dev".to_string(),
+            enabled_count: 5,
+        };
+        if let DirigentEvent::SkillPresetApplied {
+            preset_name,
+            enabled_count,
+        } = event
+        {
+            assert_eq!(preset_name, "dev");
+            assert_eq!(enabled_count, 5);
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_skills_refreshed_event() {
+        let event = DirigentEvent::SkillsRefreshed { count: 10 };
+        if let DirigentEvent::SkillsRefreshed { count } = event {
+            assert_eq!(count, 10);
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
     fn test_all_event_variants_clone() {
         // Test that all variants can be cloned
         let events: Vec<DirigentEvent> = vec![
@@ -531,6 +740,41 @@ mod tests {
             DirigentEvent::SessionUnboundFromWorktree {
                 session_id: SessionId(1),
             },
+            DirigentEvent::ContextUsageUpdated {
+                session_id: SessionId(1),
+                percentage: 0.5,
+                effective_percentage: 0.625,
+            },
+            DirigentEvent::ContextThresholdReached {
+                session_id: SessionId(1),
+                threshold: 0.7,
+                state: ContextThresholdState::Warning,
+            },
+            DirigentEvent::SkillEnabled {
+                name: "commit".to_string(),
+            },
+            DirigentEvent::SkillDisabled {
+                name: "commit".to_string(),
+            },
+            DirigentEvent::TokenBudgetWarning {
+                budget: TokenBudget {
+                    max_tokens: 15000,
+                    used_tokens: 12500,
+                    warning_threshold: 12000,
+                },
+            },
+            DirigentEvent::TokenBudgetExceeded {
+                budget: TokenBudget {
+                    max_tokens: 15000,
+                    used_tokens: 16000,
+                    warning_threshold: 12000,
+                },
+            },
+            DirigentEvent::SkillPresetApplied {
+                preset_name: "dev".to_string(),
+                enabled_count: 5,
+            },
+            DirigentEvent::SkillsRefreshed { count: 10 },
         ];
 
         for event in events {
