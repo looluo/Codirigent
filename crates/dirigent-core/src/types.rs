@@ -5,6 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
+use std::time::Duration;
 
 /// Unique identifier for a session.
 ///
@@ -82,6 +83,105 @@ pub enum TaskStatus {
     Done,
     /// Blocked by dependency or error.
     Blocked,
+}
+
+/// Verification configuration for a task.
+///
+/// Defines how to verify task completion (run tests, custom scripts, etc.)
+/// When a task has verification configured, it will transition to the
+/// `Verifying` status after the AI completes its work.
+///
+/// # Example
+///
+/// ```
+/// use dirigent_core::VerificationConfig;
+/// use std::time::Duration;
+///
+/// let config = VerificationConfig {
+///     command: "cargo test".to_string(),
+///     working_dir: None,
+///     timeout: Duration::from_secs(300),
+///     requires_human_review: true,
+///     success_patterns: vec!["test result: ok".to_string()],
+///     failure_patterns: vec!["FAILED".to_string()],
+/// };
+/// assert_eq!(config.timeout, Duration::from_secs(300));
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct VerificationConfig {
+    /// Command to execute for verification (e.g., "npm test", "cargo test").
+    pub command: String,
+
+    /// Working directory for the command. If None, uses task's assigned session's directory.
+    pub working_dir: Option<PathBuf>,
+
+    /// Timeout for verification command.
+    #[serde(with = "humantime_serde")]
+    pub timeout: Duration,
+
+    /// Whether human review is required after verification passes.
+    pub requires_human_review: bool,
+
+    /// Custom success patterns to look for in output.
+    pub success_patterns: Vec<String>,
+
+    /// Custom failure patterns that indicate test failure.
+    pub failure_patterns: Vec<String>,
+}
+
+impl Default for VerificationConfig {
+    fn default() -> Self {
+        Self {
+            command: String::new(),
+            working_dir: None,
+            timeout: Duration::from_secs(300), // 5 minutes
+            requires_human_review: true,
+            success_patterns: Vec::new(),
+            failure_patterns: Vec::new(),
+        }
+    }
+}
+
+/// Retry configuration for a task.
+///
+/// Controls how many times a task can be retried if it fails,
+/// and the delay between retry attempts.
+///
+/// # Example
+///
+/// ```
+/// use dirigent_core::RetryConfig;
+/// use std::time::Duration;
+///
+/// let mut config = RetryConfig::default();
+/// assert_eq!(config.max_retries, 3);
+/// assert_eq!(config.retry_count, 0);
+///
+/// // Simulate retries
+/// config.retry_count = 2;
+/// assert!(config.retry_count < config.max_retries);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RetryConfig {
+    /// Maximum number of retry attempts.
+    pub max_retries: u32,
+
+    /// Current retry count.
+    pub retry_count: u32,
+
+    /// Delay between retries.
+    #[serde(with = "humantime_serde")]
+    pub retry_delay: Duration,
+}
+
+impl Default for RetryConfig {
+    fn default() -> Self {
+        Self {
+            max_retries: 3,
+            retry_count: 0,
+            retry_delay: Duration::from_secs(0),
+        }
+    }
 }
 
 /// Grid position for custom layouts.
@@ -223,6 +323,150 @@ pub struct AppState {
     pub layout: LayoutMode,
     /// Last updated timestamp.
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+}
+
+/// Git worktree information.
+///
+/// Represents a git worktree, which allows multiple working directories
+/// to be associated with a single repository. This enables parallel
+/// development across multiple AI sessions without branch conflicts.
+///
+/// # Example
+///
+/// ```
+/// use dirigent_core::Worktree;
+/// use std::path::PathBuf;
+///
+/// let worktree = Worktree::new(
+///     PathBuf::from("/repo/worktrees/feature"),
+///     "feature-branch".to_string(),
+///     false,
+/// );
+/// assert_eq!(worktree.branch, "feature-branch");
+/// assert!(!worktree.is_main);
+/// ```
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct Worktree {
+    /// Absolute path to the worktree directory.
+    pub path: PathBuf,
+    /// Branch name associated with this worktree.
+    pub branch: String,
+    /// Head commit SHA (short form, typically 8 characters).
+    pub head_sha: Option<String>,
+    /// Whether this is the main worktree (the original repository).
+    pub is_main: bool,
+    /// Session bound to this worktree, if any.
+    pub bound_session: Option<SessionId>,
+    /// When the worktree was created or first detected.
+    pub created_at: chrono::DateTime<chrono::Utc>,
+}
+
+impl Worktree {
+    /// Create a new worktree instance.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Absolute path to the worktree directory
+    /// * `branch` - Branch name associated with this worktree
+    /// * `is_main` - Whether this is the main worktree
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use dirigent_core::Worktree;
+    /// use std::path::PathBuf;
+    ///
+    /// let wt = Worktree::new(
+    ///     PathBuf::from("/repo"),
+    ///     "main".to_string(),
+    ///     true,
+    /// );
+    /// assert!(wt.is_main);
+    /// ```
+    pub fn new(path: PathBuf, branch: String, is_main: bool) -> Self {
+        Self {
+            path,
+            branch,
+            head_sha: None,
+            is_main,
+            bound_session: None,
+            created_at: chrono::Utc::now(),
+        }
+    }
+
+    /// Set the head SHA for this worktree.
+    ///
+    /// # Arguments
+    ///
+    /// * `sha` - The commit SHA (typically truncated to 8 characters)
+    pub fn with_head_sha(mut self, sha: String) -> Self {
+        self.head_sha = Some(sha);
+        self
+    }
+}
+
+/// Options for creating a new worktree.
+///
+/// Specifies the branch name and optional configuration for
+/// creating a new git worktree.
+///
+/// # Example
+///
+/// ```
+/// use dirigent_core::WorktreeCreateOptions;
+///
+/// let options = WorktreeCreateOptions::new("feature-branch".to_string())
+///     .with_base_branch("main".to_string());
+/// assert_eq!(options.branch, "feature-branch");
+/// assert_eq!(options.base_branch, Some("main".to_string()));
+/// ```
+#[derive(Debug, Clone)]
+pub struct WorktreeCreateOptions {
+    /// Branch name to checkout (creates if doesn't exist).
+    pub branch: String,
+    /// Base branch to create from (if creating new branch).
+    pub base_branch: Option<String>,
+    /// Custom path for the worktree (defaults to ./worktrees/<branch>).
+    pub path: Option<PathBuf>,
+}
+
+impl WorktreeCreateOptions {
+    /// Create new worktree options with the given branch name.
+    ///
+    /// # Arguments
+    ///
+    /// * `branch` - The branch name to checkout or create
+    pub fn new(branch: String) -> Self {
+        Self {
+            branch,
+            base_branch: None,
+            path: None,
+        }
+    }
+
+    /// Set the base branch to create from.
+    ///
+    /// If the branch doesn't exist, it will be created from this base.
+    ///
+    /// # Arguments
+    ///
+    /// * `base` - The base branch name (e.g., "main", "develop")
+    pub fn with_base_branch(mut self, base: String) -> Self {
+        self.base_branch = Some(base);
+        self
+    }
+
+    /// Set a custom path for the worktree.
+    ///
+    /// By default, worktrees are created in ./worktrees/<branch>.
+    ///
+    /// # Arguments
+    ///
+    /// * `path` - Custom path for the worktree directory
+    pub fn with_path(mut self, path: PathBuf) -> Self {
+        self.path = Some(path);
+        self
+    }
 }
 
 #[cfg(test)]
@@ -394,6 +638,102 @@ mod tests {
             let parsed: TaskStatus = serde_json::from_str(&json).unwrap();
             assert_eq!(variant, parsed);
         }
+    }
+
+    // VerificationConfig tests
+    #[test]
+    fn test_verification_config_default() {
+        let config = VerificationConfig::default();
+        assert!(config.command.is_empty());
+        assert!(config.requires_human_review);
+        assert_eq!(config.timeout, Duration::from_secs(300));
+        assert!(config.working_dir.is_none());
+        assert!(config.success_patterns.is_empty());
+        assert!(config.failure_patterns.is_empty());
+    }
+
+    #[test]
+    fn test_verification_config_serialization() {
+        let config = VerificationConfig {
+            command: "npm test".to_string(),
+            working_dir: None,
+            timeout: Duration::from_secs(60),
+            requires_human_review: false,
+            success_patterns: vec!["PASS".to_string()],
+            failure_patterns: vec!["FAIL".to_string()],
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: VerificationConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.command, "npm test");
+        assert_eq!(parsed.timeout, Duration::from_secs(60));
+        assert!(!parsed.requires_human_review);
+        assert_eq!(parsed.success_patterns, vec!["PASS".to_string()]);
+        assert_eq!(parsed.failure_patterns, vec!["FAIL".to_string()]);
+    }
+
+    #[test]
+    fn test_verification_config_with_working_dir() {
+        let config = VerificationConfig {
+            command: "cargo test".to_string(),
+            working_dir: Some(PathBuf::from("/project")),
+            timeout: Duration::from_secs(120),
+            requires_human_review: true,
+            success_patterns: Vec::new(),
+            failure_patterns: Vec::new(),
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: VerificationConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.working_dir, Some(PathBuf::from("/project")));
+    }
+
+    #[test]
+    fn test_verification_config_humantime_serialization() {
+        let config = VerificationConfig {
+            command: "test".to_string(),
+            working_dir: None,
+            timeout: Duration::from_secs(300),
+            requires_human_review: true,
+            success_patterns: Vec::new(),
+            failure_patterns: Vec::new(),
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        // humantime-serde serializes Duration as human-readable strings like "5m"
+        assert!(json.contains("5m") || json.contains("300"));
+    }
+
+    // RetryConfig tests
+    #[test]
+    fn test_retry_config_default() {
+        let config = RetryConfig::default();
+        assert_eq!(config.max_retries, 3);
+        assert_eq!(config.retry_count, 0);
+        assert_eq!(config.retry_delay, Duration::from_secs(0));
+    }
+
+    #[test]
+    fn test_retry_config_serialization() {
+        let config = RetryConfig {
+            max_retries: 5,
+            retry_count: 2,
+            retry_delay: Duration::from_secs(30),
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: RetryConfig = serde_json::from_str(&json).unwrap();
+        assert_eq!(parsed.max_retries, 5);
+        assert_eq!(parsed.retry_count, 2);
+        assert_eq!(parsed.retry_delay, Duration::from_secs(30));
+    }
+
+    #[test]
+    fn test_retry_config_equality() {
+        let config1 = RetryConfig::default();
+        let config2 = RetryConfig::default();
+        let config3 = RetryConfig {
+            max_retries: 5,
+            ..Default::default()
+        };
+        assert_eq!(config1, config2);
+        assert_ne!(config1, config3);
     }
 
     // GridPosition tests
