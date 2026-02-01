@@ -11,6 +11,10 @@
 //! - [`ProcessMonitor`]: Process state monitoring
 //! - [`StorageService`]: File-based persistence
 //!
+//! ## Skill Traits
+//!
+//! - [`SkillManager`]: Skill management and token budget tracking
+//!
 //! ## Verification Traits
 //!
 //! - [`Verifier`]: Run verification checks on task completions
@@ -22,10 +26,14 @@
 //! - [`ProjectType`]: Known project types for auto-detection
 
 mod services;
+pub mod skill_manager;
 pub mod verifier;
 
 // Re-export core service traits
 pub use services::*;
+
+// Re-export skill manager trait
+pub use skill_manager::SkillManager;
 
 // Re-export verification traits
 pub use verifier::{FailureFormatter, ProjectType, VerificationDetector, Verifier};
