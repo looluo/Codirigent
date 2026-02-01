@@ -2001,4 +2001,512 @@ mod tests {
         assert!(debug_str.contains("TestCommandDetector"));
         assert!(debug_str.contains("rules"));
     }
+
+    // OutputParser tests
+
+    #[test]
+    fn test_parse_jest_basic() {
+        let output = "Tests: 2 failed, 23 passed, 25 total";
+        let result = OutputParser::parse_jest(output).unwrap();
+
+        assert_eq!(result.total, 25);
+        assert_eq!(result.passed, 23);
+        assert_eq!(result.failed, 2);
+    }
+
+    #[test]
+    fn test_parse_jest_all_passed() {
+        let output = "Tests: 10 passed, 10 total";
+        let result = OutputParser::parse_jest(output).unwrap();
+
+        assert_eq!(result.total, 10);
+        assert_eq!(result.passed, 10);
+        assert_eq!(result.failed, 0);
+    }
+
+    #[test]
+    fn test_parse_jest_no_total() {
+        let output = "Tests: 5 passed";
+        let result = OutputParser::parse_jest(output).unwrap();
+
+        assert_eq!(result.passed, 5);
+        assert_eq!(result.total, 5); // Inferred
+    }
+
+    #[test]
+    fn test_parse_jest_no_match() {
+        let output = "random text without test results";
+        let result = OutputParser::parse_jest(output);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_cargo_basic() {
+        let output = "test result: ok. 15 passed; 0 failed; 2 ignored";
+        let result = OutputParser::parse_cargo(output).unwrap();
+
+        assert_eq!(result.total, 17);
+        assert_eq!(result.passed, 15);
+        assert_eq!(result.failed, 0);
+        assert_eq!(result.skipped, 2);
+    }
+
+    #[test]
+    fn test_parse_cargo_with_failures() {
+        let output = "test result: FAILED. 10 passed; 2 failed; 1 ignored";
+        let result = OutputParser::parse_cargo(output).unwrap();
+
+        assert_eq!(result.total, 13);
+        assert_eq!(result.passed, 10);
+        assert_eq!(result.failed, 2);
+        assert_eq!(result.skipped, 1);
+    }
+
+    #[test]
+    fn test_parse_cargo_no_match() {
+        let output = "random text";
+        let result = OutputParser::parse_cargo(output);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_cargo_extract_failures() {
+        let output = "---- my_test stdout ----\nfailed\n---- another_test stdout ----\nfailed\ntest result: FAILED. 10 passed; 2 failed; 0 ignored";
+        let result = OutputParser::parse_cargo(output).unwrap();
+
+        assert_eq!(result.failures.len(), 2);
+        assert_eq!(result.failures[0].name, "my_test");
+        assert_eq!(result.failures[1].name, "another_test");
+    }
+
+    #[test]
+    fn test_parse_pytest_basic() {
+        let output = "===== 10 passed, 2 failed in 5.2s =====";
+        let result = OutputParser::parse_pytest(output).unwrap();
+
+        assert_eq!(result.passed, 10);
+        assert_eq!(result.failed, 2);
+        assert_eq!(result.total, 12);
+    }
+
+    #[test]
+    fn test_parse_pytest_with_skipped() {
+        let output = "5 passed, 1 failed, 3 skipped";
+        let result = OutputParser::parse_pytest(output).unwrap();
+
+        assert_eq!(result.passed, 5);
+        assert_eq!(result.failed, 1);
+        assert_eq!(result.skipped, 3);
+        assert_eq!(result.total, 9);
+    }
+
+    #[test]
+    fn test_parse_pytest_all_passed() {
+        let output = "=== 20 passed in 3.5s ===";
+        let result = OutputParser::parse_pytest(output).unwrap();
+
+        assert_eq!(result.passed, 20);
+        assert_eq!(result.failed, 0);
+    }
+
+    #[test]
+    fn test_parse_pytest_no_match() {
+        let output = "random text";
+        let result = OutputParser::parse_pytest(output);
+        assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_parse_pytest_extract_failures() {
+        let output = "FAILED test_file.py::test_one\nFAILED test_file.py::test_two\n5 passed, 2 failed";
+        let result = OutputParser::parse_pytest(output).unwrap();
+
+        assert_eq!(result.failures.len(), 2);
+        assert_eq!(result.failures[0].name, "test_file.py::test_one");
+        assert_eq!(result.failures[1].name, "test_file.py::test_two");
+    }
+
+    #[test]
+    fn test_parse_generic_pass_fail() {
+        let output = "PASS test1\nPASS test2\nFAIL test3";
+        let result = OutputParser::parse_generic(output);
+
+        assert_eq!(result.passed, 2);
+        assert_eq!(result.failed, 1);
+        assert_eq!(result.total, 3);
+    }
+
+    #[test]
+    fn test_parse_generic_lowercase() {
+        let output = "pass test1\npass test2\nfail test3\nerror test4";
+        let result = OutputParser::parse_generic(output);
+
+        assert_eq!(result.passed, 2);
+        assert_eq!(result.failed, 2); // fail + error
+    }
+
+    #[test]
+    fn test_parse_generic_ok() {
+        let output = "ok test1\nok test2\nok test3";
+        let result = OutputParser::parse_generic(output);
+
+        assert_eq!(result.passed, 3);
+        assert_eq!(result.failed, 0);
+    }
+
+    #[test]
+    fn test_auto_parse_npm() {
+        let output = "Tests: 5 passed, 5 total";
+        let result = OutputParser::auto_parse(output, "npm test");
+
+        assert_eq!(result.passed, 5);
+        assert_eq!(result.total, 5);
+    }
+
+    #[test]
+    fn test_auto_parse_cargo() {
+        let output = "test result: ok. 10 passed; 0 failed; 0 ignored";
+        let result = OutputParser::auto_parse(output, "cargo test");
+
+        assert_eq!(result.passed, 10);
+        assert_eq!(result.failed, 0);
+    }
+
+    #[test]
+    fn test_auto_parse_pytest() {
+        let output = "5 passed, 1 failed";
+        let result = OutputParser::auto_parse(output, "pytest");
+
+        assert_eq!(result.passed, 5);
+        assert_eq!(result.failed, 1);
+    }
+
+    #[test]
+    fn test_auto_parse_fallback_to_cargo() {
+        // Cargo output with unknown command
+        let output = "test result: ok. 5 passed; 0 failed; 0 ignored";
+        let result = OutputParser::auto_parse(output, "unknown command");
+
+        assert_eq!(result.passed, 5);
+    }
+
+    #[test]
+    fn test_auto_parse_fallback_to_generic() {
+        let output = "PASS one\nPASS two\nFAIL three";
+        let result = OutputParser::auto_parse(output, "unknown");
+
+        assert_eq!(result.passed, 2);
+        assert_eq!(result.failed, 1);
+    }
+
+    // ParsedTestResults tests
+
+    #[test]
+    fn test_parsed_test_results_default() {
+        let results = ParsedTestResults::default();
+        assert_eq!(results.total, 0);
+        assert_eq!(results.passed, 0);
+        assert_eq!(results.failed, 0);
+        assert_eq!(results.skipped, 0);
+        assert!(results.failures.is_empty());
+    }
+
+    #[test]
+    fn test_parsed_test_results_clone() {
+        let results = ParsedTestResults {
+            total: 10,
+            passed: 8,
+            failed: 2,
+            skipped: 0,
+            failures: vec![ParsedTestFailure {
+                name: "test".to_string(),
+                message: "failed".to_string(),
+            }],
+        };
+        let cloned = results.clone();
+        assert_eq!(cloned.total, 10);
+        assert_eq!(cloned.failures.len(), 1);
+    }
+
+    #[test]
+    fn test_parsed_test_results_debug() {
+        let results = ParsedTestResults::default();
+        let debug_str = format!("{:?}", results);
+        assert!(debug_str.contains("ParsedTestResults"));
+    }
+
+    // VerificationRunnerConfig tests
+
+    #[test]
+    fn test_verification_runner_config_default() {
+        let config = VerificationRunnerConfig::default();
+        assert_eq!(config.default_timeout, std::time::Duration::from_secs(300));
+        assert!(config.auto_detect);
+        assert_eq!(config.max_retries, 3);
+    }
+
+    #[test]
+    fn test_verification_runner_config_serialization() {
+        let config = VerificationRunnerConfig {
+            default_timeout: std::time::Duration::from_secs(60),
+            auto_detect: false,
+            max_retries: 5,
+        };
+        let json = serde_json::to_string(&config).unwrap();
+        let parsed: VerificationRunnerConfig = serde_json::from_str(&json).unwrap();
+        assert!(!parsed.auto_detect);
+        assert_eq!(parsed.max_retries, 5);
+    }
+
+    #[test]
+    fn test_verification_runner_config_clone() {
+        let config = VerificationRunnerConfig::default();
+        let cloned = config.clone();
+        assert_eq!(config.max_retries, cloned.max_retries);
+    }
+
+    // VerificationRunner tests
+
+    #[test]
+    fn test_verification_runner_new() {
+        let runner = VerificationRunner::new(VerificationRunnerConfig::default());
+        assert!(runner.config().auto_detect);
+        assert!(!runner.detector().rules().is_empty());
+    }
+
+    #[test]
+    fn test_verification_runner_get_command_explicit() {
+        let runner = VerificationRunner::new(VerificationRunnerConfig::default());
+        let temp = tempfile::TempDir::new().unwrap();
+
+        let commands = VerificationCommands {
+            unit: Some("custom-test".to_string()),
+            ..Default::default()
+        };
+
+        assert_eq!(
+            runner.get_command(Some(&commands), temp.path()),
+            Some("custom-test".to_string())
+        );
+    }
+
+    #[test]
+    fn test_verification_runner_get_command_auto_detect() {
+        let runner = VerificationRunner::new(VerificationRunnerConfig::default());
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::write(temp.path().join("Cargo.toml"), "[package]").unwrap();
+
+        assert_eq!(
+            runner.get_command(None, temp.path()),
+            Some("cargo test".to_string())
+        );
+    }
+
+    #[test]
+    fn test_verification_runner_get_command_no_auto_detect() {
+        let config = VerificationRunnerConfig {
+            auto_detect: false,
+            ..Default::default()
+        };
+        let runner = VerificationRunner::new(config);
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::write(temp.path().join("Cargo.toml"), "[package]").unwrap();
+
+        // Should not auto-detect when disabled
+        assert!(runner.get_command(None, temp.path()).is_none());
+    }
+
+    #[test]
+    fn test_verification_runner_detector_mut() {
+        let mut runner = VerificationRunner::new(VerificationRunnerConfig::default());
+        let initial_count = runner.detector().rules().len();
+
+        runner
+            .detector_mut()
+            .add_rule(DetectionRule::new("custom.json", "custom"));
+
+        assert_eq!(runner.detector().rules().len(), initial_count + 1);
+    }
+
+    #[tokio::test]
+    async fn test_verification_runner_run_echo() {
+        let runner = VerificationRunner::new(VerificationRunnerConfig::default());
+        let temp = tempfile::TempDir::new().unwrap();
+
+        let result = runner.run("echo success", temp.path(), None).await.unwrap();
+        assert!(result.passed);
+        assert!(result.raw_output.as_ref().unwrap().contains("success"));
+    }
+
+    #[tokio::test]
+    async fn test_verification_runner_run_failing_command() {
+        let runner = VerificationRunner::new(VerificationRunnerConfig::default());
+        let temp = tempfile::TempDir::new().unwrap();
+
+        // exit 1 causes command to fail
+        let result = runner.run("exit 1", temp.path(), None).await.unwrap();
+        assert!(!result.passed);
+    }
+
+    #[tokio::test]
+    async fn test_verification_runner_run_with_timeout() {
+        let runner = VerificationRunner::new(VerificationRunnerConfig::default());
+        let temp = tempfile::TempDir::new().unwrap();
+
+        let result = runner
+            .run(
+                "echo fast",
+                temp.path(),
+                Some(std::time::Duration::from_secs(10)),
+            )
+            .await
+            .unwrap();
+        assert!(result.passed);
+    }
+
+    // VerificationRunner format_failure_message tests
+
+    #[test]
+    fn test_format_failure_message_basic() {
+        let runner = VerificationRunner::new(VerificationRunnerConfig::default());
+
+        let result = VerificationResult::failed(
+            VerificationCheckType::UnitTest,
+            vec![VerificationFailure::new("test_auth", "Expected 401, got 200")],
+            5000,
+        );
+
+        let message = runner.format_failure_message(&result, 1, 3);
+
+        assert!(message.contains("Verification Failed"));
+        assert!(message.contains("test_auth"));
+        assert!(message.contains("Retry: 1/3"));
+    }
+
+    #[test]
+    fn test_format_failure_message_with_counts() {
+        let runner = VerificationRunner::new(VerificationRunnerConfig::default());
+
+        let result = VerificationResult::failed(
+            VerificationCheckType::UnitTest,
+            vec![VerificationFailure::new("test", "failed")],
+            1000,
+        )
+        .with_counts(8, 10);
+
+        let message = runner.format_failure_message(&result, 2, 3);
+
+        assert!(message.contains("8 passed, 2 failed"));
+    }
+
+    #[test]
+    fn test_format_failure_message_with_raw_output() {
+        let runner = VerificationRunner::new(VerificationRunnerConfig::default());
+
+        let result = VerificationResult::failed(
+            VerificationCheckType::UnitTest,
+            vec![], // No structured failures
+            1000,
+        )
+        .with_raw_output("Error: something went wrong".to_string());
+
+        let message = runner.format_failure_message(&result, 1, 3);
+
+        assert!(message.contains("Error: something went wrong"));
+    }
+
+    #[test]
+    fn test_format_failure_message_multiple_failures() {
+        let runner = VerificationRunner::new(VerificationRunnerConfig::default());
+
+        let result = VerificationResult::failed(
+            VerificationCheckType::UnitTest,
+            vec![
+                VerificationFailure::new("test_one", "first failure"),
+                VerificationFailure::new("test_two", "second failure"),
+                VerificationFailure::new("test_three", "third failure"),
+            ],
+            1000,
+        );
+
+        let message = runner.format_failure_message(&result, 1, 3);
+
+        assert!(message.contains("1. test_one"));
+        assert!(message.contains("2. test_two"));
+        assert!(message.contains("3. test_three"));
+    }
+
+    // VerificationService trait tests
+
+    #[test]
+    fn test_verification_service_should_verify_with_commands() {
+        let runner = VerificationRunner::new(VerificationRunnerConfig::default());
+        let temp = tempfile::TempDir::new().unwrap();
+
+        let commands = VerificationCommands {
+            unit: Some("npm test".to_string()),
+            ..Default::default()
+        };
+
+        assert!(runner.should_verify(Some(&commands), temp.path()));
+    }
+
+    #[test]
+    fn test_verification_service_should_verify_auto_detect() {
+        let runner = VerificationRunner::new(VerificationRunnerConfig::default());
+        let temp = tempfile::TempDir::new().unwrap();
+        std::fs::write(temp.path().join("package.json"), "{}").unwrap();
+
+        assert!(runner.should_verify(None, temp.path()));
+    }
+
+    #[test]
+    fn test_verification_service_should_not_verify_empty() {
+        let runner = VerificationRunner::new(VerificationRunnerConfig::default());
+        let temp = tempfile::TempDir::new().unwrap();
+
+        assert!(!runner.should_verify(None, temp.path()));
+    }
+
+    #[test]
+    fn test_verification_service_format_failure() {
+        let runner = VerificationRunner::new(VerificationRunnerConfig::default());
+
+        let result = VerificationResult::failed(VerificationCheckType::UnitTest, vec![], 1000);
+
+        let message = runner.format_failure(&result, 1, 3);
+        assert!(message.contains("Verification Failed"));
+        assert!(message.contains("Retry: 1/3"));
+    }
+
+    #[tokio::test]
+    async fn test_verification_service_verify() {
+        let runner = VerificationRunner::new(VerificationRunnerConfig::default());
+        let temp = tempfile::TempDir::new().unwrap();
+
+        let commands = VerificationCommands {
+            unit: Some("echo all tests passed".to_string()),
+            ..Default::default()
+        };
+
+        let result = runner.verify(Some(&commands), temp.path()).await.unwrap();
+        assert!(result.passed);
+    }
+
+    #[tokio::test]
+    async fn test_verification_service_verify_no_command_error() {
+        let config = VerificationRunnerConfig {
+            auto_detect: false,
+            ..Default::default()
+        };
+        let runner = VerificationRunner::new(config);
+        let temp = tempfile::TempDir::new().unwrap();
+
+        let result = runner.verify(None, temp.path()).await;
+        assert!(result.is_err());
+        assert!(result
+            .unwrap_err()
+            .to_string()
+            .contains("No verification command"));
+    }
 }

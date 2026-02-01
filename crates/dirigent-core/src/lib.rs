@@ -16,6 +16,9 @@
 //! - [`config_service`] - Configuration loading and saving service
 //! - [`skill`] - Skill management types (Skill, SkillPreset, TokenBudget)
 //! - [`change_summary`] - Change detection and risk assessment types
+//! - [`persistence`] - Session persistence types
+//! - [`persistence_service`] - Persistence service trait and implementation
+//! - [`auto_save`] - Automatic state saving manager
 //! - [`error`] - Error types
 //!
 //! ## Quick Start
@@ -67,6 +70,7 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
+pub mod auto_save;
 pub mod change_summary;
 pub mod config;
 pub mod config_service;
@@ -74,6 +78,8 @@ pub mod context;
 pub mod error;
 pub mod event_bus;
 pub mod events;
+pub mod persistence;
+pub mod persistence_service;
 pub mod plugin;
 pub mod scheduler;
 pub mod skill;
@@ -99,3 +105,14 @@ pub use storage::FileStorageService;
 pub use traits::{EventBus, ProcessMonitor, SessionManager, SkillManager, StorageService};
 pub use traits::{FailureFormatter, ProjectType, VerificationDetector, Verifier};
 pub use types::*;
+
+// Re-export verification runner types
+pub use verification::{
+    DetectionRule, OutputParser, ParsedTestFailure, ParsedTestResults, TestCommandDetector,
+    VerificationRunner, VerificationRunnerConfig, VerificationService,
+};
+
+// Re-export persistence types
+pub use auto_save::AutoSaveManager;
+pub use persistence::{Checkpoint, PersistentSession, PersistentState, RecoveryResult};
+pub use persistence_service::{AutoSaveConfig, DefaultPersistenceService, PersistenceService};
