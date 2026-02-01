@@ -20,6 +20,8 @@
 //! - [`persistence_service`] - Persistence service trait and implementation
 //! - [`auto_save`] - Automatic state saving manager
 //! - [`assignment`] - Task assignment management and routing
+//! - [`session_notes`] - Session notes generation and learnings extraction
+//! - [`ralph`] - Ralph Loop for autonomous task execution
 //! - [`error`] - Error types
 //!
 //! ## Quick Start
@@ -83,7 +85,9 @@ pub mod events;
 pub mod persistence;
 pub mod persistence_service;
 pub mod plugin;
+pub mod ralph;
 pub mod scheduler;
+pub mod session_notes;
 pub mod skill;
 pub mod storage;
 pub mod traits;
@@ -104,7 +108,7 @@ pub use events::DirigentEvent;
 pub use scheduler::{SchedulerConfig, SchedulerMode, TaskQueue, TaskQueueService};
 pub use skill::{Skill, SkillPreset, SkillType, TokenBudget};
 pub use storage::FileStorageService;
-pub use traits::{EventBus, ProcessMonitor, SessionManager, SkillManager, StorageService};
+pub use traits::{EventBus, ProcessMonitor, RalphLoopController, SessionManager, SkillManager, StorageService};
 pub use traits::{FailureFormatter, ProjectType, VerificationDetector, Verifier};
 pub use types::*;
 
@@ -124,3 +128,12 @@ pub use assignment::{
     AssignmentAction, AssignmentConfig, AssignmentManager, AssignmentService,
     PendingAssignment, DEFAULT_PROMPT_TEMPLATE,
 };
+
+// Re-export session notes types
+pub use session_notes::{
+    CompletionStatus, Learning, LearningCategory, LearningsExtractor, NotesGenerator,
+    SessionNote, SessionNotesConfig, SummaryMode,
+};
+
+// Re-export Ralph Loop types
+pub use ralph::{IterationResult, RalphLoopConfig, RalphLoopState, RalphLoopStatus};
