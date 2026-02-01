@@ -41,6 +41,12 @@ libc = "0.2.180"
 # Pattern matching
 regex = "1.12.2"
 
+# Async traits
+async-trait = "0.1"
+
+# Duration serialization
+humantime-serde = "1.1.1"
+
 # Internal crates
 dirigent-core = { path = "crates/dirigent-core" }
 dirigent-session = { path = "crates/dirigent-session" }
