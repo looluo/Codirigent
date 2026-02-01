@@ -266,36 +266,89 @@ impl Session {
 }
 
 /// Task definition for the task queue.
+///
+/// A task represents a unit of work that can be assigned to an AI session.
+/// Tasks support verification (running tests), retry logic, and dependency
+/// tracking for proper ordering.
+///
+/// # Example
+///
+/// ```
+/// use dirigent_core::{Task, TaskId, VerificationConfig, RetryConfig};
+///
+/// let mut task = Task::new(
+///     TaskId("task-001".to_string()),
+///     "Implement login".to_string(),
+///     "Add user authentication".to_string(),
+/// );
+///
+/// // Add verification
+/// task.verification = Some(VerificationConfig {
+///     command: "cargo test auth".to_string(),
+///     ..Default::default()
+/// });
+///
+/// assert!(task.can_retry());
+/// assert!(task.dependencies_satisfied(&[]));
+/// ```
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct Task {
     /// Unique task identifier.
     pub id: TaskId,
-    /// Task title.
+    /// Task title (short description).
     pub title: String,
-    /// Detailed description.
+    /// Detailed description/instructions.
     pub description: String,
     /// Priority level.
     pub priority: TaskPriority,
-    /// Current status.
+    /// Current status in workflow.
     pub status: TaskStatus,
-    /// Dependencies on other tasks.
+    /// Dependencies on other tasks (must complete first).
     pub dependencies: Vec<TaskId>,
-    /// Tags for categorization.
+    /// Tags for categorization and filtering.
     pub tags: Vec<String>,
+    /// Estimated time to complete in minutes.
+    pub estimated_minutes: Option<u32>,
     /// Assigned session, if any.
     pub assigned_session: Option<SessionId>,
-    /// When assigned.
+    /// When assigned to a session.
     pub assigned_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// When created.
+    /// Verification configuration.
+    pub verification: Option<VerificationConfig>,
+    /// Retry configuration.
+    pub retry: RetryConfig,
+    /// When the task was created.
     pub created_at: chrono::DateTime<chrono::Utc>,
-    /// When started.
+    /// When work started (status changed to Working).
     pub started_at: Option<chrono::DateTime<chrono::Utc>>,
-    /// When completed.
+    /// When the task was completed.
     pub completed_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Error message if task failed.
+    pub error_message: Option<String>,
 }
 
 impl Task {
     /// Create a new task with default values.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - Unique task identifier
+    /// * `title` - Short task title
+    /// * `description` - Detailed instructions
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use dirigent_core::{Task, TaskId, TaskStatus};
+    ///
+    /// let task = Task::new(
+    ///     TaskId("task-001".to_string()),
+    ///     "Test Task".to_string(),
+    ///     "Do something".to_string(),
+    /// );
+    /// assert_eq!(task.status, TaskStatus::Queued);
+    /// assert!(task.can_retry());
+    /// ```
     pub fn new(id: TaskId, title: String, description: String) -> Self {
         Self {
             id,
@@ -305,12 +358,93 @@ impl Task {
             status: TaskStatus::default(),
             dependencies: Vec::new(),
             tags: Vec::new(),
+            estimated_minutes: None,
             assigned_session: None,
             assigned_at: None,
+            verification: None,
+            retry: RetryConfig::default(),
             created_at: chrono::Utc::now(),
             started_at: None,
             completed_at: None,
+            error_message: None,
         }
+    }
+
+    /// Check if all dependencies are satisfied.
+    ///
+    /// Returns true if all tasks in the dependencies list are present
+    /// in the completed_tasks list.
+    ///
+    /// # Arguments
+    ///
+    /// * `completed_tasks` - List of task IDs that have been completed
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use dirigent_core::{Task, TaskId};
+    ///
+    /// let mut task = Task::new(
+    ///     TaskId("task-002".to_string()),
+    ///     "Has deps".to_string(),
+    ///     "".to_string(),
+    /// );
+    /// task.dependencies = vec![TaskId("task-001".to_string())];
+    ///
+    /// assert!(!task.dependencies_satisfied(&[]));
+    /// assert!(task.dependencies_satisfied(&[TaskId("task-001".to_string())]));
+    /// ```
+    pub fn dependencies_satisfied(&self, completed_tasks: &[TaskId]) -> bool {
+        self.dependencies
+            .iter()
+            .all(|dep| completed_tasks.contains(dep))
+    }
+
+    /// Check if the task can be retried.
+    ///
+    /// Returns true if the current retry count is less than the maximum
+    /// allowed retries.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use dirigent_core::{Task, TaskId};
+    ///
+    /// let mut task = Task::new(
+    ///     TaskId("task-001".to_string()),
+    ///     "Retry Task".to_string(),
+    ///     "".to_string(),
+    /// );
+    /// assert!(task.can_retry()); // Default: 0 retries out of 3
+    ///
+    /// task.retry.retry_count = 3;
+    /// assert!(!task.can_retry()); // 3 retries out of 3, no more allowed
+    /// ```
+    pub fn can_retry(&self) -> bool {
+        self.retry.retry_count < self.retry.max_retries
+    }
+
+    /// Increment the retry count.
+    ///
+    /// This should be called when a task fails and is being retried.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use dirigent_core::{Task, TaskId};
+    ///
+    /// let mut task = Task::new(
+    ///     TaskId("task-001".to_string()),
+    ///     "Retry Task".to_string(),
+    ///     "".to_string(),
+    /// );
+    /// assert_eq!(task.retry.retry_count, 0);
+    ///
+    /// task.increment_retry();
+    /// assert_eq!(task.retry.retry_count, 1);
+    /// ```
+    pub fn increment_retry(&mut self) {
+        self.retry.retry_count += 1;
     }
 }
 
@@ -865,6 +999,10 @@ mod tests {
         assert!(task.dependencies.is_empty());
         assert!(task.tags.is_empty());
         assert!(task.assigned_session.is_none());
+        assert!(task.verification.is_none());
+        assert!(task.can_retry());
+        assert!(task.estimated_minutes.is_none());
+        assert!(task.error_message.is_none());
     }
 
     #[test]
@@ -894,6 +1032,8 @@ mod tests {
         task.assigned_session = Some(SessionId(1));
         task.assigned_at = Some(chrono::Utc::now());
         task.started_at = Some(chrono::Utc::now());
+        task.estimated_minutes = Some(30);
+        task.error_message = Some("Test error".to_string());
 
         let json = serde_json::to_string(&task).unwrap();
         let parsed: Task = serde_json::from_str(&json).unwrap();
@@ -903,6 +1043,88 @@ mod tests {
         assert_eq!(parsed.dependencies.len(), 1);
         assert_eq!(parsed.tags.len(), 2);
         assert_eq!(parsed.assigned_session, Some(SessionId(1)));
+        assert_eq!(parsed.estimated_minutes, Some(30));
+        assert_eq!(parsed.error_message, Some("Test error".to_string()));
+    }
+
+    #[test]
+    fn test_task_with_verification() {
+        let mut task = Task::new(
+            TaskId("task-002".to_string()),
+            "Verified Task".to_string(),
+            "Run with tests".to_string(),
+        );
+        task.verification = Some(VerificationConfig {
+            command: "cargo test".to_string(),
+            ..Default::default()
+        });
+        assert!(task.verification.is_some());
+
+        let json = serde_json::to_string(&task).unwrap();
+        let parsed: Task = serde_json::from_str(&json).unwrap();
+        assert!(parsed.verification.is_some());
+        assert_eq!(parsed.verification.unwrap().command, "cargo test");
+    }
+
+    #[test]
+    fn test_task_retry_logic() {
+        let mut task = Task::new(
+            TaskId("task-003".to_string()),
+            "Retry Task".to_string(),
+            "May fail".to_string(),
+        );
+        assert!(task.can_retry());
+        assert_eq!(task.retry.retry_count, 0);
+
+        task.increment_retry();
+        assert_eq!(task.retry.retry_count, 1);
+        assert!(task.can_retry());
+
+        task.increment_retry();
+        task.increment_retry();
+        assert_eq!(task.retry.retry_count, 3);
+        assert!(!task.can_retry());
+    }
+
+    #[test]
+    fn test_task_dependencies_satisfied_empty() {
+        let task = Task::new(
+            TaskId("task-001".to_string()),
+            "No deps".to_string(),
+            "".to_string(),
+        );
+        assert!(task.dependencies_satisfied(&[]));
+        assert!(task.dependencies_satisfied(&[TaskId("task-other".to_string())]));
+    }
+
+    #[test]
+    fn test_task_dependencies_satisfied_with_deps() {
+        let mut task = Task::new(
+            TaskId("task-002".to_string()),
+            "Has deps".to_string(),
+            "".to_string(),
+        );
+        task.dependencies = vec![
+            TaskId("task-001".to_string()),
+            TaskId("task-000".to_string()),
+        ];
+
+        // Not satisfied
+        assert!(!task.dependencies_satisfied(&[]));
+        assert!(!task.dependencies_satisfied(&[TaskId("task-001".to_string())]));
+
+        // Satisfied
+        assert!(task.dependencies_satisfied(&[
+            TaskId("task-001".to_string()),
+            TaskId("task-000".to_string()),
+        ]));
+
+        // Satisfied with extra tasks
+        assert!(task.dependencies_satisfied(&[
+            TaskId("task-001".to_string()),
+            TaskId("task-000".to_string()),
+            TaskId("task-extra".to_string()),
+        ]));
     }
 
     // AppState tests

@@ -7,8 +7,8 @@
 //! - Error handling scenarios
 
 use dirigent_core::{
-    AppState, FileStorageService, LayoutMode, Session, SessionId, SessionStatus, StorageService,
-    Task, TaskId, TaskPriority, TaskStatus,
+    AppState, FileStorageService, LayoutMode, RetryConfig, Session, SessionId, SessionStatus,
+    StorageService, Task, TaskId, TaskPriority, TaskStatus,
 };
 use std::path::PathBuf;
 use tempfile::TempDir;
@@ -23,11 +23,15 @@ fn create_task(id: &str, title: &str) -> Task {
         status: TaskStatus::Queued,
         dependencies: vec![],
         tags: vec!["integration-test".to_string()],
+        estimated_minutes: None,
         assigned_session: None,
         assigned_at: None,
+        verification: None,
+        retry: RetryConfig::default(),
         created_at: chrono::Utc::now(),
         started_at: None,
         completed_at: None,
+        error_message: None,
     }
 }
 

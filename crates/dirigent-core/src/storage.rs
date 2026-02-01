@@ -334,7 +334,9 @@ impl StorageService for FileStorageService {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::types::{LayoutMode, Session, SessionId, SessionStatus, TaskPriority, TaskStatus};
+    use crate::types::{
+        LayoutMode, RetryConfig, Session, SessionId, SessionStatus, TaskPriority, TaskStatus,
+    };
     use tempfile::TempDir;
 
     // Helper function to create a test task
@@ -347,11 +349,15 @@ mod tests {
             status: TaskStatus::Queued,
             dependencies: vec![],
             tags: vec!["test".to_string()],
+            estimated_minutes: None,
             assigned_session: None,
             assigned_at: None,
+            verification: None,
+            retry: RetryConfig::default(),
             created_at: chrono::Utc::now(),
             started_at: None,
             completed_at: None,
+            error_message: None,
         }
     }
 
