@@ -236,6 +236,8 @@ impl AppView {
                             .flex()
                             .flex_row()
                             .gap(px(8.0))
+                            .child("C")
+                            .child("O")
                             .child("D")
                             .child("I")
                             .child("R")
