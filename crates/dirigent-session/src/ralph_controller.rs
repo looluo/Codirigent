@@ -113,18 +113,6 @@ impl DefaultRalphLoopController {
         }
     }
 
-    /// Check if a loop should be paused due to error.
-    ///
-    /// Returns true if the config has pause_on_error enabled and
-    /// the last iteration failed.
-    fn should_pause_on_error(&self, session_id: SessionId) -> bool {
-        if let Some((config, state)) = self.loops.get(&session_id) {
-            config.pause_on_error && !state.last_iteration_passed()
-        } else {
-            false
-        }
-    }
-
     /// Check if context compaction should be triggered.
     ///
     /// Returns true if auto_compact is enabled and the current
@@ -329,7 +317,7 @@ impl RalphLoopController for DefaultRalphLoopController {
 
         // Get config values before mutable borrow
         let (max_iterations, should_pause) = {
-            let (config, state) = self
+            let (config, _state) = self
                 .loops
                 .get(&session_id)
                 .context("No loop found for session")?;
