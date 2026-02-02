@@ -6,12 +6,15 @@
 //! - Click-to-focus functionality
 //! - Session renaming support
 //! - New session button
+//! - File tree browser
 
+mod file_tree;
 mod types;
 
 #[cfg(test)]
 mod tests;
 
+pub use file_tree::*;
 pub use types::*;
 
 use codirigent_core::{Session, SessionId, SessionStatus};
