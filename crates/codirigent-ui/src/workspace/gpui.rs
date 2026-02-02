@@ -529,7 +529,7 @@ impl WorkspaceView {
         match event {
             EmptySessionEvent::CreateSessionClicked { position } => {
                 info!(?position, "Create session at position");
-                // Session creation is handled in the click handler
+                self.create_session(cx);
             }
         }
         cx.notify();

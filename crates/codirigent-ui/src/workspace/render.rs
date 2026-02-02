@@ -70,15 +70,25 @@ impl WorkspaceView {
             } else {
                 gpui::Hsla::transparent_black()
             };
+            let hover_bg: gpui::Hsla = theme.active.into();
+            let session_id = session.id;
 
             list = list.child(
                 div()
+                    .id(SharedString::from(format!("session-item-{}", session_id.0)))
                     .h(px(32.0))
                     .px_3()
                     .bg(item_bg)
                     .flex()
                     .items_center()
                     .gap_2()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(hover_bg.opacity(0.1)))
+                    .on_click(cx.listener(move |this, _event: &ClickEvent, _window, cx| {
+                        info!(?session_id, "Session item clicked");
+                        this.workspace.focus_session(session_id);
+                        cx.notify();
+                    }))
                     .child(
                         // Status indicator dot
                         div()
@@ -99,32 +109,6 @@ impl WorkspaceView {
         }
 
         sidebar = sidebar.child(list);
-
-        // New session button with click handler
-        let muted: gpui::Hsla = theme.muted.into();
-        let hover_bg: gpui::Hsla = theme.active.into();
-        sidebar = sidebar.child(
-            div()
-                .id("new-session-btn")
-                .h(px(44.0))
-                .px_3()
-                .border_t_1()
-                .border_color(border_color)
-                .flex()
-                .items_center()
-                .cursor_pointer()
-                .hover(|style| style.bg(hover_bg.opacity(0.1)))
-                .on_click(cx.listener(|this, _event: &ClickEvent, _window, cx| {
-                    info!("New Session button clicked");
-                    this.create_session(cx);
-                }))
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(muted)
-                        .child("+ New Session (Cmd+N)"),
-                ),
-        );
 
         sidebar
     }
@@ -403,15 +387,17 @@ impl WorkspaceView {
         // Window controls (macOS-style traffic lights)
         #[cfg(target_os = "macos")]
         {
-            let mut controls = div().flex().gap_2().items_center();
+            let mut controls = div().flex().gap_2().items_center().ml_2();
             for btn in &hints.controls {
                 let color: gpui::Hsla = btn.current_color().into();
                 controls = controls.child(
                     div()
-                        .w(px(12.0))
-                        .h(px(12.0))
+                        .w(px(14.0))
+                        .h(px(14.0))
                         .rounded_full()
-                        .bg(color),
+                        .bg(color)
+                        .border_1()
+                        .border_color(color.opacity(0.3)),
                 );
             }
             bar = bar.child(controls);
@@ -1146,8 +1132,10 @@ impl WorkspaceView {
             .overflow_hidden()
             .child(header)
             .child(
-                // Render actual terminal content instead of placeholder
-                self.render_terminal_content(session_id, theme),
+                div()
+                    .flex_1()
+                    .overflow_hidden()
+                    .child(self.render_terminal_content(session_id, theme)),
             )
     }
 
