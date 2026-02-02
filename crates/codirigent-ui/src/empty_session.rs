@@ -5,6 +5,7 @@
 
 use crate::sidebar::Color;
 use codirigent_core::GridPosition;
+use std::collections::HashSet;
 
 /// Empty session cell events.
 #[derive(Debug, Clone, PartialEq)]
@@ -166,12 +167,13 @@ impl EmptySessionPool {
     ///
     /// Creates empty cells for all positions that don't have active sessions.
     pub fn setup_for_grid(&mut self, rows: u32, cols: u32, occupied: &[GridPosition]) {
+        let occupied_set: HashSet<_> = occupied.iter().collect();
         self.cells.clear();
 
         for row in 0..rows {
             for col in 0..cols {
                 let pos = GridPosition { row, col };
-                if !occupied.contains(&pos) {
+                if !occupied_set.contains(&pos) {
                     self.cells.push(EmptySessionCell::new(pos));
                 }
             }

@@ -208,7 +208,7 @@ impl Default for RetryConfig {
 }
 
 /// Grid position for custom layouts.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct GridPosition {
     /// Row index (0-based).
     pub row: u32,

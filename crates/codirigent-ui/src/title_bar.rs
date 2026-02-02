@@ -46,6 +46,9 @@ impl WindowControl {
         ]
     }
 
+    /// Get all controls in platform order.
+    ///
+    /// On Windows/Linux: Minimize, Maximize, Close (right side).
     #[cfg(not(target_os = "macos"))]
     pub fn all() -> &'static [WindowControl] {
         &[
