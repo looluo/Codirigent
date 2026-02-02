@@ -141,20 +141,18 @@ impl EventListener for TerminalEventHandler {
                 );
                 // TODO: Integrate with system clipboard
             }
-            TermEvent::ClipboardLoad(clipboard_type, format) => {
+            TermEvent::ClipboardLoad(clipboard_type, _format) => {
                 debug!(
                     session_id = %self.session_id,
                     ?clipboard_type,
-                    %format,
                     "Clipboard load request"
                 );
                 // TODO: Integrate with system clipboard
             }
-            TermEvent::ColorRequest(index, format) => {
+            TermEvent::ColorRequest(index, _format) => {
                 debug!(
                     session_id = %self.session_id,
                     index,
-                    %format,
                     "Color request"
                 );
             }
@@ -166,10 +164,9 @@ impl EventListener for TerminalEventHandler {
                 );
                 // TODO: Forward to PTY
             }
-            TermEvent::TextAreaSizeRequest(format) => {
+            TermEvent::TextAreaSizeRequest(_format) => {
                 debug!(
                     session_id = %self.session_id,
-                    %format,
                     "Text area size request"
                 );
             }
@@ -294,9 +291,7 @@ impl Terminal {
     /// terminal.process_output(b"Hello, World!");
     /// ```
     pub fn process_output(&mut self, data: &[u8]) {
-        for byte in data {
-            self.processor.advance(&mut self.term, *byte);
-        }
+        self.processor.advance(&mut self.term, data);
         self.dirty = true;
     }
 
@@ -311,9 +306,7 @@ impl Terminal {
     /// * `chunk_size` - Number of bytes to process per batch
     pub fn process_output_chunked(&mut self, data: &[u8], chunk_size: usize) {
         for chunk in data.chunks(chunk_size) {
-            for byte in chunk {
-                self.processor.advance(&mut self.term, *byte);
-            }
+            self.processor.advance(&mut self.term, chunk);
         }
         self.dirty = true;
     }
@@ -367,7 +360,7 @@ impl Terminal {
     ///
     /// Row and column are 0-indexed.
     pub fn cursor_position(&self) -> (usize, usize) {
-        let cursor = self.term.grid().cursor;
+        let cursor = &self.term.grid().cursor;
         (cursor.point.line.0 as usize, cursor.point.column.0)
     }
 
@@ -375,12 +368,12 @@ impl Terminal {
     ///
     /// Returns `false` if the terminal is in cursor-hidden mode.
     pub fn cursor_visible(&self) -> bool {
-        !self.term.mode().contains(TermMode::HIDE_CURSOR)
+        self.term.mode().contains(TermMode::SHOW_CURSOR)
     }
 
     /// Get the current terminal mode flags.
     pub fn mode(&self) -> TermMode {
-        self.term.mode()
+        *self.term.mode()
     }
 
     /// Access the underlying alacritty term for rendering.

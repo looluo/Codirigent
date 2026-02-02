@@ -13,7 +13,7 @@ members = [
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.70"
+rust-version = "1.75"
 authors = ["Dirigent Contributors"]
 license = "MIT OR Apache-2.0"
 repository = "https://github.com/user/dirigent"
@@ -55,6 +55,10 @@ dirs = "5"
 # Testing
 tempfile = "3"
 
+# GPUI from crates.io with pinned core-text to avoid core-graphics conflict
+gpui = "0.2"
+core-text = "=21.0.0"
+
 # Internal crates
 dirigent-core = { path = "crates/dirigent-core" }
 dirigent-session = { path = "crates/dirigent-session" }
@@ -89,5 +93,12 @@ tokio.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 
+[features]
+default = []
+gpui-full = ["dirigent-ui/gpui-full"]
+terminal = ["dirigent-ui/terminal"]
+
 [dev-dependencies]
 tempfile.workspace = true
+
+

@@ -11,6 +11,9 @@
 
 use dirigent_core::SessionStatus;
 
+#[cfg(feature = "gpui-full")]
+use gpui::Hsla as GpuiHsla;
+
 /// RGBA color representation.
 ///
 /// Components are stored as u8 values (0-255). Used for terminal cell colors
@@ -141,6 +144,32 @@ impl Hsla {
     /// Create a new HSLA color.
     pub const fn new(h: f32, s: f32, l: f32, a: f32) -> Self {
         Self { h, s, l, a }
+    }
+}
+
+/// Convert theme Hsla to GPUI Hsla.
+#[cfg(feature = "gpui-full")]
+impl From<Hsla> for GpuiHsla {
+    fn from(color: Hsla) -> Self {
+        GpuiHsla {
+            h: color.h,
+            s: color.s,
+            l: color.l,
+            a: color.a,
+        }
+    }
+}
+
+/// Convert GPUI Hsla to theme Hsla.
+#[cfg(feature = "gpui-full")]
+impl From<GpuiHsla> for Hsla {
+    fn from(color: GpuiHsla) -> Self {
+        Hsla {
+            h: color.h,
+            s: color.s,
+            l: color.l,
+            a: color.a,
+        }
     }
 }
 
@@ -327,6 +356,48 @@ impl DirigentTheme {
             SessionStatus::WaitingForInput => "Waiting",
             SessionStatus::Done => "Done",
             SessionStatus::Error => "Error",
+        }
+    }
+
+    /// Get a color from the 256-color indexed palette.
+    ///
+    /// The 256-color palette is organized as:
+    /// - 0-15: Standard ANSI colors
+    /// - 16-231: 6x6x6 color cube
+    /// - 232-255: Grayscale ramp
+    ///
+    /// # Arguments
+    ///
+    /// * `index` - Color index (0-255)
+    ///
+    /// # Returns
+    ///
+    /// The RGBA color for the given index
+    pub fn get_indexed_color(&self, index: u8) -> Rgba {
+        match index {
+            // Standard ANSI colors (0-15)
+            0..=15 => self.ansi.colors[index as usize],
+            // 6x6x6 color cube (16-231)
+            16..=231 => {
+                let idx = index - 16;
+                let r = (idx / 36) % 6;
+                let g = (idx / 6) % 6;
+                let b = idx % 6;
+                // Convert 0-5 to 0-255 (0, 95, 135, 175, 215, 255)
+                let to_component = |v: u8| -> u8 {
+                    if v == 0 {
+                        0
+                    } else {
+                        55 + v * 40
+                    }
+                };
+                Rgba::rgb(to_component(r), to_component(g), to_component(b))
+            }
+            // Grayscale ramp (232-255)
+            232..=255 => {
+                let gray = 8 + (index - 232) * 10;
+                Rgba::rgb(gray, gray, gray)
+            }
         }
     }
 }

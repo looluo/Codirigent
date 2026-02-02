@@ -5,14 +5,13 @@
 //!
 //! Requires the `gpui` feature to be enabled.
 
-use dirigent_core::{DefaultEventBus, EventBus};
+use dirigent_core::DefaultEventBus;
 use dirigent_detector::{DetectorConfig, InputDetector};
 use dirigent_session::DefaultSessionManager;
 use gpui::*;
 use std::sync::{Arc, Mutex};
 use tracing::info;
 
-use crate::keybindings::register_keybindings;
 use crate::theme::DirigentTheme;
 
 // Application actions
@@ -87,12 +86,9 @@ impl DirigentApp {
     pub fn run(self) {
         info!("Starting Dirigent GPUI application...");
 
-        Application::new().run(|cx: &mut App| {
+        Application::new().run(move |cx: &mut App| {
             // Register global actions
             Self::register_actions(cx);
-
-            // Register keyboard bindings
-            register_keybindings(cx);
 
             // Create the main window
             let theme = self.theme.clone();
@@ -191,10 +187,16 @@ impl PlaceholderView {
 
 impl Render for PlaceholderView {
     fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        // Convert theme colors to GPUI Hsla types
+        let bg: gpui::Hsla = self.theme.background.into();
+        let fg: gpui::Hsla = self.theme.foreground.into();
+        let idle_color: gpui::Hsla = self.theme.session_idle.into();
+        let border_color: gpui::Hsla = self.theme.border.into();
+
         div()
             .size_full()
-            .bg(self.theme.background)
-            .text_color(self.theme.foreground)
+            .bg(bg)
+            .text_color(fg)
             .flex()
             .flex_col()
             .items_center()
@@ -208,14 +210,14 @@ impl Render for PlaceholderView {
             .child(
                 div()
                     .mt_2()
-                    .text_color(self.theme.session_idle)
+                    .text_color(idle_color)
                     .child("AI Coding Agent Orchestration IDE"),
             )
             .child(
                 div()
                     .mt_4()
                     .text_sm()
-                    .text_color(self.theme.border)
+                    .text_color(border_color)
                     .child("Press Cmd+N to create a new session"),
             )
     }

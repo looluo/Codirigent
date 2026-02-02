@@ -1,6 +1,21 @@
 //! Dirigent - AI Coding Agent Orchestration IDE
 //!
 //! Entry point for the Dirigent application.
+//!
+//! # Features
+//!
+//! - `gpui-full`: Enable the full GPUI-based user interface
+//! - `terminal`: Enable terminal rendering with alacritty_terminal
+//!
+//! # Running
+//!
+//! ```bash
+//! # Run with GPUI interface
+//! cargo run --features gpui-full
+//!
+//! # Run with GPUI and terminal support
+//! cargo run --features "gpui-full,terminal"
+//! ```
 
 use anyhow::Result;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
@@ -9,13 +24,27 @@ fn main() -> Result<()> {
     // Initialize tracing
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
-        .with(tracing_subscriber::EnvFilter::from_default_env())
+        .with(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| tracing_subscriber::EnvFilter::new("info")),
+        )
         .init();
 
     tracing::info!("Starting Dirigent...");
 
-    // TODO: Initialize application
-    // This will be implemented in Stage 9 (GPUI Application)
+    // Launch GPUI application if feature is enabled
+    #[cfg(feature = "gpui-full")]
+    {
+        tracing::info!("Launching GPUI application...");
+        dirigent_ui::DirigentApp::new().run();
+    }
+
+    // Without GPUI, just print info and exit
+    #[cfg(not(feature = "gpui-full"))]
+    {
+        tracing::info!("Dirigent started without GPUI.");
+        tracing::info!("To launch the GUI, run: cargo run --features gpui-full");
+    }
 
     Ok(())
 }

@@ -90,14 +90,23 @@ pub mod theme_config;
 pub mod theme_manager;
 pub mod workspace;
 
-// Modules that require dependencies not yet available
-// TODO(Stage 12+): Enable when GPUI/alacritty_terminal are available
-// pub mod app;
-// pub mod clipboard;
-// pub mod input;
-// pub mod terminal;
-// pub mod terminal_colors;
-// pub mod terminal_view;
+// Modules that require GPUI feature only
+#[cfg(feature = "gpui-full")]
+pub mod app;
+
+// Modules that require terminal feature only (alacritty_terminal)
+#[cfg(feature = "terminal")]
+pub mod clipboard;
+#[cfg(feature = "terminal")]
+pub mod input;
+#[cfg(feature = "terminal")]
+pub mod terminal;
+#[cfg(feature = "terminal")]
+pub mod terminal_colors;
+
+// Modules that require both GPUI and terminal (renders terminal in GPUI)
+#[cfg(all(feature = "gpui-full", feature = "terminal"))]
+pub mod terminal_view;
 
 // Re-export commonly used items
 pub use actions::{
@@ -124,3 +133,7 @@ pub use smart_clipboard::{SmartClipboardProvider, ThumbnailPreview};
 
 // Re-export clipboard preview component
 pub use clipboard_preview::ClipboardPreview;
+
+// Re-export GPUI app when feature is enabled
+#[cfg(feature = "gpui-full")]
+pub use app::DirigentApp;

@@ -25,11 +25,12 @@ tokio.workspace = true
 tracing.workspace = true
 chrono.workspace = true
 
-# GPUI - Community Edition (requires Rust 1.75+)
-gpui = { package = "gpui-ce", version = "0.3", optional = true }
+# GPUI from crates.io with workspace version alignment
+gpui = { workspace = true, optional = true }
+core-text = { workspace = true }  # Force version alignment to avoid core-graphics conflict
 
 # Terminal rendering (requires Rust 1.75+ for latest version)
-alacritty_terminal = { version = "0.24", optional = true }
+alacritty_terminal = { version = "0.25", optional = true }
 
 # macOS-specific dependencies
 [target.'cfg(target_os = "macos")'.dependencies]
