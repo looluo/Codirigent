@@ -29,6 +29,9 @@ mod core;
 #[cfg(feature = "gpui-full")]
 pub mod gpui;
 
+#[cfg(feature = "gpui-full")]
+mod render;
+
 #[cfg(test)]
 mod tests;
 

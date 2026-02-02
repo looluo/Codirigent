@@ -30,8 +30,8 @@ use crate::app::{
     ToggleSidebar,
 };
 use gpui::{
-    div, px, App, AppContext, ClickEvent, Context, Entity, FocusHandle, Focusable, FontWeight,
-    InteractiveElement, IntoElement, ParentElement, Render, Styled, Window,
+    div, px, App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement,
+    IntoElement, ParentElement, Render, Styled, Window,
 };
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -71,56 +71,6 @@ impl WorkspaceView {
     ) -> Self {
         let mut workspace = Workspace::new();
         workspace.set_theme(theme);
-
-        // Register action handlers for keyboard shortcuts
-        cx.on_action(|this: &mut Self, _: &NewSession, _window, cx| {
-            info!("NewSession action received");
-            this.create_session(cx);
-        });
-
-        cx.on_action(|this: &mut Self, _: &CloseSession, _window, cx| {
-            info!("CloseSession action received");
-            this.close_focused_session(cx);
-        });
-
-        cx.on_action(|this: &mut Self, _: &NextLayout, _window, cx| {
-            info!("NextLayout action received");
-            this.next_layout(cx);
-        });
-
-        cx.on_action(|this: &mut Self, _: &ToggleSidebar, _window, cx| {
-            info!("ToggleSidebar action received");
-            this.toggle_sidebar(cx);
-        });
-
-        // Focus session actions
-        cx.on_action(|this: &mut Self, _: &FocusSession1, _window, cx| {
-            this.focus_session_number(1, cx);
-        });
-        cx.on_action(|this: &mut Self, _: &FocusSession2, _window, cx| {
-            this.focus_session_number(2, cx);
-        });
-        cx.on_action(|this: &mut Self, _: &FocusSession3, _window, cx| {
-            this.focus_session_number(3, cx);
-        });
-        cx.on_action(|this: &mut Self, _: &FocusSession4, _window, cx| {
-            this.focus_session_number(4, cx);
-        });
-        cx.on_action(|this: &mut Self, _: &FocusSession5, _window, cx| {
-            this.focus_session_number(5, cx);
-        });
-        cx.on_action(|this: &mut Self, _: &FocusSession6, _window, cx| {
-            this.focus_session_number(6, cx);
-        });
-        cx.on_action(|this: &mut Self, _: &FocusSession7, _window, cx| {
-            this.focus_session_number(7, cx);
-        });
-        cx.on_action(|this: &mut Self, _: &FocusSession8, _window, cx| {
-            this.focus_session_number(8, cx);
-        });
-        cx.on_action(|this: &mut Self, _: &FocusSession9, _window, cx| {
-            this.focus_session_number(9, cx);
-        });
 
         Self {
             workspace,
@@ -183,225 +133,148 @@ impl WorkspaceView {
         }
     }
 
-    /// Render the sidebar.
-    fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let theme = self.workspace.theme();
-        let sidebar_bg: gpui::Hsla = theme.sidebar_background.into();
-        let border_color: gpui::Hsla = theme.border.into();
-        let fg: gpui::Hsla = theme.foreground.into();
+    // --- Action Handlers ---
+    // These are called by GPUI when keyboard shortcuts or menu items trigger actions.
 
-        let width = self.workspace.sidebar_width();
-        let sessions = self.workspace.sessions().to_vec(); // Clone to avoid borrow issues
-
-        // Top padding for macOS transparent titlebar (traffic lights area)
-        let titlebar_height = 28.0;
-
-        let mut sidebar = div()
-            .w(px(width))
-            .h_full()
-            .pt(px(titlebar_height))
-            .bg(sidebar_bg)
-            .border_r_1()
-            .border_color(border_color)
-            .flex()
-            .flex_col();
-
-        // Header
-        sidebar = sidebar.child(
-            div()
-                .h(px(40.0))
-                .px_3()
-                .flex()
-                .items_center()
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::SEMIBOLD)
-                        .text_color(fg)
-                        .child("Sessions"),
-                ),
-        );
-
-        // Session list
-        let mut list = div().flex_1().overflow_hidden().flex().flex_col();
-
-        for session in sessions {
-            let status_color: gpui::Hsla = theme.status_color(session.status).into();
-            let is_focused = self.workspace.focused_session_id() == Some(session.id);
-            let item_bg = if is_focused {
-                let active: gpui::Hsla = theme.active.into();
-                active.opacity(0.2)
-            } else {
-                gpui::Hsla::transparent_black()
-            };
-
-            list = list.child(
-                div()
-                    .h(px(32.0))
-                    .px_3()
-                    .bg(item_bg)
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .child(
-                        // Status indicator dot
-                        div()
-                            .w(px(8.0))
-                            .h(px(8.0))
-                            .rounded_full()
-                            .bg(status_color),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(fg)
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .child(session.name.clone()),
-                    ),
-            );
-        }
-
-        sidebar = sidebar.child(list);
-
-        // New session button with click handler
-        let muted: gpui::Hsla = theme.muted.into();
-        let hover_bg = theme.active.into();
-        sidebar = sidebar.child(
-            div()
-                .id("new-session-btn")
-                .h(px(44.0))
-                .px_3()
-                .border_t_1()
-                .border_color(border_color)
-                .flex()
-                .items_center()
-                .cursor_pointer()
-                .hover(|style| style.bg(gpui::Hsla::from(hover_bg).opacity(0.1)))
-                .on_click(cx.listener(|this, _event: &ClickEvent, _window, cx| {
-                    info!("New Session button clicked");
-                    this.create_session(cx);
-                }))
-                .child(
-                    div()
-                        .text_sm()
-                        .text_color(muted)
-                        .child("+ New Session (Cmd+N)"),
-                ),
-        );
-
-        sidebar
+    /// Handle NewSession action (Cmd+N).
+    fn handle_new_session(
+        &mut self,
+        _action: &NewSession,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        info!("NewSession action triggered");
+        self.create_session(cx);
     }
 
-    /// Render the grid of session panes.
-    fn render_grid(&self) -> impl IntoElement {
-        let theme = self.workspace.theme();
-        let panel_bg: gpui::Hsla = theme.panel_background.into();
-        let border_color: gpui::Hsla = theme.border.into();
-        let fg: gpui::Hsla = theme.foreground.into();
+    /// Handle CloseSession action (Cmd+W).
+    fn handle_close_session(
+        &mut self,
+        _action: &CloseSession,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        info!("CloseSession action triggered");
+        self.close_focused_session(cx);
+    }
 
-        let cells = self.workspace.cell_info();
-        let profile = self.workspace.layout_profile();
-        let (rows, cols) = profile.dimensions();
+    /// Handle NextLayout action (Cmd+\).
+    fn handle_next_layout(
+        &mut self,
+        _action: &NextLayout,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        info!("NextLayout action triggered");
+        self.next_layout(cx);
+    }
 
-        let mut grid = div().flex_1().flex().flex_col().gap(px(theme.grid_gap));
+    /// Handle ToggleSidebar action (Cmd+B).
+    fn handle_toggle_sidebar(
+        &mut self,
+        _action: &ToggleSidebar,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        info!("ToggleSidebar action triggered");
+        self.toggle_sidebar(cx);
+    }
 
-        for row in 0..rows {
-            let mut row_div = div().flex_1().flex().flex_row().gap(px(theme.grid_gap));
+    /// Handle FocusSession1 action (Cmd+1).
+    fn handle_focus_session1(
+        &mut self,
+        _action: &FocusSession1,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_session_number(1, cx);
+    }
 
-            for col in 0..cols {
-                let index = (row * cols + col) as usize;
-                let cell = cells.get(index);
+    /// Handle FocusSession2 action (Cmd+2).
+    fn handle_focus_session2(
+        &mut self,
+        _action: &FocusSession2,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_session_number(2, cx);
+    }
 
-                let cell_div = if let Some(info) = cell {
-                    let status_color: gpui::Hsla = theme.status_color(info.status).into();
-                    let cell_border = if info.is_focused {
-                        let active: gpui::Hsla = theme.active.into();
-                        active
-                    } else {
-                        border_color
-                    };
+    /// Handle FocusSession3 action (Cmd+3).
+    fn handle_focus_session3(
+        &mut self,
+        _action: &FocusSession3,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_session_number(3, cx);
+    }
 
-                    div()
-                        .flex_1()
-                        .bg(panel_bg)
-                        .border_1()
-                        .border_color(cell_border)
-                        .rounded_md()
-                        .flex()
-                        .flex_col()
-                        .overflow_hidden()
-                        .child(
-                            // Header with session name
-                            div()
-                                .h(px(28.0))
-                                .px_2()
-                                .border_b_1()
-                                .border_color(border_color)
-                                .flex()
-                                .items_center()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .w(px(8.0))
-                                        .h(px(8.0))
-                                        .rounded_full()
-                                        .bg(status_color),
-                                )
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .font_weight(FontWeight::MEDIUM)
-                                        .text_color(fg)
-                                        .overflow_hidden()
-                                        .text_ellipsis()
-                                        .child(info.name.clone()),
-                                ),
-                        )
-                        .child(
-                            // Content area (placeholder for terminal)
-                            div()
-                                .flex_1()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(border_color)
-                                        .child(format!(
-                                            "[{}]",
-                                            CodirigentTheme::status_name(info.status)
-                                        )),
-                                ),
-                        )
-                } else {
-                    // Empty cell
-                    div()
-                        .flex_1()
-                        .bg(panel_bg)
-                        .border_1()
-                        .border_color(border_color)
-                        .rounded_md()
-                        .border_dashed()
-                        .flex()
-                        .items_center()
-                        .justify_center()
-                        .child(
-                            div()
-                                .text_xs()
-                                .text_color(border_color)
-                                .child("[Empty]"),
-                        )
-                };
+    /// Handle FocusSession4 action (Cmd+4).
+    fn handle_focus_session4(
+        &mut self,
+        _action: &FocusSession4,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_session_number(4, cx);
+    }
 
-                row_div = row_div.child(cell_div);
-            }
+    /// Handle FocusSession5 action (Cmd+5).
+    fn handle_focus_session5(
+        &mut self,
+        _action: &FocusSession5,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_session_number(5, cx);
+    }
 
-            grid = grid.child(row_div);
-        }
+    /// Handle FocusSession6 action (Cmd+6).
+    fn handle_focus_session6(
+        &mut self,
+        _action: &FocusSession6,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_session_number(6, cx);
+    }
 
-        grid
+    /// Handle FocusSession7 action (Cmd+7).
+    fn handle_focus_session7(
+        &mut self,
+        _action: &FocusSession7,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_session_number(7, cx);
+    }
+
+    /// Handle FocusSession8 action (Cmd+8).
+    fn handle_focus_session8(
+        &mut self,
+        _action: &FocusSession8,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_session_number(8, cx);
+    }
+
+    /// Handle FocusSession9 action (Cmd+9).
+    fn handle_focus_session9(
+        &mut self,
+        _action: &FocusSession9,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.focus_session_number(9, cx);
+    }
+
+    /// Get a reference to the underlying workspace.
+    ///
+    /// Used by the render module to access workspace state.
+    pub(super) fn workspace(&self) -> &Workspace {
+        &self.workspace
     }
 }
 
@@ -413,8 +286,11 @@ impl Focusable for WorkspaceView {
 
 impl Render for WorkspaceView {
     fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        // Clone theme values before any mutable borrows
         let theme = self.workspace.theme();
         let bg: gpui::Hsla = theme.background.into();
+        let grid_gap = theme.grid_gap;
+        let show_sidebar = self.workspace.is_sidebar_visible();
 
         // Top padding for macOS transparent titlebar (traffic lights area)
         let titlebar_height = 28.0;
@@ -422,12 +298,26 @@ impl Render for WorkspaceView {
         let mut container = div()
             .size_full()
             .track_focus(&self.focus_handle(cx))
+            // Register action handlers for keyboard shortcuts
+            .on_action(cx.listener(Self::handle_new_session))
+            .on_action(cx.listener(Self::handle_close_session))
+            .on_action(cx.listener(Self::handle_next_layout))
+            .on_action(cx.listener(Self::handle_toggle_sidebar))
+            .on_action(cx.listener(Self::handle_focus_session1))
+            .on_action(cx.listener(Self::handle_focus_session2))
+            .on_action(cx.listener(Self::handle_focus_session3))
+            .on_action(cx.listener(Self::handle_focus_session4))
+            .on_action(cx.listener(Self::handle_focus_session5))
+            .on_action(cx.listener(Self::handle_focus_session6))
+            .on_action(cx.listener(Self::handle_focus_session7))
+            .on_action(cx.listener(Self::handle_focus_session8))
+            .on_action(cx.listener(Self::handle_focus_session9))
             .bg(bg)
             .flex()
             .flex_row();
 
         // Render sidebar if visible
-        if self.workspace.is_sidebar_visible() {
+        if show_sidebar {
             container = container.child(self.render_sidebar(cx));
         }
 
@@ -435,9 +325,9 @@ impl Render for WorkspaceView {
         container = container.child(
             div()
                 .flex_1()
-                .pt(px(titlebar_height + theme.grid_gap))
-                .pb(px(theme.grid_gap))
-                .px(px(theme.grid_gap))
+                .pt(px(titlebar_height + grid_gap))
+                .pb(px(grid_gap))
+                .px(px(grid_gap))
                 .flex()
                 .child(self.render_grid()),
         );
