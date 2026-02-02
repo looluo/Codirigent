@@ -330,8 +330,14 @@ impl ClipboardPreview {
         match Self::resize_image_bytes(&image.bytes, max_size, image.format) {
             Ok(resized) => resized,
             Err(e) => {
-                // Log warning and fall back to original bytes
-                warn!("Failed to resize image: {}, returning original bytes", e);
+                // Log warning with context and fall back to original bytes
+                warn!(
+                    width = image.width,
+                    height = image.height,
+                    format = ?image.format,
+                    error = %e,
+                    "Failed to resize image, returning original bytes"
+                );
                 image.bytes.clone()
             }
         }

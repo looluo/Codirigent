@@ -211,10 +211,18 @@ impl OutputParser for CargoTestParser {
 /// ## Parsed Information
 ///
 /// - Tests passed/failed/total from "Tests:" summary line
+/// - Failure details including file location, expected/actual values
 #[derive(Debug)]
 pub struct JestParser {
     /// Pattern to match Jest test summary.
     summary_pattern: Regex,
+    /// Pattern to extract file location from stack trace.
+    /// Example: "at Object.<anonymous> (src/test.js:15:17)"
+    location_pattern: Regex,
+    /// Pattern to extract expected value from assertion.
+    expected_pattern: Regex,
+    /// Pattern to extract received/actual value from assertion.
+    received_pattern: Regex,
 }
 
 impl Default for JestParser {
@@ -232,7 +240,9 @@ impl Clone for JestParser {
 impl JestParser {
     /// Create a new Jest parser.
     ///
-    /// Compiles regex patterns for parsing Jest output.
+    /// Compiles regex patterns for parsing Jest output. All patterns are
+    /// compiled once at construction time to avoid repeated compilation
+    /// during parsing.
     pub fn new() -> Self {
         Self {
             // Matches: "Tests: 2 failed, 23 passed, 25 total"
@@ -241,26 +251,30 @@ impl JestParser {
                 r"Tests:\s*(?:(\d+)\s*failed,\s*)?(\d+)\s*passed(?:,\s*\d+\s*skipped)?,\s*(\d+)\s*total",
             )
             .expect("Invalid Jest summary regex"),
+            // Pattern to extract file location from stack trace
+            location_pattern: Regex::new(
+                r"at\s+(?:Object\.<anonymous>|[\w.]+)\s+\(([^:]+):(\d+):\d+\)",
+            )
+            .expect("Invalid Jest location regex"),
+            // Pattern to extract expected value
+            expected_pattern: Regex::new(r"Expected:\s*(.+)")
+                .expect("Invalid Jest expected regex"),
+            // Pattern to extract received/actual value
+            received_pattern: Regex::new(r"Received:\s*(.+)")
+                .expect("Invalid Jest received regex"),
         }
     }
 
     /// Parse Jest failure blocks from output.
     ///
     /// Jest failures are marked with "●" and include test name, error message,
-    /// expected/actual values, and stack trace with file location.
+    /// expected/actual values, and stack trace with file location. Uses the
+    /// pre-compiled regex patterns from the struct for efficient parsing.
     fn parse_failures(&self, output: &str) -> Vec<VerificationFailure> {
         let mut failures = Vec::new();
 
-        // Pattern to extract file location from stack trace
-        // Example: "at Object.<anonymous> (src/test.js:15:17)"
-        let location_pattern = Regex::new(r"at\s+(?:Object\.<anonymous>|[\w.]+)\s+\(([^:]+):(\d+):\d+\)").ok();
-        let expected_pattern = Regex::new(r"Expected:\s*(.+)").ok();
-        let received_pattern = Regex::new(r"Received:\s*(.+)").ok();
-
-        // Split output by the failure marker
-        let parts: Vec<&str> = output.split('●').collect();
-
-        for part in parts.iter().skip(1) {
+        // Split output by the failure marker and iterate directly (skip the collect)
+        for part in output.split('●').skip(1) {
             // First line is the test name
             let lines: Vec<&str> = part.lines().collect();
             if lines.is_empty() {
@@ -272,46 +286,40 @@ impl JestParser {
                 continue;
             }
 
-            let block = part.to_string();
             let mut file = None;
             let mut line = None;
             let mut expected = None;
             let mut actual = None;
 
-            // Extract file and line from stack trace
-            if let Some(ref pat) = location_pattern {
-                if let Some(caps) = pat.captures(&block) {
-                    file = caps.get(1).map(|m| std::path::PathBuf::from(m.as_str()));
-                    line = caps.get(2).and_then(|m| m.as_str().parse().ok());
-                }
+            // Extract file and line from stack trace (use part directly, no to_string)
+            if let Some(caps) = self.location_pattern.captures(part) {
+                file = caps.get(1).map(|m| std::path::PathBuf::from(m.as_str()));
+                line = caps.get(2).and_then(|m| m.as_str().parse().ok());
             }
 
             // Extract expected value
-            if let Some(ref pat) = expected_pattern {
-                if let Some(caps) = pat.captures(&block) {
-                    expected = caps.get(1).map(|m| m.as_str().trim().to_string());
-                }
+            if let Some(caps) = self.expected_pattern.captures(part) {
+                expected = caps.get(1).map(|m| m.as_str().trim().to_string());
             }
 
             // Extract actual/received value
-            if let Some(ref pat) = received_pattern {
-                if let Some(caps) = pat.captures(&block) {
-                    actual = caps.get(1).map(|m| m.as_str().trim().to_string());
-                }
+            if let Some(caps) = self.received_pattern.captures(part) {
+                actual = caps.get(1).map(|m| m.as_str().trim().to_string());
             }
 
-            // Build the message from the block (first few lines)
-            let message_lines: Vec<&str> = lines
+            // Build the message from the first few non-empty lines after the name
+            let message = lines
                 .iter()
                 .skip(1)
                 .take(5)
-                .filter(|l| !l.trim().is_empty())
-                .copied()
-                .collect();
-            let message = if message_lines.is_empty() {
+                .map(|l| l.trim())
+                .filter(|l| !l.is_empty())
+                .collect::<Vec<_>>()
+                .join("\n");
+            let message = if message.is_empty() {
                 "Test failed".to_string()
             } else {
-                message_lines.join("\n").trim().to_string()
+                message
             };
 
             failures.push(VerificationFailure {
