@@ -101,7 +101,7 @@ impl WindowsSmartClipboard {
     /// ```
     pub fn new() -> Self {
         // Get initial sequence number, default to 0 if unavailable
-        let initial_seq = seq_num().unwrap_or(0);
+        let initial_seq = seq_num().map_or(0, |nz| nz.get());
         Self {
             last_seq_num: AtomicU32::new(initial_seq),
         }
@@ -131,7 +131,7 @@ impl WindowsSmartClipboard {
     /// }
     /// ```
     pub fn has_changed(&self) -> bool {
-        let current_seq = seq_num().unwrap_or(0);
+        let current_seq = seq_num().map_or(0, |nz| nz.get());
         let last_seq = self.last_seq_num.swap(current_seq, Ordering::SeqCst);
         current_seq != last_seq
     }
@@ -310,17 +310,16 @@ mod tests {
     fn test_windows_clipboard_new() {
         let clipboard = WindowsSmartClipboard::new();
         // Just verify it can be created and has a valid sequence number stored
-        let seq = clipboard.last_seq_num.load(Ordering::SeqCst);
-        // Sequence number should be set (could be 0 if clipboard wasn't accessed)
-        assert!(seq >= 0);
+        let _seq = clipboard.last_seq_num.load(Ordering::SeqCst);
+        // Sequence number is always valid (u32 is always >= 0)
     }
 
     #[test]
     fn test_windows_clipboard_default() {
         let clipboard = WindowsSmartClipboard::default();
         // Default should be equivalent to new()
-        let seq = clipboard.last_seq_num.load(Ordering::SeqCst);
-        assert!(seq >= 0);
+        let _seq = clipboard.last_seq_num.load(Ordering::SeqCst);
+        // Sequence number is always valid (u32 is always >= 0)
     }
 
     #[test]
@@ -488,17 +487,15 @@ mod tests {
         let clipboard = WindowsSmartClipboard::new();
 
         // Get initial state
-        let initial = clipboard.last_seq_num.load(Ordering::SeqCst);
+        let _initial = clipboard.last_seq_num.load(Ordering::SeqCst);
 
         // Call has_changed - this should update internal state
         let _ = clipboard.has_changed();
 
         // The sequence number might have been updated
-        let after = clipboard.last_seq_num.load(Ordering::SeqCst);
+        let _after = clipboard.last_seq_num.load(Ordering::SeqCst);
 
-        // Both should be valid sequence numbers
-        assert!(initial >= 0);
-        assert!(after >= 0);
+        // Both are always valid sequence numbers (u32 is always >= 0)
     }
 
     #[test]
