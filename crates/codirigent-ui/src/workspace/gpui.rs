@@ -691,7 +691,7 @@ impl WorkspaceView {
                 self.worktree_panel.open_create_modal();
                 // Fetch available branches if we have a manager
                 if let Some(ref manager) = self.worktree_manager {
-                    if let Ok(mgr) = manager.lock() {
+                    if let Ok(_mgr) = manager.lock() {
                         // For now, just use a default list
                         // TODO: Fetch actual branches from git
                         self.worktree_panel.set_available_branches(vec![
@@ -1159,6 +1159,11 @@ impl Render for WorkspaceView {
         // 6. Session menu modal (if open)
         if let Some(menu) = self.render_session_menu(cx) {
             container = container.child(menu);
+        }
+
+        // 7. Worktree create modal (if open)
+        if let Some(modal) = self.render_worktree_modal(cx) {
+            container = container.child(modal);
         }
 
         container
