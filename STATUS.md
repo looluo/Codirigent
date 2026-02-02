@@ -1,12 +1,12 @@
 # Codirigent Implementation Status
 
 ## Quick Stats
-- **Progress:** 10 of 16 features (63%)
+- **Progress:** 11 of 16 features (69%)
 - **Phase 1:** ✅ 100% Complete
-- **Phase 2:** ⚠️ 67% Complete
+- **Phase 2:** ⚠️ 83% Complete (5/6)
 - **Phase 3:** ❌ 0% Complete
 - **Build Status:** ✅ Passing
-- **Last Updated:** 2026-02-02
+- **Last Updated:** 2026-02-02 (Iteration 2)
 
 ## Completed Features
 
@@ -17,47 +17,55 @@
 - ✅ A4: Window controls visible on macOS
 - ✅ C5: Empty cell clicks create sessions
 
-### Phase 2: Backend Integration + Visual ⚠️ (4/6)
+### Phase 2: Backend Integration + Visual ⚠️ (5/6)
 - ✅ C1: Custom layout picker modal
-- ✅ C2: Task board actions → TaskManager backend **[THIS SESSION]**
+- ✅ C2: Task board actions → TaskManager backend
+- ✅ C4: Session context menu (rename/group/close) **[THIS ITERATION]**
 - ✅ B1: Logo in title bar
 - ✅ B4: Visual session grouping with colors
 - ⏳ C3: File tree drag-to-terminal (blocked by B2)
-- ⏳ C4: Session rename/group assignment UI
 
 ## Remaining Work
 
-### Phase 2: 2 features (~2.5 hours)
-1. **C4**: Session context menu (2 hours) - HIGH PRIORITY
-2. **C3**: File tree drag-to-terminal (30 min) - After B2
+### Phase 2: 1 feature (~30 min)
+1. **C3**: File tree drag-to-terminal (30 min) - After B2
 
-### Phase 3: 4 features (~13 hours)  
-1. **B2**: File tree integration (3 hours) - HIGH PRIORITY
+### Phase 3: 4 features (~13 hours)
+1. **B2**: File tree integration (3 hours) - HIGH PRIORITY (unblocks C3)
 2. **B3**: Task board expansion (4 hours)
 3. **B5**: Git worktree full UI (6 hours)
 
-**Total Remaining:** ~15.5 hours
+**Total Remaining:** ~13.5 hours
 
-## This Session's Work
+## This Iteration's Work
 
-### Feature Implemented: C2 - Task Board Backend Integration
+### Iteration 2: C4 - Session Context Menu
 
 **What Was Done:**
-- Added `TaskManager` field to WorkspaceView with Arc<Mutex<>> pattern
-- Initialized with FileStorageService for task persistence
-- Wired task board events to backend:
-  - Create Task (AddTaskClicked)
-  - Start Task (TaskAction::Start)
-  - Complete/Review Task (TaskAction::Complete/Review)
-  - Delete Task (TaskAction::Delete)
-- Implemented storage fallback for edge cases
-- Build successful, no errors
+- Added "⋮" menu button next to each session in sidebar
+- Implemented modal menu overlay with session management options
+- Wired "Remove from Group" and "Close Session" to backend
+- Proper state management with session_menu_open field
+- Build successful after fixing GPUI on_click patterns
+
+**Features:**
+- Menu Button: Vertical ellipsis (⋮) with hover effect
+- Modal Overlay: Click-outside-to-close behavior
+- Menu Options:
+  * Rename Session (TODO: text input modal)
+  * Assign to Group (TODO: group picker modal)
+  * Remove from Group ✅ (working)
+  * Close Session ✅ (working)
 
 **Technical Details:**
-- Storage: `.codirigent/tasks/` directory
-- Fallback: Temp directory if CWD unavailable
-- Thread-safe: Arc<Mutex<TaskManager>>
-- Event-driven: Shared DefaultEventBus
+- Pattern: .id() required before .on_click() for StatefulInteractiveElement
+- Chaining: .on_click() must come before adding .child() elements
+- Lifetimes: Owned strings needed for labels in closures
+- State: session_menu_open: Option<SessionId>
+
+**Commit:** `6857336`
+
+### Iteration 1: C2 - Task Board Backend Integration
 
 **Commit:** `a11a1c7`
 
