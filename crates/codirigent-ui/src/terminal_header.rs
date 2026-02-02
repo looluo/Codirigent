@@ -228,9 +228,14 @@ impl TaskBadge {
     const MAX_DISPLAY_LEN: usize = 30;
 
     /// Create a new task badge.
+    ///
+    /// Long task descriptions are truncated to `MAX_DISPLAY_LEN` characters
+    /// with an ellipsis. Uses character-aware truncation to handle UTF-8 safely.
     pub fn new(text: &str) -> Self {
-        let display_text = if text.len() > Self::MAX_DISPLAY_LEN {
-            format!("{}...", &text[..Self::MAX_DISPLAY_LEN - 3])
+        let char_count = text.chars().count();
+        let display_text = if char_count > Self::MAX_DISPLAY_LEN {
+            let truncated: String = text.chars().take(Self::MAX_DISPLAY_LEN - 3).collect();
+            format!("{}...", truncated)
         } else {
             text.to_string()
         };
@@ -412,8 +417,30 @@ mod tests {
     fn test_task_badge_long_truncation() {
         let long_text = "This is a very long task description that should be truncated";
         let badge = TaskBadge::new(long_text);
-        assert!(badge.display_text.len() <= TaskBadge::MAX_DISPLAY_LEN);
+        assert!(badge.display_text.chars().count() <= TaskBadge::MAX_DISPLAY_LEN);
         assert!(badge.display_text.ends_with("..."));
+    }
+
+    #[test]
+    fn test_task_badge_utf8_truncation() {
+        // Test with multi-byte UTF-8 characters (Chinese) - must be longer than MAX_DISPLAY_LEN (30)
+        let chinese_text = "這是一個非常非常非常非常非常非常非常非常長的任務描述，需要被截斷才能顯示在介面上";
+        assert!(chinese_text.chars().count() > TaskBadge::MAX_DISPLAY_LEN);
+        let badge = TaskBadge::new(chinese_text);
+        // Should not panic and should be valid UTF-8
+        assert!(badge.display_text.chars().count() <= TaskBadge::MAX_DISPLAY_LEN);
+        assert!(badge.display_text.ends_with("..."));
+        // Full text should be preserved
+        assert_eq!(badge.text, chinese_text);
+    }
+
+    #[test]
+    fn test_task_badge_emoji_truncation() {
+        // Test with emoji characters
+        let emoji_text = "🚀🎉🔥⭐💻🎯🌟✨📝🔧💡🎨🎸🎤🎬🎮🎯🎲🎪🎭";
+        let badge = TaskBadge::new(emoji_text);
+        // Should not panic and should be valid UTF-8
+        assert!(badge.display_text.chars().count() <= TaskBadge::MAX_DISPLAY_LEN);
     }
 
     #[test]
