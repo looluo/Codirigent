@@ -21,7 +21,7 @@
 
 use super::core::Workspace;
 use crate::theme::CodirigentTheme;
-use codirigent_core::{DefaultEventBus, CodirigentEvent, EventBus, Session, SessionId};
+use codirigent_core::{CodirigentEvent, DefaultEventBus, EventBus, Session, SessionId};
 use codirigent_detector::InputDetector;
 use codirigent_session::DefaultSessionManager;
 use gpui::{
@@ -67,8 +67,8 @@ impl WorkspaceView {
         let mut workspace = Workspace::new();
         workspace.set_theme(theme);
 
-        // Note: Event subscription via spawn will be added in a future task
-        // For now, the workspace view renders the current state
+        // TODO: Action handlers need to be registered via Window::on_action
+        // For now, actions are handled by the global handlers in app.rs
 
         Self {
             workspace,
@@ -141,9 +141,13 @@ impl WorkspaceView {
         let width = self.workspace.sidebar_width();
         let sessions = self.workspace.sessions();
 
+        // Top padding for macOS transparent titlebar (traffic lights area)
+        let titlebar_height = 28.0;
+
         let mut sidebar = div()
             .w(px(width))
             .h_full()
+            .pt(px(titlebar_height))
             .bg(sidebar_bg)
             .border_r_1()
             .border_color(border_color)
@@ -352,6 +356,9 @@ impl Render for WorkspaceView {
         let theme = self.workspace.theme();
         let bg: gpui::Hsla = theme.background.into();
 
+        // Top padding for macOS transparent titlebar (traffic lights area)
+        let titlebar_height = 28.0;
+
         let mut container = div()
             .size_full()
             .track_focus(&self.focus_handle(cx))
@@ -364,11 +371,13 @@ impl Render for WorkspaceView {
             container = container.child(self.render_sidebar());
         }
 
-        // Render grid
+        // Render grid with top padding for titlebar
         container = container.child(
             div()
                 .flex_1()
-                .p(px(theme.grid_gap))
+                .pt(px(titlebar_height + theme.grid_gap))
+                .pb(px(theme.grid_gap))
+                .px(px(theme.grid_gap))
                 .flex()
                 .child(self.render_grid()),
         );
