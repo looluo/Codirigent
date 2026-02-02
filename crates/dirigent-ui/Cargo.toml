@@ -9,7 +9,7 @@ license.workspace = true
 [features]
 default = []
 # Full GPUI support (requires Rust 1.75+)
-gpui-full = ["dep:gpui"]
+gpui-full = ["dep:gpui", "dep:core-text"]
 # Terminal rendering (requires Rust 1.75+ for alacritty_terminal 0.25+)
 terminal = ["dep:alacritty_terminal"]
 
@@ -27,7 +27,7 @@ chrono.workspace = true
 
 # GPUI from crates.io with workspace version alignment
 gpui = { workspace = true, optional = true }
-core-text = { workspace = true }  # Force version alignment to avoid core-graphics conflict
+core-text = { workspace = true, optional = true }  # Version alignment for GPUI
 
 # Terminal rendering (requires Rust 1.75+ for latest version)
 alacritty_terminal = { version = "0.25", optional = true }
