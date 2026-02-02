@@ -80,15 +80,6 @@ impl TerminalMouseEvent {
             return None;
         }
 
-        let button_code = match (self.button, self.pressed) {
-            (TerminalMouseButton::Left, true) => 0,
-            (TerminalMouseButton::Middle, true) => 1,
-            (TerminalMouseButton::Right, true) => 2,
-            (_, false) => 3, // Release
-            (TerminalMouseButton::WheelUp, _) => 64,
-            (TerminalMouseButton::WheelDown, _) => 65,
-        };
-
         let mut modifier_code = 0u8;
         if self.modifiers.shift {
             modifier_code |= 4;
@@ -100,10 +91,18 @@ impl TerminalMouseEvent {
             modifier_code |= 16;
         }
 
-        let code = button_code + modifier_code;
-
         // SGR extended mouse mode (preferred, supports coordinates > 223)
+        // In SGR mode, the button code always indicates the actual button,
+        // and press/release is distinguished by the suffix ('M' vs 'm')
         if mode.contains(TermMode::SGR_MOUSE) {
+            let button_code = match self.button {
+                TerminalMouseButton::Left => 0,
+                TerminalMouseButton::Middle => 1,
+                TerminalMouseButton::Right => 2,
+                TerminalMouseButton::WheelUp => 64,
+                TerminalMouseButton::WheelDown => 65,
+            };
+            let code = button_code + modifier_code;
             let suffix = if self.pressed { 'M' } else { 'm' };
             Some(
                 format!(
@@ -115,35 +114,48 @@ impl TerminalMouseEvent {
                 )
                 .into_bytes(),
             )
-        } else if mode.contains(TermMode::UTF8_MOUSE) {
-            // UTF-8 mouse mode (supports larger coordinates)
-            let mut bytes = vec![0x1b, b'[', b'M'];
-            bytes.push((code + 32) as u8);
-            let col = self.col + 1 + 32;
-            let row = self.row + 1 + 32;
-            if col < 128 {
-                bytes.push(col as u8);
-            } else {
-                bytes.push(0xC0 | ((col >> 6) & 0x1F) as u8);
-                bytes.push(0x80 | (col & 0x3F) as u8);
-            }
-            if row < 128 {
-                bytes.push(row as u8);
-            } else {
-                bytes.push(0xC0 | ((row >> 6) & 0x1F) as u8);
-                bytes.push(0x80 | (row & 0x3F) as u8);
-            }
-            Some(bytes)
         } else {
-            // Normal mouse mode (X10 compatible, max 223 for coordinates)
-            Some(vec![
-                0x1b,
-                b'[',
-                b'M',
-                (code + 32) as u8,
-                ((self.col + 1 + 32) as u8).min(255),
-                ((self.row + 1 + 32) as u8).min(255),
-            ])
+            // For non-SGR modes (UTF-8 and normal X10), button code 3 means "release"
+            let button_code = match (self.button, self.pressed) {
+                (TerminalMouseButton::Left, true) => 0,
+                (TerminalMouseButton::Middle, true) => 1,
+                (TerminalMouseButton::Right, true) => 2,
+                (_, false) => 3, // Release (no way to indicate which button in X10 mode)
+                (TerminalMouseButton::WheelUp, _) => 64,
+                (TerminalMouseButton::WheelDown, _) => 65,
+            };
+            let code = button_code + modifier_code;
+
+            if mode.contains(TermMode::UTF8_MOUSE) {
+                // UTF-8 mouse mode (supports larger coordinates)
+                let mut bytes = vec![0x1b, b'[', b'M'];
+                bytes.push((code + 32) as u8);
+                let col = self.col + 1 + 32;
+                let row = self.row + 1 + 32;
+                if col < 128 {
+                    bytes.push(col as u8);
+                } else {
+                    bytes.push(0xC0 | ((col >> 6) & 0x1F) as u8);
+                    bytes.push(0x80 | (col & 0x3F) as u8);
+                }
+                if row < 128 {
+                    bytes.push(row as u8);
+                } else {
+                    bytes.push(0xC0 | ((row >> 6) & 0x1F) as u8);
+                    bytes.push(0x80 | (row & 0x3F) as u8);
+                }
+                Some(bytes)
+            } else {
+                // Normal mouse mode (X10 compatible, max 223 for coordinates)
+                Some(vec![
+                    0x1b,
+                    b'[',
+                    b'M',
+                    (code + 32) as u8,
+                    ((self.col + 1 + 32) as u8).min(255),
+                    ((self.row + 1 + 32) as u8).min(255),
+                ])
+            }
         }
     }
 }
