@@ -15,6 +15,9 @@
 //! - [`workspace`] - Main workspace view managing sessions
 //! - [`sidebar`] - Session sidebar with grouping and status indicators
 //! - [`actions`] - UI action definitions and keybindings
+//! - [`smart_clipboard`] - Smart clipboard with image support
+//! - [`clipboard_preview`] - Clipboard thumbnail preview component
+//! - [`platform`] - Platform-specific implementations
 //!
 //! # Layout System
 //!
@@ -74,11 +77,14 @@
 
 // Core modules (ready)
 pub mod actions;
+pub mod clipboard_preview;
 pub mod integration;
 pub mod keybindings;
 pub mod layout;
 pub mod layout_profile;
+pub mod platform;
 pub mod sidebar;
+pub mod smart_clipboard;
 pub mod theme;
 pub mod theme_config;
 pub mod theme_manager;
@@ -112,3 +118,9 @@ pub use keybindings::KeyBinding as AdvancedKeyBinding;
 pub use layout_profile::{LayoutProfileManager, SavedLayoutProfile};
 pub use theme_config::{Theme as ConfigTheme, ThemeColors, ThemeSpacing, ThemeTypography, TerminalColors as ConfigTerminalColors};
 pub use theme_manager::ThemeManager;
+
+// Re-export smart clipboard types
+pub use smart_clipboard::{SmartClipboardProvider, ThumbnailPreview};
+
+// Re-export clipboard preview component
+pub use clipboard_preview::ClipboardPreview;

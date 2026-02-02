@@ -31,5 +31,19 @@ gpui = { package = "gpui-ce", version = "0.3", optional = true }
 # Terminal rendering (requires Rust 1.75+ for latest version)
 alacritty_terminal = { version = "0.24", optional = true }
 
+# macOS-specific dependencies
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSPasteboard", "NSPasteboardItem"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSData", "NSArray", "NSURL"] }
+
+# Linux-specific dependencies (X11/Wayland clipboard)
+[target.'cfg(target_os = "linux")'.dependencies]
+arboard = "3.6"
+
+# Windows-specific dependencies (Win32 clipboard)
+[target.'cfg(target_os = "windows")'.dependencies]
+clipboard-win = "5.4"
+
 [dev-dependencies]
 tempfile.workspace = true

@@ -10,6 +10,22 @@ use crate::skill::TokenBudget;
 use crate::types::*;
 use std::path::PathBuf;
 
+/// Type of content detected on clipboard.
+///
+/// Used to determine how to handle clipboard content when pasting
+/// into sessions or saving to files.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ClipboardContentType {
+    /// Plain text content.
+    Text,
+    /// Image data (PNG/JPEG).
+    Image,
+    /// File paths.
+    Files,
+    /// Empty clipboard.
+    Empty,
+}
+
 /// Events for loose coupling between modules.
 ///
 /// All cross-module communication should happen through events,
@@ -448,6 +464,29 @@ pub enum DirigentEvent {
         error: String,
         /// Task number if applicable.
         task_number: Option<u32>,
+    },
+
+    // === Clipboard Events ===
+    /// Clipboard content was detected.
+    ClipboardContentDetected {
+        /// Type of content detected.
+        content_type: ClipboardContentType,
+    },
+
+    /// Image was saved from clipboard.
+    ClipboardImageSaved {
+        /// Session ID (if focused).
+        session_id: Option<SessionId>,
+        /// Path where image was saved.
+        path: PathBuf,
+    },
+
+    /// Smart paste was triggered.
+    SmartPasteTriggered {
+        /// Target session ID.
+        session_id: SessionId,
+        /// Formatted content ready for pasting.
+        formatted_content: String,
     },
 }
 
@@ -1195,6 +1234,18 @@ mod tests {
                 success_count: 2,
                 failure_count: 1,
             },
+            // Clipboard events
+            DirigentEvent::ClipboardContentDetected {
+                content_type: ClipboardContentType::Text,
+            },
+            DirigentEvent::ClipboardImageSaved {
+                session_id: Some(SessionId(1)),
+                path: PathBuf::from("/tmp/image.png"),
+            },
+            DirigentEvent::SmartPasteTriggered {
+                session_id: SessionId(1),
+                formatted_content: "content".to_string(),
+            },
         ];
 
         for event in events {
@@ -1556,6 +1607,182 @@ mod tests {
 
         for event in events {
             let _ = event.clone();
+        }
+    }
+
+    // === Clipboard Event Tests ===
+
+    #[test]
+    fn test_clipboard_content_type_variants() {
+        // Test all variants
+        let text = ClipboardContentType::Text;
+        let image = ClipboardContentType::Image;
+        let files = ClipboardContentType::Files;
+        let empty = ClipboardContentType::Empty;
+
+        // Test equality
+        assert_eq!(text, ClipboardContentType::Text);
+        assert_eq!(image, ClipboardContentType::Image);
+        assert_eq!(files, ClipboardContentType::Files);
+        assert_eq!(empty, ClipboardContentType::Empty);
+
+        // Test inequality
+        assert_ne!(text, image);
+        assert_ne!(image, files);
+        assert_ne!(files, empty);
+
+        // Test debug
+        assert!(format!("{:?}", text).contains("Text"));
+        assert!(format!("{:?}", image).contains("Image"));
+        assert!(format!("{:?}", files).contains("Files"));
+        assert!(format!("{:?}", empty).contains("Empty"));
+
+        // Test copy
+        let text_copy = text;
+        assert_eq!(text_copy, ClipboardContentType::Text);
+
+        // Test clone
+        let text_cloned = text.clone();
+        assert_eq!(text_cloned, ClipboardContentType::Text);
+    }
+
+    #[test]
+    fn test_clipboard_content_detected_event() {
+        let event = DirigentEvent::ClipboardContentDetected {
+            content_type: ClipboardContentType::Text,
+        };
+        if let DirigentEvent::ClipboardContentDetected { content_type } = event {
+            assert_eq!(content_type, ClipboardContentType::Text);
+        } else {
+            panic!("Wrong event type");
+        }
+
+        // Test with image type
+        let event = DirigentEvent::ClipboardContentDetected {
+            content_type: ClipboardContentType::Image,
+        };
+        if let DirigentEvent::ClipboardContentDetected { content_type } = event {
+            assert_eq!(content_type, ClipboardContentType::Image);
+        } else {
+            panic!("Wrong event type");
+        }
+
+        // Test with files type
+        let event = DirigentEvent::ClipboardContentDetected {
+            content_type: ClipboardContentType::Files,
+        };
+        if let DirigentEvent::ClipboardContentDetected { content_type } = event {
+            assert_eq!(content_type, ClipboardContentType::Files);
+        } else {
+            panic!("Wrong event type");
+        }
+
+        // Test with empty type
+        let event = DirigentEvent::ClipboardContentDetected {
+            content_type: ClipboardContentType::Empty,
+        };
+        if let DirigentEvent::ClipboardContentDetected { content_type } = event {
+            assert_eq!(content_type, ClipboardContentType::Empty);
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_clipboard_image_saved_event() {
+        // Test with session ID
+        let event = DirigentEvent::ClipboardImageSaved {
+            session_id: Some(SessionId(42)),
+            path: PathBuf::from("/tmp/clipboard_image.png"),
+        };
+        if let DirigentEvent::ClipboardImageSaved { session_id, path } = event {
+            assert_eq!(session_id, Some(SessionId(42)));
+            assert_eq!(path, PathBuf::from("/tmp/clipboard_image.png"));
+        } else {
+            panic!("Wrong event type");
+        }
+
+        // Test without session ID (no focused session)
+        let event = DirigentEvent::ClipboardImageSaved {
+            session_id: None,
+            path: PathBuf::from("/project/.dirigent/images/img_001.png"),
+        };
+        if let DirigentEvent::ClipboardImageSaved { session_id, path } = event {
+            assert!(session_id.is_none());
+            assert_eq!(path, PathBuf::from("/project/.dirigent/images/img_001.png"));
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_smart_paste_triggered_event() {
+        let event = DirigentEvent::SmartPasteTriggered {
+            session_id: SessionId(1),
+            formatted_content: "formatted code block".to_string(),
+        };
+        if let DirigentEvent::SmartPasteTriggered {
+            session_id,
+            formatted_content,
+        } = event
+        {
+            assert_eq!(session_id, SessionId(1));
+            assert_eq!(formatted_content, "formatted code block");
+        } else {
+            panic!("Wrong event type");
+        }
+
+        // Test with empty content
+        let event = DirigentEvent::SmartPasteTriggered {
+            session_id: SessionId(99),
+            formatted_content: String::new(),
+        };
+        if let DirigentEvent::SmartPasteTriggered {
+            session_id,
+            formatted_content,
+        } = event
+        {
+            assert_eq!(session_id, SessionId(99));
+            assert!(formatted_content.is_empty());
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_clipboard_events_clone() {
+        // Test that all clipboard event variants can be cloned
+        let events: Vec<DirigentEvent> = vec![
+            DirigentEvent::ClipboardContentDetected {
+                content_type: ClipboardContentType::Text,
+            },
+            DirigentEvent::ClipboardContentDetected {
+                content_type: ClipboardContentType::Image,
+            },
+            DirigentEvent::ClipboardContentDetected {
+                content_type: ClipboardContentType::Files,
+            },
+            DirigentEvent::ClipboardContentDetected {
+                content_type: ClipboardContentType::Empty,
+            },
+            DirigentEvent::ClipboardImageSaved {
+                session_id: Some(SessionId(1)),
+                path: PathBuf::from("/tmp/image.png"),
+            },
+            DirigentEvent::ClipboardImageSaved {
+                session_id: None,
+                path: PathBuf::from("/tmp/image.png"),
+            },
+            DirigentEvent::SmartPasteTriggered {
+                session_id: SessionId(1),
+                formatted_content: "content".to_string(),
+            },
+        ];
+
+        for event in events {
+            let cloned = event.clone();
+            // Verify the clone worked by checking debug output
+            let _ = format!("{:?}", cloned);
         }
     }
 }

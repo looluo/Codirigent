@@ -46,6 +46,8 @@
 #![warn(clippy::all)]
 
 pub mod broadcast_service;
+pub mod cli_detector;
+pub mod clipboard_service;
 pub mod manager;
 pub mod pty;
 pub mod ralph_controller;
@@ -57,6 +59,8 @@ pub mod skill_manager;
 pub mod worktree;
 
 pub use broadcast_service::DefaultBroadcastService;
+pub use cli_detector::{CliDetector, DefaultCliDetector};
+pub use clipboard_service::{ClipboardService, DefaultClipboardService};
 pub use manager::DefaultSessionManager;
 pub use pty::{spawn_output_reader, OutputReader, PtyHandle, PtySize};
 pub use ralph_controller::{DefaultRalphLoopController, LoopStats};

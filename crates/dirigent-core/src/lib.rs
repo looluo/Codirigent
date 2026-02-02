@@ -81,6 +81,7 @@ pub mod assignment;
 pub mod auto_save;
 pub mod broadcast;
 pub mod change_summary;
+pub mod clipboard_types;
 pub mod config;
 pub mod config_service;
 pub mod context;
@@ -112,7 +113,7 @@ pub use config_service::{ConfigChange, ConfigService, DefaultConfigService, Effe
 pub use context::{ContextConfig, ContextPattern, ContextTracker, ContextTrackingService, ContextUsage};
 pub use error::{DirigentError, Result};
 pub use event_bus::DefaultEventBus;
-pub use events::DirigentEvent;
+pub use events::{ClipboardContentType, DirigentEvent};
 pub use scheduler::{SchedulerConfig, SchedulerMode, TaskQueue, TaskQueueService};
 pub use skill::{Skill, SkillPreset, SkillType, TokenBudget};
 pub use storage::FileStorageService;
@@ -167,3 +168,6 @@ pub use pipeline::{
     FailureMessageFormatter, PipelineEvent, PipelineStage, PipelineState, ReviewDecision,
     VerificationPipeline,
 };
+
+// Re-export clipboard types
+pub use clipboard_types::{CliType, ClipboardContent, ImageData, ImageFormat};
