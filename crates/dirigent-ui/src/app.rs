@@ -84,12 +84,11 @@ impl AppView {
     ) -> Self {
         // Spawn a timer task that transitions to workspace after the duration.
         // Uses `async move |this, mut cx|` pattern for proper lifetime handling.
-        cx.spawn(async move |this, mut cx| {
+        cx.spawn(async move |this, cx| {
             cx.background_executor().timer(splash_duration).await;
-            this.update(&mut cx, |this, cx| {
+            this.update(cx, |this, cx| {
                 this.transition_to_workspace(cx);
             })
-            .ok()
         })
         .detach();
 
