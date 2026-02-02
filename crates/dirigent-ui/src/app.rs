@@ -10,8 +10,8 @@ use dirigent_detector::{DetectorConfig, InputDetector};
 use dirigent_session::DefaultSessionManager;
 use gpui::{
     actions, div, px, size, App, AppContext, Application, Bounds, Context, FocusHandle, Focusable,
-    FontWeight, IntoElement, KeyBinding, ParentElement, Render, Styled, TitlebarOptions, Window,
-    WindowBounds, WindowOptions,
+    FontWeight, InteractiveElement, IntoElement, KeyBinding, ParentElement, Render, Styled,
+    TitlebarOptions, Window, WindowBounds, WindowOptions,
 };
 use std::sync::{Arc, Mutex};
 use tracing::info;
