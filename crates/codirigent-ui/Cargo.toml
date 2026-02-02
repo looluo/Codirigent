@@ -25,6 +25,9 @@ tokio.workspace = true
 tracing.workspace = true
 chrono.workspace = true
 
+# Image processing for thumbnail generation
+image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
+
 # GPUI from crates.io with workspace version alignment
 gpui = { workspace = true, optional = true }
 core-text = { workspace = true, optional = true }  # Version alignment for GPUI

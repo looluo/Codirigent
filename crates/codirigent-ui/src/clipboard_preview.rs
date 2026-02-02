@@ -39,8 +39,11 @@
 
 use crate::smart_clipboard::ThumbnailPreview;
 use crate::theme::CodirigentTheme;
-use codirigent_core::ImageData;
+use codirigent_core::{ImageData, ImageFormat as CoreImageFormat};
+use image::{imageops::FilterType, ImageReader};
+use std::io::Cursor;
 use std::path::PathBuf;
+use tracing::warn;
 
 #[cfg(feature = "gpui-full")]
 use std::sync::Arc;
@@ -247,8 +250,8 @@ impl ClipboardPreview {
     ///
     /// # Returns
     ///
-    /// Scaled thumbnail bytes. For MVP, this returns the original bytes
-    /// as actual image scaling requires an image processing library.
+    /// Scaled thumbnail bytes. If the image is smaller than `max_size` or
+    /// if scaling fails, returns the original bytes.
     ///
     /// # Example
     ///
@@ -256,30 +259,63 @@ impl ClipboardPreview {
     /// use codirigent_ui::clipboard_preview::ClipboardPreview;
     /// use codirigent_core::{ImageData, ImageFormat};
     ///
-    /// let image = ImageData {
+    /// // Small image - returns original bytes
+    /// let small_image = ImageData {
     ///     bytes: vec![1, 2, 3, 4],
-    ///     width: 1920,
-    ///     height: 1080,
+    ///     width: 64,
+    ///     height: 64,
     ///     format: ImageFormat::Png,
     /// };
+    /// let thumbnail = ClipboardPreview::generate_thumbnail(&small_image, 128);
+    /// assert_eq!(thumbnail, small_image.bytes);
     ///
-    /// let thumbnail = ClipboardPreview::generate_thumbnail(&image, 128);
-    /// // MVP returns original bytes; real implementation would scale
-    /// assert!(!thumbnail.is_empty());
+    /// // Large image would be scaled down (requires valid image bytes)
     /// ```
     pub fn generate_thumbnail(image: &ImageData, max_size: u32) -> Vec<u8> {
-        // Calculate scaled dimensions maintaining aspect ratio
-        let (scaled_width, scaled_height) =
-            Self::calculate_scaled_dimensions(image.width, image.height, max_size);
+        // If image is already smaller than max_size, return original bytes
+        if image.width <= max_size && image.height <= max_size {
+            return image.bytes.clone();
+        }
 
-        // MVP: Return original bytes with metadata about intended scale
-        // TODO: Implement actual image scaling with an image processing library
-        // like `image` crate when available. The scaled dimensions are:
-        // - scaled_width: {scaled_width}
-        // - scaled_height: {scaled_height}
-        let _ = (scaled_width, scaled_height); // Silence unused warnings
+        // Try to decode and resize the image
+        match Self::resize_image_bytes(&image.bytes, max_size, image.format) {
+            Ok(resized) => resized,
+            Err(e) => {
+                // Log warning and fall back to original bytes
+                warn!("Failed to resize image: {}, returning original bytes", e);
+                image.bytes.clone()
+            }
+        }
+    }
 
-        image.bytes.clone()
+    /// Resize image bytes to fit within max_size while preserving aspect ratio.
+    fn resize_image_bytes(
+        bytes: &[u8],
+        max_size: u32,
+        format: CoreImageFormat,
+    ) -> Result<Vec<u8>, image::ImageError> {
+        // Load image from bytes
+        let img = ImageReader::new(Cursor::new(bytes))
+            .with_guessed_format()?
+            .decode()?;
+
+        // Resize while preserving aspect ratio (fits within max_size x max_size)
+        // Using Lanczos3 for high quality thumbnails
+        let thumbnail = img.resize(max_size, max_size, FilterType::Lanczos3);
+
+        // Encode to appropriate format (preserve JPEG, convert others to PNG)
+        let mut output = Vec::new();
+        let output_format = match format {
+            CoreImageFormat::Jpeg => image::ImageFormat::Jpeg,
+            // PNG, TIFF, DIB, RGBA all get encoded as PNG for thumbnails
+            CoreImageFormat::Png
+            | CoreImageFormat::Tiff
+            | CoreImageFormat::Dib
+            | CoreImageFormat::Rgba => image::ImageFormat::Png,
+        };
+        thumbnail.write_to(&mut Cursor::new(&mut output), output_format)?;
+
+        Ok(output)
     }
 
     /// Calculate scaled dimensions maintaining aspect ratio.
@@ -293,6 +329,7 @@ impl ClipboardPreview {
     /// # Returns
     ///
     /// Tuple of (scaled_width, scaled_height)
+    #[cfg(test)]
     fn calculate_scaled_dimensions(width: u32, height: u32, max_size: u32) -> (u32, u32) {
         if width == 0 || height == 0 {
             return (0, 0);
