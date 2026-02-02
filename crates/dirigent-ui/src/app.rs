@@ -46,7 +46,6 @@ actions!(
 const DEFAULT_SPLASH_DURATION_MS: u64 = 2000;
 
 /// Application view state.
-#[allow(dead_code)]
 enum AppViewState {
     /// Showing the splash screen.
     Splash { loading_message: String },
@@ -60,39 +59,50 @@ pub struct AppView {
     state: AppViewState,
     /// Focus handle.
     focus_handle: FocusHandle,
-    /// Session manager reference (kept for future splash->workspace transition).
-    #[allow(dead_code)]
+    /// Session manager reference.
     session_manager: Arc<Mutex<DefaultSessionManager>>,
-    /// Input detector reference (kept for future splash->workspace transition).
-    #[allow(dead_code)]
+    /// Input detector reference.
     detector: Arc<Mutex<InputDetector>>,
-    /// Event bus reference (kept for future splash->workspace transition).
-    #[allow(dead_code)]
+    /// Event bus reference.
     event_bus: Arc<DefaultEventBus>,
-    /// Theme (kept for future splash->workspace transition).
-    #[allow(dead_code)]
+    /// Theme.
     theme: DirigentTheme,
 }
 
 impl AppView {
     /// Create a new app view starting with splash screen.
     ///
-    /// Note: The splash timer is temporarily disabled due to GPUI async closure
-    /// lifetime constraints with Rust 2021 edition. The workspace is shown
-    /// immediately. Timer functionality will be restored in a future update.
+    /// Shows the splash screen for the specified duration, then transitions
+    /// to the main workspace.
     pub fn new_with_splash(
         session_manager: Arc<Mutex<DefaultSessionManager>>,
         detector: Arc<Mutex<InputDetector>>,
         event_bus: Arc<DefaultEventBus>,
         theme: DirigentTheme,
-        _splash_duration: Duration,
+        splash_duration: Duration,
         cx: &mut Context<Self>,
     ) -> Self {
-        // TODO: Re-enable splash timer when async closure lifetime issue is resolved
-        // The spawn pattern `cx.spawn(|view, cx| async move { view.update(cx, ...) })`
-        // causes "implementation of AsyncFnOnce is not general enough" error in
-        // Rust 2021 edition. For now, skip directly to workspace.
-        Self::new_workspace(session_manager, detector, event_bus, theme, cx)
+        // Spawn a timer task that transitions to workspace after the duration.
+        // Uses `async move |this, mut cx|` pattern for proper lifetime handling.
+        cx.spawn(async move |this, mut cx| {
+            cx.background_executor().timer(splash_duration).await;
+            this.update(&mut cx, |this, cx| {
+                this.transition_to_workspace(cx);
+            })
+            .ok()
+        })
+        .detach();
+
+        Self {
+            state: AppViewState::Splash {
+                loading_message: "Loading modules...".to_string(),
+            },
+            focus_handle: cx.focus_handle(),
+            session_manager,
+            detector,
+            event_bus,
+            theme,
+        }
     }
 
     /// Create a new app view directly with workspace (no splash).
@@ -124,10 +134,6 @@ impl AppView {
     }
 
     /// Transition from splash to workspace.
-    ///
-    /// Note: Currently unused as splash timer is disabled. Kept for future use
-    /// when the async closure lifetime issue is resolved.
-    #[allow(dead_code)]
     fn transition_to_workspace(&mut self, cx: &mut Context<Self>) {
         let workspace = cx.new(|cx| {
             WorkspaceView::new(
@@ -194,9 +200,6 @@ impl AppView {
     }
 
     /// Render the splash screen.
-    ///
-    /// Note: Currently unused as splash timer is disabled. Kept for future use.
-    #[allow(dead_code)]
     fn render_splash(&self, loading_message: &str, cx: &mut Context<Self>) -> impl IntoElement {
         let version = env!("CARGO_PKG_VERSION");
 
@@ -461,34 +464,20 @@ impl DirigentApp {
             info!("ToggleSidebar action triggered (global fallback)");
         });
 
-        // Session focus actions (global fallbacks)
-        cx.on_action(|_: &FocusSession1, _cx| {
-            info!("FocusSession1 action triggered (global fallback)");
-        });
-        cx.on_action(|_: &FocusSession2, _cx| {
-            info!("FocusSession2 action triggered (global fallback)");
-        });
-        cx.on_action(|_: &FocusSession3, _cx| {
-            info!("FocusSession3 action triggered (global fallback)");
-        });
-        cx.on_action(|_: &FocusSession4, _cx| {
-            info!("FocusSession4 action triggered (global fallback)");
-        });
-        cx.on_action(|_: &FocusSession5, _cx| {
-            info!("FocusSession5 action triggered (global fallback)");
-        });
-        cx.on_action(|_: &FocusSession6, _cx| {
-            info!("FocusSession6 action triggered (global fallback)");
-        });
-        cx.on_action(|_: &FocusSession7, _cx| {
-            info!("FocusSession7 action triggered (global fallback)");
-        });
-        cx.on_action(|_: &FocusSession8, _cx| {
-            info!("FocusSession8 action triggered (global fallback)");
-        });
-        cx.on_action(|_: &FocusSession9, _cx| {
-            info!("FocusSession9 action triggered (global fallback)");
-        });
+        // Session focus actions (global fallbacks) - use macro to reduce repetition
+        macro_rules! register_focus_fallback {
+            ($cx:expr, $($action:ty),+ $(,)?) => {
+                $($cx.on_action(|_: &$action, _cx| {
+                    info!(concat!(stringify!($action), " triggered (global fallback)"));
+                });)+
+            };
+        }
+        register_focus_fallback!(
+            cx,
+            FocusSession1, FocusSession2, FocusSession3,
+            FocusSession4, FocusSession5, FocusSession6,
+            FocusSession7, FocusSession8, FocusSession9,
+        );
     }
 }
 

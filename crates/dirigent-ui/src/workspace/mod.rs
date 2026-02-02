@@ -29,6 +29,9 @@ mod core;
 #[cfg(feature = "gpui-full")]
 pub mod gpui;
 
+#[cfg(test)]
+mod tests;
+
 // Re-export core types
 pub use core::{CellInfo, Workspace};
 
