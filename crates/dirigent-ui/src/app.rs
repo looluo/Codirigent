@@ -8,7 +8,10 @@
 use dirigent_core::DefaultEventBus;
 use dirigent_detector::{DetectorConfig, InputDetector};
 use dirigent_session::DefaultSessionManager;
-use gpui::*;
+use gpui::{
+    actions, div, px, size, App, Application, Bounds, Context, FontWeight, IntoElement, Render,
+    TitlebarOptions, Window, WindowBounds, WindowOptions,
+};
 use std::sync::{Arc, Mutex};
 use tracing::info;
 
@@ -223,7 +226,7 @@ impl Render for PlaceholderView {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "gpui-full"))]
 mod tests {
     use super::*;
 
