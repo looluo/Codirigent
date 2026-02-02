@@ -24,8 +24,13 @@ use crate::theme::CodirigentTheme;
 use codirigent_core::{CodirigentEvent, DefaultEventBus, EventBus, Session, SessionId};
 use codirigent_detector::InputDetector;
 use codirigent_session::DefaultSessionManager;
+use crate::app::{
+    CloseSession, FocusSession1, FocusSession2, FocusSession3, FocusSession4, FocusSession5,
+    FocusSession6, FocusSession7, FocusSession8, FocusSession9, NewSession, NextLayout,
+    ToggleSidebar,
+};
 use gpui::{
-    div, px, App, AppContext, Context, Entity, FocusHandle, Focusable, FontWeight,
+    div, px, App, AppContext, ClickEvent, Context, Entity, FocusHandle, Focusable, FontWeight,
     InteractiveElement, IntoElement, ParentElement, Render, Styled, Window,
 };
 use std::path::PathBuf;
@@ -67,8 +72,55 @@ impl WorkspaceView {
         let mut workspace = Workspace::new();
         workspace.set_theme(theme);
 
-        // TODO: Action handlers need to be registered via Window::on_action
-        // For now, actions are handled by the global handlers in app.rs
+        // Register action handlers for keyboard shortcuts
+        cx.on_action(|this: &mut Self, _: &NewSession, _window, cx| {
+            info!("NewSession action received");
+            this.create_session(cx);
+        });
+
+        cx.on_action(|this: &mut Self, _: &CloseSession, _window, cx| {
+            info!("CloseSession action received");
+            this.close_focused_session(cx);
+        });
+
+        cx.on_action(|this: &mut Self, _: &NextLayout, _window, cx| {
+            info!("NextLayout action received");
+            this.next_layout(cx);
+        });
+
+        cx.on_action(|this: &mut Self, _: &ToggleSidebar, _window, cx| {
+            info!("ToggleSidebar action received");
+            this.toggle_sidebar(cx);
+        });
+
+        // Focus session actions
+        cx.on_action(|this: &mut Self, _: &FocusSession1, _window, cx| {
+            this.focus_session_number(1, cx);
+        });
+        cx.on_action(|this: &mut Self, _: &FocusSession2, _window, cx| {
+            this.focus_session_number(2, cx);
+        });
+        cx.on_action(|this: &mut Self, _: &FocusSession3, _window, cx| {
+            this.focus_session_number(3, cx);
+        });
+        cx.on_action(|this: &mut Self, _: &FocusSession4, _window, cx| {
+            this.focus_session_number(4, cx);
+        });
+        cx.on_action(|this: &mut Self, _: &FocusSession5, _window, cx| {
+            this.focus_session_number(5, cx);
+        });
+        cx.on_action(|this: &mut Self, _: &FocusSession6, _window, cx| {
+            this.focus_session_number(6, cx);
+        });
+        cx.on_action(|this: &mut Self, _: &FocusSession7, _window, cx| {
+            this.focus_session_number(7, cx);
+        });
+        cx.on_action(|this: &mut Self, _: &FocusSession8, _window, cx| {
+            this.focus_session_number(8, cx);
+        });
+        cx.on_action(|this: &mut Self, _: &FocusSession9, _window, cx| {
+            this.focus_session_number(9, cx);
+        });
 
         Self {
             workspace,
@@ -132,14 +184,14 @@ impl WorkspaceView {
     }
 
     /// Render the sidebar.
-    fn render_sidebar(&self) -> impl IntoElement {
+    fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.workspace.theme();
         let sidebar_bg: gpui::Hsla = theme.sidebar_background.into();
         let border_color: gpui::Hsla = theme.border.into();
         let fg: gpui::Hsla = theme.foreground.into();
 
         let width = self.workspace.sidebar_width();
-        let sessions = self.workspace.sessions();
+        let sessions = self.workspace.sessions().to_vec(); // Clone to avoid borrow issues
 
         // Top padding for macOS transparent titlebar (traffic lights area)
         let titlebar_height = 28.0;
@@ -212,16 +264,24 @@ impl WorkspaceView {
 
         sidebar = sidebar.child(list);
 
-        // New session button
+        // New session button with click handler
         let muted: gpui::Hsla = theme.muted.into();
+        let hover_bg = theme.active.into();
         sidebar = sidebar.child(
             div()
+                .id("new-session-btn")
                 .h(px(44.0))
                 .px_3()
                 .border_t_1()
                 .border_color(border_color)
                 .flex()
                 .items_center()
+                .cursor_pointer()
+                .hover(|style| style.bg(gpui::Hsla::from(hover_bg).opacity(0.1)))
+                .on_click(cx.listener(|this, _event: &ClickEvent, _window, cx| {
+                    info!("New Session button clicked");
+                    this.create_session(cx);
+                }))
                 .child(
                     div()
                         .text_sm()
@@ -368,7 +428,7 @@ impl Render for WorkspaceView {
 
         // Render sidebar if visible
         if self.workspace.is_sidebar_visible() {
-            container = container.child(self.render_sidebar());
+            container = container.child(self.render_sidebar(cx));
         }
 
         // Render grid with top padding for titlebar
