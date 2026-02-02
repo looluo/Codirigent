@@ -173,6 +173,20 @@ impl From<GpuiHsla> for Hsla {
     }
 }
 
+/// Convert theme Rgba to GPUI Hsla.
+#[cfg(feature = "gpui-full")]
+impl From<Rgba> for GpuiHsla {
+    fn from(color: Rgba) -> Self {
+        let hsla = color.to_hsla();
+        GpuiHsla {
+            h: hsla.h,
+            s: hsla.s,
+            l: hsla.l,
+            a: hsla.a,
+        }
+    }
+}
+
 /// Helper function to create an HSLA color.
 ///
 /// # Arguments

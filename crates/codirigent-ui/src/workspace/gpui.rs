@@ -20,8 +20,11 @@
 //! ```
 
 use super::core::Workspace;
+use crate::input::{key_to_bytes, TerminalKeystroke, TerminalModifiers};
+use crate::terminal::Terminal;
+use crate::terminal_view::TerminalView;
 use crate::theme::CodirigentTheme;
-use codirigent_core::{CodirigentEvent, DefaultEventBus, EventBus, Session, SessionId};
+use codirigent_core::{CodirigentEvent, DefaultEventBus, EventBus, Session, SessionId, SessionManager};
 use codirigent_detector::InputDetector;
 use codirigent_session::DefaultSessionManager;
 use crate::app::{
@@ -31,11 +34,13 @@ use crate::app::{
 };
 use gpui::{
     div, px, App, AppContext, Context, Entity, FocusHandle, Focusable, InteractiveElement,
-    IntoElement, ParentElement, Render, Styled, Window,
+    IntoElement, KeyDownEvent, ParentElement, Render, Styled, Window,
 };
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use tracing::info;
+use std::time::Duration;
+use tracing::{info, warn};
 
 /// GPUI View wrapper for Workspace.
 ///
@@ -48,7 +53,13 @@ pub struct WorkspaceView {
     focus_handle: FocusHandle,
     /// Event bus for cross-module communication.
     event_bus: Arc<DefaultEventBus>,
-    /// Next session ID counter.
+    /// Session manager for PTY and session lifecycle.
+    session_manager: Arc<Mutex<DefaultSessionManager>>,
+    /// Input detector for monitoring session status.
+    detector: Arc<Mutex<InputDetector>>,
+    /// Terminal views for each session.
+    terminals: HashMap<SessionId, TerminalView>,
+    /// Next session ID counter (kept for UI session tracking).
     next_session_id: u64,
 }
 
@@ -57,14 +68,14 @@ impl WorkspaceView {
     ///
     /// # Arguments
     ///
-    /// * `session_manager` - Session manager for PTY and session lifecycle (unused currently)
-    /// * `detector` - Input detector for monitoring session status (unused currently)
+    /// * `session_manager` - Session manager for PTY and session lifecycle
+    /// * `detector` - Input detector for monitoring session status
     /// * `event_bus` - Event bus for cross-module communication
     /// * `theme` - Theme configuration
     /// * `cx` - GPUI context
     pub fn new(
-        _session_manager: Arc<Mutex<DefaultSessionManager>>,
-        _detector: Arc<Mutex<InputDetector>>,
+        session_manager: Arc<Mutex<DefaultSessionManager>>,
+        detector: Arc<Mutex<InputDetector>>,
         event_bus: Arc<DefaultEventBus>,
         theme: CodirigentTheme,
         cx: &mut Context<Self>,
@@ -72,28 +83,90 @@ impl WorkspaceView {
         let mut workspace = Workspace::new();
         workspace.set_theme(theme);
 
+        // Start output polling background task
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+            loop {
+                cx.background_executor()
+                    .timer(Duration::from_millis(16))
+                    .await;
+                let result = this.update(cx, |this, cx| {
+                    this.poll_output(cx);
+                });
+                if result.is_err() {
+                    // View was dropped, stop the task
+                    break;
+                }
+            }
+        })
+        .detach();
+
         Self {
             workspace,
             focus_handle: cx.focus_handle(),
             event_bus,
+            session_manager,
+            detector,
+            terminals: HashMap::new(),
             next_session_id: 1,
+        }
+    }
+
+    /// Poll PTY output and feed to terminal emulators.
+    fn poll_output(&mut self, cx: &mut Context<Self>) {
+        let session_ids: Vec<SessionId> = self.terminals.keys().copied().collect();
+        let mut any_dirty = false;
+
+        for session_id in session_ids {
+            // Try to drain output from the session manager
+            let output = {
+                let manager = self.session_manager.lock().unwrap();
+                manager.try_drain_output(session_id)
+            };
+
+            if let Some(data) = output {
+                if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
+                    terminal_view.terminal_mut().process_output(&data);
+                    any_dirty = true;
+                }
+            }
+        }
+
+        if any_dirty {
+            cx.notify();
         }
     }
 
     /// Create a new session.
     pub fn create_session(&mut self, cx: &mut Context<Self>) {
-        let id = SessionId(self.next_session_id);
+        let name = format!("Session {}", self.next_session_id);
         self.next_session_id += 1;
 
-        let name = format!("Session {}", id.0);
         let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/tmp"));
 
-        let session = Session::new(id, name.clone(), working_dir);
+        // Create session with real PTY via session manager
+        let session_id = {
+            let manager = self.session_manager.lock().unwrap();
+            match manager.create_session(name.clone(), working_dir.clone()) {
+                Ok(id) => id,
+                Err(e) => {
+                    warn!("Failed to create session: {}", e);
+                    return;
+                }
+            }
+        };
+
+        // Create terminal emulator for this session
+        let terminal = Terminal::new(24, 80, session_id);
+        let theme = self.workspace.theme();
+        let terminal_view = TerminalView::new(terminal, theme.clone());
+        self.terminals.insert(session_id, terminal_view);
+
+        // Create UI session for workspace
+        let session = Session::new(session_id, name.clone(), working_dir);
 
         if self.workspace.add_session(session) {
-            // Notify through event bus
-            self.event_bus.publish(CodirigentEvent::SessionCreated { id });
-            info!(%name, "Created new session");
+            // Event is already published by session manager
+            info!(%name, "Created new session with PTY");
             cx.notify();
         }
     }
@@ -101,8 +174,19 @@ impl WorkspaceView {
     /// Close the focused session.
     pub fn close_focused_session(&mut self, cx: &mut Context<Self>) {
         if let Some(id) = self.workspace.focused_session_id() {
+            // Remove terminal view
+            self.terminals.remove(&id);
+
+            // Close PTY session
+            {
+                let manager = self.session_manager.lock().unwrap();
+                if let Err(e) = manager.close_session(id) {
+                    warn!("Failed to close session {}: {}", id, e);
+                }
+            }
+
+            // Remove from workspace UI
             self.workspace.remove_session(id);
-            self.event_bus.publish(CodirigentEvent::SessionClosed { id });
             info!(?id, "Closed session");
             cx.notify();
         }
@@ -276,6 +360,50 @@ impl WorkspaceView {
     pub(super) fn workspace(&self) -> &Workspace {
         &self.workspace
     }
+
+    /// Get a reference to the terminals HashMap.
+    ///
+    /// Used by the render module to access terminal views.
+    pub(super) fn terminals(&self) -> &HashMap<SessionId, TerminalView> {
+        &self.terminals
+    }
+
+    /// Handle keyboard input for the focused session.
+    fn handle_key_down(&mut self, event: &KeyDownEvent, _cx: &mut Context<Self>) {
+        // Don't send Cmd+ shortcuts to PTY
+        if event.keystroke.modifiers.platform {
+            return;
+        }
+
+        // Get focused session
+        let Some(session_id) = self.workspace.focused_session_id() else {
+            return;
+        };
+
+        // Get terminal mode for proper escape sequence generation
+        let Some(terminal_view) = self.terminals.get(&session_id) else {
+            return;
+        };
+        let term_mode = terminal_view.terminal().mode();
+
+        // Convert GPUI keystroke to terminal keystroke
+        let modifiers = TerminalModifiers {
+            shift: event.keystroke.modifiers.shift,
+            control: event.keystroke.modifiers.control,
+            alt: event.keystroke.modifiers.alt,
+        };
+
+        let keystroke = TerminalKeystroke::with_modifiers(event.keystroke.key.clone(), modifiers);
+
+        // Convert to bytes
+        if let Some(bytes) = key_to_bytes(&keystroke, term_mode) {
+            // Send to PTY
+            let manager = self.session_manager.lock().unwrap();
+            if let Err(e) = manager.send_input(session_id, &bytes) {
+                warn!("Failed to send input to session {}: {}", session_id, e);
+            }
+        }
+    }
 }
 
 impl Focusable for WorkspaceView {
@@ -312,6 +440,10 @@ impl Render for WorkspaceView {
             .on_action(cx.listener(Self::handle_focus_session7))
             .on_action(cx.listener(Self::handle_focus_session8))
             .on_action(cx.listener(Self::handle_focus_session9))
+            // Handle keyboard input for PTY
+            .on_key_down(cx.listener(|this, event: &KeyDownEvent, _window, cx| {
+                this.handle_key_down(event, cx);
+            }))
             .bg(bg)
             .flex()
             .flex_row();

@@ -4,7 +4,9 @@
 //! separated from the main WorkspaceView to keep file sizes manageable.
 
 use super::gpui::WorkspaceView;
+use crate::terminal_view::CursorShape;
 use crate::theme::CodirigentTheme;
+use codirigent_core::SessionId;
 use gpui::{
     div, px, ClickEvent, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
     StatefulInteractiveElement, Styled,
@@ -188,21 +190,8 @@ impl WorkspaceView {
                                 ),
                         )
                         .child(
-                            // Content area (placeholder for terminal)
-                            div()
-                                .flex_1()
-                                .flex()
-                                .items_center()
-                                .justify_center()
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(border_color)
-                                        .child(format!(
-                                            "[{}]",
-                                            CodirigentTheme::status_name(info.status)
-                                        )),
-                                ),
+                            // Terminal content area
+                            self.render_terminal_content(info.session_id, &theme),
                         )
                 } else {
                     // Empty cell
@@ -231,5 +220,151 @@ impl WorkspaceView {
         }
 
         grid
+    }
+
+    /// Render the terminal content for a session.
+    fn render_terminal_content(
+        &self,
+        session_id: SessionId,
+        theme: &CodirigentTheme,
+    ) -> impl IntoElement {
+        let terminal_bg: gpui::Hsla = theme.terminal_background.into();
+        let terminal_fg: gpui::Hsla = theme.terminal_foreground.into();
+
+        // Get the terminal view for this session
+        let Some(terminal_view) = self.terminals().get(&session_id) else {
+            // No terminal yet, show placeholder
+            return div()
+                .flex_1()
+                .bg(terminal_bg)
+                .flex()
+                .items_center()
+                .justify_center()
+                .child(div().text_xs().text_color(terminal_fg).child("[No Terminal]"))
+                .into_any_element();
+        };
+
+        let cell_width = terminal_view.cell_width();
+        let cell_height = terminal_view.cell_height();
+        let cells_by_row = terminal_view.cells_by_row();
+        let cursor_rect = terminal_view.cursor_rect();
+        let term_rows = terminal_view.terminal().rows() as usize;
+        let term_cols = terminal_view.terminal().cols() as usize;
+
+        // Build terminal grid
+        let mut terminal_div = div()
+            .flex_1()
+            .bg(terminal_bg)
+            .p_1()
+            .overflow_hidden()
+            .flex()
+            .flex_col()
+            .font_family("Monaco")
+            .text_size(px(terminal_view.font_size()));
+
+        // Render each row
+        for row_idx in 0..term_rows {
+            let row_cells = cells_by_row.get(row_idx);
+            let mut row_div = div().h(px(cell_height)).flex().flex_row();
+
+            // Create a map of column -> cell for quick lookup
+            let cell_map: std::collections::HashMap<usize, _> = row_cells
+                .map(|cells| cells.iter().map(|c| (c.column, c)).collect())
+                .unwrap_or_default();
+
+            // Render each column
+            for col_idx in 0..term_cols {
+                let cell_div = if let Some(cell) = cell_map.get(&col_idx) {
+                    let fg: gpui::Hsla = cell.foreground.into();
+                    let bg: gpui::Hsla = cell.background.into();
+
+                    let mut d = div()
+                        .w(px(cell_width))
+                        .h(px(cell_height))
+                        .text_color(fg)
+                        .child(cell.character.to_string());
+
+                    // Only set background if not default
+                    if cell.background != theme.terminal_background {
+                        d = d.bg(bg);
+                    }
+
+                    // Apply text decorations
+                    if cell.bold {
+                        d = d.font_weight(FontWeight::BOLD);
+                    }
+                    if cell.italic {
+                        d = d.italic();
+                    }
+                    if cell.underline {
+                        d = d.underline();
+                    }
+
+                    d
+                } else {
+                    // Empty cell
+                    div()
+                        .w(px(cell_width))
+                        .h(px(cell_height))
+                        .text_color(terminal_fg)
+                        .child(" ")
+                };
+
+                row_div = row_div.child(cell_div);
+            }
+
+            terminal_div = terminal_div.child(row_div);
+        }
+
+        // Add cursor overlay if visible
+        if let Some(cursor) = cursor_rect {
+            let cursor_color: gpui::Hsla = cursor.color.into();
+            let cursor_x = cursor.x;
+            let cursor_y = cursor.y;
+            let cursor_w = cursor.width;
+            let cursor_h = cursor.height;
+
+            let cursor_div = match cursor.shape {
+                CursorShape::Block => div()
+                    .absolute()
+                    .left(px(cursor_x + 4.0)) // +4 for padding
+                    .top(px(cursor_y + 4.0))
+                    .w(px(cursor_w))
+                    .h(px(cursor_h))
+                    .bg(cursor_color.opacity(0.7)),
+                CursorShape::HollowBlock => div()
+                    .absolute()
+                    .left(px(cursor_x + 4.0))
+                    .top(px(cursor_y + 4.0))
+                    .w(px(cursor_w))
+                    .h(px(cursor_h))
+                    .border_1()
+                    .border_color(cursor_color),
+                CursorShape::Beam => div()
+                    .absolute()
+                    .left(px(cursor_x + 4.0))
+                    .top(px(cursor_y + 4.0))
+                    .w(px(2.0))
+                    .h(px(cursor_h))
+                    .bg(cursor_color),
+                CursorShape::Underline => div()
+                    .absolute()
+                    .left(px(cursor_x + 4.0))
+                    .top(px(cursor_y + cursor_h - 2.0 + 4.0))
+                    .w(px(cursor_w))
+                    .h(px(2.0))
+                    .bg(cursor_color),
+            };
+
+            // Wrap in relative container for cursor positioning
+            terminal_div = div()
+                .flex_1()
+                .relative()
+                .overflow_hidden()
+                .child(terminal_div)
+                .child(cursor_div);
+        }
+
+        terminal_div.into_any_element()
     }
 }

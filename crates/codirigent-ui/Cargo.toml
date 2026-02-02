@@ -9,7 +9,8 @@ license.workspace = true
 [features]
 default = []
 # Full GPUI support (requires Rust 1.75+)
-gpui-full = ["dep:gpui", "dep:core-text"]
+# Includes terminal rendering for full functionality
+gpui-full = ["dep:gpui", "dep:core-text", "terminal"]
 # Terminal rendering (requires Rust 1.75+ for alacritty_terminal 0.25+)
 terminal = ["dep:alacritty_terminal"]
 
