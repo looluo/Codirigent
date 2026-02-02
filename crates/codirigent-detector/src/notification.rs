@@ -148,6 +148,7 @@ pub fn notify_error(session_id: SessionId, session_name: &str, error_message: &s
 ///
 /// Escapes backslashes and double quotes, and replaces control characters
 /// (newlines, carriage returns, tabs) with spaces to prevent injection attacks.
+#[cfg(target_os = "macos")]
 fn sanitize_for_applescript(s: &str) -> String {
     s.replace('\\', "\\\\")
         .replace('"', "\\\"")
