@@ -28,6 +28,7 @@ use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::Processor as VteProcessor;
 use codirigent_core::{ClipboardContent, SessionId};
 use std::sync::Arc;
+use tokio::sync::mpsc;
 use tracing::{debug, warn};
 
 /// Terminal size configuration.
@@ -98,11 +99,13 @@ impl Dimensions for TerminalSize {
 ///
 /// Receives events from alacritty_terminal such as title changes, bell rings,
 /// and clipboard operations. Optionally integrates with the system clipboard
-/// for copy/paste operations.
+/// for copy/paste operations, and can forward PTY write requests to the session.
 pub struct TerminalEventHandler {
     session_id: SessionId,
     /// Optional clipboard provider for system clipboard integration.
     clipboard: Option<Arc<dyn crate::smart_clipboard::SmartClipboardProvider>>,
+    /// Optional channel for sending PTY write requests back to the session.
+    pty_writer: Option<mpsc::UnboundedSender<Vec<u8>>>,
 }
 
 impl TerminalEventHandler {
@@ -111,6 +114,7 @@ impl TerminalEventHandler {
         Self {
             session_id,
             clipboard: None,
+            pty_writer: None,
         }
     }
 
@@ -122,6 +126,26 @@ impl TerminalEventHandler {
         Self {
             session_id,
             clipboard: Some(clipboard),
+            pty_writer: None,
+        }
+    }
+
+    /// Create a new event handler with full integration.
+    ///
+    /// # Arguments
+    ///
+    /// * `session_id` - The session this handler is associated with
+    /// * `clipboard` - Clipboard provider for copy/paste operations
+    /// * `pty_writer` - Channel sender for forwarding PTY write requests
+    pub fn with_full_integration(
+        session_id: SessionId,
+        clipboard: Arc<dyn crate::smart_clipboard::SmartClipboardProvider>,
+        pty_writer: mpsc::UnboundedSender<Vec<u8>>,
+    ) -> Self {
+        Self {
+            session_id,
+            clipboard: Some(clipboard),
+            pty_writer: Some(pty_writer),
         }
     }
 
@@ -219,7 +243,17 @@ impl EventListener for TerminalEventHandler {
                     text_len = text.len(),
                     "PTY write request"
                 );
-                // TODO: Forward to PTY
+                // Forward to PTY via the channel
+                if let Some(ref sender) = self.pty_writer {
+                    let bytes = text.into_bytes();
+                    if let Err(e) = sender.send(bytes) {
+                        warn!(
+                            session_id = %self.session_id,
+                            error = %e,
+                            "Failed to forward PTY write request"
+                        );
+                    }
+                }
             }
             TermEvent::TextAreaSizeRequest(_format) => {
                 debug!(
