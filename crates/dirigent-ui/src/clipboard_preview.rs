@@ -42,6 +42,15 @@ use crate::theme::DirigentTheme;
 use dirigent_core::ImageData;
 use std::path::PathBuf;
 
+#[cfg(feature = "gpui-full")]
+use std::sync::Arc;
+
+#[cfg(feature = "gpui-full")]
+use gpui::{
+    div, px, Context, Image, ImageFormat, IntoElement, ObjectFit, ParentElement, Render, Styled,
+    StyledImage, Window,
+};
+
 /// Maximum thumbnail dimension (width or height) in pixels.
 pub const MAX_THUMBNAIL_SIZE: u32 = 128;
 
@@ -382,68 +391,85 @@ impl ClipboardPreview {
     pub fn format_dimensions(width: u32, height: u32) -> String {
         format!("{}x{}", width, height)
     }
+}
 
-    // TODO: Implement GPUI Render trait when GPUI is available
-    // The render implementation would display:
-    // - 128x128 thumbnail image
-    // - Image dimensions (e.g., "1920x1080")
-    // - File size in human-readable format (e.g., "1.5 MB")
-    // - Path to the image (truncated if too long)
-    //
-    // Example structure:
-    // ```rust
-    // impl Render for ClipboardPreview {
-    //     fn render(&mut self, cx: &mut ViewContext<Self>) -> impl IntoElement {
-    //         if !self.visible {
-    //             return div();
-    //         }
-    //
-    //         let preview = self.current_preview.as_ref().unwrap();
-    //
-    //         div()
-    //             .bg(self.theme.panel_background)
-    //             .border_1()
-    //             .border_color(self.theme.border)
-    //             .rounded_md()
-    //             .p_2()
-    //             .flex()
-    //             .flex_col()
-    //             .gap_2()
-    //             .child(
-    //                 // Thumbnail image
-    //                 img(&preview.thumbnail_bytes)
-    //                     .w(px(128.0))
-    //                     .h(px(128.0))
-    //                     .object_fit(ObjectFit::Contain)
-    //             )
-    //             .child(
-    //                 // Dimensions
-    //                 div()
-    //                     .text_sm()
-    //                     .text_color(self.theme.foreground)
-    //                     .child(Self::format_dimensions(
-    //                         preview.original_width,
-    //                         preview.original_height
-    //                     ))
-    //             )
-    //             .child(
-    //                 // File size
-    //                 div()
-    //                     .text_sm()
-    //                     .text_color(self.theme.muted)
-    //                     .child(preview.human_readable_size())
-    //             )
-    //             .child(
-    //                 // Path (truncated)
-    //                 div()
-    //                     .text_xs()
-    //                     .text_color(self.theme.muted)
-    //                     .truncate()
-    //                     .child(preview.image_path.display().to_string())
-    //             )
-    //     }
-    // }
-    // ```
+/// GPUI Render implementation for ClipboardPreview.
+///
+/// Renders a thumbnail preview panel showing:
+/// - 128x128 thumbnail image
+/// - Original image dimensions (e.g., "1920x1080")
+/// - File size in human-readable format (e.g., "1.5 MB")
+/// - Path to the image (truncated if too long)
+///
+/// When the preview is not visible, renders an empty div.
+#[cfg(feature = "gpui-full")]
+impl Render for ClipboardPreview {
+    fn render(&mut self, _window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
+        // Use pattern matching to safely extract preview, avoiding unwrap()
+        let Some(preview) = self.current_preview.as_ref().filter(|_| self.visible) else {
+            return div().into_any_element();
+        };
+
+        // Create GPUI Image from thumbnail bytes
+        // TODO: Store actual image format in ThumbnailPreview and use it here.
+        // Currently assumes PNG which works for most screenshots but may cause
+        // issues with JPEG or other formats.
+        // TODO: Consider caching the Image in the struct to avoid cloning bytes
+        // on every render cycle.
+        let image = Arc::new(Image::from_bytes(
+            ImageFormat::Png,
+            preview.thumbnail_bytes.clone(),
+        ));
+
+        // Convert theme colors to GPUI Hsla
+        let panel_bg: gpui::Hsla = self.theme.panel_background.into();
+        let border_color: gpui::Hsla = self.theme.border.into();
+        let foreground_color: gpui::Hsla = self.theme.foreground.into();
+        let muted_color: gpui::Hsla = self.theme.muted.into();
+
+        div()
+            .bg(panel_bg)
+            .border_1()
+            .border_color(border_color)
+            .rounded_md()
+            .p_2()
+            .flex()
+            .flex_col()
+            .gap_2()
+            .child(
+                // 128x128 thumbnail image
+                gpui::img(image)
+                    .w(px(128.0))
+                    .h(px(128.0))
+                    .object_fit(ObjectFit::Contain),
+            )
+            .child(
+                // Image dimensions
+                div()
+                    .text_sm()
+                    .text_color(foreground_color)
+                    .child(Self::format_dimensions(
+                        preview.original_width,
+                        preview.original_height,
+                    )),
+            )
+            .child(
+                // File size in human-readable format
+                div()
+                    .text_sm()
+                    .text_color(muted_color)
+                    .child(preview.human_readable_size()),
+            )
+            .child(
+                // Image path (truncated)
+                div()
+                    .text_xs()
+                    .text_color(muted_color)
+                    .truncate()
+                    .child(preview.image_path.display().to_string()),
+            )
+            .into_any_element()
+    }
 }
 
 #[cfg(test)]
