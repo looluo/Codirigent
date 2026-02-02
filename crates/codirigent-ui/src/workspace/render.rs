@@ -58,8 +58,13 @@ impl WorkspaceView {
                 ),
         );
 
-        // Session list with grouping
-        let mut list = div().flex_1().overflow_hidden().flex().flex_col();
+        // Session list with grouping (takes 60% of space)
+        let mut list = div()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .flex_basis(gpui::relative(0.6))  // 60% of sidebar height
+            .min_h(px(150.0));  // Minimum height
         let muted: gpui::Hsla = theme.muted.into();
 
         // Group sessions by their group field
@@ -208,7 +213,149 @@ impl WorkspaceView {
 
         sidebar = sidebar.child(list);
 
+        // Separator between sessions and files
+        sidebar = sidebar.child(
+            div()
+                .h(px(1.0))
+                .w_full()
+                .bg(border_color),
+        );
+
+        // File tree section (takes remaining 40% of space)
+        sidebar = sidebar.child(self.render_file_tree_section(theme, cx));
+
         sidebar
+    }
+
+    /// Render the file tree section of the sidebar.
+    fn render_file_tree_section(
+        &self,
+        theme: &CodirigentTheme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let fg: gpui::Hsla = theme.foreground.into();
+        let muted: gpui::Hsla = theme.muted.into();
+        let hover_bg: gpui::Hsla = theme.active.into();
+        let border_color: gpui::Hsla = theme.border.into();
+
+        let mut section = div()
+            .flex()
+            .flex_col()
+            .flex_basis(gpui::relative(0.4))  // 40% of sidebar height
+            .min_h(px(100.0))  // Minimum height
+            .overflow_hidden();
+
+        // Header
+        section = section.child(
+            div()
+                .h(px(32.0))
+                .px_3()
+                .flex()
+                .items_center()
+                .border_b_1()
+                .border_color(border_color)
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(fg)
+                        .child("Files"),
+                ),
+        );
+
+        // File tree items
+        let items = self.file_tree.visible_items();
+
+        let mut file_list = div()
+            .flex_1()
+            .overflow_hidden()
+            .flex()
+            .flex_col();
+
+        if items.is_empty() {
+            // Empty state
+            file_list = file_list.child(
+                div()
+                    .p_4()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(muted)
+                            .child("No files to display"),
+                    ),
+            );
+        } else {
+            // Render file tree items
+            for item in items {
+                file_list = file_list.child(self.render_file_tree_item(item, theme, hover_bg, fg, muted, cx));
+            }
+        }
+
+        section.child(file_list)
+    }
+
+    /// Render a single file tree item.
+    fn render_file_tree_item(
+        &self,
+        item: &crate::sidebar::FileTreeRenderItem,
+        theme: &CodirigentTheme,
+        hover_bg: gpui::Hsla,
+        fg: gpui::Hsla,
+        muted: gpui::Hsla,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let icon_color = item.icon.color();
+        // Convert RGBA to Hsla for GPUI
+        let icon_hsla = gpui::Hsla {
+            h: 0.5,  // Default hue
+            s: 0.5,  // Default saturation
+            l: (icon_color.r + icon_color.g + icon_color.b) / 3.0,  // Approximate lightness
+            a: icon_color.a,
+        };
+
+        let indent = px(item.depth as f32 * crate::sidebar::FileTreePanel::INDENT_SIZE);
+        let path = item.path.clone();
+        let is_dir = item.is_dir;
+
+        div()
+            .id(SharedString::from(format!("file-tree-item-{}", path.display())))
+            .h(px(crate::sidebar::FileTreePanel::ITEM_HEIGHT))
+            .pl(indent)
+            .pr_2()
+            .flex()
+            .items_center()
+            .gap_2()
+            .cursor_pointer()
+            .hover(|style| style.bg(hover_bg.opacity(0.1)))
+            .on_click(cx.listener(move |this, _event: &ClickEvent, _window, cx| {
+                if is_dir {
+                    info!(?path, "Directory clicked");
+                    this.file_tree.toggle_directory(&path);
+                } else {
+                    info!(?path, "File clicked");
+                    this.file_tree.select(&path);
+                }
+                cx.notify();
+            }))
+            .child(
+                // Icon
+                div()
+                    .text_sm()
+                    .text_color(icon_hsla)
+                    .child(item.icon.text()),
+            )
+            .child(
+                // Name
+                div()
+                    .text_sm()
+                    .text_color(fg)
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(item.name.clone()),
+            )
     }
 
     /// Render the grid of session panes.

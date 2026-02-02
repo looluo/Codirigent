@@ -26,6 +26,7 @@ use crate::terminal::Terminal;
 use crate::terminal_view::TerminalView;
 // Imports from feature branch (UI components)
 use crate::empty_session::{EmptySessionEvent, EmptySessionPool};
+use crate::sidebar::{FileTreePanel, FileTreeEvent};
 use crate::status_bar::StatusBar;
 use crate::task_board::TaskBoardPanel;
 use crate::terminal_header::TerminalHeader;
@@ -92,6 +93,8 @@ pub struct WorkspaceView {
     pub(super) broadcast_enabled: bool,
     /// Session menu state: which session's menu is open (if any).
     pub(super) session_menu_open: Option<SessionId>,
+    /// File tree panel for sidebar.
+    pub(super) file_tree: FileTreePanel,
 }
 
 impl WorkspaceView {
@@ -162,6 +165,12 @@ impl WorkspaceView {
             event_bus.clone() as Arc<dyn codirigent_core::EventBus>,
         )));
 
+        // Initialize file tree panel with current working directory
+        let mut file_tree = FileTreePanel::new();
+        if let Ok(cwd) = std::env::current_dir() {
+            file_tree.set_root(cwd);
+        }
+
         Self {
             workspace,
             focus_handle: cx.focus_handle(),
@@ -179,6 +188,7 @@ impl WorkspaceView {
             terminal_headers: Vec::new(),
             broadcast_enabled: false,
             session_menu_open: None,
+            file_tree,
         }
     }
 
@@ -618,6 +628,37 @@ impl WorkspaceView {
             EmptySessionEvent::CreateSessionClicked { position } => {
                 info!(?position, "Create session at position");
                 self.create_session(cx);
+            }
+        }
+        cx.notify();
+    }
+
+    /// Handle file tree events.
+    fn handle_file_tree_event(&mut self, event: FileTreeEvent, cx: &mut Context<Self>) {
+        match event {
+            FileTreeEvent::FileSelected(path) => {
+                info!(?path, "File selected");
+                // Could highlight the file or show preview
+            }
+            FileTreeEvent::FileActivated(path) => {
+                info!(?path, "File activated");
+                // Could open file in editor (future feature)
+            }
+            FileTreeEvent::DirectoryToggled(path) => {
+                info!(?path, "Directory toggled");
+                self.file_tree.toggle_directory(&path);
+            }
+            FileTreeEvent::PathDraggedToTerminal { path, session_id } => {
+                info!(?path, ?session_id, "Path dragged to terminal");
+                // C3 implementation: insert path into terminal
+                let path_str = path.to_string_lossy();
+                let input = format!("{} ", path_str); // Add space after path
+                let session_id = SessionId(session_id);
+                if let Ok(manager) = self.session_manager.lock() {
+                    if let Err(e) = manager.send_input(session_id, input.as_bytes()) {
+                        warn!("Failed to send path to terminal: {}", e);
+                    }
+                }
             }
         }
         cx.notify();
