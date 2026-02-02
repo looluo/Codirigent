@@ -193,8 +193,10 @@ mod tests {
     use crate::smart_clipboard::SmartClipboardProvider;
     #[allow(unused_imports)]
     use dirigent_core::ClipboardContent;
+    use serial_test::serial;
 
     #[test]
+    #[serial(clipboard)]
     #[cfg(target_os = "macos")]
     fn test_create_clipboard_macos() {
         let clipboard = create_clipboard();
@@ -213,6 +215,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(clipboard)]
     #[cfg(target_os = "windows")]
     fn test_create_clipboard_windows() {
         let clipboard = create_clipboard();
@@ -222,6 +225,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(clipboard)]
     #[cfg(target_os = "linux")]
     fn test_create_clipboard_linux() {
         let clipboard = create_clipboard();
@@ -238,6 +242,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(clipboard)]
     #[cfg(target_os = "windows")]
     fn test_windows_clipboard_available() {
         // WindowsSmartClipboard should be available on Windows
@@ -247,6 +252,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(clipboard)]
     #[cfg(target_os = "windows")]
     fn test_windows_clipboard_has_changed() {
         let clipboard = WindowsSmartClipboard::new();
@@ -258,6 +264,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(clipboard)]
     #[cfg(target_os = "linux")]
     fn test_linux_clipboard_try_create() {
         let result = try_create_linux_clipboard();
@@ -275,6 +282,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(clipboard)]
     #[cfg(target_os = "linux")]
     fn test_linux_create_clipboard_returns_box() {
         let clipboard = create_clipboard();

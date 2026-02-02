@@ -476,8 +476,13 @@ unsafe impl Sync for MacOSSmartClipboard {}
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
+
+    // Tests that access the system clipboard must run serially to avoid race conditions.
+    // The system clipboard is a shared global resource.
 
     #[test]
+    #[serial(clipboard)]
     fn test_macos_clipboard_new() {
         let clipboard = MacOSSmartClipboard::new();
         // Just verify it can be created and the change count is captured
@@ -485,6 +490,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(clipboard)]
     fn test_macos_clipboard_default() {
         let clipboard = MacOSSmartClipboard::default();
         // Default should be equivalent to new()
@@ -492,48 +498,41 @@ mod tests {
     }
 
     #[test]
+    #[serial(clipboard)]
     fn test_macos_clipboard_read_text() {
         let clipboard = MacOSSmartClipboard::new();
-        // Use a unique string to avoid conflicts with parallel tests
-        let unique_text = format!("test_read_{}", std::process::id());
-        clipboard.write_text(unique_text.clone()).unwrap();
+        let test_text = "serial_test_read_text";
+        clipboard.write_text(test_text.to_string()).unwrap();
 
-        // Read it back - due to parallel tests, we may get different content
+        // With serial execution, we can now reliably read back what we wrote
         let content = clipboard.read_content().unwrap();
         match content {
             ClipboardContent::Text(text) => {
-                // Just verify we got some text (may be from another test)
-                assert!(!text.is_empty());
+                assert_eq!(text, test_text);
             }
-            ClipboardContent::Image(_) => {
-                // Image might be on clipboard from another test - valid
-            }
-            ClipboardContent::Files(_) => {
-                // Files might be on clipboard - valid
-            }
-            ClipboardContent::Empty => {
-                // Empty is valid if another test cleared it
-            }
+            _ => panic!("Expected text content on clipboard"),
         }
     }
 
     #[test]
+    #[serial(clipboard)]
     fn test_macos_clipboard_write_text() {
         let clipboard = MacOSSmartClipboard::new();
-        let unique_text = format!("test_write_{}", std::process::id());
-        let result = clipboard.write_text(unique_text.clone());
+        let test_text = "serial_test_write_text";
+        let result = clipboard.write_text(test_text.to_string());
         assert!(result.is_ok());
 
-        // Due to parallel tests sharing clipboard, just verify read succeeds
-        let content = clipboard.read_content();
-        assert!(content.is_ok());
+        // With serial execution, we can verify the exact content
+        let content = clipboard.read_content().unwrap();
+        assert!(matches!(content, ClipboardContent::Text(t) if t == test_text));
     }
 
     #[test]
+    #[serial(clipboard)]
     fn test_macos_clipboard_has_changed() {
         let clipboard = MacOSSmartClipboard::new();
 
-        // First check - might or might not show change depending on timing
+        // First check captures current state
         let _first_check = clipboard.has_changed();
 
         // Write to clipboard
@@ -549,6 +548,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(clipboard)]
     fn test_macos_clipboard_has_image() {
         let clipboard = MacOSSmartClipboard::new();
 
@@ -569,6 +569,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(clipboard)]
     fn test_macos_clipboard_write_image() {
         let clipboard = MacOSSmartClipboard::new();
 
@@ -590,6 +591,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(clipboard)]
     fn test_macos_clipboard_debug() {
         let clipboard = MacOSSmartClipboard::new();
         let debug_str = format!("{:?}", clipboard);
@@ -599,6 +601,7 @@ mod tests {
 
     #[test]
     fn test_macos_clipboard_is_send_sync() {
+        // This is a compile-time check, no clipboard access needed
         fn assert_send_sync<T: Send + Sync>() {}
         assert_send_sync::<MacOSSmartClipboard>();
     }

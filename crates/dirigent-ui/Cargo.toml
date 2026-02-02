@@ -49,3 +49,4 @@ clipboard-win = "5.4"
 
 [dev-dependencies]
 tempfile.workspace = true
+serial_test = "3.2"
