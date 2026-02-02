@@ -102,26 +102,29 @@ pub struct SplashScreen {
 }
 
 impl SplashScreen {
-    /// Create a new splash screen.
+    /// Create a new splash screen with an automatic timer.
     ///
-    /// Note: The splash timer is temporarily disabled due to GPUI async closure
-    /// lifetime constraints with Rust 2021 edition. The splash screen is created
-    /// but transitions immediately. Timer functionality will be restored in a
-    /// future update.
+    /// Spawns a background timer that triggers the `on_complete` callback
+    /// after the specified duration.
     ///
     /// # Arguments
     ///
-    /// * `duration` - How long to show the splash screen (currently unused)
+    /// * `duration` - How long to show the splash screen
     /// * `on_complete` - Callback when splash duration is complete
     /// * `cx` - GPUI context
-    pub fn new<F>(_duration: Duration, on_complete: F, cx: &mut Context<Self>) -> Self
+    pub fn new<F>(duration: Duration, on_complete: F, cx: &mut Context<Self>) -> Self
     where
         F: FnOnce(&mut Context<Self>) + Send + 'static,
     {
-        // TODO: Re-enable timer when GPUI async closure lifetime issue is resolved
-        // The spawn pattern `cx.spawn(|view, cx| async move { view.update(cx, ...) })`
-        // causes "implementation of AsyncFnOnce is not general enough" error in
-        // Rust 2021 edition.
+        // Spawn a timer that triggers completion after the duration.
+        // Uses `async move |this, cx|` pattern for proper lifetime handling.
+        cx.spawn(async move |this, cx| {
+            cx.background_executor().timer(duration).await;
+            this.update(cx, |this, cx| {
+                this.complete(cx);
+            })
+        })
+        .detach();
 
         Self {
             focus_handle: cx.focus_handle(),
