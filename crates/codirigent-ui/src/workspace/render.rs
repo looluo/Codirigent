@@ -58,54 +58,120 @@ impl WorkspaceView {
                 ),
         );
 
-        // Session list
+        // Session list with grouping
         let mut list = div().flex_1().overflow_hidden().flex().flex_col();
+        let muted: gpui::Hsla = theme.muted.into();
 
+        // Group sessions by their group field
+        let mut grouped: std::collections::HashMap<Option<String>, Vec<_>> = std::collections::HashMap::new();
         for session in sessions {
-            let status_color: gpui::Hsla = theme.status_color(session.status).into();
-            let is_focused = self.workspace().focused_session_id() == Some(session.id);
-            let item_bg = if is_focused {
-                let active: gpui::Hsla = theme.active.into();
-                active.opacity(0.2)
-            } else {
-                gpui::Hsla::transparent_black()
-            };
-            let hover_bg: gpui::Hsla = theme.active.into();
-            let session_id = session.id;
+            grouped.entry(session.group.clone()).or_insert_with(Vec::new).push(session);
+        }
 
-            list = list.child(
-                div()
-                    .id(SharedString::from(format!("session-item-{}", session_id.0)))
-                    .h(px(32.0))
-                    .px_3()
-                    .bg(item_bg)
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .cursor_pointer()
-                    .hover(|style| style.bg(hover_bg.opacity(0.1)))
-                    .on_click(cx.listener(move |this, _event: &ClickEvent, _window, cx| {
-                        info!(?session_id, "Session item clicked");
-                        this.workspace.focus_session(session_id);
-                        cx.notify();
-                    }))
-                    .child(
-                        // Status indicator dot
-                        div()
-                            .w(px(8.0))
-                            .h(px(8.0))
-                            .rounded_full()
-                            .bg(status_color),
-                    )
-                    .child(
-                        div()
-                            .text_sm()
-                            .text_color(fg)
-                            .overflow_hidden()
-                            .text_ellipsis()
-                            .child(session.name.clone()),
-                    ),
-            );
+        // Sort groups: None (ungrouped) first, then alphabetically
+        let mut group_names: Vec<_> = grouped.keys().cloned().collect();
+        group_names.sort_by(|a, b| {
+            match (a, b) {
+                (None, None) => std::cmp::Ordering::Equal,
+                (None, Some(_)) => std::cmp::Ordering::Less,
+                (Some(_), None) => std::cmp::Ordering::Greater,
+                (Some(a), Some(b)) => a.cmp(b),
+            }
+        });
+
+        // Render each group
+        for group_name in group_names {
+            let group_sessions = grouped.get(&group_name).unwrap();
+
+            // If group has a name, show group header
+            if let Some(ref name) = group_name {
+                let group_color = group_sessions
+                    .first()
+                    .and_then(|s| s.color.as_ref())
+                    .and_then(|c| self.parse_group_color(c))
+                    .unwrap_or(theme.primary.into());
+
+                list = list.child(
+                    div()
+                        .h(px(28.0))
+                        .px_3()
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .w(px(6.0))
+                                .h(px(6.0))
+                                .rounded_full()
+                                .bg(group_color),
+                        )
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(FontWeight::SEMIBOLD)
+                                .text_color(muted)
+                                .child(format!("{} ({})", name, group_sessions.len())),
+                        ),
+                );
+            }
+
+            // Render sessions in this group
+            for session in group_sessions {
+                let status_color: gpui::Hsla = theme.status_color(session.status).into();
+                let is_focused = self.workspace().focused_session_id() == Some(session.id);
+                let item_bg = if is_focused {
+                    let active: gpui::Hsla = theme.active.into();
+                    active.opacity(0.2)
+                } else {
+                    gpui::Hsla::transparent_black()
+                };
+                let hover_bg: gpui::Hsla = theme.active.into();
+                let session_id = session.id;
+
+                // Get group color for left border
+                let left_border_color = session.color.as_ref()
+                    .and_then(|c| self.parse_group_color(c))
+                    .unwrap_or(gpui::Hsla::transparent_black());
+
+                let indent = if session.group.is_some() { px(12.0) } else { px(0.0) };
+
+                list = list.child(
+                    div()
+                        .id(SharedString::from(format!("session-item-{}", session_id.0)))
+                        .h(px(32.0))
+                        .pl(indent)
+                        .pr_3()
+                        .bg(item_bg)
+                        .border_l_2()
+                        .border_color(left_border_color)
+                        .flex()
+                        .items_center()
+                        .gap_2()
+                        .cursor_pointer()
+                        .hover(|style| style.bg(hover_bg.opacity(0.1)))
+                        .on_click(cx.listener(move |this, _event: &ClickEvent, _window, cx| {
+                            info!(?session_id, "Session item clicked");
+                            this.workspace.focus_session(session_id);
+                            cx.notify();
+                        }))
+                        .child(
+                            // Status indicator dot
+                            div()
+                                .w(px(8.0))
+                                .h(px(8.0))
+                                .rounded_full()
+                                .bg(status_color),
+                        )
+                        .child(
+                            div()
+                                .text_sm()
+                                .text_color(fg)
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .child(session.name.clone()),
+                        ),
+                );
+            }
         }
 
         sidebar = sidebar.child(list);
@@ -1632,5 +1698,20 @@ impl WorkspaceView {
             .h(px(size))
             .rounded(px(radius))
             .bg(color)
+    }
+
+    /// Parse a group color string into Hsla.
+    fn parse_group_color(&self, color: &str) -> Option<gpui::Hsla> {
+        match color.to_lowercase().as_str() {
+            "teal" | "blue-green" => Some(gpui::Hsla { h: 0.52, s: 0.70, l: 0.60, a: 1.0 }),
+            "coral" | "orange-red" => Some(gpui::Hsla { h: 0.03, s: 0.80, l: 0.62, a: 1.0 }),
+            "orange" => Some(gpui::Hsla { h: 0.08, s: 0.90, l: 0.60, a: 1.0 }),
+            "blue" => Some(gpui::Hsla { h: 0.60, s: 0.70, l: 0.60, a: 1.0 }),
+            "purple" => Some(gpui::Hsla { h: 0.75, s: 0.60, l: 0.65, a: 1.0 }),
+            "green" => Some(gpui::Hsla { h: 0.33, s: 0.60, l: 0.55, a: 1.0 }),
+            "yellow" => Some(gpui::Hsla { h: 0.15, s: 0.80, l: 0.65, a: 1.0 }),
+            "red" => Some(gpui::Hsla { h: 0.0, s: 0.80, l: 0.60, a: 1.0 }),
+            _ => None,
+        }
     }
 }
