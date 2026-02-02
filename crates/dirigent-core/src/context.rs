@@ -102,8 +102,8 @@ impl Default for ContextConfig {
 /// # Example
 ///
 /// ```
-/// use dirigent_core::context::{ContextUsage, ContextThresholdState};
-/// use dirigent_core::SessionId;
+/// use dirigent_core::context::ContextUsage;
+/// use dirigent_core::{ContextThresholdState, SessionId};
 ///
 /// let usage = ContextUsage {
 ///     session_id: SessionId(1),
@@ -180,8 +180,8 @@ struct CompiledPattern {
 /// # Example
 ///
 /// ```
-/// use dirigent_core::context::{ContextConfig, ContextTracker, ContextThresholdState};
-/// use dirigent_core::SessionId;
+/// use dirigent_core::context::{ContextConfig, ContextTracker};
+/// use dirigent_core::{ContextThresholdState, SessionId};
 ///
 /// let mut tracker = ContextTracker::new(ContextConfig::default());
 ///

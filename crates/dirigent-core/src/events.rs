@@ -888,6 +888,157 @@ mod tests {
         }
     }
 
+    // === Ralph Loop Event Tests ===
+
+    #[test]
+    fn test_ralph_loop_started_event() {
+        let event = DirigentEvent::RalphLoopStarted {
+            session_id: SessionId(1),
+            config: crate::ralph::RalphLoopConfig::default(),
+        };
+        if let DirigentEvent::RalphLoopStarted { session_id, config } = event {
+            assert_eq!(session_id, SessionId(1));
+            assert_eq!(config.max_iterations, 20); // Default is 20
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_ralph_loop_paused_event() {
+        let event = DirigentEvent::RalphLoopPaused {
+            session_id: SessionId(1),
+        };
+        if let DirigentEvent::RalphLoopPaused { session_id } = event {
+            assert_eq!(session_id, SessionId(1));
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_ralph_loop_resumed_event() {
+        let event = DirigentEvent::RalphLoopResumed {
+            session_id: SessionId(1),
+        };
+        if let DirigentEvent::RalphLoopResumed { session_id } = event {
+            assert_eq!(session_id, SessionId(1));
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_ralph_loop_cancelled_event() {
+        let event = DirigentEvent::RalphLoopCancelled {
+            session_id: SessionId(1),
+        };
+        if let DirigentEvent::RalphLoopCancelled { session_id } = event {
+            assert_eq!(session_id, SessionId(1));
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_ralph_loop_iteration_event() {
+        let event = DirigentEvent::RalphLoopIteration {
+            session_id: SessionId(1),
+            iteration: 3,
+            passed: true,
+            test_failures: Some(0),
+        };
+        if let DirigentEvent::RalphLoopIteration {
+            session_id,
+            iteration,
+            passed,
+            test_failures,
+        } = event
+        {
+            assert_eq!(session_id, SessionId(1));
+            assert_eq!(iteration, 3);
+            assert!(passed);
+            assert_eq!(test_failures, Some(0));
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_ralph_loop_completed_event() {
+        let event = DirigentEvent::RalphLoopCompleted {
+            session_id: SessionId(1),
+            total_iterations: 5,
+        };
+        if let DirigentEvent::RalphLoopCompleted {
+            session_id,
+            total_iterations,
+        } = event
+        {
+            assert_eq!(session_id, SessionId(1));
+            assert_eq!(total_iterations, 5);
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_ralph_loop_failed_event() {
+        let event = DirigentEvent::RalphLoopFailed {
+            session_id: SessionId(1),
+            reason: "Max iterations reached".to_string(),
+            iterations: 10,
+        };
+        if let DirigentEvent::RalphLoopFailed {
+            session_id,
+            reason,
+            iterations,
+        } = event
+        {
+            assert_eq!(session_id, SessionId(1));
+            assert_eq!(reason, "Max iterations reached");
+            assert_eq!(iterations, 10);
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_ralph_loop_stuck_event() {
+        let event = DirigentEvent::RalphLoopStuck {
+            session_id: SessionId(1),
+            iterations_without_progress: 3,
+        };
+        if let DirigentEvent::RalphLoopStuck {
+            session_id,
+            iterations_without_progress,
+        } = event
+        {
+            assert_eq!(session_id, SessionId(1));
+            assert_eq!(iterations_without_progress, 3);
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_ralph_loop_compacted_event() {
+        let event = DirigentEvent::RalphLoopCompacted {
+            session_id: SessionId(1),
+            iteration: 7,
+        };
+        if let DirigentEvent::RalphLoopCompacted {
+            session_id,
+            iteration,
+        } = event
+        {
+            assert_eq!(session_id, SessionId(1));
+            assert_eq!(iteration, 7);
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
     #[test]
     fn test_all_event_variants_clone() {
         // Test that all variants can be cloned
@@ -988,6 +1139,43 @@ mod tests {
                 enabled_count: 5,
             },
             DirigentEvent::SkillsRefreshed { count: 10 },
+            // Ralph Loop events
+            DirigentEvent::RalphLoopStarted {
+                session_id: SessionId(1),
+                config: crate::ralph::RalphLoopConfig::default(),
+            },
+            DirigentEvent::RalphLoopPaused {
+                session_id: SessionId(1),
+            },
+            DirigentEvent::RalphLoopResumed {
+                session_id: SessionId(1),
+            },
+            DirigentEvent::RalphLoopCancelled {
+                session_id: SessionId(1),
+            },
+            DirigentEvent::RalphLoopIteration {
+                session_id: SessionId(1),
+                iteration: 1,
+                passed: true,
+                test_failures: Some(0),
+            },
+            DirigentEvent::RalphLoopCompleted {
+                session_id: SessionId(1),
+                total_iterations: 5,
+            },
+            DirigentEvent::RalphLoopFailed {
+                session_id: SessionId(1),
+                reason: "Max iterations reached".to_string(),
+                iterations: 10,
+            },
+            DirigentEvent::RalphLoopStuck {
+                session_id: SessionId(1),
+                iterations_without_progress: 3,
+            },
+            DirigentEvent::RalphLoopCompacted {
+                session_id: SessionId(1),
+                iteration: 7,
+            },
             DirigentEvent::BroadcastSent {
                 id: crate::broadcast::BroadcastId(1),
                 target_count: 3,
