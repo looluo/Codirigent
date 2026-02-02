@@ -1,0 +1,52 @@
+[package]
+name = "codirigent-ui"
+description = "GPUI-based user interface for Dirigent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[features]
+default = []
+# Full GPUI support (requires Rust 1.75+)
+gpui-full = ["dep:gpui", "dep:core-text"]
+# Terminal rendering (requires Rust 1.75+ for alacritty_terminal 0.25+)
+terminal = ["dep:alacritty_terminal"]
+
+[dependencies]
+codirigent-core.workspace = true
+codirigent-session.workspace = true
+codirigent-detector.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+chrono.workspace = true
+
+# GPUI from crates.io with workspace version alignment
+gpui = { workspace = true, optional = true }
+core-text = { workspace = true, optional = true }  # Version alignment for GPUI
+
+# Terminal rendering (requires Rust 1.75+ for latest version)
+alacritty_terminal = { version = "0.25", optional = true }
+
+# macOS-specific dependencies
+[target.'cfg(target_os = "macos")'.dependencies]
+objc2 = "0.6"
+objc2-app-kit = { version = "0.3", features = ["NSPasteboard", "NSPasteboardItem"] }
+objc2-foundation = { version = "0.3", features = ["NSString", "NSData", "NSArray", "NSURL"] }
+dispatch = "0.2"
+
+# Linux-specific dependencies (X11/Wayland clipboard)
+[target.'cfg(target_os = "linux")'.dependencies]
+arboard = "3.6"
+
+# Windows-specific dependencies (Win32 clipboard)
+[target.'cfg(target_os = "windows")'.dependencies]
+clipboard-win = "5.4"
+
+[dev-dependencies]
+tempfile.workspace = true
+serial_test = "3.2"

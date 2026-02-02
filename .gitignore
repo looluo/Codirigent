@@ -1,5 +1,5 @@
 # =============================================================================
-# Dirigent Project .gitignore
+# Codirigent Project .gitignore
 # =============================================================================
 
 # -----------------------------------------------------------------------------
@@ -79,15 +79,15 @@ $RECYCLE.BIN/
 .directory
 
 # -----------------------------------------------------------------------------
-# Dirigent Runtime (generated during use)
+# Codirigent Runtime (generated during use)
 # -----------------------------------------------------------------------------
 
 # Runtime state (not tracked, regenerated on start)
-.dirigent/state.json
+.codirigent/state.json
 
 # Session notes are optional to track
 # Uncomment to ignore:
-# .dirigent/sessions/
+# .codirigent/sessions/
 
 # -----------------------------------------------------------------------------
 # Miscellaneous

@@ -1,16 +1,16 @@
-//! Integration tests for Dirigent.
+//! Integration tests for Codirigent.
 //!
-//! These tests verify the end-to-end functionality of the Dirigent application,
+//! These tests verify the end-to-end functionality of the Codirigent application,
 //! including session lifecycle, event flow, state persistence, and component
 //! integration.
 
-use dirigent_core::{
-    DefaultEventBus, DirigentEvent, EventBus, FileStorageService, ProcessMonitor,
+use codirigent_core::{
+    DefaultEventBus, CodirigentEvent, EventBus, FileStorageService, ProcessMonitor,
     Session, SessionId, SessionManager, SessionStatus, StorageService,
 };
-use dirigent_detector::{DetectorConfig, InputDetector};
-use dirigent_session::DefaultSessionManager;
-use dirigent_ui::integration::{DirigentIntegration, IntegrationConfig};
+use codirigent_detector::{DetectorConfig, InputDetector};
+use codirigent_session::DefaultSessionManager;
+use codirigent_ui::integration::{CodirigentIntegration, IntegrationConfig};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
@@ -20,19 +20,19 @@ use tempfile::TempDir;
 // ============================================================================
 
 /// Create a test integration instance.
-fn create_test_integration() -> (DirigentIntegration, TempDir) {
+fn create_test_integration() -> (CodirigentIntegration, TempDir) {
     let temp = TempDir::new().unwrap();
     let config = IntegrationConfig {
         auto_start_event_loop: false,
         ..Default::default()
     };
     let integration =
-        DirigentIntegration::with_config(temp.path().to_path_buf(), config).unwrap();
+        CodirigentIntegration::with_config(temp.path().to_path_buf(), config).unwrap();
     (integration, temp)
 }
 
 /// Create a test session and return its ID.
-fn create_test_session(integration: &DirigentIntegration, temp: &TempDir, name: &str) -> SessionId {
+fn create_test_session(integration: &CodirigentIntegration, temp: &TempDir, name: &str) -> SessionId {
     integration
         .create_session(name.to_string(), temp.path().to_path_buf())
         .unwrap()
@@ -133,7 +133,7 @@ fn test_state_persistence() {
             ..Default::default()
         };
         let integration =
-            DirigentIntegration::with_config(temp.path().to_path_buf(), config).unwrap();
+            CodirigentIntegration::with_config(temp.path().to_path_buf(), config).unwrap();
 
         integration
             .create_session("Persistent Session".to_string(), temp.path().to_path_buf())
@@ -152,7 +152,7 @@ fn test_state_persistence() {
             ..Default::default()
         };
         let integration =
-            DirigentIntegration::with_config(temp.path().to_path_buf(), config).unwrap();
+            CodirigentIntegration::with_config(temp.path().to_path_buf(), config).unwrap();
 
         let state = integration.load_state().unwrap();
         assert_eq!(state.sessions.len(), 2);
@@ -175,7 +175,7 @@ fn test_session_restoration() {
             ..Default::default()
         };
         let integration =
-            DirigentIntegration::with_config(temp.path().to_path_buf(), config).unwrap();
+            CodirigentIntegration::with_config(temp.path().to_path_buf(), config).unwrap();
 
         integration
             .create_session("Restorable 1".to_string(), temp.path().to_path_buf())
@@ -194,7 +194,7 @@ fn test_session_restoration() {
             ..Default::default()
         };
         let integration =
-            DirigentIntegration::with_config(temp.path().to_path_buf(), config).unwrap();
+            CodirigentIntegration::with_config(temp.path().to_path_buf(), config).unwrap();
 
         let restored_count = integration.restore_sessions().unwrap();
         assert_eq!(restored_count, 2);
@@ -208,10 +208,10 @@ fn test_storage_directory_creation() {
     let temp = TempDir::new().unwrap();
 
     let storage = FileStorageService::new(temp.path()).unwrap();
-    let dirigent_dir = storage.dirigent_dir();
+    let codirigent_dir = storage.codirigent_dir();
 
-    assert!(dirigent_dir.exists());
-    assert!(dirigent_dir.join("tasks").exists());
+    assert!(codirigent_dir.exists());
+    assert!(codirigent_dir.join("tasks").exists());
 }
 
 // ============================================================================
@@ -246,7 +246,7 @@ fn test_custom_input_patterns() {
     };
 
     let integration =
-        DirigentIntegration::with_config(temp.path().to_path_buf(), config).unwrap();
+        CodirigentIntegration::with_config(temp.path().to_path_buf(), config).unwrap();
 
     let id = integration
         .create_session("Custom Pattern Test".to_string(), temp.path().to_path_buf())
@@ -303,13 +303,13 @@ async fn test_event_subscription() {
     let mut rx = integration.subscribe();
 
     // Publish an event
-    integration.publish(DirigentEvent::SessionCreated { id: SessionId(999) });
+    integration.publish(CodirigentEvent::SessionCreated { id: SessionId(999) });
 
     // Receive the event
     let event = rx.recv().await.unwrap();
     assert!(matches!(
         event,
-        DirigentEvent::SessionCreated { id } if id == SessionId(999)
+        CodirigentEvent::SessionCreated { id } if id == SessionId(999)
     ));
 }
 
@@ -328,7 +328,7 @@ fn test_session_creation_publishes_event() {
     // Should receive SessionCreated event
     let event = rx.try_recv().unwrap();
     assert!(
-        matches!(event, DirigentEvent::SessionCreated { id: created_id } if created_id == id)
+        matches!(event, CodirigentEvent::SessionCreated { id: created_id } if created_id == id)
     );
 }
 
@@ -352,7 +352,7 @@ fn test_session_closure_publishes_event() {
     // Should receive SessionClosed event
     let event = rx.try_recv().unwrap();
     assert!(
-        matches!(event, DirigentEvent::SessionClosed { id: closed_id } if closed_id == id)
+        matches!(event, CodirigentEvent::SessionClosed { id: closed_id } if closed_id == id)
     );
 }
 
@@ -377,7 +377,7 @@ fn test_status_change_publishes_event() {
     let event = rx.try_recv().unwrap();
     assert!(matches!(
         event,
-        DirigentEvent::SessionStatusChanged {
+        CodirigentEvent::SessionStatusChanged {
             id: changed_id,
             old: SessionStatus::Idle,
             new: SessionStatus::Working
@@ -456,8 +456,8 @@ fn test_detector_multiple_sessions() {
 /// Test workspace session management.
 #[test]
 fn test_workspace_session_management() {
-    use dirigent_ui::workspace::Workspace;
-    use dirigent_ui::layout::LayoutProfile;
+    use codirigent_ui::workspace::Workspace;
+    use codirigent_ui::layout::LayoutProfile;
 
     let mut workspace = Workspace::new();
     workspace.set_layout(LayoutProfile::Grid2x2);
@@ -485,8 +485,8 @@ fn test_workspace_session_management() {
 /// Test workspace layout switching.
 #[test]
 fn test_workspace_layout_switching() {
-    use dirigent_ui::workspace::Workspace;
-    use dirigent_ui::layout::LayoutProfile;
+    use codirigent_ui::workspace::Workspace;
+    use codirigent_ui::layout::LayoutProfile;
 
     let mut workspace = Workspace::new();
 
@@ -505,7 +505,7 @@ fn test_workspace_layout_switching() {
 /// Test workspace sidebar toggling.
 #[test]
 fn test_workspace_sidebar() {
-    use dirigent_ui::workspace::Workspace;
+    use codirigent_ui::workspace::Workspace;
 
     let mut workspace = Workspace::new();
 
@@ -572,7 +572,7 @@ fn test_complete_workflow() {
         ..Default::default()
     };
     let integration =
-        DirigentIntegration::with_config(temp.path().to_path_buf(), config).unwrap();
+        CodirigentIntegration::with_config(temp.path().to_path_buf(), config).unwrap();
 
     // Step 2: Create sessions
     let claude_id = integration

@@ -1,0 +1,15 @@
+[package]
+name = "codirigent-filetree"
+description = "File tree browser component for Dirigent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+
+[dependencies]
+codirigent-core.workspace = true
+anyhow.workspace = true
+thiserror.workspace = true
+serde.workspace = true
+tokio.workspace = true
+tracing.workspace = true

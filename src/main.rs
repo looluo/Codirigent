@@ -1,6 +1,6 @@
-//! Dirigent - AI Coding Agent Orchestration IDE
+//! Codirigent - AI Coding Agent Orchestration IDE
 //!
-//! Entry point for the Dirigent application.
+//! Entry point for the Codirigent application.
 //!
 //! # Features
 //!
@@ -30,19 +30,19 @@ fn main() -> Result<()> {
         )
         .init();
 
-    tracing::info!("Starting Dirigent...");
+    tracing::info!("Starting Codirigent...");
 
     // Launch GPUI application if feature is enabled
     #[cfg(feature = "gpui-full")]
     {
         tracing::info!("Launching GPUI application...");
-        dirigent_ui::DirigentApp::new().run();
+        codirigent_ui::CodirigentApp::new().run();
     }
 
     // Without GPUI, just print info and exit
     #[cfg(not(feature = "gpui-full"))]
     {
-        tracing::info!("Dirigent started without GPUI.");
+        tracing::info!("Codirigent started without GPUI.");
         tracing::info!("To launch the GUI, run: cargo run --features gpui-full");
     }
 

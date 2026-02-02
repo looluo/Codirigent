@@ -1,22 +1,22 @@
 [workspace]
 resolver = "2"
 members = [
-    "crates/dirigent-core",
-    "crates/dirigent-session",
-    "crates/dirigent-detector",
-    "crates/dirigent-ui",
-    "crates/dirigent-filetree",
-    "crates/dirigent-plugin",
-    "crates/dirigent-verification",
+    "crates/codirigent-core",
+    "crates/codirigent-session",
+    "crates/codirigent-detector",
+    "crates/codirigent-ui",
+    "crates/codirigent-filetree",
+    "crates/codirigent-plugin",
+    "crates/codirigent-verification",
 ]
 
 [workspace.package]
 version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
-authors = ["Dirigent Contributors"]
+authors = ["Codirigent Contributors"]
 license = "MIT OR Apache-2.0"
-repository = "https://github.com/user/dirigent"
+repository = "https://github.com/user/codirigent"
 
 [workspace.dependencies]
 # Core dependencies
@@ -60,17 +60,17 @@ gpui = "0.2"
 core-text = "=21.0.0"
 
 # Internal crates
-dirigent-core = { path = "crates/dirigent-core" }
-dirigent-session = { path = "crates/dirigent-session" }
-dirigent-detector = { path = "crates/dirigent-detector" }
-dirigent-ui = { path = "crates/dirigent-ui" }
-dirigent-filetree = { path = "crates/dirigent-filetree" }
-dirigent-plugin = { path = "crates/dirigent-plugin" }
-dirigent-verification = { path = "crates/dirigent-verification" }
+codirigent-core = { path = "crates/codirigent-core" }
+codirigent-session = { path = "crates/codirigent-session" }
+codirigent-detector = { path = "crates/codirigent-detector" }
+codirigent-ui = { path = "crates/codirigent-ui" }
+codirigent-filetree = { path = "crates/codirigent-filetree" }
+codirigent-plugin = { path = "crates/codirigent-plugin" }
+codirigent-verification = { path = "crates/codirigent-verification" }
 
 # Root package (the main binary)
 [package]
-name = "dirigent"
+name = "codirigent"
 description = "AI Coding Agent Orchestration IDE"
 version.workspace = true
 edition.workspace = true
@@ -79,15 +79,15 @@ authors.workspace = true
 license.workspace = true
 
 [[bin]]
-name = "dirigent"
+name = "codirigent"
 path = "src/main.rs"
 
 [dependencies]
-dirigent-core.workspace = true
-dirigent-session.workspace = true
-dirigent-detector.workspace = true
-dirigent-filetree.workspace = true
-dirigent-ui.workspace = true
+codirigent-core.workspace = true
+codirigent-session.workspace = true
+codirigent-detector.workspace = true
+codirigent-filetree.workspace = true
+codirigent-ui.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -95,10 +95,9 @@ tracing-subscriber.workspace = true
 
 [features]
 default = []
-gpui-full = ["dirigent-ui/gpui-full"]
-terminal = ["dirigent-ui/terminal"]
+gpui-full = ["codirigent-ui/gpui-full"]
+terminal = ["codirigent-ui/terminal"]
 
 [dev-dependencies]
 tempfile.workspace = true
-
 
