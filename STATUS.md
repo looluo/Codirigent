@@ -1,12 +1,12 @@
 # Codirigent Implementation Status
 
 ## Quick Stats
-- **Progress:** 13 of 16 features (81%)
+- **Progress:** 14 of 16 features (88%)
 - **Phase 1:** ✅ 100% Complete (6/6)
 - **Phase 2:** ✅ 100% Complete (6/6)
-- **Phase 3:** ⚠️ 25% Complete (1/4)
+- **Phase 3:** ⚠️ 50% Complete (2/4)
 - **Build Status:** ✅ Passing
-- **Last Updated:** 2026-02-02 (Iteration 3)
+- **Last Updated:** 2026-02-02 (Iteration 4)
 
 ## Completed Features
 
@@ -25,20 +25,55 @@
 - ✅ B1: Logo in title bar
 - ✅ B4: Visual session grouping with colors
 
-### Phase 3: Major Features ⚠️ (1/4)
-- ✅ B2: File tree integration **[THIS ITERATION]**
-- ⏳ B3: Task board expansion (4 hours)
+### Phase 3: Major Features ⚠️ (2/4)
+- ✅ B2: File tree integration
+- ✅ B3: Task board expansion **[THIS ITERATION]**
 - ⏳ B5: Git worktree full UI (6 hours)
 
 ## Remaining Work
 
-### Phase 3: 3 features (~10 hours)
-1. **B3**: Task board expansion (4 hours) - NEXT
-2. **B5**: Git worktree full UI (6 hours)
+### Phase 3: 1 feature (~6 hours)
+1. **B5**: Git worktree full UI (6 hours) - NEXT
 
-**Total Remaining:** ~10 hours
+**Total Remaining:** ~6 hours
 
 ## This Iteration's Work
+
+### Iteration 4: B3 - Task Board Expansion
+
+**What Was Done:**
+- Added per-tab expand/collapse state for fine-grained control
+- Implemented real task fetching from TaskManager
+- Created comprehensive task card rendering with:
+  * Priority-colored dots (Critical/High=red/coral, Medium=yellow, Low=blue)
+  * Tag display with themed colors
+  * Metadata: estimated time and relative timestamps
+  * Context-aware action buttons (Assign/Start/Review/Complete/Delete)
+- Added status-based filtering for each tab (Queue, In Progress, Review, Done)
+- Implemented empty states for tabs with no tasks
+- Limited display to 20 tasks per tab for performance
+- Made task_manager and handle_task_board_event accessible to render module
+
+**Features:**
+- Per-Tab Expansion: Each tab can be independently expanded/collapsed ✅
+- Real Task Data: Connected to TaskManager backend ✅
+- Task Cards: Full information display with priority, tags, metadata ✅
+- Action Buttons: Status-appropriate actions on each card ✅
+- Performance: Limited to 20 visible tasks per tab ✅
+
+**Technical Details:**
+- HashMap<TaskBoardTab, bool> for per-tab expansion state
+- Task status mapping: CoreStatus → UIStatus
+- Priority color mapping with HSLA values
+- Relative timestamp formatting (minutes/hours/days ago)
+- Action button event wiring to handle_task_board_event
+
+**Commit:** `d2cf0c5`
+
+**Impact:**
+- Phase 3: 50% COMPLETE (2/4) ✅
+- Total: 14/16 features (88%)
+- Remaining: 1 feature (B5) - ~6 hours
 
 ### Iteration 3: B2 - File Tree Integration + C3 - Drag-to-Terminal
 
@@ -59,6 +94,8 @@
 - Color conversion: RGBA → HSLA approximation for icons
 - Event handling: DirectoryToggled, FileSelected, PathDraggedToTerminal
 - Backend wiring: session_manager.send_input(path_bytes)
+
+**Commit:** `118b1ca`
 
 **Commit:** `118b1ca`
 
