@@ -56,6 +56,32 @@ use gpui::{
     StyledImage, Window,
 };
 
+/// Wrapper for cached GPUI Image that implements Debug and Clone.
+///
+/// This wrapper allows `ClipboardPreview` to cache the GPUI Image while
+/// still deriving Debug and Clone. On clone, the cache is NOT cloned
+/// (each instance gets its own empty cache) to avoid sharing mutable state.
+#[cfg(feature = "gpui-full")]
+#[derive(Default)]
+struct CachedImage(Option<Arc<Image>>);
+
+#[cfg(feature = "gpui-full")]
+impl std::fmt::Debug for CachedImage {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("CachedImage")
+            .field("is_cached", &self.0.is_some())
+            .finish()
+    }
+}
+
+#[cfg(feature = "gpui-full")]
+impl Clone for CachedImage {
+    fn clone(&self) -> Self {
+        // Don't clone the cache - each instance builds its own
+        Self(None)
+    }
+}
+
 /// Maximum thumbnail dimension (width or height) in pixels.
 pub const MAX_THUMBNAIL_SIZE: u32 = 128;
 
@@ -82,6 +108,9 @@ pub struct ClipboardPreview {
     current_preview: Option<ThumbnailPreview>,
     /// Whether the preview is visible.
     visible: bool,
+    /// Cached GPUI image to avoid recreating on every render cycle.
+    #[cfg(feature = "gpui-full")]
+    cached_image: CachedImage,
 }
 
 impl ClipboardPreview {
@@ -110,6 +139,8 @@ impl ClipboardPreview {
             theme,
             current_preview: None,
             visible: false,
+            #[cfg(feature = "gpui-full")]
+            cached_image: CachedImage::default(),
         }
     }
 
@@ -143,6 +174,11 @@ impl ClipboardPreview {
     pub fn show(&mut self, preview: ThumbnailPreview) {
         self.current_preview = Some(preview);
         self.visible = true;
+        // Clear cached image when preview changes
+        #[cfg(feature = "gpui-full")]
+        {
+            self.cached_image.0 = None;
+        }
     }
 
     /// Hide and clear the preview.
@@ -173,6 +209,11 @@ impl ClipboardPreview {
     pub fn hide(&mut self) {
         self.current_preview = None;
         self.visible = false;
+        // Clear cached image when hiding
+        #[cfg(feature = "gpui-full")]
+        {
+            self.cached_image.0 = None;
+        }
     }
 
     /// Check if the preview is currently visible.
@@ -462,15 +503,19 @@ impl Render for ClipboardPreview {
             return div().into_any_element();
         };
 
-        // Create GPUI Image from thumbnail bytes using the stored format
-        // TODO: Consider caching the Image in the struct to avoid cloning bytes
-        // on every render cycle.
-        let gpui_format = match preview.format {
-            CoreImageFormat::Jpeg => ImageFormat::Jpeg,
-            // PNG, TIFF, DIB, RGBA all become PNG after scaling
-            _ => ImageFormat::Png,
+        // Use cached GPUI Image if available, otherwise create and cache it
+        let image = if let Some(cached) = self.cached_image.0.as_ref() {
+            Arc::clone(cached)
+        } else {
+            let gpui_format = match preview.format {
+                CoreImageFormat::Jpeg => ImageFormat::Jpeg,
+                // PNG, TIFF, DIB, RGBA all become PNG after scaling
+                _ => ImageFormat::Png,
+            };
+            let new_image = Arc::new(Image::from_bytes(gpui_format, preview.thumbnail_bytes.clone()));
+            self.cached_image.0 = Some(Arc::clone(&new_image));
+            new_image
         };
-        let image = Arc::new(Image::from_bytes(gpui_format, preview.thumbnail_bytes.clone()));
 
         // Convert theme colors to GPUI Hsla
         let panel_bg: gpui::Hsla = self.theme.panel_background.into();
