@@ -403,13 +403,20 @@ impl WorkspaceView {
             bar = bar.child(controls);
         }
 
-        // Logo
+        // Logo and title
         bar = bar.child(
             div()
-                .text_sm()
-                .font_weight(FontWeight::BOLD)
-                .text_color(fg)
-                .child(hints.logo),
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(self.render_logo_small())
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(fg)
+                        .child(hints.logo),
+                ),
         );
 
         // Spacer
@@ -1542,5 +1549,88 @@ impl WorkspaceView {
         }
 
         grid
+    }
+
+    /// Render a small logo for the title bar.
+    fn render_logo_small(&self) -> impl IntoElement {
+        // Scale for title bar (smaller than splash screen)
+        let cell_size = 8.0;  // 25px → 8px for title bar
+        let gap = 2.0;        // 7px → 2px
+        let radius = 2.0;     // 5px → 2px
+
+        // Brand colors (from splash_screen.rs)
+        let teal = gpui::Hsla {
+            h: 0.52,
+            s: 0.70,
+            l: 0.60,
+            a: 1.0,
+        };
+        let teal_70 = gpui::Hsla {
+            h: 0.52,
+            s: 0.70,
+            l: 0.60,
+            a: 0.7,
+        };
+        let teal_40 = gpui::Hsla {
+            h: 0.52,
+            s: 0.70,
+            l: 0.60,
+            a: 0.4,
+        };
+        let coral = gpui::Hsla {
+            h: 0.03,
+            s: 0.80,
+            l: 0.62,
+            a: 1.0,
+        };
+
+        // Logo grid layout (3x3):
+        // [100%] [70%]  [40%]
+        // [70%]  [CORAL] [70%]
+        // [40%]  [70%]  [100%]
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(gap))
+            .child(
+                // Row 1
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(gap))
+                    .child(self.render_logo_cell_small(teal, cell_size, radius))
+                    .child(self.render_logo_cell_small(teal_70, cell_size, radius))
+                    .child(self.render_logo_cell_small(teal_40, cell_size, radius)),
+            )
+            .child(
+                // Row 2
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(gap))
+                    .child(self.render_logo_cell_small(teal_70, cell_size, radius))
+                    .child(self.render_logo_cell_small(coral, cell_size, radius))
+                    .child(self.render_logo_cell_small(teal_70, cell_size, radius)),
+            )
+            .child(
+                // Row 3
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(gap))
+                    .child(self.render_logo_cell_small(teal_40, cell_size, radius))
+                    .child(self.render_logo_cell_small(teal_70, cell_size, radius))
+                    .child(self.render_logo_cell_small(teal, cell_size, radius)),
+            )
+    }
+
+    /// Render a single logo cell (small version for title bar).
+    fn render_logo_cell_small(&self, color: gpui::Hsla, size: f32, radius: f32) -> impl IntoElement {
+        div()
+            .w(px(size))
+            .h(px(size))
+            .rounded(px(radius))
+            .bg(color)
     }
 }
