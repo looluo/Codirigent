@@ -1,0 +1,24 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<svg width="120" height="120" viewBox="0 0 120 120" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Monochrome logo (white on transparent) -->
+  <!-- For use on colored backgrounds or when color is not available -->
+
+  <!-- Row 1 -->
+  <rect x="15" y="15" width="25" height="25" rx="5" fill="#fff"/>
+  <rect x="47" y="15" width="25" height="25" rx="5" fill="#fff" opacity="0.7"/>
+  <rect x="79" y="15" width="25" height="25" rx="5" fill="#fff" opacity="0.4"/>
+
+  <!-- Row 2 -->
+  <rect x="15" y="47" width="25" height="25" rx="5" fill="#fff" opacity="0.7"/>
+  <rect x="47" y="47" width="25" height="25" rx="5" fill="#fff"/>
+  <rect x="79" y="47" width="25" height="25" rx="5" fill="#fff" opacity="0.7"/>
+
+  <!-- Row 3 -->
+  <rect x="15" y="79" width="25" height="25" rx="5" fill="#fff" opacity="0.4"/>
+  <rect x="47" y="79" width="25" height="25" rx="5" fill="#fff" opacity="0.7"/>
+  <rect x="79" y="79" width="25" height="25" rx="5" fill="#fff"/>
+
+  <!-- Conductor icon (play arrow + baton) - dark for contrast -->
+  <path d="M55 55 L62 60 L55 65" stroke="#0a0a0a" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/>
+  <line x1="62" y1="60" x2="72" y2="60" stroke="#0a0a0a" stroke-width="3" stroke-linecap="round"/>
+</svg>
