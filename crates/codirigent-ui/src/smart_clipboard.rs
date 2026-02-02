@@ -22,7 +22,7 @@
 //!
 //! ```
 //! use codirigent_ui::smart_clipboard::{SmartClipboardProvider, ThumbnailPreview};
-//! use codirigent_core::{ClipboardContent, ImageData};
+//! use codirigent_core::{ClipboardContent, ImageData, ImageFormat};
 //! use std::path::PathBuf;
 //!
 //! // Create a thumbnail preview
@@ -32,13 +32,14 @@
 //!     1920,
 //!     1080,
 //!     1024000,
+//!     ImageFormat::Png,
 //! );
 //! assert_eq!(preview.original_width, 1920);
 //! assert_eq!(preview.original_height, 1080);
 //! ```
 
 use anyhow::Result;
-use codirigent_core::{ClipboardContent, ImageData};
+use codirigent_core::{ClipboardContent, ImageData, ImageFormat};
 use std::path::PathBuf;
 
 /// Platform-specific clipboard provider with image support.
@@ -135,6 +136,7 @@ pub trait SmartClipboardProvider: Send + Sync {
 ///
 /// ```
 /// use codirigent_ui::smart_clipboard::ThumbnailPreview;
+/// use codirigent_core::ImageFormat;
 /// use std::path::PathBuf;
 ///
 /// let preview = ThumbnailPreview::new(
@@ -143,11 +145,13 @@ pub trait SmartClipboardProvider: Send + Sync {
 ///     1920,
 ///     1080,
 ///     2048000,
+///     ImageFormat::Png,
 /// );
 ///
 /// assert_eq!(preview.original_width, 1920);
 /// assert_eq!(preview.original_height, 1080);
 /// assert_eq!(preview.file_size, 2048000);
+/// assert_eq!(preview.format, ImageFormat::Png);
 /// ```
 #[derive(Debug, Clone)]
 pub struct ThumbnailPreview {
@@ -161,6 +165,8 @@ pub struct ThumbnailPreview {
     pub original_height: u32,
     /// File size in bytes.
     pub file_size: u64,
+    /// Image format of the thumbnail bytes.
+    pub format: ImageFormat,
 }
 
 impl ThumbnailPreview {
@@ -173,11 +179,13 @@ impl ThumbnailPreview {
     /// * `original_width` - Original image width in pixels
     /// * `original_height` - Original image height in pixels
     /// * `file_size` - Size of the original file in bytes
+    /// * `format` - Image format of the thumbnail bytes
     ///
     /// # Example
     ///
     /// ```
     /// use codirigent_ui::smart_clipboard::ThumbnailPreview;
+    /// use codirigent_core::ImageFormat;
     /// use std::path::PathBuf;
     ///
     /// let preview = ThumbnailPreview::new(
@@ -186,8 +194,10 @@ impl ThumbnailPreview {
     ///     800,
     ///     600,
     ///     512000,
+    ///     ImageFormat::Png,
     /// );
     /// assert_eq!(preview.image_path, PathBuf::from("/tmp/image.png"));
+    /// assert_eq!(preview.format, ImageFormat::Png);
     /// ```
     pub fn new(
         thumbnail_bytes: Vec<u8>,
@@ -195,6 +205,7 @@ impl ThumbnailPreview {
         original_width: u32,
         original_height: u32,
         file_size: u64,
+        format: ImageFormat,
     ) -> Self {
         Self {
             thumbnail_bytes,
@@ -202,6 +213,7 @@ impl ThumbnailPreview {
             original_width,
             original_height,
             file_size,
+            format,
         }
     }
 
@@ -215,6 +227,7 @@ impl ThumbnailPreview {
     ///
     /// ```
     /// use codirigent_ui::smart_clipboard::ThumbnailPreview;
+    /// use codirigent_core::ImageFormat;
     /// use std::path::PathBuf;
     ///
     /// let preview = ThumbnailPreview::new(
@@ -223,6 +236,7 @@ impl ThumbnailPreview {
     ///     1920,
     ///     1080,
     ///     0,
+    ///     ImageFormat::Png,
     /// );
     /// let ratio = preview.aspect_ratio();
     /// assert!((ratio - 1.777).abs() < 0.01); // ~16:9
@@ -245,6 +259,7 @@ impl ThumbnailPreview {
     ///
     /// ```
     /// use codirigent_ui::smart_clipboard::ThumbnailPreview;
+    /// use codirigent_core::ImageFormat;
     /// use std::path::PathBuf;
     ///
     /// let empty_preview = ThumbnailPreview::new(
@@ -253,6 +268,7 @@ impl ThumbnailPreview {
     ///     100,
     ///     100,
     ///     0,
+    ///     ImageFormat::Png,
     /// );
     /// assert!(empty_preview.is_empty());
     ///
@@ -262,6 +278,7 @@ impl ThumbnailPreview {
     ///     100,
     ///     100,
     ///     100,
+    ///     ImageFormat::Png,
     /// );
     /// assert!(!filled_preview.is_empty());
     /// ```
@@ -279,6 +296,7 @@ impl ThumbnailPreview {
     ///
     /// ```
     /// use codirigent_ui::smart_clipboard::ThumbnailPreview;
+    /// use codirigent_core::ImageFormat;
     /// use std::path::PathBuf;
     ///
     /// let preview = ThumbnailPreview::new(
@@ -287,6 +305,7 @@ impl ThumbnailPreview {
     ///     100,
     ///     100,
     ///     1536000, // 1.5 MB
+    ///     ImageFormat::Png,
     /// );
     /// assert_eq!(preview.human_readable_size(), "1.5 MB");
     /// ```
@@ -317,69 +336,71 @@ mod tests {
     fn test_thumbnail_preview_new() {
         let bytes = vec![0x89, 0x50, 0x4E, 0x47];
         let path = PathBuf::from("/tmp/screenshot.png");
-        let preview = ThumbnailPreview::new(bytes.clone(), path.clone(), 1920, 1080, 1024000);
+        let preview =
+            ThumbnailPreview::new(bytes.clone(), path.clone(), 1920, 1080, 1024000, ImageFormat::Png);
 
         assert_eq!(preview.thumbnail_bytes, bytes);
         assert_eq!(preview.image_path, path);
         assert_eq!(preview.original_width, 1920);
         assert_eq!(preview.original_height, 1080);
         assert_eq!(preview.file_size, 1024000);
+        assert_eq!(preview.format, ImageFormat::Png);
     }
 
     #[test]
     fn test_thumbnail_preview_aspect_ratio() {
         // 16:9 aspect ratio
-        let preview = ThumbnailPreview::new(vec![], PathBuf::new(), 1920, 1080, 0);
+        let preview = ThumbnailPreview::new(vec![], PathBuf::new(), 1920, 1080, 0, ImageFormat::Png);
         let ratio = preview.aspect_ratio();
         assert!((ratio - 1.777).abs() < 0.01);
 
         // 4:3 aspect ratio
-        let preview = ThumbnailPreview::new(vec![], PathBuf::new(), 800, 600, 0);
+        let preview = ThumbnailPreview::new(vec![], PathBuf::new(), 800, 600, 0, ImageFormat::Png);
         let ratio = preview.aspect_ratio();
         assert!((ratio - 1.333).abs() < 0.01);
 
         // 1:1 aspect ratio
-        let preview = ThumbnailPreview::new(vec![], PathBuf::new(), 100, 100, 0);
+        let preview = ThumbnailPreview::new(vec![], PathBuf::new(), 100, 100, 0, ImageFormat::Png);
         let ratio = preview.aspect_ratio();
         assert!((ratio - 1.0).abs() < 0.001);
     }
 
     #[test]
     fn test_thumbnail_preview_aspect_ratio_zero_height() {
-        let preview = ThumbnailPreview::new(vec![], PathBuf::new(), 100, 0, 0);
+        let preview = ThumbnailPreview::new(vec![], PathBuf::new(), 100, 0, 0, ImageFormat::Png);
         assert_eq!(preview.aspect_ratio(), 1.0);
     }
 
     #[test]
     fn test_thumbnail_preview_is_empty() {
-        let empty = ThumbnailPreview::new(vec![], PathBuf::new(), 100, 100, 0);
+        let empty = ThumbnailPreview::new(vec![], PathBuf::new(), 100, 100, 0, ImageFormat::Png);
         assert!(empty.is_empty());
 
-        let filled = ThumbnailPreview::new(vec![1, 2, 3], PathBuf::new(), 100, 100, 100);
+        let filled = ThumbnailPreview::new(vec![1, 2, 3], PathBuf::new(), 100, 100, 100, ImageFormat::Png);
         assert!(!filled.is_empty());
     }
 
     #[test]
     fn test_thumbnail_preview_human_readable_size_bytes() {
-        let preview = ThumbnailPreview::new(vec![], PathBuf::new(), 0, 0, 512);
+        let preview = ThumbnailPreview::new(vec![], PathBuf::new(), 0, 0, 512, ImageFormat::Png);
         assert_eq!(preview.human_readable_size(), "512 B");
     }
 
     #[test]
     fn test_thumbnail_preview_human_readable_size_kb() {
-        let preview = ThumbnailPreview::new(vec![], PathBuf::new(), 0, 0, 1536);
+        let preview = ThumbnailPreview::new(vec![], PathBuf::new(), 0, 0, 1536, ImageFormat::Png);
         assert_eq!(preview.human_readable_size(), "1.5 KB");
     }
 
     #[test]
     fn test_thumbnail_preview_human_readable_size_mb() {
-        let preview = ThumbnailPreview::new(vec![], PathBuf::new(), 0, 0, 1536000);
+        let preview = ThumbnailPreview::new(vec![], PathBuf::new(), 0, 0, 1536000, ImageFormat::Png);
         assert_eq!(preview.human_readable_size(), "1.5 MB");
     }
 
     #[test]
     fn test_thumbnail_preview_human_readable_size_gb() {
-        let preview = ThumbnailPreview::new(vec![], PathBuf::new(), 0, 0, 1610612736);
+        let preview = ThumbnailPreview::new(vec![], PathBuf::new(), 0, 0, 1610612736, ImageFormat::Png);
         assert_eq!(preview.human_readable_size(), "1.5 GB");
     }
 
@@ -391,6 +412,7 @@ mod tests {
             800,
             600,
             1000,
+            ImageFormat::Png,
         );
         let cloned = original.clone();
 
@@ -399,6 +421,7 @@ mod tests {
         assert_eq!(cloned.original_width, original.original_width);
         assert_eq!(cloned.original_height, original.original_height);
         assert_eq!(cloned.file_size, original.file_size);
+        assert_eq!(cloned.format, original.format);
     }
 
     #[test]
@@ -409,6 +432,7 @@ mod tests {
             800,
             600,
             1000,
+            ImageFormat::Png,
         );
         let debug_str = format!("{:?}", preview);
         assert!(debug_str.contains("ThumbnailPreview"));

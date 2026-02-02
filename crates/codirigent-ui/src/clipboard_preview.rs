@@ -22,12 +22,14 @@
 //! let mut preview = ClipboardPreview::new(CodirigentTheme::dark());
 //!
 //! // Show a preview
+//! use codirigent_core::ImageFormat;
 //! let thumbnail = ThumbnailPreview::new(
 //!     vec![0x89, 0x50, 0x4E, 0x47],
 //!     PathBuf::from("/tmp/image.png"),
 //!     1920,
 //!     1080,
 //!     2048000,
+//!     ImageFormat::Png,
 //! );
 //! preview.show(thumbnail);
 //! assert!(preview.is_visible());
@@ -123,6 +125,7 @@ impl ClipboardPreview {
     /// use codirigent_ui::clipboard_preview::ClipboardPreview;
     /// use codirigent_ui::smart_clipboard::ThumbnailPreview;
     /// use codirigent_ui::theme::CodirigentTheme;
+    /// use codirigent_core::ImageFormat;
     /// use std::path::PathBuf;
     ///
     /// let mut preview = ClipboardPreview::new(CodirigentTheme::dark());
@@ -132,6 +135,7 @@ impl ClipboardPreview {
     ///     800,
     ///     600,
     ///     1000,
+    ///     ImageFormat::Png,
     /// );
     /// preview.show(thumbnail);
     /// assert!(preview.is_visible());
@@ -149,6 +153,7 @@ impl ClipboardPreview {
     /// use codirigent_ui::clipboard_preview::ClipboardPreview;
     /// use codirigent_ui::smart_clipboard::ThumbnailPreview;
     /// use codirigent_ui::theme::CodirigentTheme;
+    /// use codirigent_core::ImageFormat;
     /// use std::path::PathBuf;
     ///
     /// let mut preview = ClipboardPreview::new(CodirigentTheme::dark());
@@ -158,6 +163,7 @@ impl ClipboardPreview {
     ///     800,
     ///     600,
     ///     1000,
+    ///     ImageFormat::Png,
     /// );
     /// preview.show(thumbnail);
     /// preview.hide();
@@ -200,6 +206,7 @@ impl ClipboardPreview {
     /// use codirigent_ui::clipboard_preview::ClipboardPreview;
     /// use codirigent_ui::smart_clipboard::ThumbnailPreview;
     /// use codirigent_ui::theme::CodirigentTheme;
+    /// use codirigent_core::ImageFormat;
     /// use std::path::PathBuf;
     ///
     /// let mut preview = ClipboardPreview::new(CodirigentTheme::dark());
@@ -211,6 +218,7 @@ impl ClipboardPreview {
     ///     800,
     ///     600,
     ///     1000,
+    ///     ImageFormat::Png,
     /// );
     /// preview.show(thumbnail);
     /// assert!(preview.preview().is_some());
@@ -397,12 +405,19 @@ impl ClipboardPreview {
     pub fn create_preview(image: &ImageData, path: PathBuf, file_size: u64) -> ThumbnailPreview {
         let thumbnail_bytes = Self::generate_thumbnail(image, MAX_THUMBNAIL_SIZE);
 
+        // Determine the output format: JPEG stays as JPEG, everything else becomes PNG
+        let output_format = match image.format {
+            CoreImageFormat::Jpeg => CoreImageFormat::Jpeg,
+            _ => CoreImageFormat::Png,
+        };
+
         ThumbnailPreview::new(
             thumbnail_bytes,
             path,
             image.width,
             image.height,
             file_size,
+            output_format,
         )
     }
 
@@ -447,16 +462,15 @@ impl Render for ClipboardPreview {
             return div().into_any_element();
         };
 
-        // Create GPUI Image from thumbnail bytes
-        // TODO: Store actual image format in ThumbnailPreview and use it here.
-        // Currently assumes PNG which works for most screenshots but may cause
-        // issues with JPEG or other formats.
+        // Create GPUI Image from thumbnail bytes using the stored format
         // TODO: Consider caching the Image in the struct to avoid cloning bytes
         // on every render cycle.
-        let image = Arc::new(Image::from_bytes(
-            ImageFormat::Png,
-            preview.thumbnail_bytes.clone(),
-        ));
+        let gpui_format = match preview.format {
+            CoreImageFormat::Jpeg => ImageFormat::Jpeg,
+            // PNG, TIFF, DIB, RGBA all become PNG after scaling
+            _ => ImageFormat::Png,
+        };
+        let image = Arc::new(Image::from_bytes(gpui_format, preview.thumbnail_bytes.clone()));
 
         // Convert theme colors to GPUI Hsla
         let panel_bg: gpui::Hsla = self.theme.panel_background.into();
@@ -539,6 +553,7 @@ mod tests {
             800,
             600,
             1000,
+            CoreImageFormat::Png,
         );
         preview.show(thumbnail.clone());
 
@@ -561,7 +576,7 @@ mod tests {
         assert!(!preview.is_visible());
 
         // Show makes it visible
-        let thumbnail = ThumbnailPreview::new(vec![], PathBuf::new(), 100, 100, 0);
+        let thumbnail = ThumbnailPreview::new(vec![], PathBuf::new(), 100, 100, 0, CoreImageFormat::Png);
         preview.show(thumbnail);
         assert!(preview.is_visible());
 
@@ -662,6 +677,7 @@ mod tests {
             800,
             600,
             1000,
+            CoreImageFormat::Png,
         );
         original.show(thumbnail);
 
