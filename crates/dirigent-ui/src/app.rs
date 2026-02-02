@@ -9,14 +9,17 @@ use dirigent_core::DefaultEventBus;
 use dirigent_detector::{DetectorConfig, InputDetector};
 use dirigent_session::DefaultSessionManager;
 use gpui::{
-    actions, div, px, size, App, AppContext, Application, Bounds, Context, FocusHandle, Focusable,
-    FontWeight, InteractiveElement, IntoElement, KeyBinding, ParentElement, Render, Styled,
-    TitlebarOptions, Window, WindowBounds, WindowOptions,
+    actions, div, px, size, App, AppContext, Application, Bounds, Context, Entity,
+    FocusHandle, Focusable, InteractiveElement, IntoElement, KeyBinding, ParentElement, Render,
+    Styled, TitlebarOptions, Window, WindowBounds, WindowOptions,
 };
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 use tracing::info;
 
+use crate::splash_screen::brand;
 use crate::theme::DirigentTheme;
+use crate::workspace::gpui::WorkspaceView;
 
 // Application actions
 actions!(
@@ -39,6 +42,244 @@ actions!(
     ]
 );
 
+/// Default splash screen duration in milliseconds.
+const DEFAULT_SPLASH_DURATION_MS: u64 = 2000;
+
+/// Application view state.
+#[allow(dead_code)]
+enum AppViewState {
+    /// Showing the splash screen.
+    Splash { loading_message: String },
+    /// Showing the main workspace.
+    Workspace { workspace: Entity<WorkspaceView> },
+}
+
+/// Root application view that manages splash -> workspace transition.
+pub struct AppView {
+    /// Current view state.
+    state: AppViewState,
+    /// Focus handle.
+    focus_handle: FocusHandle,
+    /// Session manager reference (kept for future splash->workspace transition).
+    #[allow(dead_code)]
+    session_manager: Arc<Mutex<DefaultSessionManager>>,
+    /// Input detector reference (kept for future splash->workspace transition).
+    #[allow(dead_code)]
+    detector: Arc<Mutex<InputDetector>>,
+    /// Event bus reference (kept for future splash->workspace transition).
+    #[allow(dead_code)]
+    event_bus: Arc<DefaultEventBus>,
+    /// Theme (kept for future splash->workspace transition).
+    #[allow(dead_code)]
+    theme: DirigentTheme,
+}
+
+impl AppView {
+    /// Create a new app view starting with splash screen.
+    ///
+    /// Note: The splash timer is temporarily disabled due to GPUI async closure
+    /// lifetime constraints with Rust 2021 edition. The workspace is shown
+    /// immediately. Timer functionality will be restored in a future update.
+    pub fn new_with_splash(
+        session_manager: Arc<Mutex<DefaultSessionManager>>,
+        detector: Arc<Mutex<InputDetector>>,
+        event_bus: Arc<DefaultEventBus>,
+        theme: DirigentTheme,
+        _splash_duration: Duration,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        // TODO: Re-enable splash timer when async closure lifetime issue is resolved
+        // The spawn pattern `cx.spawn(|view, cx| async move { view.update(cx, ...) })`
+        // causes "implementation of AsyncFnOnce is not general enough" error in
+        // Rust 2021 edition. For now, skip directly to workspace.
+        Self::new_workspace(session_manager, detector, event_bus, theme, cx)
+    }
+
+    /// Create a new app view directly with workspace (no splash).
+    pub fn new_workspace(
+        session_manager: Arc<Mutex<DefaultSessionManager>>,
+        detector: Arc<Mutex<InputDetector>>,
+        event_bus: Arc<DefaultEventBus>,
+        theme: DirigentTheme,
+        cx: &mut Context<Self>,
+    ) -> Self {
+        let workspace = cx.new(|cx| {
+            WorkspaceView::new(
+                session_manager.clone(),
+                detector.clone(),
+                event_bus.clone(),
+                theme.clone(),
+                cx,
+            )
+        });
+
+        Self {
+            state: AppViewState::Workspace { workspace },
+            focus_handle: cx.focus_handle(),
+            session_manager,
+            detector,
+            event_bus,
+            theme,
+        }
+    }
+
+    /// Transition from splash to workspace.
+    ///
+    /// Note: Currently unused as splash timer is disabled. Kept for future use
+    /// when the async closure lifetime issue is resolved.
+    #[allow(dead_code)]
+    fn transition_to_workspace(&mut self, cx: &mut Context<Self>) {
+        let workspace = cx.new(|cx| {
+            WorkspaceView::new(
+                self.session_manager.clone(),
+                self.detector.clone(),
+                self.event_bus.clone(),
+                self.theme.clone(),
+                cx,
+            )
+        });
+        self.state = AppViewState::Workspace { workspace };
+        cx.notify();
+    }
+
+    /// Render a single grid cell of the logo.
+    fn render_logo_cell(color: gpui::Hsla, size: f32, radius: f32) -> impl IntoElement {
+        div()
+            .w(px(size))
+            .h(px(size))
+            .rounded(px(radius))
+            .bg(color)
+    }
+
+    /// Render the 3x3 grid logo.
+    fn render_logo(scale: f32) -> impl IntoElement {
+        let cell_size = 25.0 * scale;
+        let gap = 7.0 * scale;
+        let radius = 5.0 * scale;
+
+        div()
+            .flex()
+            .flex_col()
+            .gap(px(gap))
+            .child(
+                // Row 1
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(gap))
+                    .child(Self::render_logo_cell(brand::TEAL, cell_size, radius))
+                    .child(Self::render_logo_cell(brand::TEAL_70, cell_size, radius))
+                    .child(Self::render_logo_cell(brand::TEAL_40, cell_size, radius)),
+            )
+            .child(
+                // Row 2
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(gap))
+                    .child(Self::render_logo_cell(brand::TEAL_70, cell_size, radius))
+                    .child(Self::render_logo_cell(brand::CORAL, cell_size, radius))
+                    .child(Self::render_logo_cell(brand::TEAL_70, cell_size, radius)),
+            )
+            .child(
+                // Row 3
+                div()
+                    .flex()
+                    .flex_row()
+                    .gap(px(gap))
+                    .child(Self::render_logo_cell(brand::TEAL_40, cell_size, radius))
+                    .child(Self::render_logo_cell(brand::TEAL_70, cell_size, radius))
+                    .child(Self::render_logo_cell(brand::TEAL, cell_size, radius)),
+            )
+    }
+
+    /// Render the splash screen.
+    ///
+    /// Note: Currently unused as splash timer is disabled. Kept for future use.
+    #[allow(dead_code)]
+    fn render_splash(&self, loading_message: &str, cx: &mut Context<Self>) -> impl IntoElement {
+        let version = env!("CARGO_PKG_VERSION");
+
+        div()
+            .size_full()
+            .track_focus(&self.focus_handle(cx))
+            .bg(brand::BACKGROUND)
+            .flex()
+            .flex_col()
+            .items_center()
+            .justify_center()
+            .relative()
+            .child(
+                // Glow effect container
+                div()
+                    .absolute()
+                    .w(px(400.0))
+                    .h(px(400.0))
+                    .rounded_full()
+                    .bg(gpui::hsla(176.0 / 360.0, 0.58, 0.55, 0.1)),
+            )
+            .child(
+                // Main content
+                div()
+                    .flex()
+                    .flex_col()
+                    .items_center()
+                    .gap_6()
+                    .child(Self::render_logo(1.0))
+                    .child(
+                        // Wordmark with letter spacing
+                        div()
+                            .text_size(px(28.0))
+                            .text_color(brand::TEXT)
+                            .flex()
+                            .flex_row()
+                            .gap(px(8.0))
+                            .child("D")
+                            .child("I")
+                            .child("R")
+                            .child("I")
+                            .child("G")
+                            .child("E")
+                            .child("N")
+                            .child("T"),
+                    )
+                    .child(
+                        div()
+                            .text_size(px(12.0))
+                            .text_color(brand::TEXT_MUTED)
+                            .child(loading_message.to_string()),
+                    ),
+            )
+            .child(
+                div()
+                    .absolute()
+                    .bottom_5()
+                    .text_size(px(11.0))
+                    .text_color(brand::TEXT_VERY_MUTED)
+                    .child(format!("v{}", version)),
+            )
+    }
+}
+
+impl Focusable for AppView {
+    fn focus_handle(&self, _cx: &App) -> FocusHandle {
+        self.focus_handle.clone()
+    }
+}
+
+impl Render for AppView {
+    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+        match &self.state {
+            AppViewState::Splash { loading_message } => {
+                self.render_splash(loading_message, cx).into_any_element()
+            }
+            AppViewState::Workspace { workspace } => {
+                div().size_full().child(workspace.clone()).into_any_element()
+            }
+        }
+    }
+}
+
 /// Main Dirigent application state.
 ///
 /// Holds references to the session manager, input detector, and event bus
@@ -52,12 +293,17 @@ pub struct DirigentApp {
     pub event_bus: Arc<DefaultEventBus>,
     /// Application theme.
     pub theme: DirigentTheme,
+    /// Whether to show splash screen on startup.
+    pub show_splash: bool,
+    /// Splash screen duration.
+    pub splash_duration: Duration,
 }
 
 impl DirigentApp {
     /// Create a new application instance with default configuration.
     ///
     /// Initializes the session manager, input detector, and event bus.
+    /// By default, the splash screen is enabled.
     pub fn new() -> Self {
         let event_bus = Arc::new(DefaultEventBus::new(64));
 
@@ -73,6 +319,8 @@ impl DirigentApp {
             detector,
             event_bus,
             theme: DirigentTheme::dark(),
+            show_splash: true,
+            splash_duration: Duration::from_millis(DEFAULT_SPLASH_DURATION_MS),
         }
     }
 
@@ -83,12 +331,29 @@ impl DirigentApp {
         app
     }
 
+    /// Enable or disable the splash screen.
+    pub fn with_splash(mut self, show: bool) -> Self {
+        self.show_splash = show;
+        self
+    }
+
+    /// Set the splash screen duration.
+    pub fn with_splash_duration(mut self, duration: Duration) -> Self {
+        self.splash_duration = duration;
+        self
+    }
+
     /// Run the GPUI application.
     ///
     /// This starts the application event loop and opens the main window.
+    /// If splash screen is enabled, it shows the splash first before
+    /// transitioning to the workspace.
     /// This method does not return until the application is closed.
     pub fn run(self) {
         info!("Starting Dirigent GPUI application...");
+
+        let show_splash = self.show_splash;
+        let splash_duration = self.splash_duration;
 
         Application::new().run(move |cx: &mut App| {
             // Register global actions
@@ -113,21 +378,59 @@ impl DirigentApp {
             ]);
 
             // Create the main window
+            let session_manager = self.session_manager.clone();
+            let detector = self.detector.clone();
+            let event_bus = self.event_bus.clone();
             let theme = self.theme.clone();
+
             let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
-            cx.open_window(
-                WindowOptions {
-                    window_bounds: Some(WindowBounds::Windowed(bounds)),
-                    titlebar: Some(TitlebarOptions {
-                        title: Some("Dirigent".into()),
-                        appears_transparent: true,
+
+            if show_splash {
+                // Show splash screen with transition to workspace
+                cx.open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(bounds)),
+                        titlebar: Some(TitlebarOptions {
+                            title: Some("Dirigent".into()),
+                            appears_transparent: true,
+                            ..Default::default()
+                        }),
                         ..Default::default()
-                    }),
-                    ..Default::default()
-                },
-                |_window, cx| cx.new(|cx| PlaceholderView::new(theme, cx)),
-            )
-            .expect("Failed to open main window");
+                    },
+                    move |_window, cx| {
+                        cx.new(|cx| {
+                            AppView::new_with_splash(
+                                session_manager,
+                                detector,
+                                event_bus,
+                                theme,
+                                splash_duration,
+                                cx,
+                            )
+                        })
+                    },
+                )
+                .expect("Failed to open main window");
+            } else {
+                // Skip splash, go directly to workspace
+                cx.open_window(
+                    WindowOptions {
+                        window_bounds: Some(WindowBounds::Windowed(bounds)),
+                        titlebar: Some(TitlebarOptions {
+                            title: Some("Dirigent".into()),
+                            appears_transparent: true,
+                            ..Default::default()
+                        }),
+                        ..Default::default()
+                    },
+                    move |_window, cx| {
+                        cx.new(|cx| {
+                            AppView::new_workspace(session_manager, detector, event_bus, theme, cx)
+                        })
+                    },
+                )
+                .expect("Failed to open main window");
+            }
         });
     }
 
@@ -138,51 +441,53 @@ impl DirigentApp {
             cx.quit();
         });
 
-        // Placeholder handlers for other actions
-        // These will be properly implemented when the workspace view is created
+        // Note: NewSession, CloseSession, NextLayout, ToggleSidebar, and
+        // FocusSession1-9 are now handled by WorkspaceView's registered actions.
+        // The global handlers here are fallbacks that log the action.
+
         cx.on_action(|_: &NewSession, _cx| {
-            info!("NewSession action triggered");
+            info!("NewSession action triggered (global fallback)");
         });
 
         cx.on_action(|_: &CloseSession, _cx| {
-            info!("CloseSession action triggered");
+            info!("CloseSession action triggered (global fallback)");
         });
 
         cx.on_action(|_: &NextLayout, _cx| {
-            info!("NextLayout action triggered");
+            info!("NextLayout action triggered (global fallback)");
         });
 
         cx.on_action(|_: &ToggleSidebar, _cx| {
-            info!("ToggleSidebar action triggered");
+            info!("ToggleSidebar action triggered (global fallback)");
         });
 
-        // Session focus actions
+        // Session focus actions (global fallbacks)
         cx.on_action(|_: &FocusSession1, _cx| {
-            info!("FocusSession1 action triggered");
+            info!("FocusSession1 action triggered (global fallback)");
         });
         cx.on_action(|_: &FocusSession2, _cx| {
-            info!("FocusSession2 action triggered");
+            info!("FocusSession2 action triggered (global fallback)");
         });
         cx.on_action(|_: &FocusSession3, _cx| {
-            info!("FocusSession3 action triggered");
+            info!("FocusSession3 action triggered (global fallback)");
         });
         cx.on_action(|_: &FocusSession4, _cx| {
-            info!("FocusSession4 action triggered");
+            info!("FocusSession4 action triggered (global fallback)");
         });
         cx.on_action(|_: &FocusSession5, _cx| {
-            info!("FocusSession5 action triggered");
+            info!("FocusSession5 action triggered (global fallback)");
         });
         cx.on_action(|_: &FocusSession6, _cx| {
-            info!("FocusSession6 action triggered");
+            info!("FocusSession6 action triggered (global fallback)");
         });
         cx.on_action(|_: &FocusSession7, _cx| {
-            info!("FocusSession7 action triggered");
+            info!("FocusSession7 action triggered (global fallback)");
         });
         cx.on_action(|_: &FocusSession8, _cx| {
-            info!("FocusSession8 action triggered");
+            info!("FocusSession8 action triggered (global fallback)");
         });
         cx.on_action(|_: &FocusSession9, _cx| {
-            info!("FocusSession9 action triggered");
+            info!("FocusSession9 action triggered (global fallback)");
         });
     }
 }
@@ -190,69 +495,6 @@ impl DirigentApp {
 impl Default for DirigentApp {
     fn default() -> Self {
         Self::new()
-    }
-}
-
-/// Placeholder view until the Workspace is implemented.
-///
-/// Displays a simple loading screen with the Dirigent branding.
-struct PlaceholderView {
-    theme: DirigentTheme,
-    focus_handle: FocusHandle,
-}
-
-impl PlaceholderView {
-    /// Create a new placeholder view with the given theme.
-    fn new(theme: DirigentTheme, cx: &mut Context<Self>) -> Self {
-        Self {
-            theme,
-            focus_handle: cx.focus_handle(),
-        }
-    }
-}
-
-impl Focusable for PlaceholderView {
-    fn focus_handle(&self, _cx: &App) -> FocusHandle {
-        self.focus_handle.clone()
-    }
-}
-
-impl Render for PlaceholderView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
-        // Convert theme colors to GPUI Hsla types
-        let bg: gpui::Hsla = self.theme.background.into();
-        let fg: gpui::Hsla = self.theme.foreground.into();
-        let idle_color: gpui::Hsla = self.theme.session_idle.into();
-        let border_color: gpui::Hsla = self.theme.border.into();
-
-        div()
-            .size_full()
-            .track_focus(&self.focus_handle(cx))
-            .bg(bg)
-            .text_color(fg)
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .child(
-                div()
-                    .text_xl()
-                    .font_weight(FontWeight::BOLD)
-                    .child("Dirigent"),
-            )
-            .child(
-                div()
-                    .mt_2()
-                    .text_color(idle_color)
-                    .child("AI Coding Agent Orchestration IDE"),
-            )
-            .child(
-                div()
-                    .mt_4()
-                    .text_sm()
-                    .text_color(border_color)
-                    .child("Press Cmd+N to create a new session"),
-            )
     }
 }
 
@@ -266,6 +508,7 @@ mod tests {
         assert!(Arc::strong_count(&app.event_bus) >= 1);
         assert!(Arc::strong_count(&app.session_manager) == 1);
         assert!(Arc::strong_count(&app.detector) == 1);
+        assert!(app.show_splash); // Splash enabled by default
     }
 
     #[test]
@@ -281,7 +524,24 @@ mod tests {
         assert!(app.theme.background != DirigentTheme::dark().background);
     }
 
-    // Note: PlaceholderView::new now requires a GPUI Context, so it cannot be
-    // unit tested without GPUI's test infrastructure. It will be covered by
-    // integration tests when the full workspace view is implemented.
+    #[test]
+    fn test_dirigent_app_with_splash() {
+        let app = DirigentApp::new().with_splash(false);
+        assert!(!app.show_splash);
+
+        let app = DirigentApp::new().with_splash(true);
+        assert!(app.show_splash);
+    }
+
+    #[test]
+    fn test_dirigent_app_with_splash_duration() {
+        let app = DirigentApp::new().with_splash_duration(Duration::from_secs(5));
+        assert_eq!(app.splash_duration, Duration::from_secs(5));
+    }
+
+    #[test]
+    fn test_default_splash_duration() {
+        let app = DirigentApp::new();
+        assert_eq!(app.splash_duration, Duration::from_millis(DEFAULT_SPLASH_DURATION_MS));
+    }
 }

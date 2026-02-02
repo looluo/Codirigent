@@ -93,6 +93,8 @@ pub mod workspace;
 // Modules that require GPUI feature only
 #[cfg(feature = "gpui-full")]
 pub mod app;
+#[cfg(feature = "gpui-full")]
+pub mod splash_screen;
 
 // Modules that require terminal feature only (alacritty_terminal)
 #[cfg(feature = "terminal")]
@@ -137,3 +139,11 @@ pub use clipboard_preview::ClipboardPreview;
 // Re-export GPUI app when feature is enabled
 #[cfg(feature = "gpui-full")]
 pub use app::DirigentApp;
+
+// Re-export WorkspaceView when GPUI is enabled
+#[cfg(feature = "gpui-full")]
+pub use workspace::WorkspaceView;
+
+// Re-export SplashScreen when GPUI is enabled
+#[cfg(feature = "gpui-full")]
+pub use splash_screen::{SplashScreen, brand as splash_brand, create_splash_screen};
