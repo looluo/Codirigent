@@ -14,6 +14,8 @@
 //! - [`VerificationGate`] - Main implementation of the [`Verifier`] trait
 //! - [`GitChangeDetector`] - Detects file changes using git
 //! - [`RuleBasedRiskAssessor`] - Assesses risk levels for file changes
+//! - [`DefaultFailureFormatter`] - Formats verification failures for session retry
+//! - [`PipelineOrchestrator`] - Coordinates the complete verification pipeline
 //!
 //! ## Example
 //!
@@ -54,6 +56,34 @@
 //! println!("Risk level: {:?}", summary.risk_assessment.overall_risk);
 //! ```
 //!
+//! ## Pipeline Example
+//!
+//! ```no_run
+//! use dirigent_verification::PipelineOrchestrator;
+//! use dirigent_core::pipeline::{VerificationPipeline, ReviewDecision};
+//! use dirigent_core::{SessionId, TaskId};
+//! use std::path::PathBuf;
+//!
+//! # async fn example() -> anyhow::Result<()> {
+//! // Create pipeline orchestrator
+//! let pipeline = PipelineOrchestrator::new(PathBuf::from(".dirigent/notes"));
+//!
+//! // Start pipeline for a completed task
+//! pipeline.start(
+//!     TaskId("task-001".to_string()),
+//!     SessionId(1),
+//!     PathBuf::from("/project"),
+//! ).await?;
+//!
+//! // Submit review
+//! pipeline.submit_review(
+//!     &TaskId("task-001".to_string()),
+//!     ReviewDecision::Approve,
+//! ).await?;
+//! # Ok(())
+//! # }
+//! ```
+//!
 //! [`Verifier`]: dirigent_core::Verifier
 
 #![warn(missing_docs)]
@@ -62,13 +92,19 @@
 pub mod change_detector;
 pub mod detector;
 pub mod executor;
+pub mod formatter;
+pub mod notes;
 pub mod parser;
+pub mod pipeline;
 pub mod risk_assessor;
 pub mod verifier;
 
 pub use change_detector::GitChangeDetector;
 pub use detector::DefaultDetector;
 pub use executor::{CommandExecutor, ExecutionResult};
+pub use formatter::DefaultFailureFormatter;
+pub use notes::{DefaultNotesGenerator, PatternLearningsExtractor};
 pub use parser::{CargoTestParser, GenericParser, JestParser, OutputParser, PytestParser};
+pub use pipeline::PipelineOrchestrator;
 pub use risk_assessor::RuleBasedRiskAssessor;
 pub use verifier::VerificationGate;
