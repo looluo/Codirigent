@@ -26,8 +26,9 @@ use alacritty_terminal::event::{Event as TermEvent, EventListener};
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::term::{Config, Term, TermMode};
 use alacritty_terminal::vte::ansi::Processor as VteProcessor;
-use codirigent_core::SessionId;
-use tracing::debug;
+use codirigent_core::{ClipboardContent, SessionId};
+use std::sync::Arc;
+use tracing::{debug, warn};
 
 /// Terminal size configuration.
 ///
@@ -96,15 +97,32 @@ impl Dimensions for TerminalSize {
 /// Event handler for terminal events.
 ///
 /// Receives events from alacritty_terminal such as title changes, bell rings,
-/// and clipboard operations.
+/// and clipboard operations. Optionally integrates with the system clipboard
+/// for copy/paste operations.
 pub struct TerminalEventHandler {
     session_id: SessionId,
+    /// Optional clipboard provider for system clipboard integration.
+    clipboard: Option<Arc<dyn crate::smart_clipboard::SmartClipboardProvider>>,
 }
 
 impl TerminalEventHandler {
     /// Create a new event handler for the given session.
     pub fn new(session_id: SessionId) -> Self {
-        Self { session_id }
+        Self {
+            session_id,
+            clipboard: None,
+        }
+    }
+
+    /// Create a new event handler with clipboard integration.
+    pub fn with_clipboard(
+        session_id: SessionId,
+        clipboard: Arc<dyn crate::smart_clipboard::SmartClipboardProvider>,
+    ) -> Self {
+        Self {
+            session_id,
+            clipboard: Some(clipboard),
+        }
     }
 
     /// Get the session ID this handler is associated with.
@@ -139,7 +157,16 @@ impl EventListener for TerminalEventHandler {
                     text_len = text.len(),
                     "Clipboard store request"
                 );
-                // TODO: Integrate with system clipboard
+                // Write text to system clipboard
+                if let Some(ref clipboard) = self.clipboard {
+                    if let Err(e) = clipboard.write_text(text) {
+                        warn!(
+                            session_id = %self.session_id,
+                            error = %e,
+                            "Failed to store text in clipboard"
+                        );
+                    }
+                }
             }
             TermEvent::ClipboardLoad(clipboard_type, _format) => {
                 debug!(
@@ -147,7 +174,37 @@ impl EventListener for TerminalEventHandler {
                     ?clipboard_type,
                     "Clipboard load request"
                 );
-                // TODO: Integrate with system clipboard
+                // Note: ClipboardLoad is typically used by terminal applications to request
+                // clipboard content. The response is usually sent via the terminal's input
+                // (PTY write). For now we just log it - full implementation would require
+                // a callback mechanism to send the clipboard content back to the terminal.
+                if let Some(ref clipboard) = self.clipboard {
+                    match clipboard.read_content() {
+                        Ok(ClipboardContent::Text(text)) => {
+                            debug!(
+                                session_id = %self.session_id,
+                                text_len = text.len(),
+                                "Clipboard text available for terminal"
+                            );
+                            // The actual response would need to be written to the PTY
+                            // via OSC 52 response sequence. This requires PTY write access.
+                        }
+                        Ok(other) => {
+                            debug!(
+                                session_id = %self.session_id,
+                                content_type = ?std::mem::discriminant(&other),
+                                "Clipboard has non-text content"
+                            );
+                        }
+                        Err(e) => {
+                            warn!(
+                                session_id = %self.session_id,
+                                error = %e,
+                                "Failed to load clipboard content"
+                            );
+                        }
+                    }
+                }
             }
             TermEvent::ColorRequest(index, _format) => {
                 debug!(
