@@ -2352,11 +2352,13 @@ impl WorkspaceView {
         let muted: gpui::Hsla = theme.muted.into();
         let primary: gpui::Hsla = theme.primary.into();
         let input_bg: gpui::Hsla = theme.terminal_background.into();
+        let focus_border: gpui::Hsla = primary;
 
         let branch_value = self.worktree_panel.branch_input().to_string();
         let base_branch_value = self.worktree_panel.base_branch_input().to_string();
         let use_existing = self.worktree_panel.use_existing_branch();
         let available_branches = self.worktree_panel.available_branches().to_vec();
+        let focused_input = self.worktree_panel.focused_input();
 
         Some(
             div()
@@ -2381,6 +2383,39 @@ impl WorkspaceView {
                         .rounded_lg()
                         .flex()
                         .flex_col()
+                        .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _window, cx| {
+                            // Get the key as a string
+                            let key = event.keystroke.key.to_string();
+
+                            // Don't handle if modifiers are pressed (except shift for capitals)
+                            if event.keystroke.modifiers.control || event.keystroke.modifiers.alt || event.keystroke.modifiers.platform {
+                                return;
+                            }
+
+                            match key.as_str() {
+                                "backspace" => {
+                                    this.worktree_panel.handle_backspace();
+                                    cx.notify();
+                                }
+                                "tab" => {
+                                    let current = this.worktree_panel.focused_input().unwrap_or(0);
+                                    let next = if current == 0 { 1 } else { 0 };
+                                    this.worktree_panel.set_focus(next);
+                                    cx.notify();
+                                }
+                                _ => {
+                                    // Handle printable characters
+                                    if key.len() == 1 {
+                                        if let Some(c) = key.chars().next() {
+                                            if c.is_alphanumeric() || c.is_ascii_punctuation() || c == ' ' || c == '-' || c == '_' || c == '/' {
+                                                this.worktree_panel.handle_char_input(c);
+                                                cx.notify();
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }))
                         // Header
                         .child(
                             div()
@@ -2486,21 +2521,35 @@ impl WorkspaceView {
                                             } else {
                                                 branch_value.clone()
                                             };
+                                            let is_focused = focused_input == Some(0);
+                                            let display_with_cursor = if is_focused && !display_value.is_empty() {
+                                                format!("{}|", display_value)
+                                            } else if is_focused {
+                                                "|".to_string()
+                                            } else {
+                                                display_value.clone()
+                                            };
                                             Some(
                                                 div()
+                                                    .id("branch-input")
                                                     .h(px(36.0))
                                                     .px_3()
                                                     .bg(input_bg)
                                                     .border_1()
-                                                    .border_color(border_color)
+                                                    .border_color(if is_focused { focus_border } else { border_color })
                                                     .rounded_md()
                                                     .flex()
                                                     .items_center()
+                                                    .cursor_pointer()
+                                                    .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                                        this.worktree_panel.set_focus(0);
+                                                        cx.notify();
+                                                    }))
                                                     .child(
                                                         div()
                                                             .text_sm()
-                                                            .text_color(if branch_value.is_empty() { muted } else { fg })
-                                                            .child(display_value),
+                                                            .text_color(if branch_value.is_empty() && !is_focused { muted } else { fg })
+                                                            .child(display_with_cursor),
                                                     ),
                                             )
                                         } else {
@@ -2558,23 +2607,35 @@ impl WorkspaceView {
                                                     .text_color(muted)
                                                     .child("Base Branch:"),
                                             )
-                                            .child(
+                                            .child({
+                                                let is_focused = focused_input == Some(1);
+                                                let display_text = if is_focused {
+                                                    format!("{}|", base_branch_value)
+                                                } else {
+                                                    base_branch_value.clone()
+                                                };
                                                 div()
+                                                    .id("base-branch-input")
                                                     .h(px(36.0))
                                                     .px_3()
                                                     .bg(input_bg)
                                                     .border_1()
-                                                    .border_color(border_color)
+                                                    .border_color(if is_focused { focus_border } else { border_color })
                                                     .rounded_md()
                                                     .flex()
                                                     .items_center()
+                                                    .cursor_pointer()
+                                                    .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                                        this.worktree_panel.set_focus(1);
+                                                        cx.notify();
+                                                    }))
                                                     .child(
                                                         div()
                                                             .text_sm()
                                                             .text_color(fg)
-                                                            .child(base_branch_value.clone()),
-                                                    ),
-                                            ),
+                                                            .child(display_text),
+                                                    )
+                                            }),
                                     )
                                 })
                                 // Info message

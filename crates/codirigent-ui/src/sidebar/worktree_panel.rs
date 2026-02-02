@@ -58,6 +58,8 @@ pub struct WorktreePanel {
     available_branches: Vec<String>,
     /// Panel height.
     height: f32,
+    /// Which input field has focus (0 = branch, 1 = base_branch, None = no focus).
+    focused_input: Option<usize>,
 }
 
 impl Default for WorktreePanel {
@@ -84,6 +86,7 @@ impl WorktreePanel {
             use_existing_branch: false,
             available_branches: Vec::new(),
             height: Self::DEFAULT_HEIGHT,
+            focused_input: None,
         }
     }
 
@@ -108,6 +111,7 @@ impl WorktreePanel {
         self.branch_input.clear();
         self.base_branch_input = String::from("main");
         self.use_existing_branch = false;
+        self.focused_input = Some(0); // Focus branch input by default
     }
 
     /// Close the create worktree modal.
@@ -174,6 +178,57 @@ impl WorktreePanel {
         })
     }
 
+    /// Set focus to a specific input field.
+    pub fn set_focus(&mut self, field: usize) {
+        self.focused_input = Some(field);
+    }
+
+    /// Get the currently focused input field.
+    pub fn focused_input(&self) -> Option<usize> {
+        self.focused_input
+    }
+
+    /// Handle a character input.
+    pub fn handle_char_input(&mut self, c: char) {
+        match self.focused_input {
+            Some(0) => {
+                // Branch name input
+                self.branch_input.push(c);
+            }
+            Some(1) => {
+                // Base branch input
+                self.base_branch_input.push(c);
+            }
+            _ => {}
+        }
+    }
+
+    /// Handle backspace.
+    pub fn handle_backspace(&mut self) {
+        match self.focused_input {
+            Some(0) => {
+                self.branch_input.pop();
+            }
+            Some(1) => {
+                self.base_branch_input.pop();
+            }
+            _ => {}
+        }
+    }
+
+    /// Clear the focused input field.
+    pub fn clear_focused_input(&mut self) {
+        match self.focused_input {
+            Some(0) => {
+                self.branch_input.clear();
+            }
+            Some(1) => {
+                self.base_branch_input.clear();
+            }
+            _ => {}
+        }
+    }
+
     /// Generate rendering hints for GPUI.
     pub fn render_hints(&self) -> WorktreeRenderHints {
         WorktreeRenderHints {
@@ -186,6 +241,7 @@ impl WorktreePanel {
             height: self.height,
             header_height: Self::HEADER_HEIGHT,
             item_height: Self::ITEM_HEIGHT,
+            focused_input: self.focused_input,
         }
     }
 }
@@ -211,6 +267,8 @@ pub struct WorktreeRenderHints {
     pub header_height: f32,
     /// Item height.
     pub item_height: f32,
+    /// Which input field has focus.
+    pub focused_input: Option<usize>,
 }
 
 /// Worktree item for rendering.
