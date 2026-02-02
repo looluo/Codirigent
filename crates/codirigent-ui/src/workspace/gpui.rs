@@ -72,7 +72,7 @@ pub struct WorkspaceView {
     /// Input detector for monitoring session status.
     detector: Arc<Mutex<InputDetector>>,
     /// Task manager for task lifecycle and assignment.
-    task_manager: Arc<Mutex<TaskManager>>,
+    pub(super) task_manager: Arc<Mutex<TaskManager>>,
     /// Terminal views for each session.
     terminals: HashMap<SessionId, TerminalView>,
     /// Next session ID counter (kept for UI session tracking).
@@ -95,6 +95,8 @@ pub struct WorkspaceView {
     pub(super) session_menu_open: Option<SessionId>,
     /// File tree panel for sidebar.
     pub(super) file_tree: FileTreePanel,
+    /// Per-tab task expansion state.
+    pub(super) task_tab_expanded: HashMap<crate::task_board::TaskBoardTab, bool>,
 }
 
 impl WorkspaceView {
@@ -189,6 +191,7 @@ impl WorkspaceView {
             broadcast_enabled: false,
             session_menu_open: None,
             file_tree,
+            task_tab_expanded: HashMap::new(),
         }
     }
 
@@ -540,7 +543,7 @@ impl WorkspaceView {
     }
 
     /// Handle task board events.
-    fn handle_task_board_event(&mut self, event: crate::task_board::TaskBoardEvent, cx: &mut Context<Self>) {
+    pub(super) fn handle_task_board_event(&mut self, event: crate::task_board::TaskBoardEvent, cx: &mut Context<Self>) {
         use crate::task_board::TaskAction;
 
         match event {

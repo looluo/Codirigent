@@ -19,6 +19,56 @@ use gpui::{
 use tracing::info;
 
 impl WorkspaceView {
+    /// Convert core Task to UI TaskItem with status mapping.
+    fn core_task_to_ui_item(&self, task: &codirigent_core::Task) -> crate::task_board::TaskItem {
+        use crate::task_board::{TaskItem, TaskPriority as UIPriority, TaskStatus as UIStatus};
+        use codirigent_core::{TaskPriority as CorePriority, TaskStatus as CoreStatus};
+
+        // Map priority
+        let ui_priority = match task.priority {
+            CorePriority::Critical | CorePriority::High => UIPriority::High,
+            CorePriority::Medium => UIPriority::Medium,
+            CorePriority::Low => UIPriority::Low,
+        };
+
+        // Map status
+        let ui_status = match task.status {
+            CoreStatus::Queued => UIStatus::Queued,
+            CoreStatus::Assigned | CoreStatus::Working => UIStatus::InProgress,
+            CoreStatus::Verifying | CoreStatus::Review => UIStatus::PendingReview,
+            CoreStatus::Done => UIStatus::Completed,
+            CoreStatus::Blocked => UIStatus::Queued, // Treat blocked as queued in UI
+        };
+
+        // Format estimated time
+        let estimated_time = task.estimated_minutes.map(|mins| {
+            if mins < 60 {
+                format!("{}m", mins)
+            } else {
+                format!("{}h {}m", mins / 60, mins % 60)
+            }
+        });
+
+        // Format created_at as relative time
+        let created_at = {
+            let now = chrono::Utc::now();
+            let duration = now.signed_duration_since(task.created_at);
+            if duration.num_minutes() < 60 {
+                Some(format!("{}m ago", duration.num_minutes()))
+            } else if duration.num_hours() < 24 {
+                Some(format!("{}h ago", duration.num_hours()))
+            } else {
+                Some(format!("{}d ago", duration.num_days()))
+            }
+        };
+
+        TaskItem::new(task.id.0.clone(), task.title.clone())
+            .with_priority(ui_priority)
+            .with_status(ui_status)
+            .with_estimated_time(estimated_time.unwrap_or_else(|| "?".to_string()))
+            .with_created_at(created_at.unwrap_or_else(|| "now".to_string()))
+    }
+
     /// Render the sidebar.
     pub(super) fn render_sidebar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.workspace().theme();
@@ -1189,23 +1239,301 @@ impl WorkspaceView {
         // Content area (only if expanded)
         if hints.is_expanded {
             let content_height = hints.height - hints.header_height;
-            panel = panel.child(
+
+            // Fetch real tasks from TaskManager
+            let all_tasks: Vec<codirigent_core::Task> = if let Ok(manager) = self.task_manager.lock() {
+                manager.list_tasks().into_iter().map(|t| t.clone()).collect::<Vec<codirigent_core::Task>>()
+            } else {
+                Vec::new()
+            };
+
+            // Get the currently selected tab
+            let selected_tab = hints.tabs.iter()
+                .find(|t| t.is_active)
+                .map(|t| t.tab)
+                .unwrap_or(crate::task_board::TaskBoardTab::Queue);
+
+            // Filter tasks by selected tab status
+            let filtered_tasks: Vec<_> = all_tasks.iter()
+                .filter(|task| {
+                    use crate::task_board::TaskBoardTab;
+                    use codirigent_core::TaskStatus;
+                    match selected_tab {
+                        TaskBoardTab::Queue => matches!(task.status, TaskStatus::Queued | TaskStatus::Blocked),
+                        TaskBoardTab::InProgress => matches!(task.status, TaskStatus::Assigned | TaskStatus::Working),
+                        TaskBoardTab::Review => matches!(task.status, TaskStatus::Verifying | TaskStatus::Review),
+                        TaskBoardTab::Done => matches!(task.status, TaskStatus::Done),
+                    }
+                })
+                .collect();
+
+            // Check if this tab's content is expanded (per-tab state)
+            let tab_expanded = self.task_tab_expanded.get(&selected_tab).copied().unwrap_or(false);
+
+            let mut content = div()
+                .w_full()
+                .flex()
+                .flex_col();
+
+            // Tab-specific expand/collapse toggle
+            content = content.child(
                 div()
-                    .h(px(content_height))
-                    .w_full()
+                    .id(SharedString::from(format!("task-tab-toggle-{:?}", selected_tab)))
+                    .h(px(28.0))
+                    .px_3()
                     .flex()
                     .items_center()
-                    .justify_center()
+                    .gap_2()
+                    .cursor_pointer()
+                    .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                        let current = this.task_tab_expanded.get(&selected_tab).copied().unwrap_or(false);
+                        this.task_tab_expanded.insert(selected_tab, !current);
+                        cx.notify();
+                    }))
                     .child(
                         div()
                             .text_xs()
                             .text_color(muted)
-                            .child("Task list placeholder"),
+                            .child(if tab_expanded { "▼" } else { "▶" }),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(fg)
+                            .child(format!("{} tasks", filtered_tasks.len())),
                     ),
             );
+
+            // Show tasks if tab is expanded
+            if tab_expanded {
+                if filtered_tasks.is_empty() {
+                    // Empty state
+                    content = content.child(
+                        div()
+                            .h(px(content_height - 28.0))
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .justify_center()
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(muted)
+                                    .child("No tasks in this state"),
+                            ),
+                    );
+                } else {
+                    // Task list
+                    let mut task_list = div()
+                        .w_full()
+                        .flex()
+                        .flex_col()
+                        .gap_2()
+                        .px_3()
+                        .py_2()
+                        .overflow_hidden()
+                        .max_h(px(content_height - 28.0));
+
+                    // Limit to first 20 tasks for performance
+                    for task in filtered_tasks.iter().take(20) {
+                        task_list = task_list.child(self.render_task_card(task, &theme, fg, muted, primary, border_color, cx));
+                    }
+
+                    if filtered_tasks.len() > 20 {
+                        task_list = task_list.child(
+                            div()
+                                .py_2()
+                                .text_xs()
+                                .text_color(muted)
+                                .child(format!("... and {} more", filtered_tasks.len() - 20)),
+                        );
+                    }
+
+                    content = content.child(task_list);
+                }
+            }
+
+            panel = panel.child(content);
         }
 
         panel
+    }
+
+    /// Render a single task card.
+    fn render_task_card(
+        &self,
+        task: &codirigent_core::Task,
+        theme: &CodirigentTheme,
+        fg: gpui::Hsla,
+        muted: gpui::Hsla,
+        primary: gpui::Hsla,
+        border_color: gpui::Hsla,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        use codirigent_core::{TaskPriority, TaskStatus};
+
+        // Priority color
+        let priority_color = match task.priority {
+            TaskPriority::Critical => gpui::Hsla { h: 0.0, s: 0.80, l: 0.55, a: 1.0 }, // Red
+            TaskPriority::High => gpui::Hsla { h: 0.03, s: 0.80, l: 0.62, a: 1.0 }, // Coral
+            TaskPriority::Medium => gpui::Hsla { h: 0.15, s: 0.80, l: 0.65, a: 1.0 }, // Yellow
+            TaskPriority::Low => gpui::Hsla { h: 0.60, s: 0.70, l: 0.60, a: 1.0 }, // Blue
+        };
+
+        let task_id = task.id.0.clone();
+        let task_title = task.title.clone();
+        let estimated_mins = task.estimated_minutes.unwrap_or(0);
+
+        // Format created_at
+        let created_str = {
+            let now = chrono::Utc::now();
+            let duration = now.signed_duration_since(task.created_at);
+            if duration.num_minutes() < 60 {
+                format!("{}m ago", duration.num_minutes())
+            } else if duration.num_hours() < 24 {
+                format!("{}h ago", duration.num_hours())
+            } else {
+                format!("{}d ago", duration.num_days())
+            }
+        };
+
+        let bg: gpui::Hsla = theme.panel_background.into();
+
+        let mut card = div()
+            .id(SharedString::from(format!("task-card-{}", task_id)))
+            .w_full()
+            .p_3()
+            .bg(bg)
+            .border_1()
+            .border_color(border_color)
+            .rounded_md()
+            .flex()
+            .flex_col()
+            .gap_2();
+
+        // Header: Priority dot + Title
+        card = card.child(
+            div()
+                .flex()
+                .items_center()
+                .gap_2()
+                .child(
+                    // Priority dot
+                    div()
+                        .w(px(8.0))
+                        .h(px(8.0))
+                        .rounded_full()
+                        .bg(priority_color),
+                )
+                .child(
+                    // Title
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(fg)
+                        .flex_1()
+                        .overflow_hidden()
+                        .text_ellipsis()
+                        .child(task_title.clone()),
+                ),
+        );
+
+        // Tags
+        if !task.tags.is_empty() {
+            let mut tags_row = div().flex().gap_1().flex_wrap();
+            for tag in &task.tags {
+                tags_row = tags_row.child(
+                    div()
+                        .px_2()
+                        .py_1()
+                        .rounded_md()
+                        .bg(primary.opacity(0.15))
+                        .text_xs()
+                        .text_color(primary)
+                        .child(tag.clone()),
+                );
+            }
+            card = card.child(tags_row);
+        }
+
+        // Metadata row
+        card = card.child(
+            div()
+                .flex()
+                .gap_3()
+                .text_xs()
+                .text_color(muted)
+                .child(format!("Est: {}min", estimated_mins))
+                .child(format!("Created: {}", created_str)),
+        );
+
+        // Actions row
+        let task_id_for_assign = task_id.clone();
+        let task_id_for_start = task_id.clone();
+        let task_id_for_delete = task_id.clone();
+
+        let mut actions = div().flex().gap_2();
+
+        // Show different actions based on status
+        match task.status {
+            TaskStatus::Queued | TaskStatus::Blocked => {
+                actions = actions
+                    .child(self.render_task_action_button("Assign", task_id_for_assign, crate::task_board::TaskAction::Assign, primary, fg, cx))
+                    .child(self.render_task_action_button("Start", task_id_for_start, crate::task_board::TaskAction::Start, primary, fg, cx))
+                    .child(self.render_task_action_button("Delete", task_id_for_delete, crate::task_board::TaskAction::Delete, muted, fg, cx));
+            }
+            TaskStatus::Assigned | TaskStatus::Working => {
+                actions = actions
+                    .child(self.render_task_action_button("Review", task_id_for_start, crate::task_board::TaskAction::Review, primary, fg, cx));
+            }
+            TaskStatus::Verifying | TaskStatus::Review => {
+                actions = actions
+                    .child(self.render_task_action_button("Complete", task_id_for_start, crate::task_board::TaskAction::Complete, primary, fg, cx));
+            }
+            TaskStatus::Done => {
+                actions = actions
+                    .child(self.render_task_action_button("Delete", task_id_for_delete, crate::task_board::TaskAction::Delete, muted, fg, cx));
+            }
+        }
+
+        card = card.child(actions);
+
+        card
+    }
+
+    /// Render a task action button.
+    fn render_task_action_button(
+        &self,
+        label: &str,
+        task_id: String,
+        action: crate::task_board::TaskAction,
+        color: gpui::Hsla,
+        _fg: gpui::Hsla,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let label_owned = label.to_string();
+
+        div()
+            .id(SharedString::from(format!("task-action-{}-{}", task_id, label)))
+            .px_2()
+            .py_1()
+            .rounded_md()
+            .bg(color.opacity(0.1))
+            .text_xs()
+            .text_color(color)
+            .cursor_pointer()
+            .hover(move |style| style.bg(color.opacity(0.2)))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _window, _cx| {
+                info!("Task action: {} on {}", label_owned, task_id);
+                this.handle_task_board_event(
+                    crate::task_board::TaskBoardEvent::TaskAction {
+                        task_id: task_id.clone(),
+                        action,
+                    },
+                    _cx,
+                );
+            }))
+            .child(label.to_string())
     }
 
     /// Render the grid with terminal headers using the new UI components.
