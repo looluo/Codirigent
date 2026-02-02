@@ -85,6 +85,7 @@ pub mod layout_profile;
 pub mod platform;
 pub mod sidebar;
 pub mod smart_clipboard;
+pub mod status_bar;
 pub mod task_board;
 pub mod terminal_header;
 pub mod theme;
