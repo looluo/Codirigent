@@ -22,6 +22,9 @@
 //! - [`assignment`] - Task assignment management and routing
 //! - [`session_notes`] - Session notes generation and learnings extraction
 //! - [`ralph`] - Ralph Loop for autonomous task execution
+//! - [`task_manager`] - Unified task management coordinator
+//! - [`session_advanced`] - Advanced session features (templates, handoff, groups, overnight mode)
+//! - [`pipeline`] - Verification pipeline types and traits
 //! - [`error`] - Error types
 //!
 //! ## Quick Start
@@ -75,6 +78,7 @@
 
 pub mod assignment;
 pub mod auto_save;
+pub mod broadcast;
 pub mod change_summary;
 pub mod config;
 pub mod config_service;
@@ -87,9 +91,12 @@ pub mod persistence_service;
 pub mod plugin;
 pub mod ralph;
 pub mod scheduler;
+pub mod session_advanced;
 pub mod session_notes;
 pub mod skill;
 pub mod storage;
+pub mod pipeline;
+pub mod task_manager;
 pub mod traits;
 pub mod types;
 pub mod verification;
@@ -137,3 +144,25 @@ pub use session_notes::{
 
 // Re-export Ralph Loop types
 pub use ralph::{IterationResult, RalphLoopConfig, RalphLoopState, RalphLoopStatus};
+
+// Re-export task manager types
+pub use task_manager::{TaskCompletionResult, TaskManagementService, TaskManager, TaskManagerConfig};
+
+// Re-export broadcast types
+pub use broadcast::{
+    BroadcastHistoryEntry, BroadcastId, BroadcastMessage, BroadcastPriority, BroadcastVariables,
+    DeliveryStatus,
+};
+pub use traits::BroadcastService;
+
+// Re-export advanced session types
+pub use session_advanced::{
+    ContextHandoff, HandoffStatus, OvernightConfig, OvernightSummary, SessionGroup,
+    SessionTemplate,
+};
+
+// Re-export pipeline types
+pub use pipeline::{
+    FailureMessageFormatter, PipelineEvent, PipelineStage, PipelineState, ReviewDecision,
+    VerificationPipeline,
+};

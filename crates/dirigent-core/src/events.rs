@@ -5,6 +5,7 @@
 //! should happen through events, allowing modules to react to changes
 //! without tight coupling.
 
+use crate::session_advanced::{OvernightConfig, OvernightSummary};
 use crate::skill::TokenBudget;
 use crate::types::*;
 use std::path::PathBuf;
@@ -235,6 +236,218 @@ pub enum DirigentEvent {
     SkillsRefreshed {
         /// Total number of skills found.
         count: usize,
+    },
+
+    // === Ralph Loop Events ===
+    /// A Ralph Loop was started for a session.
+    RalphLoopStarted {
+        /// The session ID.
+        session_id: SessionId,
+        /// The configuration for the loop.
+        config: crate::ralph::RalphLoopConfig,
+    },
+
+    /// A Ralph Loop was paused.
+    RalphLoopPaused {
+        /// The session ID.
+        session_id: SessionId,
+    },
+
+    /// A Ralph Loop was resumed.
+    RalphLoopResumed {
+        /// The session ID.
+        session_id: SessionId,
+    },
+
+    /// A Ralph Loop was cancelled.
+    RalphLoopCancelled {
+        /// The session ID.
+        session_id: SessionId,
+    },
+
+    /// A Ralph Loop completed an iteration.
+    RalphLoopIteration {
+        /// The session ID.
+        session_id: SessionId,
+        /// The iteration number.
+        iteration: u32,
+        /// Whether verification passed.
+        passed: bool,
+        /// Number of test failures (if applicable).
+        test_failures: Option<u32>,
+    },
+
+    /// A Ralph Loop completed successfully.
+    RalphLoopCompleted {
+        /// The session ID.
+        session_id: SessionId,
+        /// Total number of iterations executed.
+        total_iterations: u32,
+    },
+
+    /// A Ralph Loop failed.
+    RalphLoopFailed {
+        /// The session ID.
+        session_id: SessionId,
+        /// Reason for failure.
+        reason: String,
+        /// Number of iterations executed.
+        iterations: u32,
+    },
+
+    /// A Ralph Loop detected a stuck state.
+    RalphLoopStuck {
+        /// The session ID.
+        session_id: SessionId,
+        /// Number of iterations without progress.
+        iterations_without_progress: u32,
+    },
+
+    /// Context compaction was triggered for a Ralph Loop.
+    RalphLoopCompacted {
+        /// The session ID.
+        session_id: SessionId,
+        /// The iteration at which compaction was triggered.
+        iteration: u32,
+    },
+
+    // === Broadcast Events ===
+    /// Broadcast message was sent.
+    BroadcastSent {
+        /// Broadcast ID.
+        id: crate::broadcast::BroadcastId,
+        /// Number of target sessions.
+        target_count: usize,
+        /// Message priority.
+        priority: crate::broadcast::BroadcastPriority,
+    },
+
+    /// Broadcast was delivered to a session.
+    BroadcastDelivered {
+        /// Broadcast ID.
+        id: crate::broadcast::BroadcastId,
+        /// Session that received the message.
+        session_id: SessionId,
+    },
+
+    /// Broadcast delivery failed for a session.
+    BroadcastDeliveryFailed {
+        /// Broadcast ID.
+        id: crate::broadcast::BroadcastId,
+        /// Session that failed to receive.
+        session_id: SessionId,
+        /// Error message.
+        error: String,
+    },
+
+    /// All broadcast deliveries completed.
+    BroadcastComplete {
+        /// Broadcast ID.
+        id: crate::broadcast::BroadcastId,
+        /// Number of successful deliveries.
+        success_count: usize,
+        /// Number of failed deliveries.
+        failure_count: usize,
+    },
+
+    // === Advanced Session Events ===
+    /// Context handoff was initiated between sessions.
+    HandoffInitiated {
+        /// Source session (high context usage).
+        source: SessionId,
+        /// Target session (new or low context).
+        target: SessionId,
+    },
+
+    /// Context handoff completed successfully.
+    HandoffCompleted {
+        /// Source session.
+        source: SessionId,
+        /// Target session.
+        target: SessionId,
+    },
+
+    /// Context handoff failed.
+    HandoffFailed {
+        /// Source session.
+        source: SessionId,
+        /// Target session.
+        target: SessionId,
+        /// Error message.
+        error: String,
+    },
+
+    /// Session was created from a template.
+    SessionCreatedFromTemplate {
+        /// The created session ID.
+        session_id: SessionId,
+        /// Name of the template used.
+        template_name: String,
+    },
+
+    /// Session template was saved.
+    TemplateSaved {
+        /// Name of the saved template.
+        name: String,
+    },
+
+    /// Session was cloned.
+    SessionCloned {
+        /// Original session ID.
+        source_session: SessionId,
+        /// New session ID.
+        cloned_session: SessionId,
+    },
+
+    /// Session group was created.
+    SessionGroupCreated {
+        /// Group name.
+        name: String,
+    },
+
+    /// Session was added to a group.
+    SessionAddedToGroup {
+        /// Session ID.
+        session_id: SessionId,
+        /// Group name.
+        group_name: String,
+    },
+
+    /// Session was removed from a group.
+    SessionRemovedFromGroup {
+        /// Session ID.
+        session_id: SessionId,
+        /// Group name.
+        group_name: String,
+    },
+
+    // === Overnight Mode Events ===
+    /// Overnight mode was started.
+    OvernightStarted {
+        /// Configuration used.
+        config: OvernightConfig,
+    },
+
+    /// Overnight mode was stopped.
+    OvernightStopped {
+        /// Summary of work done.
+        summary: OvernightSummary,
+    },
+
+    /// Task completed during overnight mode.
+    OvernightTaskCompleted {
+        /// Task number in the overnight session.
+        task_number: u32,
+        /// Whether the task succeeded.
+        success: bool,
+    },
+
+    /// Error occurred during overnight mode.
+    OvernightError {
+        /// Error message.
+        error: String,
+        /// Task number if applicable.
+        task_number: Option<u32>,
     },
 }
 
@@ -775,6 +988,382 @@ mod tests {
                 enabled_count: 5,
             },
             DirigentEvent::SkillsRefreshed { count: 10 },
+            DirigentEvent::BroadcastSent {
+                id: crate::broadcast::BroadcastId(1),
+                target_count: 3,
+                priority: crate::broadcast::BroadcastPriority::Normal,
+            },
+            DirigentEvent::BroadcastDelivered {
+                id: crate::broadcast::BroadcastId(1),
+                session_id: SessionId(1),
+            },
+            DirigentEvent::BroadcastDeliveryFailed {
+                id: crate::broadcast::BroadcastId(1),
+                session_id: SessionId(2),
+                error: "Connection timeout".to_string(),
+            },
+            DirigentEvent::BroadcastComplete {
+                id: crate::broadcast::BroadcastId(1),
+                success_count: 2,
+                failure_count: 1,
+            },
+        ];
+
+        for event in events {
+            let _ = event.clone();
+        }
+    }
+
+    #[test]
+    fn test_broadcast_sent_event() {
+        let event = DirigentEvent::BroadcastSent {
+            id: crate::broadcast::BroadcastId(1),
+            target_count: 5,
+            priority: crate::broadcast::BroadcastPriority::High,
+        };
+        if let DirigentEvent::BroadcastSent {
+            id,
+            target_count,
+            priority,
+        } = event
+        {
+            assert_eq!(id, crate::broadcast::BroadcastId(1));
+            assert_eq!(target_count, 5);
+            assert_eq!(priority, crate::broadcast::BroadcastPriority::High);
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_broadcast_delivered_event() {
+        let event = DirigentEvent::BroadcastDelivered {
+            id: crate::broadcast::BroadcastId(1),
+            session_id: SessionId(42),
+        };
+        if let DirigentEvent::BroadcastDelivered { id, session_id } = event {
+            assert_eq!(id, crate::broadcast::BroadcastId(1));
+            assert_eq!(session_id, SessionId(42));
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_broadcast_delivery_failed_event() {
+        let event = DirigentEvent::BroadcastDeliveryFailed {
+            id: crate::broadcast::BroadcastId(1),
+            session_id: SessionId(2),
+            error: "Session offline".to_string(),
+        };
+        if let DirigentEvent::BroadcastDeliveryFailed {
+            id,
+            session_id,
+            error,
+        } = event
+        {
+            assert_eq!(id, crate::broadcast::BroadcastId(1));
+            assert_eq!(session_id, SessionId(2));
+            assert_eq!(error, "Session offline");
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_broadcast_complete_event() {
+        let event = DirigentEvent::BroadcastComplete {
+            id: crate::broadcast::BroadcastId(1),
+            success_count: 8,
+            failure_count: 2,
+        };
+        if let DirigentEvent::BroadcastComplete {
+            id,
+            success_count,
+            failure_count,
+        } = event
+        {
+            assert_eq!(id, crate::broadcast::BroadcastId(1));
+            assert_eq!(success_count, 8);
+            assert_eq!(failure_count, 2);
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    // === Advanced Session Event Tests ===
+
+    #[test]
+    fn test_handoff_initiated_event() {
+        let event = DirigentEvent::HandoffInitiated {
+            source: SessionId(1),
+            target: SessionId(2),
+        };
+        if let DirigentEvent::HandoffInitiated { source, target } = event {
+            assert_eq!(source, SessionId(1));
+            assert_eq!(target, SessionId(2));
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_handoff_completed_event() {
+        let event = DirigentEvent::HandoffCompleted {
+            source: SessionId(1),
+            target: SessionId(2),
+        };
+        if let DirigentEvent::HandoffCompleted { source, target } = event {
+            assert_eq!(source, SessionId(1));
+            assert_eq!(target, SessionId(2));
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_handoff_failed_event() {
+        let event = DirigentEvent::HandoffFailed {
+            source: SessionId(1),
+            target: SessionId(2),
+            error: "Target session busy".to_string(),
+        };
+        if let DirigentEvent::HandoffFailed {
+            source,
+            target,
+            error,
+        } = event
+        {
+            assert_eq!(source, SessionId(1));
+            assert_eq!(target, SessionId(2));
+            assert_eq!(error, "Target session busy");
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_session_created_from_template_event() {
+        let event = DirigentEvent::SessionCreatedFromTemplate {
+            session_id: SessionId(1),
+            template_name: "development".to_string(),
+        };
+        if let DirigentEvent::SessionCreatedFromTemplate {
+            session_id,
+            template_name,
+        } = event
+        {
+            assert_eq!(session_id, SessionId(1));
+            assert_eq!(template_name, "development");
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_template_saved_event() {
+        let event = DirigentEvent::TemplateSaved {
+            name: "my-template".to_string(),
+        };
+        if let DirigentEvent::TemplateSaved { name } = event {
+            assert_eq!(name, "my-template");
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_session_cloned_event() {
+        let event = DirigentEvent::SessionCloned {
+            source_session: SessionId(1),
+            cloned_session: SessionId(2),
+        };
+        if let DirigentEvent::SessionCloned {
+            source_session,
+            cloned_session,
+        } = event
+        {
+            assert_eq!(source_session, SessionId(1));
+            assert_eq!(cloned_session, SessionId(2));
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_session_group_created_event() {
+        let event = DirigentEvent::SessionGroupCreated {
+            name: "backend".to_string(),
+        };
+        if let DirigentEvent::SessionGroupCreated { name } = event {
+            assert_eq!(name, "backend");
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_session_added_to_group_event() {
+        let event = DirigentEvent::SessionAddedToGroup {
+            session_id: SessionId(1),
+            group_name: "backend".to_string(),
+        };
+        if let DirigentEvent::SessionAddedToGroup {
+            session_id,
+            group_name,
+        } = event
+        {
+            assert_eq!(session_id, SessionId(1));
+            assert_eq!(group_name, "backend");
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_session_removed_from_group_event() {
+        let event = DirigentEvent::SessionRemovedFromGroup {
+            session_id: SessionId(1),
+            group_name: "backend".to_string(),
+        };
+        if let DirigentEvent::SessionRemovedFromGroup {
+            session_id,
+            group_name,
+        } = event
+        {
+            assert_eq!(session_id, SessionId(1));
+            assert_eq!(group_name, "backend");
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_overnight_started_event() {
+        let config = OvernightConfig::default();
+        let event = DirigentEvent::OvernightStarted {
+            config: config.clone(),
+        };
+        if let DirigentEvent::OvernightStarted { config: c } = event {
+            assert_eq!(c.start_hour, config.start_hour);
+            assert_eq!(c.stop_hour, config.stop_hour);
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_overnight_stopped_event() {
+        let summary = OvernightSummary::default();
+        let event = DirigentEvent::OvernightStopped {
+            summary: summary.clone(),
+        };
+        if let DirigentEvent::OvernightStopped { summary: s } = event {
+            assert_eq!(s.tasks_completed, summary.tasks_completed);
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_overnight_task_completed_event() {
+        let event = DirigentEvent::OvernightTaskCompleted {
+            task_number: 5,
+            success: true,
+        };
+        if let DirigentEvent::OvernightTaskCompleted {
+            task_number,
+            success,
+        } = event
+        {
+            assert_eq!(task_number, 5);
+            assert!(success);
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_overnight_error_event() {
+        let event = DirigentEvent::OvernightError {
+            error: "Task timeout".to_string(),
+            task_number: Some(3),
+        };
+        if let DirigentEvent::OvernightError { error, task_number } = event {
+            assert_eq!(error, "Task timeout");
+            assert_eq!(task_number, Some(3));
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_overnight_error_event_no_task() {
+        let event = DirigentEvent::OvernightError {
+            error: "System error".to_string(),
+            task_number: None,
+        };
+        if let DirigentEvent::OvernightError { error, task_number } = event {
+            assert_eq!(error, "System error");
+            assert!(task_number.is_none());
+        } else {
+            panic!("Wrong event type");
+        }
+    }
+
+    #[test]
+    fn test_advanced_session_events_clone() {
+        // Test that all advanced session event variants can be cloned
+        let events: Vec<DirigentEvent> = vec![
+            DirigentEvent::HandoffInitiated {
+                source: SessionId(1),
+                target: SessionId(2),
+            },
+            DirigentEvent::HandoffCompleted {
+                source: SessionId(1),
+                target: SessionId(2),
+            },
+            DirigentEvent::HandoffFailed {
+                source: SessionId(1),
+                target: SessionId(2),
+                error: "error".to_string(),
+            },
+            DirigentEvent::SessionCreatedFromTemplate {
+                session_id: SessionId(1),
+                template_name: "dev".to_string(),
+            },
+            DirigentEvent::TemplateSaved {
+                name: "template".to_string(),
+            },
+            DirigentEvent::SessionCloned {
+                source_session: SessionId(1),
+                cloned_session: SessionId(2),
+            },
+            DirigentEvent::SessionGroupCreated {
+                name: "group".to_string(),
+            },
+            DirigentEvent::SessionAddedToGroup {
+                session_id: SessionId(1),
+                group_name: "group".to_string(),
+            },
+            DirigentEvent::SessionRemovedFromGroup {
+                session_id: SessionId(1),
+                group_name: "group".to_string(),
+            },
+            DirigentEvent::OvernightStarted {
+                config: OvernightConfig::default(),
+            },
+            DirigentEvent::OvernightStopped {
+                summary: OvernightSummary::default(),
+            },
+            DirigentEvent::OvernightTaskCompleted {
+                task_number: 1,
+                success: true,
+            },
+            DirigentEvent::OvernightError {
+                error: "err".to_string(),
+                task_number: None,
+            },
         ];
 
         for event in events {
