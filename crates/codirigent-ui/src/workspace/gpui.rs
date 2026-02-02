@@ -90,6 +90,8 @@ pub struct WorkspaceView {
     pub(super) terminal_headers: Vec<(SessionId, TerminalHeader)>,
     /// Whether broadcast mode is enabled.
     pub(super) broadcast_enabled: bool,
+    /// Session menu state: which session's menu is open (if any).
+    pub(super) session_menu_open: Option<SessionId>,
 }
 
 impl WorkspaceView {
@@ -176,6 +178,7 @@ impl WorkspaceView {
             empty_cells: EmptySessionPool::new(),
             terminal_headers: Vec::new(),
             broadcast_enabled: false,
+            session_menu_open: None,
         }
     }
 
@@ -633,6 +636,70 @@ impl WorkspaceView {
         cx.notify();
     }
 
+    /// Open session menu for a specific session.
+    pub fn open_session_menu(&mut self, session_id: SessionId, cx: &mut Context<Self>) {
+        info!(?session_id, "Opening session menu");
+        self.session_menu_open = Some(session_id);
+        cx.notify();
+    }
+
+    /// Close the session menu.
+    pub fn close_session_menu(&mut self, cx: &mut Context<Self>) {
+        info!("Closing session menu");
+        self.session_menu_open = None;
+        cx.notify();
+    }
+
+    /// Handle session menu action.
+    pub fn handle_session_menu_action(
+        &mut self,
+        session_id: SessionId,
+        action: crate::workspace::render::SessionMenuAction,
+        cx: &mut Context<Self>,
+    ) {
+        use crate::workspace::render::SessionMenuAction;
+
+        info!(?session_id, ?action, "Handling session menu action");
+
+        match action {
+            SessionMenuAction::Rename => {
+                // TODO: Open rename modal with text input
+                info!(?session_id, "Rename action - modal not yet implemented");
+                // For now, just log
+                self.close_session_menu(cx);
+            }
+            SessionMenuAction::AssignGroup => {
+                // TODO: Open group picker modal
+                info!(?session_id, "Assign to group action - modal not yet implemented");
+                // For now, just log
+                self.close_session_menu(cx);
+            }
+            SessionMenuAction::RemoveGroup => {
+                // Remove session from group
+                if let Ok(manager) = self.session_manager.lock() {
+                    if let Err(e) = manager.set_session_group(session_id, None, None) {
+                        warn!("Failed to remove session from group: {}", e);
+                    } else {
+                        info!(?session_id, "Session removed from group");
+                    }
+                }
+                self.close_session_menu(cx);
+            }
+            SessionMenuAction::Close => {
+                // Close the session
+                if let Ok(manager) = self.session_manager.lock() {
+                    if let Err(e) = manager.close_session(session_id) {
+                        warn!("Failed to close session: {}", e);
+                    } else {
+                        info!(?session_id, "Session closed");
+                    }
+                }
+                self.close_session_menu(cx);
+            }
+        }
+        cx.notify();
+    }
+
     // --- Action Handlers ---
     // These are called by GPUI when keyboard shortcuts or menu items trigger actions.
 
@@ -915,6 +982,11 @@ impl Render for WorkspaceView {
         // 5. Custom layout modal (if open)
         if let Some(modal) = self.render_custom_layout_modal(cx) {
             container = container.child(modal);
+        }
+
+        // 6. Session menu modal (if open)
+        if let Some(menu) = self.render_session_menu(cx) {
+            container = container.child(menu);
         }
 
         container

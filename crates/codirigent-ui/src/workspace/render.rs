@@ -140,35 +140,67 @@ impl WorkspaceView {
                         .id(SharedString::from(format!("session-item-{}", session_id.0)))
                         .h(px(32.0))
                         .pl(indent)
-                        .pr_3()
+                        .pr_1()
                         .bg(item_bg)
                         .border_l_2()
                         .border_color(left_border_color)
                         .flex()
                         .items_center()
                         .gap_2()
-                        .cursor_pointer()
-                        .hover(|style| style.bg(hover_bg.opacity(0.1)))
-                        .on_click(cx.listener(move |this, _event: &ClickEvent, _window, cx| {
-                            info!(?session_id, "Session item clicked");
-                            this.workspace.focus_session(session_id);
-                            cx.notify();
-                        }))
                         .child(
-                            // Status indicator dot
+                            // Main clickable area (status dot + name)
                             div()
-                                .w(px(8.0))
-                                .h(px(8.0))
-                                .rounded_full()
-                                .bg(status_color),
+                                .id(SharedString::from(format!("session-main-{}", session_id.0)))
+                                .flex_1()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .cursor_pointer()
+                                .hover(|style| style.bg(hover_bg.opacity(0.1)))
+                                .on_click(cx.listener(move |this, _event: &ClickEvent, _window, cx| {
+                                    info!(?session_id, "Session item clicked");
+                                    this.workspace.focus_session(session_id);
+                                    cx.notify();
+                                }))
+                                .child(
+                                    // Status indicator dot
+                                    div()
+                                        .w(px(8.0))
+                                        .h(px(8.0))
+                                        .rounded_full()
+                                        .bg(status_color),
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(fg)
+                                        .overflow_hidden()
+                                        .text_ellipsis()
+                                        .child(session.name.clone()),
+                                ),
                         )
                         .child(
+                            // Menu button
                             div()
-                                .text_sm()
-                                .text_color(fg)
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .child(session.name.clone()),
+                                .id(SharedString::from(format!("session-menu-btn-{}", session_id.0)))
+                                .w(px(24.0))
+                                .h(px(24.0))
+                                .flex()
+                                .items_center()
+                                .justify_center()
+                                .cursor_pointer()
+                                .rounded_sm()
+                                .hover(|style| style.bg(hover_bg.opacity(0.2)))
+                                .on_click(cx.listener(move |this, _event: &ClickEvent, _window, cx| {
+                                    info!(?session_id, "Session menu button clicked");
+                                    this.open_session_menu(session_id, cx);
+                                }))
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(muted)
+                                        .child("⋮"), // Vertical ellipsis
+                                ),
                         ),
                 );
             }
@@ -1714,4 +1746,148 @@ impl WorkspaceView {
             _ => None,
         }
     }
+
+    /// Render session menu modal.
+    pub(super) fn render_session_menu(&mut self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let session_id = self.session_menu_open?;
+
+        let theme = self.workspace().theme();
+        let panel_bg: gpui::Hsla = theme.panel_background.into();
+        let border_color: gpui::Hsla = theme.border.into();
+        let fg: gpui::Hsla = theme.foreground.into();
+        let hover_bg: gpui::Hsla = theme.active.into();
+
+        let overlay = div()
+            .id("session-menu-overlay")
+            .absolute()
+            .inset_0()
+            .flex()
+            .items_center()
+            .justify_center()
+            .bg(gpui::Hsla::black().opacity(0.3))
+            .child(
+                div()
+                    .w(px(280.0))
+                    .bg(panel_bg)
+                    .border_1()
+                    .border_color(border_color)
+                    .rounded_md()
+                    .overflow_hidden()
+                    .shadow_lg()
+                    .flex()
+                    .flex_col()
+                        // Menu header
+                        .child(
+                            div()
+                                .h(px(40.0))
+                                .px_4()
+                                .flex()
+                                .items_center()
+                                .border_b_1()
+                                .border_color(border_color)
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(fg)
+                                        .child("Session Options"),
+                                ),
+                        )
+                        // Menu items
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .py_2()
+                                .child(self.render_menu_item(
+                                    "Rename Session",
+                                    session_id,
+                                    SessionMenuAction::Rename,
+                                    theme,
+                                    hover_bg,
+                                    fg,
+                                    cx,
+                                ))
+                                .child(self.render_menu_item(
+                                    "Assign to Group",
+                                    session_id,
+                                    SessionMenuAction::AssignGroup,
+                                    theme,
+                                    hover_bg,
+                                    fg,
+                                    cx,
+                                ))
+                                .child(self.render_menu_item(
+                                    "Remove from Group",
+                                    session_id,
+                                    SessionMenuAction::RemoveGroup,
+                                    theme,
+                                    hover_bg,
+                                    fg,
+                                    cx,
+                                ))
+                                .child(
+                                    // Separator
+                                    div()
+                                        .h(px(1.0))
+                                        .mx_2()
+                                        .my_1()
+                                        .bg(border_color),
+                                )
+                                .child(self.render_menu_item(
+                                    "Close Session",
+                                    session_id,
+                                    SessionMenuAction::Close,
+                                    theme,
+                                    hover_bg,
+                                    fg,
+                                    cx,
+                                )),
+                        ),
+                );
+
+        Some(overlay.on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+            this.close_session_menu(cx);
+        })))
+    }
+
+    /// Render a menu item.
+    fn render_menu_item(
+        &self,
+        label: &str,
+        session_id: SessionId,
+        action: SessionMenuAction,
+        _theme: &CodirigentTheme,
+        hover_bg: gpui::Hsla,
+        fg: gpui::Hsla,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let label = label.to_string();
+        div()
+            .id(SharedString::from(format!("menu-{:?}-{}", action, session_id.0)))
+            .h(px(36.0))
+            .px_4()
+            .flex()
+            .items_center()
+            .cursor_pointer()
+            .hover(|style| style.bg(hover_bg.opacity(0.1)))
+            .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                this.handle_session_menu_action(session_id, action, cx);
+            }))
+            .child(
+                div()
+                    .text_sm()
+                    .text_color(fg)
+                    .child(label),
+            )
+    }
+}
+
+/// Session menu actions.
+#[derive(Debug, Clone, Copy)]
+pub enum SessionMenuAction {
+    Rename,
+    AssignGroup,
+    RemoveGroup,
+    Close,
 }
