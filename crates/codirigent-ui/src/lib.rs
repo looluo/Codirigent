@@ -91,6 +91,7 @@ pub mod terminal_header;
 pub mod theme;
 pub mod theme_config;
 pub mod theme_manager;
+pub mod title_bar;
 pub mod toolbar;
 pub mod workspace;
 
