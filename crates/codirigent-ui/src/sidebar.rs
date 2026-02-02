@@ -10,12 +10,14 @@
 
 mod file_tree;
 mod types;
+mod worktree_panel;
 
 #[cfg(test)]
 mod tests;
 
 pub use file_tree::*;
 pub use types::*;
+pub use worktree_panel::*;
 
 use codirigent_core::{Session, SessionId, SessionStatus};
 use std::collections::HashMap;

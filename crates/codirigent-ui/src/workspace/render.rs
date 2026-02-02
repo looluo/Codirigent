@@ -108,12 +108,12 @@ impl WorkspaceView {
                 ),
         );
 
-        // Session list with grouping (takes 60% of space)
+        // Session list with grouping (takes 50% of space)
         let mut list = div()
             .flex()
             .flex_col()
             .overflow_hidden()
-            .flex_basis(gpui::relative(0.6))  // 60% of sidebar height
+            .flex_basis(gpui::relative(0.5))  // 50% of sidebar height
             .min_h(px(150.0));  // Minimum height
         let muted: gpui::Hsla = theme.muted.into();
 
@@ -271,8 +271,19 @@ impl WorkspaceView {
                 .bg(border_color),
         );
 
-        // File tree section (takes remaining 40% of space)
+        // File tree section (takes 30% of space)
         sidebar = sidebar.child(self.render_file_tree_section(theme, cx));
+
+        // Separator between files and worktrees
+        sidebar = sidebar.child(
+            div()
+                .h(px(1.0))
+                .w_full()
+                .bg(border_color),
+        );
+
+        // Worktree section (takes remaining 20% of space)
+        sidebar = sidebar.child(self.render_worktree_section(theme, cx));
 
         sidebar
     }
@@ -291,7 +302,7 @@ impl WorkspaceView {
         let mut section = div()
             .flex()
             .flex_col()
-            .flex_basis(gpui::relative(0.4))  // 40% of sidebar height
+            .flex_basis(gpui::relative(0.3))  // 30% of sidebar height
             .min_h(px(100.0))  // Minimum height
             .overflow_hidden();
 
@@ -345,6 +356,208 @@ impl WorkspaceView {
         }
 
         section.child(file_list)
+    }
+
+    /// Render the worktree section of the sidebar.
+    fn render_worktree_section(
+        &self,
+        theme: &CodirigentTheme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let fg: gpui::Hsla = theme.foreground.into();
+        let muted: gpui::Hsla = theme.muted.into();
+        let hover_bg: gpui::Hsla = theme.active.into();
+        let border_color: gpui::Hsla = theme.border.into();
+        let primary: gpui::Hsla = theme.primary.into();
+
+        let mut section = div()
+            .flex()
+            .flex_col()
+            .flex_basis(gpui::relative(0.2))  // 20% of sidebar height
+            .min_h(px(80.0))  // Minimum height
+            .overflow_hidden();
+
+        // Header
+        let mut header = div()
+            .h(px(32.0))
+            .px_3()
+            .flex()
+            .items_center()
+            .justify_between();
+
+        header = header.child(
+            div()
+                .text_sm()
+                .font_weight(FontWeight::SEMIBOLD)
+                .text_color(fg)
+                .child("Worktrees"),
+        );
+
+        // Actions
+        let mut actions = div().flex().gap_2();
+
+        // Refresh button
+        actions = actions.child(
+            div()
+                .id("worktree-refresh-btn")
+                .px_1()
+                .cursor_pointer()
+                .text_xs()
+                .text_color(muted)
+                .hover(|style| style.text_color(fg))
+                .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                    this.handle_worktree_event(crate::sidebar::WorktreeEvent::Refresh, cx);
+                }))
+                .child("↻"),
+        );
+
+        // Add button
+        actions = actions.child(
+            div()
+                .id("worktree-add-btn")
+                .px_1()
+                .cursor_pointer()
+                .text_xs()
+                .text_color(primary)
+                .hover(|style| style.text_color(fg))
+                .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                    this.handle_worktree_event(crate::sidebar::WorktreeEvent::CreateClicked, cx);
+                }))
+                .child("+"),
+        );
+
+        header = header.child(actions);
+        section = section.child(header);
+
+        // Worktree list
+        let mut worktree_list = div()
+            .flex()
+            .flex_col()
+            .overflow_hidden()
+            .flex_1();
+
+        // Get worktrees from panel
+        let worktrees = self.worktree_panel.worktrees();
+
+        if worktrees.is_empty() {
+            worktree_list = worktree_list.child(
+                div()
+                    .flex()
+                    .flex_1()
+                    .items_center()
+                    .justify_center()
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(muted)
+                            .child("No worktrees"),
+                    ),
+            );
+        } else {
+            // Render worktree items
+            for worktree in worktrees {
+                worktree_list = worktree_list.child(self.render_worktree_item(worktree, theme, hover_bg, fg, muted, border_color, cx));
+            }
+        }
+
+        section.child(worktree_list)
+    }
+
+    /// Render a single worktree item.
+    fn render_worktree_item(
+        &self,
+        worktree: &codirigent_core::Worktree,
+        _theme: &CodirigentTheme,
+        hover_bg: gpui::Hsla,
+        fg: gpui::Hsla,
+        muted: gpui::Hsla,
+        _border_color: gpui::Hsla,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let wt_path = worktree.path.clone();
+        let branch_name = worktree.branch.clone();
+        let is_main = worktree.is_main;
+        let bound_session = worktree.bound_session;
+
+        let mut item = div()
+            .id(SharedString::from(format!("worktree-item-{}", branch_name)))
+            .min_h(px(36.0))
+            .px_3()
+            .py_2()
+            .flex()
+            .flex_col()
+            .gap_1()
+            .cursor_pointer()
+            .hover(|style| style.bg(hover_bg.opacity(0.1)));
+
+        // Branch name row
+        let mut branch_row = div().flex().items_center().gap_2();
+
+        // Main indicator
+        if is_main {
+            branch_row = branch_row.child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child("●"),
+            );
+        }
+
+        // Branch name
+        branch_row = branch_row.child(
+            div()
+                .text_sm()
+                .text_color(fg)
+                .font_weight(if is_main { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
+                .overflow_hidden()
+                .text_ellipsis()
+                .child(branch_name.clone()),
+        );
+
+        item = item.child(branch_row);
+
+        // Session binding indicator
+        if let Some(session_id) = bound_session {
+            item = item.child(
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(format!("→ Session {}", session_id.0)),
+                    ),
+            );
+        }
+
+        // Remove button (if not main worktree)
+        if !is_main {
+            item = item.child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .child(
+                        div()
+                            .id(SharedString::from(format!("worktree-remove-{}", branch_name)))
+                            .px_1()
+                            .text_xs()
+                            .text_color(muted)
+                            .cursor_pointer()
+                            .hover(|style| style.text_color(fg))
+                            .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                                this.handle_worktree_event(
+                                    crate::sidebar::WorktreeEvent::RemoveRequested(wt_path.clone()),
+                                    cx,
+                                );
+                            }))
+                            .child("Remove"),
+                    ),
+            );
+        }
+
+        item
     }
 
     /// Render a single file tree item.

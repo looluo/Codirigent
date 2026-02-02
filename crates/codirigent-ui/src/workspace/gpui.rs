@@ -26,7 +26,7 @@ use crate::terminal::Terminal;
 use crate::terminal_view::TerminalView;
 // Imports from feature branch (UI components)
 use crate::empty_session::{EmptySessionEvent, EmptySessionPool};
-use crate::sidebar::{FileTreePanel, FileTreeEvent};
+use crate::sidebar::{FileTreePanel, FileTreeEvent, WorktreePanel, WorktreeEvent};
 use crate::status_bar::StatusBar;
 use crate::task_board::TaskBoardPanel;
 use crate::terminal_header::TerminalHeader;
@@ -37,7 +37,7 @@ use crate::toolbar::{SessionsToolbar, ToolbarEvent};
 use codirigent_core::{
     CodirigentEvent, DefaultEventBus, EventBus, GridPosition, ProcessMonitor, Session, SessionId,
     SessionManager, SessionStatus, TaskManager, TaskManagerConfig, Task, TaskId,
-    FileStorageService,
+    FileStorageService, WorktreeCreateOptions,
 };
 use codirigent_detector::InputDetector;
 use codirigent_session::DefaultSessionManager;
@@ -97,6 +97,10 @@ pub struct WorkspaceView {
     pub(super) file_tree: FileTreePanel,
     /// Per-tab task expansion state.
     pub(super) task_tab_expanded: HashMap<crate::task_board::TaskBoardTab, bool>,
+    /// Worktree panel for git worktree management.
+    pub(super) worktree_panel: WorktreePanel,
+    /// Worktree manager for git worktree operations.
+    pub(super) worktree_manager: Option<Arc<Mutex<codirigent_session::WorktreeManager>>>,
 }
 
 impl WorkspaceView {
@@ -192,7 +196,19 @@ impl WorkspaceView {
             session_menu_open: None,
             file_tree,
             task_tab_expanded: HashMap::new(),
+            worktree_panel: WorktreePanel::new(),
+            worktree_manager: Self::init_worktree_manager(),
         }
+    }
+
+    /// Initialize worktree manager if in a git repository.
+    fn init_worktree_manager() -> Option<Arc<Mutex<codirigent_session::WorktreeManager>>> {
+        if let Ok(cwd) = std::env::current_dir() {
+            if let Ok(manager) = codirigent_session::WorktreeManager::new(&cwd) {
+                return Some(Arc::new(Mutex::new(manager)));
+            }
+        }
+        None
     }
 
     /// Poll PTY output and feed to terminal emulators.
@@ -662,6 +678,118 @@ impl WorkspaceView {
                         warn!("Failed to send path to terminal: {}", e);
                     }
                 }
+            }
+        }
+        cx.notify();
+    }
+
+    /// Handle worktree panel events.
+    pub(super) fn handle_worktree_event(&mut self, event: WorktreeEvent, cx: &mut Context<Self>) {
+        match event {
+            WorktreeEvent::CreateClicked => {
+                info!("Create worktree clicked");
+                self.worktree_panel.open_create_modal();
+                // Fetch available branches if we have a manager
+                if let Some(ref manager) = self.worktree_manager {
+                    if let Ok(mgr) = manager.lock() {
+                        // For now, just use a default list
+                        // TODO: Fetch actual branches from git
+                        self.worktree_panel.set_available_branches(vec![
+                            "main".to_string(),
+                            "develop".to_string(),
+                            "staging".to_string(),
+                        ]);
+                    }
+                }
+            }
+            WorktreeEvent::RemoveRequested(path) => {
+                info!(?path, "Remove worktree requested");
+                if let Some(ref manager) = self.worktree_manager {
+                    if let Ok(mut mgr) = manager.lock() {
+                        if let Err(e) = mgr.remove(&path, false) {
+                            warn!("Failed to remove worktree: {}", e);
+                        } else {
+                            // Refresh the list
+                            if let Ok(()) = mgr.refresh() {
+                                self.worktree_panel.set_worktrees(mgr.list().to_vec());
+                            }
+                        }
+                    }
+                }
+            }
+            WorktreeEvent::BindSession { worktree_path, session_id } => {
+                info!(?worktree_path, ?session_id, "Bind session to worktree");
+                if let Some(ref manager) = self.worktree_manager {
+                    if let Ok(mut mgr) = manager.lock() {
+                        if mgr.bind_session(&worktree_path, session_id).is_ok() {
+                            // Refresh the list
+                            mgr.refresh().ok();
+                            self.worktree_panel.set_worktrees(mgr.list().to_vec());
+                        }
+                    }
+                }
+            }
+            WorktreeEvent::UnbindSession(session_id) => {
+                info!(?session_id, "Unbind session from worktree");
+                if let Some(ref manager) = self.worktree_manager {
+                    if let Ok(mut mgr) = manager.lock() {
+                        if mgr.unbind_session(session_id).is_ok() {
+                            // Refresh the list
+                            mgr.refresh().ok();
+                            self.worktree_panel.set_worktrees(mgr.list().to_vec());
+                        }
+                    }
+                }
+            }
+            WorktreeEvent::CleanupMerged => {
+                info!("Cleanup merged worktrees");
+                if let Some(ref manager) = self.worktree_manager {
+                    if let Ok(mut mgr) = manager.lock() {
+                        if let Ok(removed) = mgr.cleanup_merged("main") {
+                            info!("Removed {} merged worktrees", removed.len());
+                            // Refresh the list
+                            let _: Result<(), anyhow::Error> = mgr.refresh();
+                            self.worktree_panel.set_worktrees(mgr.list().to_vec());
+                        }
+                    }
+                }
+            }
+            WorktreeEvent::Refresh => {
+                info!("Refresh worktree list");
+                if let Some(ref manager) = self.worktree_manager {
+                    if let Ok(mut mgr) = manager.lock() {
+                        let _: Result<(), anyhow::Error> = mgr.refresh();
+                        self.worktree_panel.set_worktrees(mgr.list().to_vec());
+                    }
+                }
+            }
+            WorktreeEvent::ConfirmCreate { branch, base_branch } => {
+                info!(?branch, ?base_branch, "Confirm create worktree");
+                if let Some(ref manager) = self.worktree_manager {
+                    if let Ok(mut mgr) = manager.lock() {
+                        let options = WorktreeCreateOptions {
+                            branch: branch.clone(),
+                            base_branch,
+                            path: None,
+                        };
+                        match mgr.create(options) {
+                            Ok(_) => {
+                                info!("Created worktree for branch: {}", branch);
+                                // Refresh and close modal
+                                let _: Result<(), anyhow::Error> = mgr.refresh();
+                                self.worktree_panel.set_worktrees(mgr.list().to_vec());
+                                self.worktree_panel.close_create_modal();
+                            }
+                            Err(e) => {
+                                warn!("Failed to create worktree: {}", e);
+                            }
+                        }
+                    }
+                }
+            }
+            WorktreeEvent::CancelCreate => {
+                info!("Cancel create worktree");
+                self.worktree_panel.close_create_modal();
             }
         }
         cx.notify();
