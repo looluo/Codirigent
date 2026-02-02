@@ -24,7 +24,7 @@ use crate::input::{key_to_bytes, TerminalKeystroke, TerminalModifiers};
 use crate::terminal::Terminal;
 use crate::terminal_view::TerminalView;
 use crate::theme::CodirigentTheme;
-use codirigent_core::{CodirigentEvent, DefaultEventBus, EventBus, Session, SessionId, SessionManager};
+use codirigent_core::{CodirigentEvent, DefaultEventBus, EventBus, ProcessMonitor, Session, SessionId, SessionManager};
 use codirigent_detector::InputDetector;
 use codirigent_session::DefaultSessionManager;
 use crate::app::{
@@ -55,8 +55,8 @@ pub struct WorkspaceView {
     event_bus: Arc<DefaultEventBus>,
     /// Session manager for PTY and session lifecycle.
     session_manager: Arc<Mutex<DefaultSessionManager>>,
-    /// Input detector for monitoring session status (future use).
-    _detector: Arc<Mutex<InputDetector>>,
+    /// Input detector for monitoring session status.
+    detector: Arc<Mutex<InputDetector>>,
     /// Terminal views for each session.
     terminals: HashMap<SessionId, TerminalView>,
     /// Next session ID counter (kept for UI session tracking).
@@ -105,7 +105,7 @@ impl WorkspaceView {
             focus_handle: cx.focus_handle(),
             event_bus,
             session_manager,
-            _detector: detector,
+            detector,
             terminals: HashMap::new(),
             next_session_id: 1,
         }
@@ -124,10 +124,26 @@ impl WorkspaceView {
             };
 
             if let Some(data) = output {
+                // Feed output to terminal emulator
                 if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
                     terminal_view.terminal_mut().process_output(&data);
                     any_dirty = true;
                 }
+
+                // Feed output to detector for status detection
+                {
+                    let mut detector = self.detector.lock().unwrap();
+                    detector.process_output(session_id, &data);
+                }
+            }
+
+            // Update session status from detector
+            let status = {
+                let detector = self.detector.lock().unwrap();
+                detector.get_status(session_id)
+            };
+            if let Some(status) = status {
+                self.workspace.update_session_status(session_id, status);
             }
         }
 
@@ -155,6 +171,20 @@ impl WorkspaceView {
             }
         };
 
+        // Get child PID for monitoring
+        let child_pid = {
+            let manager = self.session_manager.lock().unwrap();
+            manager.get_child_pid(session_id)
+        };
+
+        // Start monitoring session status
+        if let Some(pid) = child_pid {
+            let mut detector = self.detector.lock().unwrap();
+            if let Err(e) = detector.start_monitoring(session_id, pid) {
+                warn!("Failed to start monitoring session {}: {}", session_id, e);
+            }
+        }
+
         // Create terminal emulator for this session
         let terminal = Terminal::new(24, 80, session_id);
         let theme = self.workspace.theme();
@@ -174,6 +204,12 @@ impl WorkspaceView {
     /// Close the focused session.
     pub fn close_focused_session(&mut self, cx: &mut Context<Self>) {
         if let Some(id) = self.workspace.focused_session_id() {
+            // Stop monitoring
+            {
+                let mut detector = self.detector.lock().unwrap();
+                detector.stop_monitoring(id);
+            }
+
             // Remove terminal view
             self.terminals.remove(&id);
 
