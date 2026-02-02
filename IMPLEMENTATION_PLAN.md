@@ -2,7 +2,7 @@
 
 ## IMPLEMENTATION STATUS (Updated)
 
-### ✅ COMPLETED: 9 of 16 Issues (56%)
+### ✅ COMPLETED: 10 of 16 Issues (63%)
 
 **Phase 1: Critical Bugs + Quick Wins (6/7 complete)**
 - ✅ **A1**: Grid cells now fill space evenly
@@ -11,13 +11,16 @@
 - ✅ **A4**: Window controls visible on macOS
 - ✅ **C5**: Empty cell clicks create sessions
 
-**Phase 2: Backend Integration + Visual (3/6 complete)**
+**Phase 2: Backend Integration + Visual (4/6 complete)**
 - ✅ **C1**: Custom layout picker modal
+- ✅ **C2**: Task board actions → TaskManager backend
 - ✅ **B1**: Logo in title bar
 - ✅ **B4**: Visual session grouping with colors
 
 **Git Commits Created:**
 ```
+a11a1c7 feat: wire task board actions to TaskManager backend (C2)
+2ab708f docs: add comprehensive implementation documentation
 d1792b6 docs: add progress tracking document
 1e3493b feat: add visual session grouping with colors (B4)
 d72e749 feat: add logo to title bar (B1)
@@ -27,10 +30,9 @@ e68157e feat: add custom layout picker modal (C1)
 
 **Build Status:** ✅ All changes compile successfully with `cargo build --features gpui-full`
 
-### ⏳ PENDING: 7 of 16 Issues (44%)
+### ⏳ PENDING: 6 of 16 Issues (37%)
 
-**Phase 2 Remaining (3/6)**
-- ⏳ **C2**: Task board actions → TaskManager backend (complex, requires integration)
+**Phase 2 Remaining (2/6)**
 - ⏳ **C3**: File tree drag to terminal (blocked by B2)
 - ⏳ **C4**: Session rename/group assignment UI (needs context menu implementation)
 
@@ -39,7 +41,7 @@ e68157e feat: add custom layout picker modal (C1)
 - ⏳ **B3**: Expand task board with task cards (~4 hours)
 - ⏳ **B5**: Git worktree full UI (~6 hours)
 
-**Estimated Remaining Time:** 15-20 hours
+**Estimated Remaining Time:** 13-18 hours
 
 ---
 
