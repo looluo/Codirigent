@@ -1,12 +1,12 @@
 # Codirigent Implementation Status
 
 ## Quick Stats
-- **Progress:** 11 of 16 features (69%)
-- **Phase 1:** ✅ 100% Complete
-- **Phase 2:** ⚠️ 83% Complete (5/6)
-- **Phase 3:** ❌ 0% Complete
+- **Progress:** 13 of 16 features (81%)
+- **Phase 1:** ✅ 100% Complete (6/6)
+- **Phase 2:** ✅ 100% Complete (6/6)
+- **Phase 3:** ⚠️ 25% Complete (1/4)
 - **Build Status:** ✅ Passing
-- **Last Updated:** 2026-02-02 (Iteration 2)
+- **Last Updated:** 2026-02-02 (Iteration 3)
 
 ## Completed Features
 
@@ -17,27 +17,55 @@
 - ✅ A4: Window controls visible on macOS
 - ✅ C5: Empty cell clicks create sessions
 
-### Phase 2: Backend Integration + Visual ⚠️ (5/6)
+### Phase 2: Backend Integration + Visual ✅ (6/6)
 - ✅ C1: Custom layout picker modal
 - ✅ C2: Task board actions → TaskManager backend
-- ✅ C4: Session context menu (rename/group/close) **[THIS ITERATION]**
+- ✅ C3: File tree drag-to-terminal **[THIS ITERATION]**
+- ✅ C4: Session context menu (rename/group/close)
 - ✅ B1: Logo in title bar
 - ✅ B4: Visual session grouping with colors
-- ⏳ C3: File tree drag-to-terminal (blocked by B2)
+
+### Phase 3: Major Features ⚠️ (1/4)
+- ✅ B2: File tree integration **[THIS ITERATION]**
+- ⏳ B3: Task board expansion (4 hours)
+- ⏳ B5: Git worktree full UI (6 hours)
 
 ## Remaining Work
 
-### Phase 2: 1 feature (~30 min)
-1. **C3**: File tree drag-to-terminal (30 min) - After B2
+### Phase 3: 3 features (~10 hours)
+1. **B3**: Task board expansion (4 hours) - NEXT
+2. **B5**: Git worktree full UI (6 hours)
 
-### Phase 3: 4 features (~13 hours)
-1. **B2**: File tree integration (3 hours) - HIGH PRIORITY (unblocks C3)
-2. **B3**: Task board expansion (4 hours)
-3. **B5**: Git worktree full UI (6 hours)
-
-**Total Remaining:** ~13.5 hours
+**Total Remaining:** ~10 hours
 
 ## This Iteration's Work
+
+### Iteration 3: B2 - File Tree Integration + C3 - Drag-to-Terminal
+
+**What Was Done:**
+- Integrated FileTreePanel into sidebar (split 60/40 with sessions)
+- Implemented file tree rendering with icons and indentation
+- Added directory expansion/collapse functionality
+- Wired PathDraggedToTerminal event to SessionManager
+- File paths now insert into terminal on drag (C3 complete)
+
+**Features:**
+- Split Sidebar: Sessions (60% top) + Files (40% bottom)
+- File Tree: Icons by type, indent by depth, click to expand
+- Drag-to-Terminal: Insert path with trailing space ✅
+
+**Technical Details:**
+- Flex layout: flex_basis(relative(0.6)) for proportional split
+- Color conversion: RGBA → HSLA approximation for icons
+- Event handling: DirectoryToggled, FileSelected, PathDraggedToTerminal
+- Backend wiring: session_manager.send_input(path_bytes)
+
+**Commit:** `118b1ca`
+
+**Impact:**
+- Phase 2: 100% COMPLETE ✅
+- Phase 3: 25% complete (1/4)
+- Total: 13/16 features (81%)
 
 ### Iteration 2: C4 - Session Context Menu
 
