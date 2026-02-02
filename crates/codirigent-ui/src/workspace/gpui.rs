@@ -55,8 +55,8 @@ pub struct WorkspaceView {
     event_bus: Arc<DefaultEventBus>,
     /// Session manager for PTY and session lifecycle.
     session_manager: Arc<Mutex<DefaultSessionManager>>,
-    /// Input detector for monitoring session status.
-    detector: Arc<Mutex<InputDetector>>,
+    /// Input detector for monitoring session status (future use).
+    _detector: Arc<Mutex<InputDetector>>,
     /// Terminal views for each session.
     terminals: HashMap<SessionId, TerminalView>,
     /// Next session ID counter (kept for UI session tracking).
@@ -105,7 +105,7 @@ impl WorkspaceView {
             focus_handle: cx.focus_handle(),
             event_bus,
             session_manager,
-            detector,
+            _detector: detector,
             terminals: HashMap::new(),
             next_session_id: 1,
         }
