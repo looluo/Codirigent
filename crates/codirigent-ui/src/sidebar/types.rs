@@ -178,5 +178,95 @@ pub enum SidebarItem {
         is_editing: bool,
         /// Indentation level (0 for ungrouped, 1 for grouped).
         indent_level: u8,
+        /// Current task description (if any).
+        task: Option<String>,
+        /// Context window usage percentage (0.0 - 1.0).
+        context_usage: Option<f32>,
+        /// Session group color indicator.
+        group_color: Option<Color>,
     },
+}
+
+/// Status badge styling information.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct StatusBadge {
+    /// Badge text.
+    pub text: &'static str,
+    /// Badge background color.
+    pub bg_color: Color,
+    /// Badge text color.
+    pub text_color: Color,
+    /// Whether the badge should show an animated dot.
+    pub animated: bool,
+}
+
+impl StatusBadge {
+    /// Get the badge for a session status with theme colors.
+    pub fn for_status(status: SessionStatus, status_colors: &StatusColors) -> Self {
+        match status {
+            SessionStatus::Idle => Self {
+                text: "Idle",
+                bg_color: Color::rgba(0.4, 0.4, 0.4, 0.2),
+                text_color: status_colors.idle,
+                animated: false,
+            },
+            SessionStatus::Working => Self {
+                text: "Working",
+                bg_color: Color::rgba(0.31, 0.80, 0.77, 0.15), // Teal @ 15%
+                text_color: status_colors.working,
+                animated: true,
+            },
+            SessionStatus::WaitingForInput => Self {
+                text: "Waiting",
+                bg_color: Color::rgba(1.0, 0.42, 0.42, 0.15), // Red @ 15%
+                text_color: status_colors.waiting_for_input,
+                animated: true,
+            },
+            SessionStatus::Done => Self {
+                text: "Done",
+                bg_color: Color::rgba(0.31, 0.80, 0.77, 0.15), // Teal @ 15%
+                text_color: status_colors.done,
+                animated: false,
+            },
+            SessionStatus::Error => Self {
+                text: "Error",
+                bg_color: Color::rgba(1.0, 0.42, 0.42, 0.15), // Red @ 15%
+                text_color: status_colors.error,
+                animated: false,
+            },
+        }
+    }
+}
+
+/// Context usage level for color coding.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ContextUsageLevel {
+    /// Normal usage (< 70%).
+    Normal,
+    /// Warning usage (70-90%).
+    Warning,
+    /// Critical usage (> 90%).
+    Critical,
+}
+
+impl ContextUsageLevel {
+    /// Determine the usage level from a percentage.
+    pub fn from_percentage(pct: f32) -> Self {
+        if pct >= 0.9 {
+            Self::Critical
+        } else if pct >= 0.7 {
+            Self::Warning
+        } else {
+            Self::Normal
+        }
+    }
+
+    /// Get the color for this usage level.
+    pub fn color(&self) -> Color {
+        match self {
+            Self::Normal => Color::from_hex("#888888"),  // Secondary text
+            Self::Warning => Color::from_hex("#F59E0B"), // Orange
+            Self::Critical => Color::from_hex("#FF6B6B"), // Red
+        }
+    }
 }

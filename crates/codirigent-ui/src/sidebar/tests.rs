@@ -339,3 +339,176 @@ fn test_take_events_clears() {
     let _ = sidebar.take_events();
     assert!(sidebar.take_events().is_empty());
 }
+
+// === Tests for new sidebar features ===
+
+#[test]
+fn test_context_usage_level_normal() {
+    assert_eq!(ContextUsageLevel::from_percentage(0.0), ContextUsageLevel::Normal);
+    assert_eq!(ContextUsageLevel::from_percentage(0.5), ContextUsageLevel::Normal);
+    assert_eq!(ContextUsageLevel::from_percentage(0.69), ContextUsageLevel::Normal);
+}
+
+#[test]
+fn test_context_usage_level_warning() {
+    assert_eq!(ContextUsageLevel::from_percentage(0.7), ContextUsageLevel::Warning);
+    assert_eq!(ContextUsageLevel::from_percentage(0.8), ContextUsageLevel::Warning);
+    assert_eq!(ContextUsageLevel::from_percentage(0.89), ContextUsageLevel::Warning);
+}
+
+#[test]
+fn test_context_usage_level_critical() {
+    assert_eq!(ContextUsageLevel::from_percentage(0.9), ContextUsageLevel::Critical);
+    assert_eq!(ContextUsageLevel::from_percentage(0.95), ContextUsageLevel::Critical);
+    assert_eq!(ContextUsageLevel::from_percentage(1.0), ContextUsageLevel::Critical);
+}
+
+#[test]
+fn test_context_usage_level_colors() {
+    let normal = ContextUsageLevel::Normal.color();
+    let warning = ContextUsageLevel::Warning.color();
+    let critical = ContextUsageLevel::Critical.color();
+
+    // Each level should have a distinct color
+    assert_ne!(normal.r, warning.r);
+    assert_ne!(warning.r, critical.r);
+}
+
+#[test]
+fn test_status_badge_for_idle() {
+    let colors = StatusColors::default();
+    let badge = StatusBadge::for_status(SessionStatus::Idle, &colors);
+    assert_eq!(badge.text, "Idle");
+    assert!(!badge.animated);
+}
+
+#[test]
+fn test_status_badge_for_working() {
+    let colors = StatusColors::default();
+    let badge = StatusBadge::for_status(SessionStatus::Working, &colors);
+    assert_eq!(badge.text, "Working");
+    assert!(badge.animated);
+}
+
+#[test]
+fn test_status_badge_for_waiting() {
+    let colors = StatusColors::default();
+    let badge = StatusBadge::for_status(SessionStatus::WaitingForInput, &colors);
+    assert_eq!(badge.text, "Waiting");
+    assert!(badge.animated);
+}
+
+#[test]
+fn test_status_badge_for_done() {
+    let colors = StatusColors::default();
+    let badge = StatusBadge::for_status(SessionStatus::Done, &colors);
+    assert_eq!(badge.text, "Done");
+    assert!(!badge.animated);
+}
+
+#[test]
+fn test_status_badge_for_error() {
+    let colors = StatusColors::default();
+    let badge = StatusBadge::for_status(SessionStatus::Error, &colors);
+    assert_eq!(badge.text, "Error");
+    assert!(!badge.animated);
+}
+
+fn create_session_with_context(
+    id: u64,
+    name: &str,
+    status: SessionStatus,
+    context_usage: Option<f32>,
+) -> Session {
+    Session {
+        id: SessionId(id),
+        name: name.to_string(),
+        status,
+        working_directory: PathBuf::from("/tmp"),
+        current_task: None,
+        context_usage,
+        created_at: chrono::Utc::now(),
+        group: None,
+        color: None,
+    }
+}
+
+fn create_session_with_task(
+    id: u64,
+    name: &str,
+    status: SessionStatus,
+    task: &str,
+) -> Session {
+    use codirigent_core::TaskId;
+    Session {
+        id: SessionId(id),
+        name: name.to_string(),
+        status,
+        working_directory: PathBuf::from("/tmp"),
+        current_task: Some(TaskId(task.to_string())),
+        context_usage: None,
+        created_at: chrono::Utc::now(),
+        group: None,
+        color: None,
+    }
+}
+
+#[test]
+fn test_render_hints_with_context_usage() {
+    let mut sidebar = SessionSidebar::new();
+    sidebar.update_sessions(vec![
+        create_session_with_context(1, "S1", SessionStatus::Working, Some(0.85)),
+    ]);
+    let hints = sidebar.render_hints();
+    if let SidebarItem::Session { context_usage, .. } = &hints.items[0] {
+        assert_eq!(*context_usage, Some(0.85));
+    } else {
+        panic!("Expected Session item");
+    }
+}
+
+#[test]
+fn test_render_hints_with_task() {
+    let mut sidebar = SessionSidebar::new();
+    sidebar.update_sessions(vec![
+        create_session_with_task(1, "S1", SessionStatus::Working, "Implementing feature X"),
+    ]);
+    let hints = sidebar.render_hints();
+    if let SidebarItem::Session { task, .. } = &hints.items[0] {
+        assert_eq!(task.as_deref(), Some("Implementing feature X"));
+    } else {
+        panic!("Expected Session item");
+    }
+}
+
+#[test]
+fn test_render_hints_with_group_color() {
+    let mut sidebar = SessionSidebar::new();
+    sidebar.update_sessions(vec![
+        create_grouped_session(1, "S1", SessionStatus::Idle, "Backend", "#4ECDC4"),
+    ]);
+    let hints = sidebar.render_hints();
+    // First item is the group header, second is the session
+    if let SidebarItem::Session { group_color, .. } = &hints.items[1] {
+        assert!(group_color.is_some());
+        let color = group_color.unwrap();
+        // #4ECDC4 should have high green component
+        assert!(color.g > 0.7);
+    } else {
+        panic!("Expected Session item");
+    }
+}
+
+#[test]
+fn test_render_hints_ungrouped_no_group_color() {
+    let mut sidebar = SessionSidebar::new();
+    sidebar.update_sessions(vec![
+        create_test_session(1, "S1", SessionStatus::Idle),
+    ]);
+    let hints = sidebar.render_hints();
+    if let SidebarItem::Session { group_color, .. } = &hints.items[0] {
+        assert!(group_color.is_none());
+    } else {
+        panic!("Expected Session item");
+    }
+}
