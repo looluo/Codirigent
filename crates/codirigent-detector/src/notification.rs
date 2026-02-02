@@ -209,23 +209,35 @@ fn send_linux_notification(title: &str, body: &str) {
     }
 }
 
-/// Windows notification (placeholder).
+/// Windows toast notification using winrt-notification.
 ///
-/// Full Windows toast notification support requires more complex setup
-/// with the Windows notification APIs. For now, we log the notification.
+/// Shows a Windows toast notification using the PowerShell App ID,
+/// which allows notifications without registering a custom app ID.
 #[cfg(target_os = "windows")]
 fn send_windows_notification(title: &str, body: &str) {
-    // Windows toast notifications require more complex setup
-    // For Phase 1, we log the notification intent
-    info!(
-        %title,
-        %body,
-        "Windows notification requested (toast API not yet implemented)"
-    );
-    // TODO: Implement using windows-rs toast API
-    // This would require adding features to the windows dependency:
-    // - Win32_UI_Shell
-    // - Win32_UI_WindowsAndMessaging
+    use winrt_notification::{Duration, Sound, Toast};
+
+    match Toast::new(Toast::POWERSHELL_APP_ID)
+        .title(title)
+        .text1(body)
+        .sound(Some(Sound::Default))
+        .duration(Duration::Short)
+        .show()
+    {
+        Ok(()) => {
+            debug!(
+                %title,
+                "Windows toast notification sent successfully"
+            );
+        }
+        Err(e) => {
+            warn!(
+                %title,
+                error = ?e,
+                "Failed to send Windows toast notification"
+            );
+        }
+    }
 }
 
 /// Check if notifications are supported on this platform.
@@ -265,8 +277,8 @@ pub fn notifications_supported() -> bool {
 
     #[cfg(target_os = "windows")]
     {
-        // Windows toast API not yet implemented
-        return false;
+        // Windows toast notifications are supported on Windows 10+
+        return true;
     }
 
     // Fallback for other platforms
