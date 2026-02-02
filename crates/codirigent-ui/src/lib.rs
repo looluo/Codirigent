@@ -88,6 +88,7 @@ pub mod smart_clipboard;
 pub mod theme;
 pub mod theme_config;
 pub mod theme_manager;
+pub mod toolbar;
 pub mod workspace;
 
 // Modules that require GPUI feature only
