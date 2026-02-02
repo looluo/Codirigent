@@ -93,6 +93,27 @@ impl Color {
 
         Self::rgba(r, g, b, 1.0)
     }
+
+    /// Convert to GPUI Hsla color.
+    ///
+    /// This allows using sidebar colors directly in GPUI rendering.
+    #[cfg(feature = "gpui-full")]
+    pub fn to_hsla(&self) -> gpui::Hsla {
+        gpui::Rgba {
+            r: self.r,
+            g: self.g,
+            b: self.b,
+            a: self.a,
+        }
+        .into()
+    }
+}
+
+#[cfg(feature = "gpui-full")]
+impl From<Color> for gpui::Hsla {
+    fn from(color: Color) -> Self {
+        color.to_hsla()
+    }
 }
 
 /// Color mapping for session status indicators.
