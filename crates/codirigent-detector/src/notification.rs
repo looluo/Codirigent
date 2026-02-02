@@ -379,54 +379,63 @@ mod tests {
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn test_sanitize_for_applescript_basic() {
         let result = sanitize_for_applescript("hello");
         assert_eq!(result, "hello");
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn test_sanitize_for_applescript_quotes() {
         let result = sanitize_for_applescript("hello \"world\"");
         assert_eq!(result, "hello \\\"world\\\"");
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn test_sanitize_for_applescript_backslash() {
         let result = sanitize_for_applescript("path\\to\\file");
         assert_eq!(result, "path\\\\to\\\\file");
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn test_sanitize_for_applescript_newline() {
         let result = sanitize_for_applescript("line1\nline2");
         assert_eq!(result, "line1 line2");
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn test_sanitize_for_applescript_carriage_return() {
         let result = sanitize_for_applescript("line1\rline2");
         assert_eq!(result, "line1 line2");
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn test_sanitize_for_applescript_tab() {
         let result = sanitize_for_applescript("col1\tcol2");
         assert_eq!(result, "col1 col2");
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn test_sanitize_for_applescript_all_control_chars() {
         let result = sanitize_for_applescript("a\nb\rc\td");
         assert_eq!(result, "a b c d");
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn test_sanitize_for_applescript_combined() {
         let result = sanitize_for_applescript("\"hello\"\nworld\\path");
         assert_eq!(result, "\\\"hello\\\" world\\\\path");
     }
 
     #[test]
+    #[cfg(target_os = "macos")]
     fn test_sanitize_for_applescript_empty() {
         let result = sanitize_for_applescript("");
         assert_eq!(result, "");
@@ -482,8 +491,8 @@ mod tests {
 
         #[test]
         fn test_notifications_supported_windows() {
-            // Windows toast API not yet implemented
-            assert!(!notifications_supported());
+            // Windows toast API is supported via winrt_notification
+            assert!(notifications_supported());
         }
     }
 }
