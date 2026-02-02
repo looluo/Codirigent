@@ -304,7 +304,7 @@ impl LayoutProfile {
     /// ```
     /// use codirigent_ui::layout::LayoutProfile;
     ///
-    /// assert_eq!(LayoutProfile::Grid2x2.display_name(), "2×2 Grid");
+    /// assert_eq!(LayoutProfile::Grid2x2.display_name(), "2×2");
     /// ```
     pub fn display_name(self) -> String {
         match self {

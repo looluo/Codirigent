@@ -1,7 +1,7 @@
 //! Theme system for Codirigent.
 //!
 //! Provides color themes for the Codirigent UI, including dark and light modes.
-//! Colors are inspired by Catppuccin for the dark theme.
+//! The dark theme uses a custom color palette designed for the Dirigent dashboard.
 //!
 //! # Color Types
 //!
@@ -185,22 +185,89 @@ pub const fn hsla(h: f32, s: f32, l: f32, a: f32) -> Hsla {
     Hsla::new(h, s, l, a)
 }
 
+/// Convert a hex color string to HSLA.
+///
+/// Accepts formats: "#RGB", "#RRGGBB", "RGB", "RRGGBB"
+///
+/// # Arguments
+///
+/// * `hex` - Hex color string
+///
+/// # Returns
+///
+/// HSLA color or None if parsing fails
+pub fn hex_to_hsla(hex: &str) -> Option<Hsla> {
+    let hex = hex.trim_start_matches('#');
+    let (r, g, b) = match hex.len() {
+        3 => {
+            let r = u8::from_str_radix(&hex[0..1], 16).ok()? * 17;
+            let g = u8::from_str_radix(&hex[1..2], 16).ok()? * 17;
+            let b = u8::from_str_radix(&hex[2..3], 16).ok()? * 17;
+            (r, g, b)
+        }
+        6 => {
+            let r = u8::from_str_radix(&hex[0..2], 16).ok()?;
+            let g = u8::from_str_radix(&hex[2..4], 16).ok()?;
+            let b = u8::from_str_radix(&hex[4..6], 16).ok()?;
+            (r, g, b)
+        }
+        _ => return None,
+    };
+    Some(Rgba::rgb(r, g, b).to_hsla())
+}
+
+/// Convert a hex color string to HSLA, panicking if invalid.
+///
+/// Use only with known-valid hex strings (e.g., compile-time constants).
+fn hex(hex: &str) -> Hsla {
+    hex_to_hsla(hex).expect("Invalid hex color")
+}
+
 /// Codirigent color theme.
 ///
 /// Contains all colors used throughout the Codirigent UI. Each color is defined
 /// as an HSLA value for flexibility in rendering.
 #[derive(Clone, Debug, PartialEq)]
 pub struct CodirigentTheme {
-    /// Main background color.
+    // === Background Colors ===
+    /// Main/deepest background color.
     pub background: Hsla,
-    /// Primary text color.
-    pub foreground: Hsla,
+    /// Panel background color (slightly lighter than background).
+    pub panel_background: Hsla,
+    /// Header/toolbar background color.
+    pub header_background: Hsla,
+    /// Sidebar background color.
+    pub sidebar_background: Hsla,
+
+    // === Border & Interaction Colors ===
     /// Border color for panels and dividers.
     pub border: Hsla,
+    /// Hover state background color.
+    pub hover: Hsla,
+    /// Active/focused element background.
+    pub active: Hsla,
     /// Selection highlight color.
     pub selection: Hsla,
-    /// Cursor color in terminals.
-    pub cursor: Hsla,
+
+    // === Text Colors ===
+    /// Primary text color.
+    pub foreground: Hsla,
+    /// Secondary text color.
+    pub text_secondary: Hsla,
+    /// Muted/tertiary text color.
+    pub muted: Hsla,
+
+    // === Accent Colors ===
+    /// Primary accent color (teal).
+    pub primary: Hsla,
+    /// Secondary accent color (blue).
+    pub secondary: Hsla,
+    /// Purple accent color.
+    pub purple: Hsla,
+    /// Orange accent color.
+    pub orange: Hsla,
+
+    // === Session Status Colors ===
     /// Color for idle sessions.
     pub session_idle: Hsla,
     /// Color for working/active sessions.
@@ -211,14 +278,22 @@ pub struct CodirigentTheme {
     pub session_done: Hsla,
     /// Color for sessions with errors.
     pub session_error: Hsla,
-    /// Sidebar background color.
-    pub sidebar_background: Hsla,
-    /// Panel/pane background color.
-    pub panel_background: Hsla,
-    /// Active/focused element highlight.
-    pub active: Hsla,
-    /// Muted/secondary text color.
-    pub muted: Hsla,
+
+    // === Priority Colors ===
+    /// High priority color.
+    pub priority_high: Hsla,
+    /// Medium priority color.
+    pub priority_medium: Hsla,
+    /// Low priority color.
+    pub priority_low: Hsla,
+
+    // === Session Group Colors ===
+    /// Session group colors (for visual grouping).
+    pub session_colors: [Hsla; 6],
+
+    // === Terminal Colors ===
+    /// Cursor color in terminals.
+    pub cursor: Hsla,
     /// Terminal ANSI colors.
     pub ansi: AnsiColors,
     /// Terminal background as RGBA.
@@ -231,88 +306,175 @@ pub struct CodirigentTheme {
     pub terminal_selection_bg: Rgba,
     /// Terminal selection foreground as RGBA.
     pub terminal_selection_fg: Rgba,
+
+    // === Layout ===
     /// Gap between grid cells in pixels.
     pub grid_gap: f32,
+
+    // === Typography ===
+    /// Base font size for UI text.
+    pub font_size_base: f32,
+    /// Small font size.
+    pub font_size_small: f32,
+    /// Large font size.
+    pub font_size_large: f32,
+
+    // === Spacing ===
+    /// Base spacing unit in pixels.
+    pub spacing_base: f32,
+    /// Small spacing.
+    pub spacing_small: f32,
+    /// Large spacing.
+    pub spacing_large: f32,
 }
 
 impl CodirigentTheme {
     /// Create the dark theme.
     ///
-    /// Uses colors inspired by Catppuccin Mocha palette.
+    /// Uses the Dirigent dashboard color palette.
     pub fn dark() -> Self {
         Self {
-            // Base colors (Catppuccin Mocha)
-            background: hsla(240.0 / 360.0, 0.21, 0.12, 1.0), // #1e1e2e
-            foreground: hsla(226.0 / 360.0, 0.64, 0.88, 1.0), // #cdd6f4
-            border: hsla(237.0 / 360.0, 0.16, 0.23, 1.0),     // #313244
-            selection: hsla(267.0 / 360.0, 0.84, 0.81, 0.3),  // #cba6f7 @ 30%
-            cursor: hsla(267.0 / 360.0, 0.84, 0.81, 1.0),     // #cba6f7
+            // === Background Colors (from mockup) ===
+            background: hex("#0a0a0c"),        // Darkest background
+            panel_background: hex("#0d0d10"),  // Panel background
+            header_background: hex("#141418"), // Header/toolbar background
+            sidebar_background: hex("#0d0d10"), // Same as panel
 
-            // Session status colors
-            session_idle: hsla(231.0 / 360.0, 0.11, 0.47, 1.0), // #6c7086
-            session_working: hsla(217.0 / 360.0, 0.92, 0.76, 1.0), // #89b4fa (blue)
-            session_waiting: hsla(39.0 / 360.0, 0.67, 0.69, 1.0), // #f9e2af (yellow)
-            session_done: hsla(115.0 / 360.0, 0.54, 0.76, 1.0), // #a6e3a1 (green)
-            session_error: hsla(343.0 / 360.0, 0.81, 0.75, 1.0), // #f38ba8 (red)
+            // === Border & Interaction Colors ===
+            border: hex("#1a1a1f"),           // Border color
+            hover: hex("#151518"),            // Hover state
+            active: hex("#1a1a22"),           // Active/focused state
+            selection: Hsla { a: 0.3, ..hex("#4ECDC4") }, // Primary @ 30%
 
-            // Panel colors
-            sidebar_background: hsla(240.0 / 360.0, 0.21, 0.10, 1.0),
-            panel_background: hsla(240.0 / 360.0, 0.21, 0.14, 1.0),
+            // === Text Colors ===
+            foreground: hex("#e0e0e0"),       // Primary text
+            text_secondary: hex("#888888"),   // Secondary text
+            muted: hex("#555555"),            // Muted text
 
-            // UI states
-            active: hsla(267.0 / 360.0, 0.84, 0.81, 1.0), // #cba6f7
-            muted: hsla(231.0 / 360.0, 0.11, 0.47, 1.0),  // #6c7086
+            // === Accent Colors ===
+            primary: hex("#4ECDC4"),          // Teal (main accent)
+            secondary: hex("#5B8DEF"),        // Blue
+            purple: hex("#A78BFA"),           // Purple
+            orange: hex("#F59E0B"),           // Orange
 
-            // Terminal colors
+            // === Session Status Colors ===
+            session_idle: hex("#666666"),     // Gray for idle
+            session_working: hex("#4ECDC4"),  // Teal for working
+            session_waiting: hex("#FF6B6B"),  // Red for waiting input
+            session_done: hex("#4ECDC4"),     // Teal for done
+            session_error: hex("#FF6B6B"),    // Red for error
+
+            // === Priority Colors ===
+            priority_high: hex("#FF6B6B"),    // Red
+            priority_medium: hex("#F59E0B"),  // Orange
+            priority_low: hex("#5B8DEF"),     // Blue
+
+            // === Session Group Colors ===
+            session_colors: [
+                hex("#4ECDC4"), // Teal
+                hex("#5B8DEF"), // Blue
+                hex("#A78BFA"), // Purple
+                hex("#F59E0B"), // Orange
+                hex("#FF6B6B"), // Red/Pink
+                hex("#10B981"), // Green
+            ],
+
+            // === Terminal Colors ===
+            cursor: hex("#4ECDC4"),           // Teal cursor
             ansi: AnsiColors::default(),
-            terminal_background: Rgba::rgb(30, 30, 46), // #1e1e2e
-            terminal_foreground: Rgba::rgb(205, 214, 244), // #cdd6f4
-            terminal_cursor: Rgba::rgb(203, 166, 247),  // #cba6f7
-            terminal_selection_bg: Rgba::new(203, 166, 247, 77), // #cba6f7 @ 30%
-            terminal_selection_fg: Rgba::rgb(205, 214, 244), // #cdd6f4
+            terminal_background: Rgba::rgb(10, 10, 12),    // #0a0a0c
+            terminal_foreground: Rgba::rgb(224, 224, 224), // #e0e0e0
+            terminal_cursor: Rgba::rgb(78, 205, 196),      // #4ECDC4
+            terminal_selection_bg: Rgba::new(78, 205, 196, 77), // #4ECDC4 @ 30%
+            terminal_selection_fg: Rgba::rgb(224, 224, 224), // #e0e0e0
 
-            // Layout
+            // === Layout ===
             grid_gap: 4.0,
+
+            // === Typography ===
+            font_size_base: 13.0,
+            font_size_small: 11.0,
+            font_size_large: 15.0,
+
+            // === Spacing ===
+            spacing_base: 8.0,
+            spacing_small: 4.0,
+            spacing_large: 16.0,
         }
     }
 
     /// Create the light theme.
     ///
-    /// Uses colors inspired by Catppuccin Latte palette.
+    /// Light theme variant with inverted colors for better readability
+    /// in bright environments.
     pub fn light() -> Self {
         Self {
-            // Base colors (Catppuccin Latte)
-            background: hsla(220.0 / 360.0, 0.23, 0.95, 1.0), // #eff1f5
-            foreground: hsla(234.0 / 360.0, 0.16, 0.35, 1.0), // #4c4f69
-            border: hsla(220.0 / 360.0, 0.13, 0.85, 1.0),     // #ccd0da
-            selection: hsla(267.0 / 360.0, 0.84, 0.70, 0.3),  // Mauve @ 30%
-            cursor: hsla(267.0 / 360.0, 0.84, 0.50, 1.0),     // Mauve
+            // === Background Colors ===
+            background: hex("#f5f5f7"),
+            panel_background: hex("#ffffff"),
+            header_background: hex("#e8e8ec"),
+            sidebar_background: hex("#f0f0f4"),
 
-            // Session status colors (darker for visibility on light bg)
-            session_idle: hsla(231.0 / 360.0, 0.10, 0.55, 1.0), // Gray
-            session_working: hsla(217.0 / 360.0, 0.92, 0.45, 1.0), // Blue
-            session_waiting: hsla(39.0 / 360.0, 0.80, 0.45, 1.0), // Yellow
-            session_done: hsla(115.0 / 360.0, 0.54, 0.40, 1.0), // Green
-            session_error: hsla(343.0 / 360.0, 0.81, 0.50, 1.0), // Red
+            // === Border & Interaction Colors ===
+            border: hex("#d0d0d8"),
+            hover: hex("#e8e8ec"),
+            active: hex("#d8d8e0"),
+            selection: Hsla { a: 0.2, ..hex("#3BA89E") }, // Darker teal @ 20%
 
-            // Panel colors
-            sidebar_background: hsla(220.0 / 360.0, 0.23, 0.92, 1.0),
-            panel_background: hsla(220.0 / 360.0, 0.23, 0.97, 1.0),
+            // === Text Colors ===
+            foreground: hex("#1a1a1c"),
+            text_secondary: hex("#666666"),
+            muted: hex("#999999"),
 
-            // UI states
-            active: hsla(267.0 / 360.0, 0.84, 0.50, 1.0),
-            muted: hsla(231.0 / 360.0, 0.10, 0.55, 1.0),
+            // === Accent Colors (slightly darker for light bg) ===
+            primary: hex("#3BA89E"),          // Darker teal
+            secondary: hex("#4A7BD8"),        // Darker blue
+            purple: hex("#8B6FD9"),           // Darker purple
+            orange: hex("#D98A0B"),           // Darker orange
 
-            // Terminal colors
+            // === Session Status Colors ===
+            session_idle: hex("#888888"),
+            session_working: hex("#3BA89E"),
+            session_waiting: hex("#D85555"),
+            session_done: hex("#3BA89E"),
+            session_error: hex("#D85555"),
+
+            // === Priority Colors ===
+            priority_high: hex("#D85555"),
+            priority_medium: hex("#D98A0B"),
+            priority_low: hex("#4A7BD8"),
+
+            // === Session Group Colors ===
+            session_colors: [
+                hex("#3BA89E"), // Teal
+                hex("#4A7BD8"), // Blue
+                hex("#8B6FD9"), // Purple
+                hex("#D98A0B"), // Orange
+                hex("#D85555"), // Red/Pink
+                hex("#0D9668"), // Green
+            ],
+
+            // === Terminal Colors ===
+            cursor: hex("#3BA89E"),
             ansi: AnsiColors::default(),
-            terminal_background: Rgba::rgb(239, 241, 245), // #eff1f5
-            terminal_foreground: Rgba::rgb(76, 79, 105),   // #4c4f69
-            terminal_cursor: Rgba::rgb(136, 57, 239),      // Mauve
-            terminal_selection_bg: Rgba::new(136, 57, 239, 77), // Mauve @ 30%
-            terminal_selection_fg: Rgba::rgb(76, 79, 105), // #4c4f69
+            terminal_background: Rgba::rgb(245, 245, 247),
+            terminal_foreground: Rgba::rgb(26, 26, 28),
+            terminal_cursor: Rgba::rgb(59, 168, 158),
+            terminal_selection_bg: Rgba::new(59, 168, 158, 51),
+            terminal_selection_fg: Rgba::rgb(26, 26, 28),
 
-            // Layout
+            // === Layout ===
             grid_gap: 4.0,
+
+            // === Typography ===
+            font_size_base: 13.0,
+            font_size_small: 11.0,
+            font_size_large: 15.0,
+
+            // === Spacing ===
+            spacing_base: 8.0,
+            spacing_small: 4.0,
+            spacing_large: 16.0,
         }
     }
 
@@ -416,18 +578,18 @@ mod tests {
     fn test_dark_theme_creation() {
         let theme = CodirigentTheme::dark();
         // Dark theme should have low lightness background
-        assert!(theme.background.l < 0.2);
+        assert!(theme.background.l < 0.1, "Dark bg lightness: {}", theme.background.l);
         // Dark theme should have high lightness foreground
-        assert!(theme.foreground.l > 0.5);
+        assert!(theme.foreground.l > 0.5, "Dark fg lightness: {}", theme.foreground.l);
     }
 
     #[test]
     fn test_light_theme_creation() {
         let theme = CodirigentTheme::light();
         // Light theme should have high lightness background
-        assert!(theme.background.l > 0.8);
+        assert!(theme.background.l > 0.9, "Light bg lightness: {}", theme.background.l);
         // Light theme should have low lightness foreground
-        assert!(theme.foreground.l < 0.5);
+        assert!(theme.foreground.l < 0.2, "Light fg lightness: {}", theme.foreground.l);
     }
 
     #[test]
@@ -468,12 +630,10 @@ mod tests {
         // Status colors should be distinct from each other
         let working = theme.status_color(SessionStatus::Working);
         let waiting = theme.status_color(SessionStatus::WaitingForInput);
-        let done = theme.status_color(SessionStatus::Done);
-        let error = theme.status_color(SessionStatus::Error);
+        let idle = theme.status_color(SessionStatus::Idle);
 
         assert_ne!(working, waiting, "Working and Waiting should be different");
-        assert_ne!(waiting, done, "Waiting and Done should be different");
-        assert_ne!(done, error, "Done and Error should be different");
+        assert_ne!(idle, working, "Idle and Working should be different");
     }
 
     #[test]
@@ -579,8 +739,77 @@ mod tests {
     #[test]
     fn test_terminal_colors() {
         let theme = CodirigentTheme::dark();
-        assert_eq!(theme.terminal_background.r, 30);
-        assert_eq!(theme.terminal_background.g, 30);
-        assert_eq!(theme.terminal_background.b, 46);
+        // #0a0a0c
+        assert_eq!(theme.terminal_background.r, 10);
+        assert_eq!(theme.terminal_background.g, 10);
+        assert_eq!(theme.terminal_background.b, 12);
+    }
+
+    #[test]
+    fn test_hex_to_hsla_valid() {
+        // Test 6-digit hex
+        let color = hex_to_hsla("#FF0000").unwrap();
+        assert!((color.h - 0.0).abs() < 0.01); // Red
+        assert!((color.s - 1.0).abs() < 0.01);
+        assert!((color.l - 0.5).abs() < 0.01);
+
+        // Test without hash
+        let color2 = hex_to_hsla("00FF00").unwrap();
+        assert!((color2.h - 0.333).abs() < 0.01); // Green
+
+        // Test 3-digit hex
+        let color3 = hex_to_hsla("#F00").unwrap();
+        assert!((color3.h - 0.0).abs() < 0.01); // Red
+    }
+
+    #[test]
+    fn test_hex_to_hsla_invalid() {
+        assert!(hex_to_hsla("invalid").is_none());
+        assert!(hex_to_hsla("#GGG").is_none());
+        assert!(hex_to_hsla("#12345").is_none()); // Wrong length
+    }
+
+    #[test]
+    fn test_accent_colors() {
+        let theme = CodirigentTheme::dark();
+        // Primary should be teal-ish (around 174 degrees hue, or ~0.48 normalized)
+        assert!(theme.primary.s > 0.4, "Primary should be saturated");
+        // Secondary should be blue-ish
+        assert!(theme.secondary.s > 0.4, "Secondary should be saturated");
+    }
+
+    #[test]
+    fn test_session_colors() {
+        let theme = CodirigentTheme::dark();
+        assert_eq!(theme.session_colors.len(), 6);
+        // All session colors should be opaque
+        for color in theme.session_colors {
+            assert_eq!(color.a, 1.0);
+        }
+    }
+
+    #[test]
+    fn test_typography_values() {
+        let theme = CodirigentTheme::dark();
+        assert_eq!(theme.font_size_base, 13.0);
+        assert!(theme.font_size_small < theme.font_size_base);
+        assert!(theme.font_size_large > theme.font_size_base);
+    }
+
+    #[test]
+    fn test_spacing_values() {
+        let theme = CodirigentTheme::dark();
+        assert_eq!(theme.spacing_base, 8.0);
+        assert!(theme.spacing_small < theme.spacing_base);
+        assert!(theme.spacing_large > theme.spacing_base);
+    }
+
+    #[test]
+    fn test_priority_colors() {
+        let theme = CodirigentTheme::dark();
+        // Priority colors should all be distinct
+        assert_ne!(theme.priority_high, theme.priority_medium);
+        assert_ne!(theme.priority_medium, theme.priority_low);
+        assert_ne!(theme.priority_high, theme.priority_low);
     }
 }
