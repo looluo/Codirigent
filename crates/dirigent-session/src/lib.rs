@@ -15,6 +15,7 @@
 //! - [`session`] - Internal session state combining metadata with runtime handles
 //! - [`manager`] - Session manager implementing the `SessionManager` trait
 //! - [`skill_manager`] - Skill discovery and management from filesystem
+//! - [`broadcast_service`] - Broadcast messaging to multiple sessions
 //!
 //! # Example
 //!
@@ -44,8 +45,10 @@
 #![warn(missing_docs)]
 #![warn(clippy::all)]
 
+pub mod broadcast_service;
 pub mod manager;
 pub mod pty;
+pub mod ralph_controller;
 pub mod session;
 pub mod skill_manager;
 
@@ -53,8 +56,10 @@ pub mod skill_manager;
 #[cfg(feature = "git-worktree")]
 pub mod worktree;
 
+pub use broadcast_service::DefaultBroadcastService;
 pub use manager::DefaultSessionManager;
 pub use pty::{spawn_output_reader, OutputReader, PtyHandle, PtySize};
+pub use ralph_controller::{DefaultRalphLoopController, LoopStats};
 pub use session::SessionState;
 pub use skill_manager::DefaultSkillManager;
 

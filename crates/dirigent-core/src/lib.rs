@@ -24,6 +24,7 @@
 //! - [`ralph`] - Ralph Loop for autonomous task execution
 //! - [`task_manager`] - Unified task management coordinator
 //! - [`session_advanced`] - Advanced session features (templates, handoff, groups, overnight mode)
+//! - [`broadcast`] - Broadcast messaging to multiple sessions
 //! - [`pipeline`] - Verification pipeline types and traits
 //! - [`error`] - Error types
 //!

@@ -295,6 +295,148 @@ pub trait StorageService: Send + Sync {
     fn delete_task(&self, id: &TaskId) -> Result<()>;
 }
 
+/// Broadcast service for sending messages to multiple sessions.
+///
+/// This trait defines the contract for broadcasting messages to AI coding
+/// sessions. Messages can include template variables that are expanded
+/// before sending.
+///
+/// # Thread Safety
+///
+/// All implementations must be `Send + Sync` to allow sharing across threads.
+///
+/// # Example
+///
+/// ```ignore
+/// use dirigent_core::{BroadcastService, BroadcastVariables, SessionId};
+///
+/// fn broadcast_update(service: &mut dyn BroadcastService) {
+///     let vars = BroadcastVariables::new()
+///         .with_project("my-app".to_string());
+///
+///     // Send to specific sessions
+///     let targets = vec![SessionId(1), SessionId(2)];
+///     service.send_with_variables(
+///         "API changed in $PROJECT, please update",
+///         targets,
+///         vars,
+///     ).unwrap();
+///
+///     // Or send to all sessions
+///     service.send_to_all("General announcement").unwrap();
+/// }
+/// ```
+pub trait BroadcastService: Send + Sync {
+    /// Send a message to specified sessions.
+    ///
+    /// # Arguments
+    ///
+    /// * `content` - The message content to send
+    /// * `targets` - List of session IDs to send to
+    ///
+    /// # Returns
+    ///
+    /// The broadcast ID for tracking delivery status.
+    fn send(&mut self, content: &str, targets: Vec<SessionId>) -> Result<crate::broadcast::BroadcastId>;
+
+    /// Send with template variable expansion.
+    ///
+    /// Variables in the template are expanded before sending:
+    /// - `$SESSION_NAME` - Session name
+    /// - `$WORKTREE` - Worktree path
+    /// - `$PROJECT` - Project name
+    /// - Custom variables via the `custom` HashMap
+    ///
+    /// # Arguments
+    ///
+    /// * `template` - Template string with variable placeholders
+    /// * `targets` - List of session IDs to send to
+    /// * `variables` - Variables to expand in the template
+    ///
+    /// # Returns
+    ///
+    /// The broadcast ID for tracking delivery status.
+    fn send_with_variables(
+        &mut self,
+        template: &str,
+        targets: Vec<SessionId>,
+        variables: crate::broadcast::BroadcastVariables,
+    ) -> Result<crate::broadcast::BroadcastId>;
+
+    /// Send with priority level.
+    ///
+    /// # Arguments
+    ///
+    /// * `content` - The message content to send
+    /// * `targets` - List of session IDs to send to
+    /// * `priority` - Message priority level
+    ///
+    /// # Returns
+    ///
+    /// The broadcast ID for tracking delivery status.
+    fn send_with_priority(
+        &mut self,
+        content: &str,
+        targets: Vec<SessionId>,
+        priority: crate::broadcast::BroadcastPriority,
+    ) -> Result<crate::broadcast::BroadcastId>;
+
+    /// Send to all active sessions.
+    ///
+    /// This requires access to the session list to determine active sessions.
+    ///
+    /// # Arguments
+    ///
+    /// * `content` - The message content to send
+    ///
+    /// # Returns
+    ///
+    /// The broadcast ID for tracking delivery status.
+    fn send_to_all(&mut self, content: &str) -> Result<crate::broadcast::BroadcastId>;
+
+    /// Get broadcast history (most recent first).
+    ///
+    /// Returns a slice of all broadcast history entries, ordered by
+    /// creation time with most recent first.
+    fn history(&self) -> &[crate::broadcast::BroadcastHistoryEntry];
+
+    /// Get a specific broadcast by ID.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The broadcast ID to look up
+    ///
+    /// # Returns
+    ///
+    /// The broadcast message if found.
+    fn get_broadcast(&self, id: crate::broadcast::BroadcastId) -> Option<&crate::broadcast::BroadcastMessage>;
+
+    /// Clear broadcast history.
+    ///
+    /// Removes all entries from the history. Active broadcasts may still
+    /// be tracked internally.
+    fn clear_history(&mut self);
+
+    /// Retry failed deliveries for a broadcast.
+    ///
+    /// Attempts to re-deliver the message to sessions that previously
+    /// failed to receive it.
+    ///
+    /// # Arguments
+    ///
+    /// * `id` - The broadcast ID to retry
+    ///
+    /// # Errors
+    ///
+    /// Returns an error if the broadcast is not found.
+    fn retry_failed(&mut self, id: crate::broadcast::BroadcastId) -> Result<()>;
+
+    /// Get the next broadcast ID.
+    ///
+    /// Used internally to generate unique broadcast IDs.
+    fn next_id(&mut self) -> crate::broadcast::BroadcastId;
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -324,6 +466,12 @@ mod tests {
     fn test_storage_service_trait_is_object_safe() {
         // This compiles only if StorageService is object-safe
         fn _takes_storage_service(_: &dyn StorageService) {}
+    }
+
+    #[test]
+    fn test_broadcast_service_trait_is_object_safe() {
+        // This compiles only if BroadcastService is object-safe
+        fn _takes_broadcast_service(_: &dyn BroadcastService) {}
     }
 
     // Mock implementations for testing trait contracts

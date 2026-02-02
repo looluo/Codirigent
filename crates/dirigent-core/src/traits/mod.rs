@@ -10,6 +10,7 @@
 //! - [`SessionManager`]: Session lifecycle management
 //! - [`ProcessMonitor`]: Process state monitoring
 //! - [`StorageService`]: File-based persistence
+//! - [`BroadcastService`]: Broadcast messaging to multiple sessions
 //!
 //! ## Skill Traits
 //!
@@ -26,6 +27,7 @@
 //! - [`ProjectType`]: Known project types for auto-detection
 
 mod services;
+pub mod ralph_controller;
 pub mod skill_manager;
 pub mod verifier;
 
@@ -34,6 +36,9 @@ pub use services::*;
 
 // Re-export skill manager trait
 pub use skill_manager::SkillManager;
+
+// Re-export Ralph Loop controller trait
+pub use ralph_controller::RalphLoopController;
 
 // Re-export verification traits
 pub use verifier::{FailureFormatter, ProjectType, VerificationDetector, Verifier};
