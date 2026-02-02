@@ -14,7 +14,7 @@ use crate::theme::CodirigentTheme;
 use codirigent_core::SessionId;
 use gpui::{
     div, px, ClickEvent, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    SharedString, StatefulInteractiveElement, Styled,
+    prelude::FluentBuilder, SharedString, StatefulInteractiveElement, Styled,
 };
 use tracing::info;
 
@@ -1290,5 +1290,257 @@ impl WorkspaceView {
         let muted: gpui::Hsla = theme.muted.into();
 
         self.render_empty_cell_inline_with_colors(position, panel_bg, border_color, muted, cx)
+    }
+
+    /// Render the custom layout picker modal.
+    ///
+    /// Displays a modal overlay with input fields for rows and columns when the
+    /// custom layout picker is open.
+    pub(super) fn render_custom_layout_modal(&mut self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let picker = self.toolbar.custom_picker();
+
+        if !picker.is_open {
+            return None;
+        }
+
+        let theme = self.workspace().theme();
+        let bg: gpui::Hsla = theme.panel_background.into();
+        let border_color: gpui::Hsla = theme.border.into();
+        let fg: gpui::Hsla = theme.foreground.into();
+        let muted: gpui::Hsla = theme.muted.into();
+        let primary: gpui::Hsla = theme.primary.into();
+        let error_color: gpui::Hsla = gpui::Hsla::red(); // Red for errors
+        let input_bg: gpui::Hsla = theme.terminal_background.into();
+
+        let rows_value = picker.rows_input.clone();
+        let cols_value = picker.cols_input.clone();
+        let has_error = picker.error.is_some();
+
+        Some(
+            div()
+                .id("custom-layout-modal-overlay")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(gpui::Hsla::black().opacity(0.5))
+                .child(
+                    div()
+                        .id("custom-layout-modal")
+                        .w(px(400.0))
+                        .bg(bg)
+                        .border_1()
+                        .border_color(border_color)
+                        .rounded_lg()
+                        .flex()
+                        .flex_col()
+                        // Header
+                        .child(
+                            div()
+                                .h(px(48.0))
+                                .px_4()
+                                .border_b_1()
+                                .border_color(border_color)
+                                .flex()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .text_base()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(fg)
+                                        .child("Custom Grid Layout"),
+                                ),
+                        )
+                        // Content
+                        .child(
+                            div()
+                                .p_4()
+                                .flex()
+                                .flex_col()
+                                .gap_4()
+                                // Rows input
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(muted)
+                                                .child("Rows (1-10):"),
+                                        )
+                                        .child(
+                                            div()
+                                                .h(px(36.0))
+                                                .px_3()
+                                                .bg(input_bg)
+                                                .border_1()
+                                                .border_color(if has_error { error_color } else { border_color })
+                                                .rounded_md()
+                                                .flex()
+                                                .items_center()
+                                                .child(
+                                                    div()
+                                                        .text_sm()
+                                                        .text_color(fg)
+                                                        .child(rows_value.clone()),
+                                                ),
+                                        ),
+                                )
+                                // Columns input
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(muted)
+                                                .child("Columns (1-10):"),
+                                        )
+                                        .child(
+                                            div()
+                                                .h(px(36.0))
+                                                .px_3()
+                                                .bg(input_bg)
+                                                .border_1()
+                                                .border_color(if has_error { error_color } else { border_color })
+                                                .rounded_md()
+                                                .flex()
+                                                .items_center()
+                                                .child(
+                                                    div()
+                                                        .text_sm()
+                                                        .text_color(fg)
+                                                        .child(cols_value.clone()),
+                                                ),
+                                        ),
+                                )
+                                // Error message
+                                .when_some(picker.error.clone(), |this, error| {
+                                    this.child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(error_color)
+                                            .child(error),
+                                    )
+                                })
+                                // Preview grid
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(muted)
+                                                .child("Preview:"),
+                                        )
+                                        .child(self.render_grid_preview(&rows_value, &cols_value, theme)),
+                                ),
+                        )
+                        // Footer with buttons
+                        .child(
+                            div()
+                                .h(px(60.0))
+                                .px_4()
+                                .border_t_1()
+                                .border_color(border_color)
+                                .flex()
+                                .items_center()
+                                .justify_end()
+                                .gap_2()
+                                // Cancel button
+                                .child(
+                                    div()
+                                        .id("custom-layout-cancel")
+                                        .px_4()
+                                        .py_2()
+                                        .border_1()
+                                        .border_color(border_color)
+                                        .rounded_md()
+                                        .text_sm()
+                                        .text_color(fg)
+                                        .cursor_pointer()
+                                        .hover(|style| style.bg(border_color.opacity(0.1)))
+                                        .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                            this.toolbar.custom_picker_mut().close();
+                                            cx.notify();
+                                        }))
+                                        .child("Cancel"),
+                                )
+                                // Apply button
+                                .child(
+                                    div()
+                                        .id("custom-layout-apply")
+                                        .px_4()
+                                        .py_2()
+                                        .bg(primary)
+                                        .rounded_md()
+                                        .text_sm()
+                                        .text_color(gpui::Hsla::white())
+                                        .cursor_pointer()
+                                        .hover(|style| style.bg(primary.opacity(0.8)))
+                                        .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                            if let Some((rows, cols)) = this.toolbar.custom_picker_mut().validate() {
+                                                this.toolbar.custom_picker_mut().close();
+                                                let profile = crate::layout::LayoutProfile::Custom { rows, cols };
+                                                this.workspace.set_layout(profile);
+                                                // Publish event through workspace method
+                                                cx.notify();
+                                            } else {
+                                                cx.notify();
+                                            }
+                                        }))
+                                        .child("Apply"),
+                                ),
+                        ),
+                ),
+        )
+    }
+
+    /// Render a preview of the grid layout.
+    fn render_grid_preview(&self, rows_str: &str, cols_str: &str, theme: &crate::theme::CodirigentTheme) -> impl IntoElement {
+        let border_color: gpui::Hsla = theme.border.into();
+        let preview_bg: gpui::Hsla = theme.terminal_background.into();
+
+        // Parse dimensions or use defaults
+        let rows: u32 = rows_str.parse().unwrap_or(2).clamp(1, 10);
+        let cols: u32 = cols_str.parse().unwrap_or(2).clamp(1, 10);
+
+        let cell_size = 30.0;
+        let gap = 4.0;
+
+        let mut grid = div()
+            .flex()
+            .flex_col()
+            .gap(px(gap));
+
+        for _ in 0..rows {
+            let mut row = div()
+                .flex()
+                .flex_row()
+                .gap(px(gap));
+
+            for _ in 0..cols {
+                row = row.child(
+                    div()
+                        .w(px(cell_size))
+                        .h(px(cell_size))
+                        .bg(preview_bg)
+                        .border_1()
+                        .border_color(border_color)
+                        .rounded_sm(),
+                );
+            }
+
+            grid = grid.child(row);
+        }
+
+        grid
     }
 }

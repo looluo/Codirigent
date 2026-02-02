@@ -827,6 +827,11 @@ impl Render for WorkspaceView {
         // 4. StatusBar at bottom (24px)
         container = container.child(self.render_status_bar());
 
+        // 5. Custom layout modal (if open)
+        if let Some(modal) = self.render_custom_layout_modal(cx) {
+            container = container.child(modal);
+        }
+
         container
     }
 }
