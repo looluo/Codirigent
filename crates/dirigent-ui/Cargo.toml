@@ -37,6 +37,7 @@ alacritty_terminal = { version = "0.25", optional = true }
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSPasteboard", "NSPasteboardItem"] }
 objc2-foundation = { version = "0.3", features = ["NSString", "NSData", "NSArray", "NSURL"] }
+dispatch = "0.2"
 
 # Linux-specific dependencies (X11/Wayland clipboard)
 [target.'cfg(target_os = "linux")'.dependencies]

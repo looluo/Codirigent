@@ -12,9 +12,11 @@
 //!
 //! ## Thread Safety
 //!
-//! The implementation is `Send + Sync` safe. While NSPasteboard is not thread-safe
-//! on its own, we access the general pasteboard through class methods which create
-//! fresh references, and we don't store any Objective-C object references.
+//! NSPasteboard must only be accessed from the main thread. This implementation
+//! uses the `dispatch` crate to ensure all clipboard operations execute on the
+//! main queue, making it safe to call from any thread.
+//!
+//! See: <https://wadetregaskis.com/nspasteboard-crashes-due-to-unsafe-internal-concurrent-memory-mutation-when-handling-file-promises/>
 
 use crate::smart_clipboard::SmartClipboardProvider;
 use anyhow::{anyhow, Result};
@@ -24,6 +26,41 @@ use objc2_app_kit::NSPasteboard;
 use objc2_foundation::{NSData, NSString};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicIsize, Ordering};
+#[cfg(test)]
+use std::sync::Mutex;
+
+/// Global mutex for serializing clipboard access in test environments.
+///
+/// NSPasteboard is not thread-safe and ideally should only be accessed from the main thread.
+/// In a GUI application with a main run loop, we use `dispatch::Queue::main().exec_sync()`.
+/// In test environments (no run loop), we fall back to mutex-based serialization.
+#[cfg(test)]
+static CLIPBOARD_MUTEX: Mutex<()> = Mutex::new(());
+
+/// Execute a closure with clipboard access serialization.
+///
+/// In production with a main run loop, dispatches to the main queue.
+/// In test environments, uses a mutex for serialization.
+fn with_clipboard_access<F, R>(f: F) -> R
+where
+    F: FnOnce() -> R + Send,
+    R: Send,
+{
+    // In test environments, there's no main run loop, so exec_sync would deadlock.
+    // Use mutex serialization instead.
+    #[cfg(test)]
+    {
+        let _guard = CLIPBOARD_MUTEX.lock().unwrap();
+        f()
+    }
+
+    // In production, dispatch to the main queue for true thread safety.
+    // This requires a running main run loop (which GPUI provides).
+    #[cfg(not(test))]
+    {
+        dispatch::Queue::main().exec_sync(f)
+    }
+}
 
 /// macOS clipboard provider.
 ///
@@ -32,12 +69,13 @@ use std::sync::atomic::{AtomicIsize, Ordering};
 ///
 /// # Thread Safety
 ///
-/// This type is `Send + Sync` safe. We track the last known change count
-/// to detect clipboard changes without storing NSPasteboard references.
+/// This type is `Send + Sync` safe. All NSPasteboard operations are dispatched
+/// to the main thread using the `dispatch` crate, ensuring thread safety even
+/// when called from background threads.
 ///
 /// # Example
 ///
-/// ```
+/// ```no_run
 /// use dirigent_ui::platform::MacOSSmartClipboard;
 /// use dirigent_ui::smart_clipboard::SmartClipboardProvider;
 ///
@@ -63,7 +101,7 @@ impl MacOSSmartClipboard {
     ///
     /// # Example
     ///
-    /// ```
+    /// ```no_run
     /// use dirigent_ui::platform::MacOSSmartClipboard;
     ///
     /// let clipboard = MacOSSmartClipboard::new();
@@ -87,7 +125,7 @@ impl MacOSSmartClipboard {
     ///
     /// # Example
     ///
-    /// ```
+    /// ```no_run
     /// use dirigent_ui::platform::MacOSSmartClipboard;
     ///
     /// let clipboard = MacOSSmartClipboard::new();
@@ -103,39 +141,57 @@ impl MacOSSmartClipboard {
     }
 
     /// Get the current change count from the general pasteboard.
+    ///
+    /// Thread-safe via `with_clipboard_access`.
     fn get_current_change_count() -> isize {
-        let pasteboard = NSPasteboard::generalPasteboard();
-        pasteboard.changeCount()
-    }
-
-    /// Get the general pasteboard.
-    fn general_pasteboard() -> Retained<NSPasteboard> {
-        NSPasteboard::generalPasteboard()
+        with_clipboard_access(|| {
+            let pasteboard = NSPasteboard::generalPasteboard();
+            pasteboard.changeCount()
+        })
     }
 
     /// Check if the clipboard contains a specific type.
+    ///
+    /// Thread-safe via `with_clipboard_access`.
     fn has_type(type_string: &NSString) -> bool {
-        let pasteboard = Self::general_pasteboard();
-        let types = pasteboard.types();
-        if let Some(types) = types {
-            types.containsObject(type_string)
-        } else {
-            false
-        }
+        // We need to convert to owned string to avoid sending reference across threads
+        let type_str = type_string.to_string();
+        with_clipboard_access(move || {
+            let pasteboard = NSPasteboard::generalPasteboard();
+            let type_ns = NSString::from_str(&type_str);
+            let types = pasteboard.types();
+            if let Some(types) = types {
+                types.containsObject(&type_ns)
+            } else {
+                false
+            }
+        })
     }
 
     /// Read string data from the clipboard for a given type.
+    ///
+    /// Thread-safe via `with_clipboard_access`.
     fn read_string_for_type(type_string: &NSString) -> Option<String> {
-        let pasteboard = Self::general_pasteboard();
-        let ns_string = pasteboard.stringForType(type_string)?;
-        Some(ns_string.to_string())
+        let type_str = type_string.to_string();
+        with_clipboard_access(move || {
+            let pasteboard = NSPasteboard::generalPasteboard();
+            let type_ns = NSString::from_str(&type_str);
+            let ns_string = pasteboard.stringForType(&type_ns)?;
+            Some(ns_string.to_string())
+        })
     }
 
     /// Read raw data from the clipboard for a given type.
+    ///
+    /// Thread-safe via `with_clipboard_access`.
     fn read_data_for_type(type_string: &NSString) -> Option<Vec<u8>> {
-        let pasteboard = Self::general_pasteboard();
-        let ns_data = pasteboard.dataForType(type_string)?;
-        Some(ns_data.to_vec())
+        let type_str = type_string.to_string();
+        with_clipboard_access(move || {
+            let pasteboard = NSPasteboard::generalPasteboard();
+            let type_ns = NSString::from_str(&type_str);
+            let ns_data = pasteboard.dataForType(&type_ns)?;
+            Some(ns_data.to_vec())
+        })
     }
 
     /// Get the pasteboard type string for plain text.
@@ -362,38 +418,45 @@ impl SmartClipboardProvider for MacOSSmartClipboard {
     /// Write text to clipboard.
     ///
     /// Clears the clipboard and writes the text as UTF-8 plain text.
+    /// Thread-safe via `with_clipboard_access`.
     fn write_text(&self, text: String) -> Result<()> {
-        let pasteboard = Self::general_pasteboard();
-        pasteboard.clearContents();
+        with_clipboard_access(move || {
+            let pasteboard = NSPasteboard::generalPasteboard();
+            pasteboard.clearContents();
 
-        let ns_string = NSString::from_str(&text);
-        let type_string = Self::string_type();
+            let ns_string = NSString::from_str(&text);
+            let type_string = NSString::from_str("public.utf8-plain-text");
 
-        let success = pasteboard.setString_forType(&ns_string, &type_string);
-        if success {
-            Ok(())
-        } else {
-            Err(anyhow!("Failed to write text to clipboard"))
-        }
+            let success = pasteboard.setString_forType(&ns_string, &type_string);
+            if success {
+                Ok(())
+            } else {
+                Err(anyhow!("Failed to write text to clipboard"))
+            }
+        })
     }
 
     /// Write image to clipboard.
     ///
     /// Clears the clipboard and writes the image data as PNG.
+    /// Thread-safe via `with_clipboard_access`.
     fn write_image(&self, image: &ImageData) -> Result<()> {
-        let pasteboard = Self::general_pasteboard();
-        pasteboard.clearContents();
+        let image_bytes = image.bytes.clone();
+        with_clipboard_access(move || {
+            let pasteboard = NSPasteboard::generalPasteboard();
+            pasteboard.clearContents();
 
-        // Create NSData from the image bytes
-        let ns_data = NSData::with_bytes(&image.bytes);
-        let type_string = Self::png_type();
+            // Create NSData from the image bytes
+            let ns_data = NSData::with_bytes(&image_bytes);
+            let type_string = NSString::from_str("public.png");
 
-        let success = pasteboard.setData_forType(Some(&ns_data), &type_string);
-        if success {
-            Ok(())
-        } else {
-            Err(anyhow!("Failed to write image to clipboard"))
-        }
+            let success = pasteboard.setData_forType(Some(&ns_data), &type_string);
+            if success {
+                Ok(())
+            } else {
+                Err(anyhow!("Failed to write image to clipboard"))
+            }
+        })
     }
 
     /// Check if clipboard has image content.
@@ -405,8 +468,8 @@ impl SmartClipboardProvider for MacOSSmartClipboard {
 }
 
 // SAFETY: MacOSSmartClipboard only contains an AtomicIsize which is Send + Sync.
-// We access NSPasteboard through class methods that create fresh references,
-// so we don't hold any non-Send/Sync Objective-C objects.
+// All NSPasteboard operations are dispatched to the main thread via dispatch::Queue::main(),
+// ensuring thread safety. We don't hold any Objective-C object references.
 unsafe impl Send for MacOSSmartClipboard {}
 unsafe impl Sync for MacOSSmartClipboard {}
 

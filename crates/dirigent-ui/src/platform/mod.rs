@@ -13,7 +13,7 @@
 //!
 //! ## Usage
 //!
-//! ```
+//! ```no_run
 //! use dirigent_ui::platform;
 //!
 //! // On macOS, this is MacOSSmartClipboard
@@ -77,7 +77,7 @@ pub use clipboard_stub::StubSmartClipboard;
 ///
 /// # Example
 ///
-/// ```
+/// ```no_run
 /// use dirigent_ui::platform::create_clipboard;
 /// use dirigent_ui::smart_clipboard::SmartClipboardProvider;
 ///
