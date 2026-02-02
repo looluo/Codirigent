@@ -78,6 +78,7 @@
 // Core modules (ready)
 pub mod actions;
 pub mod clipboard_preview;
+pub mod empty_session;
 pub mod integration;
 pub mod keybindings;
 pub mod layout;
@@ -140,6 +141,9 @@ pub use smart_clipboard::{SmartClipboardProvider, ThumbnailPreview};
 
 // Re-export clipboard preview component
 pub use clipboard_preview::ClipboardPreview;
+
+// Re-export empty session types
+pub use empty_session::{EmptySessionCell, EmptySessionEvent, EmptySessionPool, EmptySessionRenderHints};
 
 // Re-export GPUI app when feature is enabled
 #[cfg(feature = "gpui-full")]
