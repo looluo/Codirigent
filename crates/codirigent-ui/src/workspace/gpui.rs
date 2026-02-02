@@ -35,7 +35,8 @@ use crate::toolbar::{SessionsToolbar, ToolbarEvent};
 // Core imports (combined)
 use codirigent_core::{
     CodirigentEvent, DefaultEventBus, EventBus, GridPosition, ProcessMonitor, Session, SessionId,
-    SessionManager, SessionStatus,
+    SessionManager, SessionStatus, TaskManager, TaskManagerConfig, Task, TaskId,
+    FileStorageService,
 };
 use codirigent_detector::InputDetector;
 use codirigent_session::DefaultSessionManager;
@@ -69,6 +70,8 @@ pub struct WorkspaceView {
     session_manager: Arc<Mutex<DefaultSessionManager>>,
     /// Input detector for monitoring session status.
     detector: Arc<Mutex<InputDetector>>,
+    /// Task manager for task lifecycle and assignment.
+    task_manager: Arc<Mutex<TaskManager>>,
     /// Terminal views for each session.
     terminals: HashMap<SessionId, TerminalView>,
     /// Next session ID counter (kept for UI session tracking).
@@ -136,12 +139,34 @@ impl WorkspaceView {
         let mut toolbar = SessionsToolbar::new();
         toolbar.set_active_layout(workspace.layout_profile());
 
+        // Initialize task manager with file storage
+        let storage = if let Ok(cwd) = std::env::current_dir() {
+            Arc::new(FileStorageService::new(&cwd).unwrap_or_else(|e| {
+                warn!("Failed to create file storage: {}, using in-memory fallback", e);
+                // Fallback: create in temp directory
+                let temp_dir = std::env::temp_dir().join("codirigent-fallback");
+                FileStorageService::new(&temp_dir).expect("Failed to create fallback storage")
+            })) as Arc<dyn codirigent_core::StorageService>
+        } else {
+            // Fallback: use temp directory if current_dir fails
+            let temp_dir = std::env::temp_dir().join("codirigent-fallback");
+            Arc::new(FileStorageService::new(&temp_dir).expect("Failed to create fallback storage"))
+                as Arc<dyn codirigent_core::StorageService>
+        };
+
+        let task_manager = Arc::new(Mutex::new(TaskManager::new(
+            TaskManagerConfig::default(),
+            storage,
+            event_bus.clone() as Arc<dyn codirigent_core::EventBus>,
+        )));
+
         Self {
             workspace,
             focus_handle: cx.focus_handle(),
             event_bus,
             session_manager,
             detector,
+            task_manager,
             terminals: HashMap::new(),
             next_session_id: 1,
             title_bar,
@@ -503,22 +528,82 @@ impl WorkspaceView {
 
     /// Handle task board events.
     fn handle_task_board_event(&mut self, event: crate::task_board::TaskBoardEvent, cx: &mut Context<Self>) {
+        use crate::task_board::TaskAction;
+
         match event {
             crate::task_board::TaskBoardEvent::TabSelected(tab) => {
                 info!(?tab, "Task board tab selected");
             }
             crate::task_board::TaskBoardEvent::AutoAssignToggled(enabled) => {
                 info!(enabled, "Auto-assign toggled");
+                // TODO: Wire to TaskManager auto-assignment config
             }
             crate::task_board::TaskBoardEvent::AddTaskClicked => {
                 info!("Add task clicked");
-                // Would open task creation dialog
+                // TODO: Open task creation dialog
+                // For now, create a mock task to demonstrate functionality
+                let task_id = TaskId(format!("task-{}", self.next_session_id));
+                self.next_session_id += 1;
+
+                let task = Task::new(
+                    task_id.clone(),
+                    "New Task".to_string(),
+                    "Task created from UI".to_string(),
+                );
+
+                if let Ok(mut manager) = self.task_manager.lock() {
+                    if let Err(e) = manager.create_task(task) {
+                        warn!("Failed to create task: {}", e);
+                    } else {
+                        info!(%task_id, "Task created successfully");
+                    }
+                }
             }
             crate::task_board::TaskBoardEvent::TaskSelected(id) => {
                 info!(%id, "Task selected");
             }
             crate::task_board::TaskBoardEvent::TaskAction { task_id, action } => {
                 info!(%task_id, ?action, "Task action triggered");
+
+                let task_id = TaskId(task_id);
+
+                if let Ok(mut manager) = self.task_manager.lock() {
+                    let result = match action {
+                        TaskAction::Start => {
+                            info!("Starting task {}", task_id);
+                            manager.start_task(&task_id)
+                        }
+                        TaskAction::Complete => {
+                            info!("Completing task {}", task_id);
+                            // Approve task directly (marks as done)
+                            manager.approve_task(&task_id)
+                        }
+                        TaskAction::Delete => {
+                            info!("Deleting task {}", task_id);
+                            manager.delete_task(&task_id)
+                        }
+                        TaskAction::Assign => {
+                            info!("Assign action triggered for task {}", task_id);
+                            // TODO: Show session picker dialog
+                            // For now, just log
+                            Ok(())
+                        }
+                        TaskAction::Review => {
+                            info!("Review action triggered for task {}", task_id);
+                            // Approve task (marks as reviewed and done)
+                            manager.approve_task(&task_id)
+                        }
+                        TaskAction::Edit => {
+                            info!("Edit action triggered for task {}", task_id);
+                            // TODO: Open task edit dialog
+                            Ok(())
+                        }
+                    };
+
+                    if let Err(e) = result {
+                        warn!("Task action failed: {}", e);
+                    }
+                }
             }
         }
         cx.notify();

@@ -29,15 +29,20 @@ chrono.workspace = true
 # Image processing for thumbnail generation
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }
 
-# GPUI from crates.io with workspace version alignment
-gpui = { workspace = true, optional = true }
-core-text = { workspace = true, optional = true }  # Version alignment for GPUI
-
 # Terminal rendering (requires Rust 1.75+ for latest version)
 alacritty_terminal = { version = "0.25", optional = true }
 
+# GPUI with cross-platform support (enabled via gpui-full feature)
+gpui = { workspace = true, optional = true, features = [
+    "wayland",           # Linux Wayland
+    "x11",              # Linux X11
+    "font-kit",         # Font rendering
+    "windows-manifest", # Windows
+] }
+
 # macOS-specific dependencies
 [target.'cfg(target_os = "macos")'.dependencies]
+core-text = { workspace = true, optional = true }  # Version alignment for GPUI
 objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSPasteboard", "NSPasteboardItem"] }
 objc2-foundation = { version = "0.3", features = ["NSString", "NSData", "NSArray", "NSURL"] }
