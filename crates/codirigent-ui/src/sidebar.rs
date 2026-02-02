@@ -6,12 +6,15 @@
 //! - Click-to-focus functionality
 //! - Session renaming support
 //! - New session button
+//! - File tree browser
 
+mod file_tree;
 mod types;
 
 #[cfg(test)]
 mod tests;
 
+pub use file_tree::*;
 pub use types::*;
 
 use codirigent_core::{Session, SessionId, SessionStatus};
@@ -252,24 +255,17 @@ impl SessionSidebar {
         // Ungrouped sessions first
         if let Some(ungrouped) = grouped.get(&None) {
             for session in ungrouped {
-                items.push(SidebarItem::Session {
-                    id: session.id,
-                    name: session.name.clone(),
-                    status: session.status,
-                    status_color: self.status_color(session.status),
-                    is_focused: self.focused_session == Some(session.id),
-                    is_editing: self.editing_name == Some(session.id),
-                    indent_level: 0,
-                });
+                items.push(self.create_session_item(session, None, 0));
             }
         }
 
         // Grouped sessions
         for group_name in self.group_names() {
             if let Some(group) = self.get_group(group_name) {
+                let group_color = Color::from_hex(&group.color);
                 items.push(SidebarItem::GroupHeader {
                     name: group.name.clone(),
-                    color: Color::from_hex(&group.color),
+                    color: group_color,
                     expanded: group.expanded,
                     session_count: self.group_session_count(group_name),
                 });
@@ -277,15 +273,7 @@ impl SessionSidebar {
                 if group.expanded {
                     if let Some(sessions) = grouped.get(&Some(group_name.clone())) {
                         for session in sessions {
-                            items.push(SidebarItem::Session {
-                                id: session.id,
-                                name: session.name.clone(),
-                                status: session.status,
-                                status_color: self.status_color(session.status),
-                                is_focused: self.focused_session == Some(session.id),
-                                is_editing: self.editing_name == Some(session.id),
-                                indent_level: 1,
-                            });
+                            items.push(self.create_session_item(session, Some(group_color), 1));
                         }
                     }
                 }
@@ -305,6 +293,30 @@ impl SessionSidebar {
             items,
             total_height,
             width: self.width,
+        }
+    }
+
+    /// Create a SidebarItem::Session from a Session.
+    fn create_session_item(
+        &self,
+        session: &Session,
+        group_color: Option<Color>,
+        indent_level: u8,
+    ) -> SidebarItem {
+        // Get task description from current_task if present
+        let task = session.current_task.as_ref().map(|t| t.0.clone());
+
+        SidebarItem::Session {
+            id: session.id,
+            name: session.name.clone(),
+            status: session.status,
+            status_color: self.status_color(session.status),
+            is_focused: self.focused_session == Some(session.id),
+            is_editing: self.editing_name == Some(session.id),
+            indent_level,
+            task,
+            context_usage: session.context_usage,
+            group_color,
         }
     }
 }

@@ -11,6 +11,7 @@
 //! - 2x3 Grid: 6 sessions in 2 rows, 3 columns
 //! - 3x3 Grid: 9 sessions in a 3x3 grid
 //! - Single: One session takes the full workspace
+//! - Custom: User-defined grid with any rows x columns (1-10 each)
 //!
 //! # Example
 //!
@@ -20,6 +21,10 @@
 //!
 //! let profile = LayoutProfile::Grid2x2;
 //! assert_eq!(profile.max_sessions(), 4);
+//!
+//! // Custom layout example
+//! let custom = LayoutProfile::custom(4, 3).unwrap();
+//! assert_eq!(custom.max_sessions(), 12);
 //!
 //! let bounds = Bounds::new(0.0, 0.0, 1000.0, 800.0);
 //! let layout = GridLayout::new(profile.to_mode(), bounds, 4.0);
@@ -120,10 +125,17 @@ impl Bounds {
     }
 }
 
-/// Predefined layout profiles for workspace organization.
+/// Maximum rows/columns allowed for custom layouts.
+pub const MAX_GRID_DIMENSION: u32 = 10;
+
+/// Minimum rows/columns for custom layouts.
+pub const MIN_GRID_DIMENSION: u32 = 1;
+
+/// Layout profiles for workspace organization.
 ///
 /// Each profile defines a specific grid configuration that determines
-/// how sessions are arranged in the workspace.
+/// how sessions are arranged in the workspace. Includes both predefined
+/// profiles and custom user-defined layouts.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Hash)]
 pub enum LayoutProfile {
     /// 2x2 grid layout (4 sessions).
@@ -137,17 +149,65 @@ pub enum LayoutProfile {
     Grid3x3,
     /// Single session taking full workspace.
     Single,
+    /// Custom grid layout with user-defined dimensions.
+    /// Rows and columns must be between 1 and 10.
+    Custom {
+        /// Number of rows (1-10).
+        rows: u32,
+        /// Number of columns (1-10).
+        cols: u32,
+    },
 }
 
 impl LayoutProfile {
-    /// All available profiles in cycling order.
-    pub const ALL: &'static [LayoutProfile] = &[
+    /// All predefined profiles in cycling order (excludes Custom).
+    pub const PREDEFINED: &'static [LayoutProfile] = &[
         LayoutProfile::Grid2x2,
         LayoutProfile::Stack1x4,
         LayoutProfile::Grid2x3,
         LayoutProfile::Grid3x3,
         LayoutProfile::Single,
     ];
+
+    /// Create a custom layout profile with the given dimensions.
+    ///
+    /// # Arguments
+    ///
+    /// * `rows` - Number of rows (1-10)
+    /// * `cols` - Number of columns (1-10)
+    ///
+    /// # Returns
+    ///
+    /// `Some(LayoutProfile::Custom)` if dimensions are valid, `None` otherwise.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use codirigent_ui::layout::LayoutProfile;
+    ///
+    /// let custom = LayoutProfile::custom(4, 3).unwrap();
+    /// assert_eq!(custom.max_sessions(), 12);
+    ///
+    /// // Invalid dimensions return None
+    /// assert!(LayoutProfile::custom(0, 3).is_none());
+    /// assert!(LayoutProfile::custom(11, 3).is_none());
+    /// ```
+    pub fn custom(rows: u32, cols: u32) -> Option<Self> {
+        if rows >= MIN_GRID_DIMENSION
+            && rows <= MAX_GRID_DIMENSION
+            && cols >= MIN_GRID_DIMENSION
+            && cols <= MAX_GRID_DIMENSION
+        {
+            Some(LayoutProfile::Custom { rows, cols })
+        } else {
+            None
+        }
+    }
+
+    /// Check if this is a custom layout.
+    pub fn is_custom(self) -> bool {
+        matches!(self, LayoutProfile::Custom { .. })
+    }
 
     /// Convert this profile to a [`LayoutMode`].
     ///
@@ -159,6 +219,10 @@ impl LayoutProfile {
     ///
     /// let mode = LayoutProfile::Grid2x2.to_mode();
     /// assert!(matches!(mode, LayoutMode::Grid { rows: 2, cols: 2 }));
+    ///
+    /// let custom = LayoutProfile::custom(4, 3).unwrap();
+    /// let mode = custom.to_mode();
+    /// assert!(matches!(mode, LayoutMode::Grid { rows: 4, cols: 3 }));
     /// ```
     pub fn to_mode(self) -> LayoutMode {
         match self {
@@ -167,10 +231,13 @@ impl LayoutProfile {
             LayoutProfile::Grid2x3 => LayoutMode::Grid { rows: 2, cols: 3 },
             LayoutProfile::Grid3x3 => LayoutMode::Grid { rows: 3, cols: 3 },
             LayoutProfile::Single => LayoutMode::Single,
+            LayoutProfile::Custom { rows, cols } => LayoutMode::Grid { rows, cols },
         }
     }
 
     /// Get the next profile in the cycling order.
+    ///
+    /// Custom layouts cycle back to Grid2x2.
     ///
     /// # Example
     ///
@@ -180,15 +247,26 @@ impl LayoutProfile {
     /// let mut profile = LayoutProfile::Grid2x2;
     /// profile = profile.next();
     /// assert_eq!(profile, LayoutProfile::Stack1x4);
+    ///
+    /// // Custom cycles back to Grid2x2
+    /// let custom = LayoutProfile::custom(4, 3).unwrap();
+    /// assert_eq!(custom.next(), LayoutProfile::Grid2x2);
     /// ```
     pub fn next(self) -> Self {
-        let profiles = Self::ALL;
-        let current_idx = profiles.iter().position(|&p| p == self).unwrap_or(0);
-        let next_idx = (current_idx + 1) % profiles.len();
-        profiles[next_idx]
+        match self {
+            LayoutProfile::Custom { .. } => LayoutProfile::Grid2x2,
+            _ => {
+                let profiles = Self::PREDEFINED;
+                let current_idx = profiles.iter().position(|&p| p == self).unwrap_or(0);
+                let next_idx = (current_idx + 1) % profiles.len();
+                profiles[next_idx]
+            }
+        }
     }
 
     /// Get the previous profile in the cycling order.
+    ///
+    /// Custom layouts cycle back to Single.
     ///
     /// # Example
     ///
@@ -198,16 +276,25 @@ impl LayoutProfile {
     /// let mut profile = LayoutProfile::Grid2x2;
     /// profile = profile.previous();
     /// assert_eq!(profile, LayoutProfile::Single);
+    ///
+    /// // Custom cycles back to Single
+    /// let custom = LayoutProfile::custom(4, 3).unwrap();
+    /// assert_eq!(custom.previous(), LayoutProfile::Single);
     /// ```
     pub fn previous(self) -> Self {
-        let profiles = Self::ALL;
-        let current_idx = profiles.iter().position(|&p| p == self).unwrap_or(0);
-        let prev_idx = if current_idx == 0 {
-            profiles.len() - 1
-        } else {
-            current_idx - 1
-        };
-        profiles[prev_idx]
+        match self {
+            LayoutProfile::Custom { .. } => LayoutProfile::Single,
+            _ => {
+                let profiles = Self::PREDEFINED;
+                let current_idx = profiles.iter().position(|&p| p == self).unwrap_or(0);
+                let prev_idx = if current_idx == 0 {
+                    profiles.len() - 1
+                } else {
+                    current_idx - 1
+                };
+                profiles[prev_idx]
+            }
+        }
     }
 
     /// Get the display name for this layout.
@@ -217,15 +304,16 @@ impl LayoutProfile {
     /// ```
     /// use codirigent_ui::layout::LayoutProfile;
     ///
-    /// assert_eq!(LayoutProfile::Grid2x2.display_name(), "2×2 Grid");
+    /// assert_eq!(LayoutProfile::Grid2x2.display_name(), "2×2");
     /// ```
-    pub fn display_name(self) -> &'static str {
+    pub fn display_name(self) -> String {
         match self {
-            LayoutProfile::Grid2x2 => "2×2 Grid",
-            LayoutProfile::Stack1x4 => "1×4 Stack",
-            LayoutProfile::Grid2x3 => "2×3 Grid",
-            LayoutProfile::Grid3x3 => "3×3 Grid",
-            LayoutProfile::Single => "Single",
+            LayoutProfile::Grid2x2 => "2×2".to_string(),
+            LayoutProfile::Stack1x4 => "1×4".to_string(),
+            LayoutProfile::Grid2x3 => "2×3".to_string(),
+            LayoutProfile::Grid3x3 => "3×3".to_string(),
+            LayoutProfile::Single => "Single".to_string(),
+            LayoutProfile::Custom { rows, cols } => format!("{}×{}", rows, cols),
         }
     }
 
@@ -238,6 +326,9 @@ impl LayoutProfile {
     ///
     /// assert_eq!(LayoutProfile::Grid2x2.max_sessions(), 4);
     /// assert_eq!(LayoutProfile::Grid3x3.max_sessions(), 9);
+    ///
+    /// let custom = LayoutProfile::custom(4, 3).unwrap();
+    /// assert_eq!(custom.max_sessions(), 12);
     /// ```
     pub fn max_sessions(self) -> usize {
         match self {
@@ -246,6 +337,7 @@ impl LayoutProfile {
             LayoutProfile::Grid2x3 => 6,
             LayoutProfile::Grid3x3 => 9,
             LayoutProfile::Single => 1,
+            LayoutProfile::Custom { rows, cols } => (rows * cols) as usize,
         }
     }
 
@@ -257,6 +349,9 @@ impl LayoutProfile {
     /// use codirigent_ui::layout::LayoutProfile;
     ///
     /// assert_eq!(LayoutProfile::Grid2x3.dimensions(), (2, 3));
+    ///
+    /// let custom = LayoutProfile::custom(4, 3).unwrap();
+    /// assert_eq!(custom.dimensions(), (4, 3));
     /// ```
     pub fn dimensions(self) -> (u32, u32) {
         match self {
@@ -265,12 +360,15 @@ impl LayoutProfile {
             LayoutProfile::Grid2x3 => (2, 3),
             LayoutProfile::Grid3x3 => (3, 3),
             LayoutProfile::Single => (1, 1),
+            LayoutProfile::Custom { rows, cols } => (rows, cols),
         }
     }
 
     /// Try to create a profile from a LayoutMode.
     ///
-    /// Returns `None` if the mode doesn't match a predefined profile.
+    /// Returns a predefined profile if the mode matches one, otherwise
+    /// returns a Custom profile for valid Grid modes, or None for
+    /// Custom LayoutModes (which use session-specific positioning).
     ///
     /// # Example
     ///
@@ -283,6 +381,12 @@ impl LayoutProfile {
     ///
     /// let mode = LayoutMode::Single;
     /// assert_eq!(LayoutProfile::from_mode(&mode), Some(LayoutProfile::Single));
+    ///
+    /// // Non-predefined grids become Custom
+    /// let mode = LayoutMode::Grid { rows: 4, cols: 3 };
+    /// let profile = LayoutProfile::from_mode(&mode).unwrap();
+    /// assert!(profile.is_custom());
+    /// assert_eq!(profile.dimensions(), (4, 3));
     /// ```
     pub fn from_mode(mode: &LayoutMode) -> Option<Self> {
         match mode {
@@ -291,7 +395,8 @@ impl LayoutProfile {
             LayoutMode::Grid { rows: 2, cols: 3 } => Some(LayoutProfile::Grid2x3),
             LayoutMode::Grid { rows: 3, cols: 3 } => Some(LayoutProfile::Grid3x3),
             LayoutMode::Single => Some(LayoutProfile::Single),
-            _ => None,
+            LayoutMode::Grid { rows, cols } => LayoutProfile::custom(*rows, *cols),
+            LayoutMode::Custom { .. } => None, // Custom positions not supported
         }
     }
 }
@@ -868,11 +973,15 @@ mod tests {
 
     #[test]
     fn test_layout_profile_display_name() {
-        assert_eq!(LayoutProfile::Grid2x2.display_name(), "2×2 Grid");
-        assert_eq!(LayoutProfile::Stack1x4.display_name(), "1×4 Stack");
-        assert_eq!(LayoutProfile::Grid2x3.display_name(), "2×3 Grid");
-        assert_eq!(LayoutProfile::Grid3x3.display_name(), "3×3 Grid");
+        assert_eq!(LayoutProfile::Grid2x2.display_name(), "2×2");
+        assert_eq!(LayoutProfile::Stack1x4.display_name(), "1×4");
+        assert_eq!(LayoutProfile::Grid2x3.display_name(), "2×3");
+        assert_eq!(LayoutProfile::Grid3x3.display_name(), "3×3");
         assert_eq!(LayoutProfile::Single.display_name(), "Single");
+
+        // Custom layout display name
+        let custom = LayoutProfile::custom(4, 3).unwrap();
+        assert_eq!(custom.display_name(), "4×3");
     }
 
     #[test]
@@ -903,10 +1012,62 @@ mod tests {
             LayoutProfile::from_mode(&LayoutMode::Single),
             Some(LayoutProfile::Single)
         );
+
+        // Non-predefined grid becomes Custom
+        let profile = LayoutProfile::from_mode(&LayoutMode::Grid { rows: 5, cols: 5 }).unwrap();
+        assert!(profile.is_custom());
+        assert_eq!(profile.dimensions(), (5, 5));
+
+        // Invalid dimensions return None
         assert_eq!(
-            LayoutProfile::from_mode(&LayoutMode::Grid { rows: 5, cols: 5 }),
+            LayoutProfile::from_mode(&LayoutMode::Grid { rows: 11, cols: 5 }),
             None
         );
+    }
+
+    // Custom layout tests
+    #[test]
+    fn test_layout_profile_custom_creation() {
+        // Valid custom layouts
+        let custom = LayoutProfile::custom(4, 3).unwrap();
+        assert!(custom.is_custom());
+        assert_eq!(custom.dimensions(), (4, 3));
+        assert_eq!(custom.max_sessions(), 12);
+
+        // Boundary values
+        assert!(LayoutProfile::custom(1, 1).is_some());
+        assert!(LayoutProfile::custom(10, 10).is_some());
+
+        // Invalid dimensions
+        assert!(LayoutProfile::custom(0, 3).is_none());
+        assert!(LayoutProfile::custom(3, 0).is_none());
+        assert!(LayoutProfile::custom(11, 3).is_none());
+        assert!(LayoutProfile::custom(3, 11).is_none());
+    }
+
+    #[test]
+    fn test_layout_profile_custom_to_mode() {
+        let custom = LayoutProfile::custom(4, 3).unwrap();
+        let mode = custom.to_mode();
+        assert!(matches!(mode, LayoutMode::Grid { rows: 4, cols: 3 }));
+    }
+
+    #[test]
+    fn test_layout_profile_custom_cycling() {
+        let custom = LayoutProfile::custom(4, 3).unwrap();
+
+        // Custom cycles to Grid2x2 on next
+        assert_eq!(custom.next(), LayoutProfile::Grid2x2);
+
+        // Custom cycles to Single on previous
+        assert_eq!(custom.previous(), LayoutProfile::Single);
+    }
+
+    #[test]
+    fn test_layout_profile_is_custom() {
+        assert!(!LayoutProfile::Grid2x2.is_custom());
+        assert!(!LayoutProfile::Single.is_custom());
+        assert!(LayoutProfile::custom(4, 3).unwrap().is_custom());
     }
 
     // GridLayout tests

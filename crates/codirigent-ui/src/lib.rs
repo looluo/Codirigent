@@ -78,16 +78,23 @@
 // Core modules (ready)
 pub mod actions;
 pub mod clipboard_preview;
+pub mod empty_session;
 pub mod integration;
+pub mod ui_composition;
 pub mod keybindings;
 pub mod layout;
 pub mod layout_profile;
 pub mod platform;
 pub mod sidebar;
 pub mod smart_clipboard;
+pub mod status_bar;
+pub mod task_board;
+pub mod terminal_header;
 pub mod theme;
 pub mod theme_config;
 pub mod theme_manager;
+pub mod title_bar;
+pub mod toolbar;
 pub mod workspace;
 
 // Modules that require GPUI feature only
@@ -135,6 +142,12 @@ pub use smart_clipboard::{SmartClipboardProvider, ThumbnailPreview};
 
 // Re-export clipboard preview component
 pub use clipboard_preview::ClipboardPreview;
+
+// Re-export empty session types
+pub use empty_session::{EmptySessionCell, EmptySessionEvent, EmptySessionPool, EmptySessionRenderHints};
+
+// Re-export UI composition types
+pub use ui_composition::{AppUiState, AppUiEvents};
 
 // Re-export GPUI app when feature is enabled
 #[cfg(feature = "gpui-full")]
