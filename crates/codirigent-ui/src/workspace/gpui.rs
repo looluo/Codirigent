@@ -1747,8 +1747,8 @@ impl Render for WorkspaceView {
         // GPUI automatically re-renders when window resizes, so we update bounds here
         let window_size = window.viewport_size();
         let window_bounds = crate::layout::Bounds::from_size(
-            window_size.width.0,
-            window_size.height.0,
+            window_size.width.into(),
+            window_size.height.into(),
         );
         self.workspace.set_bounds(window_bounds);
 

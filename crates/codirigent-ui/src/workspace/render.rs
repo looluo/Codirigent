@@ -252,8 +252,8 @@ impl WorkspaceView {
                                                 .flex_1()
                                                 .child(session.name.clone()),
                                         )
-                                        .when_some(context_display, |div, ctx_text| {
-                                            div.child(
+                                        .when_some(context_display, |el, ctx_text| {
+                                            el.child(
                                                 div()
                                                     .text_xs()
                                                     .text_color(muted)
