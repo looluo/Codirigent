@@ -189,12 +189,25 @@ impl WorkspaceView {
 
                 let indent = if session.group.is_some() { px(12.0) } else { px(0.0) };
 
+                // Extract working directory name for compact display
+                let worktree_name = session.working_directory
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("~")
+                    .to_string();
+
+                // Format context usage if available
+                let context_display = session.context_usage.map(|usage| {
+                    format!("{}%", (usage * 100.0) as u8)
+                });
+
                 list = list.child(
                     div()
                         .id(SharedString::from(format!("session-item-{}", session_id.0)))
-                        .h(px(32.0))
+                        .min_h(px(44.0))  // Increased height for two-line layout
                         .pl(indent)
                         .pr_1()
+                        .py_1()
                         .bg(item_bg)
                         .border_l_2()
                         .border_color(left_border_color)
@@ -202,13 +215,13 @@ impl WorkspaceView {
                         .items_center()
                         .gap_2()
                         .child(
-                            // Main clickable area (status dot + name)
+                            // Main clickable area (status dot + name + context)
                             div()
                                 .id(SharedString::from(format!("session-main-{}", session_id.0)))
                                 .flex_1()
                                 .flex()
-                                .items_center()
-                                .gap_2()
+                                .flex_col()
+                                .gap_1()
                                 .cursor_pointer()
                                 .hover(|style| style.bg(hover_bg.opacity(0.1)))
                                 .on_click(cx.listener(move |this, _event: &ClickEvent, _window, cx| {
@@ -217,20 +230,45 @@ impl WorkspaceView {
                                     cx.notify();
                                 }))
                                 .child(
-                                    // Status indicator dot
+                                    // Top row: status dot + name + context %
                                     div()
-                                        .w(px(8.0))
-                                        .h(px(8.0))
-                                        .rounded_full()
-                                        .bg(status_color),
+                                        .flex()
+                                        .items_center()
+                                        .gap_2()
+                                        .child(
+                                            // Status indicator dot
+                                            div()
+                                                .w(px(8.0))
+                                                .h(px(8.0))
+                                                .rounded_full()
+                                                .bg(status_color),
+                                        )
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(fg)
+                                                .overflow_hidden()
+                                                .text_ellipsis()
+                                                .flex_1()
+                                                .child(session.name.clone()),
+                                        )
+                                        .when_some(context_display, |div, ctx_text| {
+                                            div.child(
+                                                div()
+                                                    .text_xs()
+                                                    .text_color(muted)
+                                                    .child(ctx_text)
+                                            )
+                                        }),
                                 )
                                 .child(
+                                    // Bottom row: worktree name
                                     div()
-                                        .text_sm()
-                                        .text_color(fg)
+                                        .text_xs()
+                                        .text_color(muted)
                                         .overflow_hidden()
                                         .text_ellipsis()
-                                        .child(session.name.clone()),
+                                        .child(worktree_name),
                                 ),
                         )
                         .child(
@@ -253,7 +291,7 @@ impl WorkspaceView {
                                     div()
                                         .text_sm()
                                         .text_color(muted)
-                                        .child("..."), // Vertical ellipsis
+                                        .child("⋮"), // Vertical ellipsis (better unicode char)
                                 ),
                         ),
                 );
@@ -477,10 +515,18 @@ impl WorkspaceView {
         let branch_name = worktree.branch.clone();
         let is_main = worktree.is_main;
         let bound_session = worktree.bound_session;
+        let head_sha = worktree.head_sha.clone();
+
+        // Extract directory name for display
+        let dir_name = wt_path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("unknown")
+            .to_string();
 
         let mut item = div()
             .id(SharedString::from(format!("worktree-item-{}", branch_name)))
-            .min_h(px(36.0))
+            .min_h(px(48.0))  // Increased for multi-line layout
             .px_3()
             .py_2()
             .flex()
@@ -489,29 +535,74 @@ impl WorkspaceView {
             .cursor_pointer()
             .hover(|style| style.bg(hover_bg.opacity(0.1)));
 
-        // Branch name row
-        let mut branch_row = div().flex().items_center().gap_2();
+        // Top row: folder icon + directory name + main indicator
+        let mut top_row = div().flex().items_center().gap_2();
 
-        // Main indicator
-        if is_main {
-            branch_row = branch_row.child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child("*"),
-            );
-        }
+        // Folder icon
+        top_row = top_row.child(
+            div()
+                .text_sm()
+                .child("📁"),
+        );
 
-        // Branch name
-        branch_row = branch_row.child(
+        // Directory name
+        top_row = top_row.child(
             div()
                 .text_sm()
                 .text_color(fg)
                 .font_weight(if is_main { FontWeight::SEMIBOLD } else { FontWeight::NORMAL })
                 .overflow_hidden()
                 .text_ellipsis()
+                .flex_1()
+                .child(dir_name),
+        );
+
+        // Main indicator badge
+        if is_main {
+            top_row = top_row.child(
+                div()
+                    .px_1()
+                    .rounded_sm()
+                    .text_xs()
+                    .text_color(fg.opacity(0.7))
+                    .bg(hover_bg.opacity(0.2))
+                    .child("main"),
+            );
+        }
+
+        item = item.child(top_row);
+
+        // Middle row: branch name + commit SHA
+        let mut branch_row = div().flex().items_center().gap_2();
+
+        // Branch icon
+        branch_row = branch_row.child(
+            div()
+                .text_xs()
+                .text_color(muted)
+                .child("⎇"),  // Git branch symbol
+        );
+
+        // Branch name
+        branch_row = branch_row.child(
+            div()
+                .text_xs()
+                .text_color(muted)
+                .overflow_hidden()
+                .text_ellipsis()
+                .flex_1()
                 .child(branch_name.clone()),
         );
+
+        // Commit SHA (if available)
+        if let Some(sha) = head_sha {
+            branch_row = branch_row.child(
+                div()
+                    .text_xs()
+                    .text_color(muted.opacity(0.6))
+                    .child(format!("@{}", sha)),
+            );
+        }
 
         item = item.child(branch_row);
 
