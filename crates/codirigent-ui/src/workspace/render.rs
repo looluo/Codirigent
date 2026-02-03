@@ -270,16 +270,16 @@ impl WorkspaceView {
                 .bg(border_color),
         );
 
-        // File tree section (takes 30% of space)
-        sidebar = sidebar.child(self.render_file_tree_section(theme, cx));
+        // File tree section removed per user request
+        // sidebar = sidebar.child(self.render_file_tree_section(theme, cx));
 
-        // Separator between files and worktrees
-        sidebar = sidebar.child(
-            div()
-                .h(px(1.0))
-                .w_full()
-                .bg(border_color),
-        );
+        // Separator removed (file tree removed)
+        // sidebar = sidebar.child(
+        //     div()
+        //         .h(px(1.0))
+        //         .w_full()
+        //         .bg(border_color),
+        // );
 
         // Worktree section (takes remaining 20% of space)
         sidebar = sidebar.child(self.render_worktree_section(theme, cx));
@@ -3092,6 +3092,7 @@ impl WorkspaceView {
             super::gpui::SessionActionKind::AssignGroup => "Group Name:",
         };
 
+        // Always show cursor since modal input is always focused
         let input_value = if modal.input.is_empty() {
             "|".to_string()
         } else {
@@ -3121,6 +3122,10 @@ impl WorkspaceView {
                         .rounded_lg()
                         .flex()
                         .flex_col()
+                        // Prevent closing when clicking modal content
+                        .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
+                            cx.stop_propagation();
+                        }))
                         // Header
                         .child(
                             div()
@@ -3154,10 +3159,13 @@ impl WorkspaceView {
                                 .child(text_input(
                                     "session-action-input",
                                     input_value,
-                                    false,
+                                    true,  // Always focused in modal
                                     modal.error.is_some(),
                                     &input_style,
-                                ))
+                                ).on_mouse_down(MouseButton::Left, cx.listener(|_this, _event, _window, cx| {
+                                    // Input is always focused in this modal
+                                    cx.stop_propagation();
+                                })))
                                 .when_some(modal.error.clone(), |this, error| {
                                     this.child(
                                         div()

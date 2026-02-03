@@ -415,7 +415,8 @@ impl CodirigentApp {
                         window_bounds: Some(WindowBounds::Windowed(bounds)),
                         titlebar: Some(TitlebarOptions {
                             title: Some("Codirigent".into()),
-                            appears_transparent: true,
+                            appears_transparent: true,  // Custom titlebar like Zed
+                            traffic_light_position: None,
                             ..Default::default()
                         }),
                         ..Default::default()
@@ -441,7 +442,8 @@ impl CodirigentApp {
                         window_bounds: Some(WindowBounds::Windowed(bounds)),
                         titlebar: Some(TitlebarOptions {
                             title: Some("Codirigent".into()),
-                            appears_transparent: true,
+                            appears_transparent: true,  // Custom titlebar like Zed
+                            traffic_light_position: None,
                             ..Default::default()
                         }),
                         ..Default::default()
