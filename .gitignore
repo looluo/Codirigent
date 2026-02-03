@@ -6,12 +6,6 @@
 # Project-Internal Files (not shared with open-source)
 # -----------------------------------------------------------------------------
 
-# Claude Code configuration and agents
-CLAUDE.md
-.claude/
-
-# Project documentation (internal spec)
-docs/
 
 # Development plans
 plans/
