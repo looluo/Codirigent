@@ -130,8 +130,6 @@ pub struct WorkspaceView {
     pub(super) project_picker_open: bool,
     pub(super) project_picker_input: String,
     pub(super) project_picker_error: Option<String>,
-    /// Per-tab task expansion state.
-    pub(super) task_tab_expanded: HashMap<crate::task_board::TaskBoardTab, bool>,
     /// Worktree panel for git worktree management.
     pub(super) worktree_panel: WorktreePanel,
     /// Worktree manager for git worktree operations.
@@ -252,7 +250,6 @@ impl WorkspaceView {
             project_picker_open: false,
             project_picker_input: String::new(),
             project_picker_error: None,
-            task_tab_expanded: HashMap::new(),
             worktree_panel: WorktreePanel::new(),
             worktree_manager: Self::init_worktree_manager(),
             last_click_position: None,
