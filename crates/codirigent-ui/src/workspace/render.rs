@@ -1631,7 +1631,7 @@ impl WorkspaceView {
                 .flex()
                 .flex_col()
                 .p_2()
-                .overflow_y_scroll();
+                .overflow_hidden();
 
             // Show tasks directly (no collapse)
             if filtered_tasks.is_empty() {
