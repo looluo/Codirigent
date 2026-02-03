@@ -33,6 +33,24 @@
 
 use codirigent_core::{GridPosition, LayoutMode, SessionId};
 
+/// Minimum cell width in pixels for readable terminal display.
+pub const MIN_CELL_WIDTH: f32 = 400.0;
+
+/// Minimum cell height in pixels for readable terminal display.
+pub const MIN_CELL_HEIGHT: f32 = 300.0;
+
+/// Width of the sidebar in pixels (file tree + task board area).
+pub const SIDEBAR_WIDTH: f32 = 260.0;
+
+/// Height of the title bar in pixels.
+pub const TITLE_BAR_HEIGHT: f32 = 32.0;
+
+/// Height of the toolbar in pixels.
+pub const TOOLBAR_HEIGHT: f32 = 48.0;
+
+/// Height of the status bar in pixels.
+pub const STATUS_BAR_HEIGHT: f32 = 24.0;
+
 /// A point in 2D space with pixel coordinates.
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Point {
@@ -304,16 +322,16 @@ impl LayoutProfile {
     /// ```
     /// use codirigent_ui::layout::LayoutProfile;
     ///
-    /// assert_eq!(LayoutProfile::Grid2x2.display_name(), "2×2");
+    /// assert_eq!(LayoutProfile::Grid2x2.display_name(), "2x2");
     /// ```
     pub fn display_name(self) -> String {
         match self {
-            LayoutProfile::Grid2x2 => "2×2".to_string(),
-            LayoutProfile::Stack1x4 => "1×4".to_string(),
-            LayoutProfile::Grid2x3 => "2×3".to_string(),
-            LayoutProfile::Grid3x3 => "3×3".to_string(),
+            LayoutProfile::Grid2x2 => "2x2".to_string(),
+            LayoutProfile::Stack1x4 => "1x4".to_string(),
+            LayoutProfile::Grid2x3 => "2x3".to_string(),
+            LayoutProfile::Grid3x3 => "3x3".to_string(),
             LayoutProfile::Single => "Single".to_string(),
-            LayoutProfile::Custom { rows, cols } => format!("{}×{}", rows, cols),
+            LayoutProfile::Custom { rows, cols } => format!("{}x{}", rows, cols),
         }
     }
 
@@ -339,6 +357,36 @@ impl LayoutProfile {
             LayoutProfile::Single => 1,
             LayoutProfile::Custom { rows, cols } => (rows * cols) as usize,
         }
+    }
+
+    /// Calculate minimum window size needed for readable terminals.
+    ///
+    /// Returns (width, height) in pixels based on cell minimums and UI elements.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use codirigent_ui::layout::LayoutProfile;
+    ///
+    /// let (width, height) = LayoutProfile::Grid2x2.minimum_window_size();
+    /// assert!(width > 800.0);  // At least 2 columns of 400px + sidebar
+    /// assert!(height > 600.0); // At least 2 rows of 300px + UI chrome
+    /// ```
+    pub fn minimum_window_size(self) -> (f32, f32) {
+        let (rows, cols) = self.dimensions();
+        let gap = 4.0;
+
+        let min_width = SIDEBAR_WIDTH
+            + (MIN_CELL_WIDTH * cols as f32)
+            + (gap * (cols - 1) as f32);
+
+        let min_height = TITLE_BAR_HEIGHT
+            + TOOLBAR_HEIGHT
+            + (MIN_CELL_HEIGHT * rows as f32)
+            + (gap * (rows - 1) as f32)
+            + STATUS_BAR_HEIGHT;
+
+        (min_width, min_height)
     }
 
     /// Get the grid dimensions (rows, cols) for this layout.
@@ -478,6 +526,7 @@ impl GridLayout {
     ///
     /// The cell size is calculated by dividing the available space
     /// (after subtracting gaps) evenly among all cells.
+    /// Enforces minimum cell dimensions for readability.
     pub fn cell_size(&self) -> Size {
         if self.rows == 0 || self.cols == 0 {
             return Size::zero();
@@ -489,7 +538,11 @@ impl GridLayout {
         let cell_width = (self.bounds.size.width - total_gap_x) / self.cols as f32;
         let cell_height = (self.bounds.size.height - total_gap_y) / self.rows as f32;
 
-        Size::new(cell_width.max(0.0), cell_height.max(0.0))
+        // Enforce minimums for readability
+        let cell_width = cell_width.max(MIN_CELL_WIDTH);
+        let cell_height = cell_height.max(MIN_CELL_HEIGHT);
+
+        Size::new(cell_width, cell_height)
     }
 
     /// Calculate the bounds for a cell at the given row and column.
@@ -973,15 +1026,15 @@ mod tests {
 
     #[test]
     fn test_layout_profile_display_name() {
-        assert_eq!(LayoutProfile::Grid2x2.display_name(), "2×2");
-        assert_eq!(LayoutProfile::Stack1x4.display_name(), "1×4");
-        assert_eq!(LayoutProfile::Grid2x3.display_name(), "2×3");
-        assert_eq!(LayoutProfile::Grid3x3.display_name(), "3×3");
+        assert_eq!(LayoutProfile::Grid2x2.display_name(), "2x2");
+        assert_eq!(LayoutProfile::Stack1x4.display_name(), "1x4");
+        assert_eq!(LayoutProfile::Grid2x3.display_name(), "2x3");
+        assert_eq!(LayoutProfile::Grid3x3.display_name(), "3x3");
         assert_eq!(LayoutProfile::Single.display_name(), "Single");
 
         // Custom layout display name
         let custom = LayoutProfile::custom(4, 3).unwrap();
-        assert_eq!(custom.display_name(), "4×3");
+        assert_eq!(custom.display_name(), "4x3");
     }
 
     #[test]

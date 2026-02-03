@@ -258,9 +258,7 @@ impl TitleBar {
 
     /// Click the project path.
     pub fn click_project_path(&mut self) {
-        if self.project_path.is_some() {
-            self.pending_events.push(TitleBarEvent::ProjectPathClicked);
-        }
+        self.pending_events.push(TitleBarEvent::ProjectPathClicked);
     }
 
     /// Get the title bar height.
@@ -460,8 +458,8 @@ mod tests {
         let mut bar = TitleBar::new();
         bar.click_project_path();
 
-        // No event if no path set
-        assert!(bar.take_events().is_empty());
+        let events = bar.take_events();
+        assert!(matches!(&events[0], TitleBarEvent::ProjectPathClicked));
     }
 
     #[test]

@@ -17,6 +17,7 @@ use std::sync::{Arc, Mutex};
 use std::time::Duration;
 use tracing::info;
 
+use crate::layout::LayoutProfile;
 use crate::splash_screen::brand;
 use crate::theme::CodirigentTheme;
 use crate::workspace::gpui::WorkspaceView;
@@ -397,7 +398,15 @@ impl CodirigentApp {
             let event_bus = self.event_bus.clone();
             let theme = self.theme.clone();
 
-            let bounds = Bounds::centered(None, size(px(1200.), px(800.)), cx);
+            // Calculate optimal size for default layout (Grid2x2)
+            let default_layout = LayoutProfile::Grid2x2;
+            let (min_width, min_height) = default_layout.minimum_window_size();
+
+            // Add 20% padding for comfort
+            let optimal_width = min_width * 1.2;
+            let optimal_height = min_height * 1.2;
+
+            let bounds = Bounds::centered(None, size(px(optimal_width), px(optimal_height)), cx);
 
             if show_splash {
                 // Show splash screen with transition to workspace

@@ -7,6 +7,7 @@ use super::gpui::WorkspaceView;
 // Import from main branch (terminal rendering)
 use crate::terminal_view::CursorShape;
 // Imports from feature branch (UI components)
+use crate::components::text_input::{text_input, TextInputStyle};
 use crate::empty_session::EmptySessionRenderHints;
 use crate::status_bar::StatusBarItem;
 use crate::terminal_header::TerminalHeaderRenderHints;
@@ -14,7 +15,8 @@ use crate::theme::CodirigentTheme;
 use codirigent_core::SessionId;
 use gpui::{
     div, px, ClickEvent, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    prelude::FluentBuilder, SharedString, StatefulInteractiveElement, Styled,
+    WindowControlArea, prelude::FluentBuilder, SharedString, StatefulInteractiveElement, Styled,
+    MouseButton,
 };
 use tracing::info;
 
@@ -80,12 +82,9 @@ impl WorkspaceView {
         let sessions = self.workspace().sessions().to_vec(); // Clone to avoid borrow issues
 
         // Top padding for macOS transparent titlebar (traffic lights area)
-        let titlebar_height = 28.0;
-
         let mut sidebar = div()
             .w(px(width))
             .h_full()
-            .pt(px(titlebar_height))
             .bg(sidebar_bg)
             .border_r_1()
             .border_color(border_color)
@@ -254,7 +253,7 @@ impl WorkspaceView {
                                     div()
                                         .text_sm()
                                         .text_color(muted)
-                                        .child("⋮"), // Vertical ellipsis
+                                        .child("..."), // Vertical ellipsis
                                 ),
                         ),
                 );
@@ -408,7 +407,7 @@ impl WorkspaceView {
                 .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
                     this.handle_worktree_event(crate::sidebar::WorktreeEvent::Refresh, cx);
                 }))
-                .child("↻"),
+                .child("R"),
         );
 
         // Add button
@@ -499,7 +498,7 @@ impl WorkspaceView {
                 div()
                     .text_xs()
                     .text_color(muted)
-                    .child("●"),
+                    .child("*"),
             );
         }
 
@@ -527,7 +526,7 @@ impl WorkspaceView {
                         div()
                             .text_xs()
                             .text_color(muted)
-                            .child(format!("→ Session {}", session_id.0)),
+                            .child(format!("-> Session {}", session_id.0)),
                     ),
             );
         }
@@ -596,12 +595,11 @@ impl WorkspaceView {
             .on_click(cx.listener(move |this, _event: &ClickEvent, _window, cx| {
                 if is_dir {
                     info!(?path, "Directory clicked");
-                    this.file_tree.toggle_directory(&path);
+                    this.handle_file_tree_event(crate::sidebar::FileTreeEvent::DirectoryToggled(path.clone()), cx);
                 } else {
                     info!(?path, "File clicked");
-                    this.file_tree.select(&path);
+                    this.handle_file_tree_event(crate::sidebar::FileTreeEvent::FileSelected(path.clone()), cx);
                 }
-                cx.notify();
             }))
             .child(
                 // Icon
@@ -759,7 +757,7 @@ impl WorkspaceView {
             .overflow_hidden()
             .flex()
             .flex_col()
-            .font_family("Monaco")
+            .font_family(crate::terminal_view::default_terminal_font_family())
             .text_size(px(terminal_view.font_size()));
 
         // Render each row
@@ -895,21 +893,50 @@ impl WorkspaceView {
         // Window controls (macOS-style traffic lights)
         #[cfg(target_os = "macos")]
         {
-            let mut controls = div().flex().gap_2().items_center().ml_2();
-            for btn in &hints.controls {
-                let color: gpui::Hsla = btn.current_color().into();
-                controls = controls.child(
-                    div()
-                        .w(px(14.0))
-                        .h(px(14.0))
-                        .rounded_full()
-                        .bg(color)
-                        .border_1()
-                        .border_color(color.opacity(0.3)),
-                );
-            }
-            bar = bar.child(controls);
-        }
+              let mut controls = div().flex().gap_2().items_center().ml_2();
+              for btn in &hints.controls {
+                  let color: gpui::Hsla = btn.current_color().into();
+                  let control_area = match btn.control {
+                      crate::title_bar::WindowControl::Close => WindowControlArea::Close,
+                      crate::title_bar::WindowControl::Minimize => WindowControlArea::Min,
+                      crate::title_bar::WindowControl::Maximize => WindowControlArea::Max,
+                  };
+                  let mut control = div()
+                      .w(px(14.0))
+                      .h(px(14.0))
+                      .rounded_full()
+                      .bg(color)
+                      .border_1()
+                      .border_color(color.opacity(0.3))
+                      .cursor_pointer()
+                      .window_control_area(control_area);
+
+                  control = match btn.control {
+                      crate::title_bar::WindowControl::Minimize => {
+                          control.on_click(cx.listener(|_this, _: &ClickEvent, window, _cx| {
+                              window.minimize_window();
+                          }))
+                      }
+                      crate::title_bar::WindowControl::Maximize => {
+                          control.on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                              window.zoom_window();
+                              this.title_bar.set_maximized(window.is_maximized());
+                              cx.notify();
+                          }))
+                      }
+                      crate::title_bar::WindowControl::Close => {
+                          control.on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
+                              info!("Close button clicked");
+                              cx.quit();
+                          }))
+                      }
+                  };
+
+                  controls = controls.child(control);
+              }
+              bar = bar.child(controls);
+          }
+
 
         // Logo and title
         bar = bar.child(
@@ -927,20 +954,43 @@ impl WorkspaceView {
                 ),
         );
 
-        // Spacer
-        bar = bar.child(div().flex_1());
+        // Drag region (includes project path)
+        let mut drag_region = div()
+            .flex_1()
+            .h_full()
+            .flex()
+            .items_center()
+            .window_control_area(WindowControlArea::Drag)
+            .on_mouse_down(MouseButton::Left, cx.listener(|this, _event, window, cx| {
+                // On Windows, restore before dragging maximized window
+                #[cfg(target_os = "windows")]
+                if window.is_maximized() {
+                    window.zoom_window();
+                    this.title_bar.set_maximized(false);
+                    cx.notify();
+                }
 
-        // Project path
+                window.start_window_move();
+            }));
+
         if let Some(path) = &hints.project_path {
-            bar = bar.child(
-                div()
+            drag_region = drag_region.child({
+                let path_div = div()
                     .text_xs()
                     .text_color(muted)
                     .overflow_hidden()
                     .text_ellipsis()
-                    .child(path.clone()),
-            );
+                    .cursor_pointer()
+                    .hover(|style| style.text_color(fg));
+
+                path_div.on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _event, _window, _cx| {
+                        this.title_bar.click_project_path();
+                    }))
+                    .child(path.clone())
+            });
         }
+
+        bar = bar.child(drag_region);
 
         // Settings button
         let settings_color = if hints.settings_hovered {
@@ -958,8 +1008,75 @@ impl WorkspaceView {
                 .on_click(cx.listener(|this, _: &ClickEvent, _window, _cx| {
                     this.title_bar.click_settings();
                 }))
-                .child("⚙"),
+                .child("Settings"),
         );
+
+        // Window controls (Windows/Linux)
+        #[cfg(not(target_os = "macos"))]
+        {
+            let mut controls = div().flex().items_center().gap_2();
+            controls = controls.child(
+                div()
+                    .id("window-minimize")
+                    .w(px(28.0))
+                    .h(px(20.0))
+                    .rounded_sm()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                      .text_xs()
+                      .text_color(muted)
+                      .cursor_pointer()
+                      .hover(|style| style.bg(border_color.opacity(0.2)))
+                      .on_click(cx.listener(|_this, _: &ClickEvent, window, _cx| {
+                          window.minimize_window();
+                      }))
+                      .window_control_area(WindowControlArea::Min)
+                      .child("_"),
+              );
+              controls = controls.child(
+                  div()
+                    .id("window-maximize")
+                    .w(px(28.0))
+                    .h(px(20.0))
+                    .rounded_sm()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                      .text_xs()
+                      .text_color(muted)
+                      .cursor_pointer()
+                      .hover(|style| style.bg(border_color.opacity(0.2)))
+                      .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
+                          window.zoom_window();
+                          this.title_bar.set_maximized(window.is_maximized());
+                          cx.notify();
+                      }))
+                      .window_control_area(WindowControlArea::Max)
+                      .child("[]"),
+              );
+            controls = controls.child(
+                div()
+                    .id("window-close")
+                    .w(px(28.0))
+                    .h(px(20.0))
+                    .rounded_sm()
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .text_xs()
+                    .text_color(muted)
+                    .cursor_pointer()
+                    .hover(|style| style.bg(border_color.opacity(0.2)))
+                    .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
+                        info!("Close button clicked");
+                        cx.quit();
+                    }))
+                    .window_control_area(WindowControlArea::Close)
+                    .child("X"),
+            );
+            bar = bar.child(controls);
+        }
 
         bar
     }
@@ -989,6 +1106,34 @@ impl WorkspaceView {
             left = left.child(self.render_status_bar_item(item));
         }
         bar = bar.child(left);
+
+        // Center section - Git branch
+        if let Some(ref branch) = self.current_branch {
+            let theme = self.workspace().theme();
+            let fg: gpui::Hsla = theme.foreground.into();
+            let muted: gpui::Hsla = theme.muted.into();
+
+            bar = bar.child(
+                div()
+                    .flex()
+                    .gap_1()
+                    .items_center()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(""), // Git icon/symbol
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(fg)
+                            .child(branch.clone()),
+                    ),
+            );
+        } else {
+            bar = bar.child(div()); // Empty spacer
+        }
 
         // Right section
         let mut right = div().flex().gap_4().items_center();
@@ -1054,7 +1199,7 @@ impl WorkspaceView {
                     .child(format!("v{}", v))
             }
             StatusBarItem::Separator => {
-                div().text_xs().text_color(muted).child("│")
+                div().text_xs().text_color(muted).child("|")
             }
         }
     }
@@ -1148,9 +1293,9 @@ impl WorkspaceView {
                     cx.notify();
                 }))
                 .child(if hints.broadcast_enabled {
-                    "● Broadcast"
+                    "* Broadcast"
                 } else {
-                    "○ Broadcast"
+                    "o Broadcast"
                 }),
         );
 
@@ -1307,8 +1452,7 @@ impl WorkspaceView {
             .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
                 info!(?position, "Empty cell clicked");
                 this.empty_cells.click(position);
-                // Create a new session when clicking an empty cell
-                this.create_session(cx);
+                cx.notify();
             }))
             .child(
                 div()
@@ -1358,7 +1502,7 @@ impl WorkspaceView {
             .gap_2();
 
         // Expand/collapse button
-        let toggle_icon = if hints.is_expanded { "▼" } else { "▶" };
+        let toggle_icon = if hints.is_expanded { "v" } else { ">" };
         header = header.child(
             div()
                 .id("task-board-toggle")
@@ -1425,9 +1569,9 @@ impl WorkspaceView {
                     cx.notify();
                 }))
                 .child(if hints.auto_assign.enabled {
-                    "● Auto-assign"
+                    "* Auto-assign"
                 } else {
-                    "○ Auto-assign"
+                    "o Auto-assign"
                 }),
         );
 
@@ -1441,8 +1585,9 @@ impl WorkspaceView {
                 .text_xs()
                 .text_color(primary)
                 .cursor_pointer()
-                .on_click(cx.listener(|this, _: &ClickEvent, _window, _cx| {
+                .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
                     this.task_board.click_add_task();
+                    cx.notify();
                 }))
                 .child("+ Add"),
         );
@@ -1480,90 +1625,55 @@ impl WorkspaceView {
                 })
                 .collect();
 
-            // Check if this tab's content is expanded (per-tab state)
-            let tab_expanded = self.task_tab_expanded.get(&selected_tab).copied().unwrap_or(false);
-
+            // Simplified: Always show tasks directly without per-tab collapse
             let mut content = div()
                 .w_full()
                 .flex()
-                .flex_col();
+                .flex_col()
+                .p_2()
+                .overflow_y_scroll();
 
-            // Tab-specific expand/collapse toggle
-            content = content.child(
-                div()
-                    .id(SharedString::from(format!("task-tab-toggle-{:?}", selected_tab)))
-                    .h(px(28.0))
-                    .px_3()
-                    .flex()
-                    .items_center()
-                    .gap_2()
-                    .cursor_pointer()
-                    .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
-                        let current = this.task_tab_expanded.get(&selected_tab).copied().unwrap_or(false);
-                        this.task_tab_expanded.insert(selected_tab, !current);
-                        cx.notify();
-                    }))
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(muted)
-                            .child(if tab_expanded { "▼" } else { "▶" }),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(fg)
-                            .child(format!("{} tasks", filtered_tasks.len())),
-                    ),
-            );
-
-            // Show tasks if tab is expanded
-            if tab_expanded {
-                if filtered_tasks.is_empty() {
-                    // Empty state
-                    content = content.child(
-                        div()
-                            .h(px(content_height - 28.0))
-                            .w_full()
-                            .flex()
-                            .items_center()
-                            .justify_center()
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(muted)
-                                    .child("No tasks in this state"),
-                            ),
-                    );
-                } else {
-                    // Task list
-                    let mut task_list = div()
+            // Show tasks directly (no collapse)
+            if filtered_tasks.is_empty() {
+                // Empty state
+                content = content.child(
+                    div()
+                        .h(px(content_height))
                         .w_full()
                         .flex()
-                        .flex_col()
-                        .gap_2()
-                        .px_3()
-                        .py_2()
-                        .overflow_hidden()
-                        .max_h(px(content_height - 28.0));
-
-                    // Limit to first 20 tasks for performance
-                    for task in filtered_tasks.iter().take(20) {
-                        task_list = task_list.child(self.render_task_card(task, &theme, fg, muted, primary, border_color, cx));
-                    }
-
-                    if filtered_tasks.len() > 20 {
-                        task_list = task_list.child(
+                        .items_center()
+                        .justify_center()
+                        .child(
                             div()
-                                .py_2()
                                 .text_xs()
                                 .text_color(muted)
-                                .child(format!("... and {} more", filtered_tasks.len() - 20)),
-                        );
-                    }
+                                .child("No tasks in this state"),
+                        ),
+                );
+            } else {
+                // Task list - show directly with gap
+                let mut task_list = div()
+                    .w_full()
+                    .flex()
+                    .flex_col()
+                    .gap_2();
 
-                    content = content.child(task_list);
+                // Limit to first 20 tasks for performance
+                for task in filtered_tasks.iter().take(20) {
+                    task_list = task_list.child(self.render_task_card(task, &theme, fg, muted, primary, border_color, cx));
                 }
+
+                if filtered_tasks.len() > 20 {
+                    task_list = task_list.child(
+                        div()
+                            .py_2()
+                            .text_xs()
+                            .text_color(muted)
+                            .child(format!("... and {} more", filtered_tasks.len() - 20)),
+                    );
+                }
+
+                content = content.child(task_list);
             }
 
             panel = panel.child(content);
@@ -2054,8 +2164,7 @@ impl WorkspaceView {
             .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
                 info!(?position, "Empty cell clicked");
                 this.empty_cells.click(position);
-                // Create a new session when clicking an empty cell
-                this.create_session(cx);
+                cx.notify();
             }))
             .child(
                 div()
@@ -2108,6 +2217,17 @@ impl WorkspaceView {
         let rows_value = picker.rows_input.clone();
         let cols_value = picker.cols_input.clone();
         let has_error = picker.error.is_some();
+        let focused_input = picker.focused_input();
+        let focus_border: gpui::Hsla = primary;
+        let input_style = TextInputStyle {
+            height: 36.0,
+            padding_x: 12.0,
+            bg: input_bg,
+            border: border_color,
+            focus_border,
+            error_border: error_color,
+            text: fg,
+        };
 
         Some(
             div()
@@ -2118,6 +2238,10 @@ impl WorkspaceView {
                 .items_center()
                 .justify_center()
                 .bg(gpui::Hsla::black().opacity(0.5))
+                .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                    this.toolbar.custom_picker_mut().close();
+                    cx.notify();
+                }))
                 .child(
                     div()
                         .id("custom-layout-modal")
@@ -2128,6 +2252,9 @@ impl WorkspaceView {
                         .rounded_lg()
                         .flex()
                         .flex_col()
+                        .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
+                            cx.stop_propagation();
+                        }))
                         // Header
                         .child(
                             div()
@@ -2164,23 +2291,27 @@ impl WorkspaceView {
                                                 .text_color(muted)
                                                 .child("Rows (1-10):"),
                                         )
-                                        .child(
-                                            div()
-                                                .h(px(36.0))
-                                                .px_3()
-                                                .bg(input_bg)
-                                                .border_1()
-                                                .border_color(if has_error { error_color } else { border_color })
-                                                .rounded_md()
-                                                .flex()
-                                                .items_center()
-                                                .child(
-                                                    div()
-                                                        .text_sm()
-                                                        .text_color(fg)
-                                                        .child(rows_value.clone()),
-                                                ),
-                                        ),
+                                          .child({
+                                              let is_focused = focused_input == Some(0);
+                                              let display_value = if is_focused {
+                                                  format!("{}|", rows_value.clone())
+                                              } else {
+                                                  rows_value.clone()
+                                              };
+
+                                              text_input(
+                                                  "rows-input",
+                                                  display_value,
+                                                  is_focused,
+                                                  has_error,
+                                                  &input_style,
+                                              )
+                                              .cursor_pointer()
+                                              .on_mouse_down(MouseButton::Left, cx.listener(|this, _event, _window, cx| {
+                                                  this.toolbar.custom_picker_mut().set_focus(0);
+                                                  cx.notify();
+                                              }))
+                                          }),
                                 )
                                 // Columns input
                                 .child(
@@ -2194,23 +2325,27 @@ impl WorkspaceView {
                                                 .text_color(muted)
                                                 .child("Columns (1-10):"),
                                         )
-                                        .child(
-                                            div()
-                                                .h(px(36.0))
-                                                .px_3()
-                                                .bg(input_bg)
-                                                .border_1()
-                                                .border_color(if has_error { error_color } else { border_color })
-                                                .rounded_md()
-                                                .flex()
-                                                .items_center()
-                                                .child(
-                                                    div()
-                                                        .text_sm()
-                                                        .text_color(fg)
-                                                        .child(cols_value.clone()),
-                                                ),
-                                        ),
+                                          .child({
+                                              let is_focused = focused_input == Some(1);
+                                              let display_value = if is_focused {
+                                                  format!("{}|", cols_value.clone())
+                                              } else {
+                                                  cols_value.clone()
+                                              };
+
+                                              text_input(
+                                                  "cols-input",
+                                                  display_value,
+                                                  is_focused,
+                                                  has_error,
+                                                  &input_style,
+                                              )
+                                              .cursor_pointer()
+                                              .on_mouse_down(MouseButton::Left, cx.listener(|this, _event, _window, cx| {
+                                                  this.toolbar.custom_picker_mut().set_focus(1);
+                                                  cx.notify();
+                                              }))
+                                          }),
                                 )
                                 // Error message
                                 .when_some(picker.error.clone(), |this, error| {
@@ -2353,12 +2488,23 @@ impl WorkspaceView {
         let primary: gpui::Hsla = theme.primary.into();
         let input_bg: gpui::Hsla = theme.terminal_background.into();
         let focus_border: gpui::Hsla = primary;
+        let input_style = TextInputStyle {
+            height: 36.0,
+            padding_x: 12.0,
+            bg: input_bg,
+            border: border_color,
+            focus_border,
+            error_border: border_color,
+            text: fg,
+        };
+        let placeholder_style = TextInputStyle { text: muted, ..input_style };
 
         let branch_value = self.worktree_panel.branch_input().to_string();
         let base_branch_value = self.worktree_panel.base_branch_input().to_string();
         let use_existing = self.worktree_panel.use_existing_branch();
         let available_branches = self.worktree_panel.available_branches().to_vec();
         let focused_input = self.worktree_panel.focused_input();
+        let dropdown_open = self.worktree_panel.is_branch_dropdown_open();
 
         Some(
             div()
@@ -2383,38 +2529,8 @@ impl WorkspaceView {
                         .rounded_lg()
                         .flex()
                         .flex_col()
-                        .on_key_down(cx.listener(|this, event: &gpui::KeyDownEvent, _window, cx| {
-                            // Get the key as a string
-                            let key = event.keystroke.key.to_string();
-
-                            // Don't handle if modifiers are pressed (except shift for capitals)
-                            if event.keystroke.modifiers.control || event.keystroke.modifiers.alt || event.keystroke.modifiers.platform {
-                                return;
-                            }
-
-                            match key.as_str() {
-                                "backspace" => {
-                                    this.worktree_panel.handle_backspace();
-                                    cx.notify();
-                                }
-                                "tab" => {
-                                    let current = this.worktree_panel.focused_input().unwrap_or(0);
-                                    let next = if current == 0 { 1 } else { 0 };
-                                    this.worktree_panel.set_focus(next);
-                                    cx.notify();
-                                }
-                                _ => {
-                                    // Handle printable characters
-                                    if key.len() == 1 {
-                                        if let Some(c) = key.chars().next() {
-                                            if c.is_alphanumeric() || c.is_ascii_punctuation() || c == ' ' || c == '-' || c == '_' || c == '/' {
-                                                this.worktree_panel.handle_char_input(c);
-                                                cx.notify();
-                                            }
-                                        }
-                                    }
-                                }
-                            }
+                        .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
+                            cx.stop_propagation();
                         }))
                         // Header
                         .child(
@@ -2503,8 +2619,8 @@ impl WorkspaceView {
                                         ),
                                 )
                                 // Branch name input (shown for new branch) or selection (shown for existing)
-                                .child(
-                                    div()
+                                .child({
+                                    let mut branch_block = div()
                                         .flex()
                                         .flex_col()
                                         .gap_2()
@@ -2513,87 +2629,124 @@ impl WorkspaceView {
                                                 .text_sm()
                                                 .text_color(muted)
                                                 .child(if use_existing { "Select Branch:" } else { "Branch Name:" }),
-                                        )
-                                        .children(if !use_existing {
-                                            // Text input for new branch
-                                            let display_value = if branch_value.is_empty() {
-                                                "e.g., feature/my-feature".to_string()
-                                            } else {
-                                                branch_value.clone()
-                                            };
-                                            let is_focused = focused_input == Some(0);
-                                            let display_with_cursor = if is_focused && !display_value.is_empty() {
-                                                format!("{}|", display_value)
-                                            } else if is_focused {
-                                                "|".to_string()
-                                            } else {
-                                                display_value.clone()
-                                            };
-                                            Some(
-                                                div()
-                                                    .id("branch-input")
-                                                    .h(px(36.0))
-                                                    .px_3()
-                                                    .bg(input_bg)
-                                                    .border_1()
-                                                    .border_color(if is_focused { focus_border } else { border_color })
-                                                    .rounded_md()
-                                                    .flex()
-                                                    .items_center()
-                                                    .cursor_pointer()
-                                                    .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
-                                                        this.worktree_panel.set_focus(0);
-                                                        cx.notify();
-                                                    }))
-                                                    .child(
-                                                        div()
-                                                            .text_sm()
-                                                            .text_color(if branch_value.is_empty() && !is_focused { muted } else { fg })
-                                                            .child(display_with_cursor),
-                                                    ),
-                                            )
-                                        } else {
-                                            None
-                                        })
-                                        .children(if use_existing {
-                                            // Dropdown for existing branches
-                                            let display_text = if branch_value.is_empty() {
-                                                "Select a branch...".to_string()
-                                            } else {
-                                                branch_value.clone()
-                                            };
+                                        );
 
-                                            let mut dropdown = div()
-                                                .h(px(36.0))
-                                                .px_3()
+                                    if !use_existing {
+                                        let is_focused = focused_input == Some(0);
+                                        let display_value = if branch_value.is_empty() {
+                                            "e.g., feature/my-feature".to_string()
+                                        } else {
+                                            branch_value.clone()
+                                        };
+                                        let display_with_cursor = if is_focused && !display_value.is_empty() {
+                                            format!("{}|", display_value)
+                                        } else if is_focused {
+                                            "|".to_string()
+                                        } else {
+                                            display_value.clone()
+                                        };
+                                        let style = if branch_value.is_empty() && !is_focused {
+                                            placeholder_style
+                                        } else {
+                                            input_style
+                                        };
+
+                                        branch_block = branch_block.child({
+                                            let input = text_input(
+                                                "branch-input",
+                                                display_with_cursor,
+                                                is_focused,
+                                                false,
+                                                &style,
+                                            )
+                                            .cursor_pointer();
+
+                                            input.on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _event, _window, cx| {
+                                                this.worktree_panel.set_focus(0);
+                                                cx.notify();
+                                            }))
+                                        });
+                                    } else {
+                                        let display_text = if branch_value.is_empty() {
+                                            "Select a branch...".to_string()
+                                        } else {
+                                            branch_value.clone()
+                                        };
+                                        let style = if branch_value.is_empty() {
+                                            placeholder_style
+                                        } else {
+                                            input_style
+                                        };
+
+                                        let dropdown = {
+                                            let input = text_input(
+                                                "branch-dropdown",
+                                                format!("{} v", display_text),
+                                                false,
+                                                false,
+                                                &style,
+                                            )
+                                            .cursor_pointer();
+
+                                            input.on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _event, _window, cx| {
+                                                this.worktree_panel.toggle_branch_dropdown();
+                                                cx.notify();
+                                            }))
+                                        };
+
+                                        let mut dropdown_container = div()
+                                            .flex()
+                                            .flex_col()
+                                            .gap_2()
+                                            .child(dropdown);
+
+                                        if dropdown_open {
+                                            let mut list = div()
                                                 .bg(input_bg)
                                                 .border_1()
                                                 .border_color(border_color)
                                                 .rounded_md()
                                                 .flex()
-                                                .items_center();
+                                                .flex_col();
 
                                             if available_branches.is_empty() {
-                                                dropdown = dropdown.child(
+                                                list = list.child(
                                                     div()
+                                                        .px_3()
+                                                        .py_2()
                                                         .text_sm()
                                                         .text_color(muted)
                                                         .child("No branches available"),
                                                 );
                                             } else {
-                                                dropdown = dropdown.child(
-                                                    div()
-                                                        .text_sm()
-                                                        .text_color(fg)
-                                                        .child(display_text),
-                                                );
+                                                for branch in &available_branches {
+                                                    let branch_name = branch.clone();
+                                                    list = list.child({
+                                                        let branch_div = div()
+                                                            .px_3()
+                                                            .py_2()
+                                                            .text_sm()
+                                                            .text_color(fg)
+                                                            .cursor_pointer()
+                                                            .hover(|style| style.bg(primary.opacity(0.1)));
+
+                                                        branch_div.on_mouse_down(gpui::MouseButton::Left, cx.listener(move |this, _event, _window, cx| {
+                                                                this.worktree_panel.select_existing_branch(branch_name.clone());
+                                                                cx.notify();
+                                                            }))
+                                                            .child(branch.clone())
+                                                    });
+                                                }
                                             }
 
-                                            Some(dropdown)
-                                        } else {
-                                            None
-                                        }),
-                                )
+                                            dropdown_container = dropdown_container.child(list);
+                                        }
+
+                                        branch_block = branch_block.child(dropdown_container);
+                                    }
+
+                                    branch_block
+                                })
                                 // Base branch input (only shown for new branches)
                                 .when(!use_existing, |this| {
                                     this.child(
@@ -2614,27 +2767,19 @@ impl WorkspaceView {
                                                 } else {
                                                     base_branch_value.clone()
                                                 };
-                                                div()
-                                                    .id("base-branch-input")
-                                                    .h(px(36.0))
-                                                    .px_3()
-                                                    .bg(input_bg)
-                                                    .border_1()
-                                                    .border_color(if is_focused { focus_border } else { border_color })
-                                                    .rounded_md()
-                                                    .flex()
-                                                    .items_center()
-                                                    .cursor_pointer()
-                                                    .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
-                                                        this.worktree_panel.set_focus(1);
-                                                        cx.notify();
-                                                    }))
-                                                    .child(
-                                                        div()
-                                                            .text_sm()
-                                                            .text_color(fg)
-                                                            .child(display_text),
-                                                    )
+                                                let input = text_input(
+                                                    "base-branch-input",
+                                                    display_text,
+                                                    is_focused,
+                                                    false,
+                                                    &input_style,
+                                                )
+                                                .cursor_pointer();
+
+                                                input.on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _event, _window, cx| {
+                                                    this.worktree_panel.set_focus(1);
+                                                    cx.notify();
+                                                }))
                                             }),
                                     )
                                 })
@@ -2716,9 +2861,10 @@ impl WorkspaceView {
     /// Render a small logo for the title bar.
     fn render_logo_small(&self) -> impl IntoElement {
         // Scale for title bar (smaller than splash screen)
-        let cell_size = 8.0;  // 25px → 8px for title bar
-        let gap = 2.0;        // 7px → 2px
-        let radius = 2.0;     // 5px → 2px
+        // Reduced by additional 35% for better title bar fit
+        let cell_size = 3.25;  // 5px -> 3.25px (~35% reduction)
+        let gap = 1.0;         // 1.5px -> 1.0px
+        let radius = 1.0;      // 1.5px -> 1.0px
 
         // Brand colors (from splash_screen.rs)
         let teal = gpui::Hsla {
@@ -2913,6 +3059,547 @@ impl WorkspaceView {
         Some(overlay.on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
             this.close_session_menu(cx);
         })))
+    }
+
+    /// Render the session action modal for rename/group.
+    pub(super) fn render_session_action_modal(&mut self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let modal = self.session_action_modal.clone()?;
+
+        let theme = self.workspace().theme();
+        let panel_bg: gpui::Hsla = theme.panel_background.into();
+        let border_color: gpui::Hsla = theme.border.into();
+        let fg: gpui::Hsla = theme.foreground.into();
+        let muted: gpui::Hsla = theme.muted.into();
+        let primary: gpui::Hsla = theme.primary.into();
+        let input_bg: gpui::Hsla = theme.terminal_background.into();
+        let error_color: gpui::Hsla = gpui::Hsla::red();
+        let input_style = TextInputStyle {
+            height: 36.0,
+            padding_x: 12.0,
+            bg: input_bg,
+            border: border_color,
+            focus_border: primary,
+            error_border: error_color,
+            text: fg,
+        };
+
+        let title = match modal.kind {
+            super::gpui::SessionActionKind::Rename => "Rename Session",
+            super::gpui::SessionActionKind::AssignGroup => "Assign Group",
+        };
+        let label = match modal.kind {
+            super::gpui::SessionActionKind::Rename => "Session Name:",
+            super::gpui::SessionActionKind::AssignGroup => "Group Name:",
+        };
+
+        let input_value = if modal.input.is_empty() {
+            "|".to_string()
+        } else {
+            format!("{}|", modal.input)
+        };
+
+        Some(
+            div()
+                .id("session-action-overlay")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(gpui::Hsla::black().opacity(0.5))
+                .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                    this.close_session_action_modal();
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .id("session-action-modal")
+                        .w(px(420.0))
+                        .bg(panel_bg)
+                        .border_1()
+                        .border_color(border_color)
+                        .rounded_lg()
+                        .flex()
+                        .flex_col()
+                        // Header
+                        .child(
+                            div()
+                                .h(px(48.0))
+                                .px_4()
+                                .border_b_1()
+                                .border_color(border_color)
+                                .flex()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .text_base()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(fg)
+                                        .child(title),
+                                ),
+                        )
+                        // Content
+                        .child(
+                            div()
+                                .p_4()
+                                .flex()
+                                .flex_col()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(muted)
+                                        .child(label),
+                                )
+                                .child(text_input(
+                                    "session-action-input",
+                                    input_value,
+                                    false,
+                                    modal.error.is_some(),
+                                    &input_style,
+                                ))
+                                .when_some(modal.error.clone(), |this, error| {
+                                    this.child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(error_color)
+                                            .child(error),
+                                    )
+                                }),
+                        )
+                        // Footer
+                        .child(
+                            div()
+                                .h(px(60.0))
+                                .px_4()
+                                .border_t_1()
+                                .border_color(border_color)
+                                .flex()
+                                .items_center()
+                                .justify_end()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .id("session-action-cancel")
+                                        .px_4()
+                                        .py_2()
+                                        .border_1()
+                                        .border_color(border_color)
+                                        .rounded_md()
+                                        .text_sm()
+                                        .text_color(fg)
+                                        .cursor_pointer()
+                                        .hover(|style| style.bg(border_color.opacity(0.1)))
+                                        .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                            this.close_session_action_modal();
+                                            cx.notify();
+                                        }))
+                                        .child("Cancel"),
+                                )
+                                .child(
+                                    div()
+                                        .id("session-action-apply")
+                                        .px_4()
+                                        .py_2()
+                                        .bg(primary)
+                                        .rounded_md()
+                                        .text_sm()
+                                        .text_color(gpui::Hsla::white())
+                                        .cursor_pointer()
+                                        .hover(|style| style.bg(primary.opacity(0.8)))
+                                        .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                            this.apply_session_action_modal(cx);
+                                        }))
+                                        .child("Apply"),
+                                ),
+                        ),
+                ),
+        )
+    }
+
+    /// Render the task creation modal.
+    pub(super) fn render_task_creation_modal(&mut self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        let modal = self.task_creation_modal.clone()?;
+
+        let theme = self.workspace().theme();
+        let panel_bg: gpui::Hsla = theme.panel_background.into();
+        let border_color: gpui::Hsla = theme.border.into();
+        let fg: gpui::Hsla = theme.foreground.into();
+        let muted: gpui::Hsla = theme.muted.into();
+        let primary: gpui::Hsla = theme.primary.into();
+        let input_bg: gpui::Hsla = theme.terminal_background.into();
+        let error_color: gpui::Hsla = gpui::Hsla::red();
+        let input_style = TextInputStyle {
+            height: 36.0,
+            padding_x: 12.0,
+            bg: input_bg,
+            border: border_color,
+            focus_border: primary,
+            error_border: error_color,
+            text: fg,
+        };
+
+        // Add cursor only to focused field
+        let title_focused = modal.focused_field == 0;
+        let desc_focused = modal.focused_field == 1;
+
+        let title_value = if title_focused {
+            if modal.title.is_empty() {
+                "|".to_string()
+            } else {
+                format!("{}|", modal.title)
+            }
+        } else {
+            if modal.title.is_empty() {
+                "Enter task title...".to_string()
+            } else {
+                modal.title.clone()
+            }
+        };
+
+        let description_value = if desc_focused {
+            if modal.description.is_empty() {
+                "|".to_string()
+            } else {
+                format!("{}|", modal.description)
+            }
+        } else {
+            if modal.description.is_empty() {
+                "Enter description...".to_string()
+            } else {
+                modal.description.clone()
+            }
+        };
+
+        Some(
+            div()
+                .id("task-creation-overlay")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(gpui::Hsla::black().opacity(0.5))
+                .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                    this.close_task_creation_modal();
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .id("task-creation-modal")
+                        .w(px(500.0))
+                        .bg(panel_bg)
+                        .border_1()
+                        .border_color(border_color)
+                        .rounded_lg()
+                        .flex()
+                        .flex_col()
+                        // Prevent click from closing modal
+                        .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
+                            cx.stop_propagation();
+                        }))
+                        // Header
+                        .child(
+                            div()
+                                .h(px(48.0))
+                                .px_4()
+                                .border_b_1()
+                                .border_color(border_color)
+                                .flex()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .text_base()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(fg)
+                                        .child("Create New Task"),
+                                ),
+                        )
+                        // Content
+                        .child(
+                            div()
+                                .p_4()
+                                .flex()
+                                .flex_col()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(muted)
+                                                .child(format!("Title:{}",
+                                                    if modal.focused_field == 0 { " (active)" } else { "" }
+                                                )),
+                                        )
+                                        .child(text_input(
+                                            "task-title-input",
+                                            title_value,
+                                            title_focused,
+                                            modal.error.is_some(),
+                                            &input_style,
+                                        ).on_mouse_down(MouseButton::Left, cx.listener(|this, _event, _window, cx| {
+                                            if let Some(modal) = &mut this.task_creation_modal {
+                                                modal.focused_field = 0;
+                                            }
+                                            cx.notify();
+                                        }))),
+                                )
+                                .child(
+                                    div()
+                                        .flex()
+                                        .flex_col()
+                                        .gap_2()
+                                        .child(
+                                            div()
+                                                .text_sm()
+                                                .text_color(muted)
+                                                .child(format!("Description:{}",
+                                                    if modal.focused_field == 1 { " (active)" } else { "" }
+                                                )),
+                                        )
+                                        .child(
+                                            div()
+                                                .h(px(120.0))
+                                                .w_full()
+                                                .p_3()
+                                                .bg(input_bg)
+                                                .border_1()
+                                                .border_color(if desc_focused { primary } else { border_color })
+                                                .rounded_md()
+                                                .text_sm()
+                                                .text_color(if desc_focused || !modal.description.is_empty() { fg } else { muted })
+                                                .cursor_pointer()
+                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _event, _window, cx| {
+                                                    if let Some(modal) = &mut this.task_creation_modal {
+                                                        modal.focused_field = 1;
+                                                    }
+                                                    cx.notify();
+                                                }))
+                                                .child(description_value),
+                                        ),
+                                )
+                                .when_some(modal.error.clone(), |this, error| {
+                                    this.child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(error_color)
+                                            .child(error),
+                                    )
+                                })
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(muted)
+                                        .child("Press Tab to switch fields, Enter to create, Esc to cancel"),
+                                ),
+                        )
+                        // Footer
+                        .child(
+                            div()
+                                .h(px(60.0))
+                                .px_4()
+                                .border_t_1()
+                                .border_color(border_color)
+                                .flex()
+                                .items_center()
+                                .justify_end()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .id("task-creation-cancel")
+                                        .px_4()
+                                        .py_2()
+                                        .border_1()
+                                        .border_color(border_color)
+                                        .rounded_md()
+                                        .text_sm()
+                                        .text_color(fg)
+                                        .cursor_pointer()
+                                        .hover(|style| style.bg(border_color.opacity(0.1)))
+                                        .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                            this.close_task_creation_modal();
+                                            cx.notify();
+                                        }))
+                                        .child("Cancel"),
+                                )
+                                .child(
+                                    div()
+                                        .id("task-creation-create")
+                                        .px_4()
+                                        .py_2()
+                                        .bg(primary)
+                                        .rounded_md()
+                                        .text_sm()
+                                        .text_color(gpui::Hsla::white())
+                                        .cursor_pointer()
+                                        .hover(|style| style.bg(primary.opacity(0.8)))
+                                        .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                            this.apply_task_creation_modal(cx);
+                                        }))
+                                        .child("Create Task"),
+                                ),
+                        ),
+                ),
+        )
+    }
+
+    /// Render the project picker modal.
+    pub(super) fn render_project_picker_modal(&mut self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
+        if !self.project_picker_open {
+            return None;
+        }
+
+        let theme = self.workspace().theme();
+        let panel_bg: gpui::Hsla = theme.panel_background.into();
+        let border_color: gpui::Hsla = theme.border.into();
+        let fg: gpui::Hsla = theme.foreground.into();
+        let muted: gpui::Hsla = theme.muted.into();
+        let primary: gpui::Hsla = theme.primary.into();
+        let input_bg: gpui::Hsla = theme.terminal_background.into();
+        let error_color: gpui::Hsla = gpui::Hsla::red();
+        let input_style = TextInputStyle {
+            height: 36.0,
+            padding_x: 12.0,
+            bg: input_bg,
+            border: border_color,
+            focus_border: primary,
+            error_border: error_color,
+            text: fg,
+        };
+
+        let input_value = if self.project_picker_input.is_empty() {
+            "|".to_string()
+        } else {
+            format!("{}|", self.project_picker_input)
+        };
+        let has_error = self.project_picker_error.is_some();
+        let can_apply = !self.project_picker_input.trim().is_empty();
+
+        Some(
+            div()
+                .id("project-picker-overlay")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(gpui::Hsla::black().opacity(0.5))
+                .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                    this.close_project_picker();
+                    cx.notify();
+                }))
+                .child(
+                    div()
+                        .id("project-picker-modal")
+                        .w(px(520.0))
+                        .bg(panel_bg)
+                        .border_1()
+                        .border_color(border_color)
+                        .rounded_lg()
+                        .flex()
+                        .flex_col()
+                        // Header
+                        .child(
+                            div()
+                                .h(px(48.0))
+                                .px_4()
+                                .border_b_1()
+                                .border_color(border_color)
+                                .flex()
+                                .items_center()
+                                .child(
+                                    div()
+                                        .text_base()
+                                        .font_weight(FontWeight::SEMIBOLD)
+                                        .text_color(fg)
+                                        .child("Open Project"),
+                                ),
+                        )
+                        // Content
+                        .child(
+                            div()
+                                .p_4()
+                                .flex()
+                                .flex_col()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(muted)
+                                        .child("Project folder path:"),
+                                )
+                                .child(text_input(
+                                    "project-picker-input",
+                                    input_value,
+                                    false,
+                                    has_error,
+                                    &input_style,
+                                ))
+                                .when_some(self.project_picker_error.clone(), |this, error| {
+                                    this.child(
+                                        div()
+                                            .text_sm()
+                                            .text_color(error_color)
+                                            .child(error),
+                                    )
+                                }),
+                        )
+                        // Footer
+                        .child(
+                            div()
+                                .h(px(60.0))
+                                .px_4()
+                                .border_t_1()
+                                .border_color(border_color)
+                                .flex()
+                                .items_center()
+                                .justify_end()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .id("project-picker-cancel")
+                                        .px_4()
+                                        .py_2()
+                                        .border_1()
+                                        .border_color(border_color)
+                                        .rounded_md()
+                                        .text_sm()
+                                        .text_color(fg)
+                                        .cursor_pointer()
+                                        .hover(|style| style.bg(border_color.opacity(0.1)))
+                                        .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                            this.close_project_picker();
+                                            cx.notify();
+                                        }))
+                                        .child("Cancel"),
+                                )
+                                .child(
+                                    div()
+                                        .id("project-picker-open")
+                                        .px_4()
+                                        .py_2()
+                                        .bg(if can_apply { primary } else { muted })
+                                        .rounded_md()
+                                        .text_sm()
+                                        .text_color(gpui::Hsla::white())
+                                        .cursor(if can_apply { gpui::CursorStyle::PointingHand } else { gpui::CursorStyle::OperationNotAllowed })
+                                        .when(can_apply, |style| {
+                                            style
+                                                .hover(|style| style.bg(primary.opacity(0.8)))
+                                                .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                                                    this.apply_project_picker();
+                                                    cx.notify();
+                                                }))
+                                        })
+                                        .child("Open"),
+                                ),
+                        ),
+                ),
+        )
     }
 
     /// Render a menu item.

@@ -542,12 +542,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_check_success() {
-        let gate = VerificationGate::new();
-        let temp = TempDir::new().unwrap();
+        let _gate = VerificationGate::new();
+        let _temp = TempDir::new().unwrap();
 
         #[cfg(unix)]
-        let result = gate
-            .run_check(VerificationCheckType::UnitTest, "echo ok", temp.path())
+        let result = _gate
+            .run_check(VerificationCheckType::UnitTest, "echo ok", _temp.path())
             .await
             .unwrap();
 
@@ -557,12 +557,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_run_check_failure() {
-        let gate = VerificationGate::new();
-        let temp = TempDir::new().unwrap();
+        let _gate = VerificationGate::new();
+        let _temp = TempDir::new().unwrap();
 
         #[cfg(unix)]
-        let result = gate
-            .run_check(VerificationCheckType::UnitTest, "false", temp.path())
+        let result = _gate
+            .run_check(VerificationCheckType::UnitTest, "false", _temp.path())
             .await
             .unwrap();
 

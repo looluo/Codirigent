@@ -73,6 +73,8 @@ pub struct CustomLayoutPicker {
     pub cols_input: String,
     /// Error message if validation failed.
     pub error: Option<String>,
+    /// Which input field is focused (0 = rows, 1 = columns).
+    focused_input: Option<usize>,
 }
 
 impl CustomLayoutPicker {
@@ -83,6 +85,7 @@ impl CustomLayoutPicker {
             rows_input: "2".to_string(),
             cols_input: "2".to_string(),
             error: None,
+            focused_input: None,
         }
     }
 
@@ -92,6 +95,7 @@ impl CustomLayoutPicker {
         self.rows_input = "2".to_string();
         self.cols_input = "2".to_string();
         self.error = None;
+        self.focused_input = Some(0);
     }
 
     /// Open the picker with specific values.
@@ -100,12 +104,14 @@ impl CustomLayoutPicker {
         self.rows_input = rows.to_string();
         self.cols_input = cols.to_string();
         self.error = None;
+        self.focused_input = Some(0);
     }
 
     /// Close the picker.
     pub fn close(&mut self) {
         self.is_open = false;
         self.error = None;
+        self.focused_input = None;
     }
 
     /// Validate and parse the current input values.
@@ -149,6 +155,38 @@ impl CustomLayoutPicker {
     /// Update the columns input value.
     pub fn set_cols(&mut self, value: String) {
         self.cols_input = value;
+    }
+
+    /// Set focus to a specific input field.
+    pub fn set_focus(&mut self, field: usize) {
+        self.focused_input = Some(field);
+    }
+
+    /// Get the currently focused input field.
+    pub fn focused_input(&self) -> Option<usize> {
+        self.focused_input
+    }
+
+    /// Handle a character input.
+    pub fn handle_char_input(&mut self, c: char) {
+        match self.focused_input {
+            Some(0) => self.rows_input.push(c),
+            Some(1) => self.cols_input.push(c),
+            _ => {}
+        }
+    }
+
+    /// Handle backspace for the focused input.
+    pub fn handle_backspace(&mut self) {
+        match self.focused_input {
+            Some(0) => {
+                self.rows_input.pop();
+            }
+            Some(1) => {
+                self.cols_input.pop();
+            }
+            _ => {}
+        }
     }
 }
 
@@ -386,9 +424,9 @@ mod tests {
         let toolbar = SessionsToolbar::new();
         let tabs = toolbar.tabs();
         assert_eq!(tabs.len(), 4);
-        assert_eq!(tabs[0].label, "2×2");
-        assert_eq!(tabs[1].label, "2×3");
-        assert_eq!(tabs[2].label, "3×3");
+        assert_eq!(tabs[0].label, "2x2");
+        assert_eq!(tabs[1].label, "2x3");
+        assert_eq!(tabs[2].label, "3x3");
         assert_eq!(tabs[3].label, "Custom");
     }
 
@@ -583,7 +621,7 @@ mod tests {
     #[test]
     fn test_layout_tab_button_new() {
         let tab = LayoutTabButton::new(LayoutProfile::Grid2x2, true);
-        assert_eq!(tab.label, "2×2");
+        assert_eq!(tab.label, "2x2");
         assert!(tab.is_active);
         assert!(!tab.is_hovered);
     }
@@ -610,6 +648,23 @@ mod tests {
         picker.set_cols("8".to_string());
         assert_eq!(picker.rows_input, "7");
         assert_eq!(picker.cols_input, "8");
+    }
+
+    #[test]
+    fn test_custom_picker_focus_and_input() {
+        let mut picker = CustomLayoutPicker::new();
+        picker.open();
+        assert_eq!(picker.focused_input(), Some(0));
+
+        picker.handle_char_input('3');
+        assert!(picker.rows_input.ends_with('3'));
+
+        picker.set_focus(1);
+        picker.handle_char_input('4');
+        assert!(picker.cols_input.ends_with('4'));
+
+        picker.handle_backspace();
+        assert!(!picker.cols_input.ends_with('4'));
     }
 
     #[test]

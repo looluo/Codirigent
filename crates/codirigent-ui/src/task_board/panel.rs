@@ -55,13 +55,13 @@ impl TaskBoardTab {
         }
     }
 
-    /// Get the icon emoji for this tab.
+    /// Get the icon label for this tab.
     pub fn icon(&self) -> &'static str {
         match self {
-            Self::Queue => "📋",
-            Self::InProgress => "⏳",
-            Self::Review => "👀",
-            Self::Done => "✅",
+            Self::Queue => "[Q]",
+            Self::InProgress => "[IP]",
+            Self::Review => "[RV]",
+            Self::Done => "[OK]",
         }
     }
 }

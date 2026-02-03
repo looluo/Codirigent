@@ -78,6 +78,8 @@
 // Core modules (ready)
 pub mod actions;
 pub mod clipboard_preview;
+#[cfg(feature = "gpui-full")]
+pub mod components;
 pub mod empty_session;
 pub mod integration;
 pub mod ui_composition;

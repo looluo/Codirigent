@@ -77,8 +77,9 @@ impl PtyHandle {
     /// assert!(pty.child_pid() > 0);
     /// ```
     pub fn spawn(working_dir: &Path, rows: u16, cols: u16) -> Result<Self> {
-        let shell = detect_shell();
-        Self::spawn_command(working_dir, &shell, &[], rows, cols)
+        let shell = detect_shell_command();
+        let args: Vec<&str> = shell.args.iter().map(|arg| arg.as_str()).collect();
+        Self::spawn_command(working_dir, &shell.program, &args, rows, cols)
     }
 
     /// Spawn a PTY with a specific command.
@@ -136,6 +137,9 @@ impl PtyHandle {
         // Set common environment variables for proper terminal behavior
         cmd.env("TERM", "xterm-256color");
         cmd.env("COLORTERM", "truecolor");
+        // Set UTF-8 encoding for proper character display
+        cmd.env("LANG", "en_US.UTF-8");
+        cmd.env("LC_ALL", "en_US.UTF-8");
 
         let child = pair
             .slave
@@ -260,25 +264,106 @@ impl PtyHandle {
     }
 }
 
+/// Shell command and arguments selected for a PTY session.
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct ShellCommand {
+    program: String,
+    args: Vec<String>,
+}
+
 /// Detect the default shell for the current platform.
 ///
 /// On Unix systems, returns the value of `$SHELL` or `/bin/bash` as fallback.
-/// On Windows, returns the value of `%COMSPEC%` or `cmd.exe` as fallback.
+/// On Windows, prioritizes PowerShell 7 (pwsh), then Windows PowerShell (powershell),
+/// then falls back to `%COMSPEC%` or `cmd.exe`.
+#[cfg(test)]
 fn detect_shell() -> String {
+    detect_shell_command().program
+}
+
+/// Detect the shell command and args, honoring explicit overrides.
+///
+/// Use `CODIRIGENT_SHELL` to override the executable and `CODIRIGENT_SHELL_ARGS`
+/// to provide arguments (space-delimited).
+fn detect_shell_command() -> ShellCommand {
+    if let Ok(shell) = std::env::var("CODIRIGENT_SHELL") {
+        let args = std::env::var("CODIRIGENT_SHELL_ARGS")
+            .ok()
+            .map(|value| split_shell_args(&value))
+            .unwrap_or_default();
+        return ShellCommand { program: shell, args };
+    }
+
     #[cfg(unix)]
     {
-        std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string())
+        let program = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
+        ShellCommand {
+            program,
+            args: Vec::new(),
+        }
     }
 
     #[cfg(windows)]
     {
-        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
+        use std::process::Command;
+
+        // Try PowerShell 7 first
+        if Command::new("pwsh.exe").arg("--version").output().is_ok() {
+            return ShellCommand {
+                program: "pwsh.exe".to_string(),
+                // Ensure UTF-8 output and keep the shell open.
+                args: vec![
+                    "-NoLogo".to_string(),
+                    "-NoProfile".to_string(),
+                    "-NoExit".to_string(),
+                    "-Command".to_string(),
+                    "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $OutputEncoding=[System.Text.Encoding]::UTF8"
+                        .to_string(),
+                ],
+            };
+        }
+        // Try Windows PowerShell
+        if Command::new("powershell.exe").arg("-Command").arg("exit").output().is_ok() {
+            return ShellCommand {
+                program: "powershell.exe".to_string(),
+                // Ensure UTF-8 output and keep the shell open.
+                args: vec![
+                    "-NoLogo".to_string(),
+                    "-NoProfile".to_string(),
+                    "-NoExit".to_string(),
+                    "-Command".to_string(),
+                    "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; $OutputEncoding=[System.Text.Encoding]::UTF8"
+                        .to_string(),
+                ],
+            };
+        }
+        // Fall back to cmd.exe
+        let program = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
+        ShellCommand {
+            program,
+            // Switch to UTF-8 codepage for correct Unicode output.
+            args: vec!["/K".to_string(), "chcp".to_string(), "65001".to_string()],
+        }
     }
 
     #[cfg(not(any(unix, windows)))]
     {
-        "/bin/sh".to_string()
+        ShellCommand {
+            program: "/bin/sh".to_string(),
+            args: Vec::new(),
+        }
     }
+}
+
+/// Split a space-delimited shell args string.
+///
+/// This is intentionally simple; if callers need quoting, they can provide
+/// a wrapper script via `CODIRIGENT_SHELL`.
+fn split_shell_args(value: &str) -> Vec<String> {
+    value
+        .split_whitespace()
+        .map(str::to_string)
+        .collect()
 }
 
 /// Buffer size for reading PTY output.
@@ -537,7 +622,16 @@ mod tests {
         #[cfg(unix)]
         assert!(shell.contains('/') || shell == "bash" || shell == "sh" || shell == "zsh");
         #[cfg(windows)]
-        assert!(shell.contains("cmd") || shell.contains("powershell"));
+        assert!(shell.contains("cmd") || shell.contains("powershell") || shell.contains("pwsh"));
+    }
+
+    #[test]
+    fn test_split_shell_args() {
+        let args = split_shell_args("-NoLogo -NoProfile -NoExit");
+        assert_eq!(args, vec!["-NoLogo", "-NoProfile", "-NoExit"]);
+
+        let args = split_shell_args("   /K   chcp   65001  ");
+        assert_eq!(args, vec!["/K", "chcp", "65001"]);
     }
 
     #[test]

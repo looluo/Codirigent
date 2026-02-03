@@ -285,13 +285,13 @@ impl TaskItemAction {
     /// Get the action icon.
     pub fn icon(&self) -> &'static str {
         match self {
-            Self::Assign => "→",
-            Self::Edit => "✏",
-            Self::Delete => "×",
-            Self::MarkForReview => "👀",
-            Self::Approve => "✓",
-            Self::Reject => "←",
-            Self::Reopen => "↺",
+            Self::Assign => "+",
+            Self::Edit => "E",
+            Self::Delete => "X",
+            Self::MarkForReview => "R",
+            Self::Approve => "OK",
+            Self::Reject => "NO",
+            Self::Reopen => "RE",
         }
     }
 }

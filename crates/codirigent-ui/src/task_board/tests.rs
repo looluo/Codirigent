@@ -29,10 +29,10 @@ fn test_task_board_tab_labels() {
 
 #[test]
 fn test_task_board_tab_icons() {
-    assert_eq!(TaskBoardTab::Queue.icon(), "📋");
-    assert_eq!(TaskBoardTab::InProgress.icon(), "⏳");
-    assert_eq!(TaskBoardTab::Review.icon(), "👀");
-    assert_eq!(TaskBoardTab::Done.icon(), "✅");
+    assert_eq!(TaskBoardTab::Queue.icon(), "[Q]");
+    assert_eq!(TaskBoardTab::InProgress.icon(), "[IP]");
+    assert_eq!(TaskBoardTab::Review.icon(), "[RV]");
+    assert_eq!(TaskBoardTab::Done.icon(), "[OK]");
 }
 
 #[test]

@@ -56,6 +56,8 @@ pub struct WorktreePanel {
     use_existing_branch: bool,
     /// Available branches for selection.
     available_branches: Vec<String>,
+    /// Whether the existing-branch dropdown is open.
+    branch_dropdown_open: bool,
     /// Panel height.
     height: f32,
     /// Which input field has focus (0 = branch, 1 = base_branch, None = no focus).
@@ -87,6 +89,7 @@ impl WorktreePanel {
             available_branches: Vec::new(),
             height: Self::DEFAULT_HEIGHT,
             focused_input: None,
+            branch_dropdown_open: false,
         }
     }
 
@@ -112,6 +115,7 @@ impl WorktreePanel {
         self.base_branch_input = String::from("main");
         self.use_existing_branch = false;
         self.focused_input = Some(0); // Focus branch input by default
+        self.branch_dropdown_open = false;
     }
 
     /// Close the create worktree modal.
@@ -147,11 +151,38 @@ impl WorktreePanel {
     /// Toggle use existing branch.
     pub fn toggle_use_existing_branch(&mut self) {
         self.use_existing_branch = !self.use_existing_branch;
+        self.branch_dropdown_open = false;
+        if self.use_existing_branch {
+            self.focused_input = None;
+        } else {
+            self.focused_input = Some(0);
+        }
     }
 
     /// Check if using existing branch.
     pub fn use_existing_branch(&self) -> bool {
         self.use_existing_branch
+    }
+
+    /// Toggle the existing-branch dropdown.
+    pub fn toggle_branch_dropdown(&mut self) {
+        self.branch_dropdown_open = !self.branch_dropdown_open;
+    }
+
+    /// Close the existing-branch dropdown.
+    pub fn close_branch_dropdown(&mut self) {
+        self.branch_dropdown_open = false;
+    }
+
+    /// Check if the existing-branch dropdown is open.
+    pub fn is_branch_dropdown_open(&self) -> bool {
+        self.branch_dropdown_open
+    }
+
+    /// Select an existing branch from the dropdown.
+    pub fn select_existing_branch(&mut self, branch: String) {
+        self.branch_input = branch;
+        self.branch_dropdown_open = false;
     }
 
     /// Get available branches.
@@ -242,6 +273,7 @@ impl WorktreePanel {
             header_height: Self::HEADER_HEIGHT,
             item_height: Self::ITEM_HEIGHT,
             focused_input: self.focused_input,
+            branch_dropdown_open: self.branch_dropdown_open,
         }
     }
 }
@@ -269,6 +301,8 @@ pub struct WorktreeRenderHints {
     pub item_height: f32,
     /// Which input field has focus.
     pub focused_input: Option<usize>,
+    /// Whether the existing-branch dropdown is open.
+    pub branch_dropdown_open: bool,
 }
 
 /// Worktree item for rendering.

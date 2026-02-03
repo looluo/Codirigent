@@ -403,8 +403,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_with_env() {
-        let temp = TempDir::new().unwrap();
-        let executor = CommandExecutor::new();
+        let _temp = TempDir::new().unwrap();
+        let _executor = CommandExecutor::new();
 
         #[cfg(unix)]
         {
@@ -413,10 +413,10 @@ mod tests {
             std::fs::write(&script_path, "#!/bin/sh\necho $TEST_VAR").unwrap();
             std::fs::set_permissions(&script_path, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
 
-            let result = executor
+            let result = _executor
                 .execute_with_env(
                     "./test.sh",
-                    temp.path(),
+                    _temp.path(),
                     &[("TEST_VAR", "hello_world")],
                 )
                 .await
@@ -428,8 +428,8 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_sets_ci_env() {
-        let temp = TempDir::new().unwrap();
-        let executor = CommandExecutor::new();
+        let _temp = TempDir::new().unwrap();
+        let _executor = CommandExecutor::new();
 
         #[cfg(unix)]
         {
@@ -438,8 +438,8 @@ mod tests {
             std::fs::write(&script_path, "#!/bin/sh\necho $CI").unwrap();
             std::fs::set_permissions(&script_path, std::os::unix::fs::PermissionsExt::from_mode(0o755)).unwrap();
 
-            let result = executor
-                .execute("./test.sh", temp.path())
+            let result = _executor
+                .execute("./test.sh", _temp.path())
                 .await
                 .unwrap();
 
@@ -449,13 +449,13 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_captures_stderr() {
-        let temp = TempDir::new().unwrap();
-        let executor = CommandExecutor::new();
+        let _temp = TempDir::new().unwrap();
+        let _executor = CommandExecutor::new();
 
         #[cfg(unix)]
         {
-            let result = executor
-                .execute("sh -c 'echo error >&2'", temp.path())
+            let result = _executor
+                .execute("sh -c 'echo error >&2'", _temp.path())
                 .await
                 .unwrap();
 
@@ -465,14 +465,14 @@ mod tests {
 
     #[tokio::test]
     async fn test_execute_duration_recorded() {
-        let temp = TempDir::new().unwrap();
-        let executor = CommandExecutor::new();
+        let _temp = TempDir::new().unwrap();
+        let _executor = CommandExecutor::new();
 
         #[cfg(unix)]
-        let result = executor.execute("echo test", temp.path()).await.unwrap();
+        let result = _executor.execute("echo test", _temp.path()).await.unwrap();
         #[cfg(windows)]
-        let result = executor
-            .execute("cmd /c echo test", temp.path())
+        let result = _executor
+            .execute("cmd /c echo test", _temp.path())
             .await
             .unwrap();
 
@@ -482,12 +482,12 @@ mod tests {
 
     #[tokio::test]
     async fn test_timeout() {
-        let temp = TempDir::new().unwrap();
-        let executor = CommandExecutor::with_timeout(Duration::from_millis(100));
+        let _temp = TempDir::new().unwrap();
+        let _executor = CommandExecutor::with_timeout(Duration::from_millis(100));
 
         #[cfg(unix)]
         {
-            let result = executor.execute("sleep 10", temp.path()).await;
+            let result = _executor.execute("sleep 10", _temp.path()).await;
             assert!(result.is_err());
             let err = result.unwrap_err();
             assert!(err.to_string().contains("timed out"));

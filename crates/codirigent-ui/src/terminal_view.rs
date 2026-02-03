@@ -34,6 +34,7 @@
 //! ```
 
 use crate::terminal::Terminal;
+use crate::terminal::TerminalSize;
 use crate::terminal_colors::{convert_color, dim_color};
 use crate::theme::{CodirigentTheme, Rgba};
 use alacritty_terminal::grid::Scroll;
@@ -184,12 +185,25 @@ pub struct TerminalView {
 impl TerminalView {
     /// Create a new terminal view.
     pub fn new(terminal: Terminal, theme: CodirigentTheme) -> Self {
+        let font_size = theme.font_size_base;
+        // Keep cell metrics aligned with the chosen font size to reduce spacing issues.
+        let cell_width = (font_size * 0.6).max(7.0);
+        let cell_height = (font_size * 1.3).max(14.0);
+
+        let mut terminal = terminal;
+        terminal.resize_with_cells(TerminalSize::new(
+            terminal.rows(),
+            terminal.cols(),
+            cell_width,
+            cell_height,
+        ));
+
         Self {
             terminal,
             theme,
-            cell_width: 8.0,
-            cell_height: 16.0,
-            font_size: 14.0,
+            cell_width,
+            cell_height,
+            font_size,
             selection: Selection::new(),
             cursor_shape: CursorShape::Block,
             focused: true,
@@ -230,6 +244,12 @@ impl TerminalView {
     pub fn set_cell_dimensions(&mut self, width: f32, height: f32) {
         self.cell_width = width;
         self.cell_height = height;
+        self.terminal.resize_with_cells(TerminalSize::new(
+            self.terminal.rows(),
+            self.terminal.cols(),
+            width,
+            height,
+        ));
     }
 
     /// Get the font size.
@@ -454,6 +474,26 @@ impl TerminalView {
     }
 }
 
+/// Default monospace font family for terminals per platform.
+pub fn default_terminal_font_family() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "Consolas"
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "Menlo"
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        "DejaVu Sans Mono"
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        "monospace"
+    }
+}
+
 /// Cursor rendering information.
 #[derive(Debug, Clone, Copy)]
 pub struct CursorRect {
@@ -578,16 +618,16 @@ mod tests {
     fn test_pixel_size() {
         let view = create_test_view();
         let (width, height) = view.pixel_size();
-        assert_eq!(width, 640.0);
-        assert_eq!(height, 384.0);
+        assert_eq!(width, view.cell_width() * view.terminal().cols() as f32);
+        assert_eq!(height, view.cell_height() * view.terminal().rows() as f32);
     }
 
     #[test]
     fn test_dimensions_from_pixels() {
         let view = create_test_view();
         let (rows, cols) = view.dimensions_from_pixels(800.0, 600.0);
-        assert_eq!(cols, 100);
-        assert_eq!(rows, 37);
+        assert_eq!(cols, (800.0 / view.cell_width()).floor() as u16);
+        assert_eq!(rows, (600.0 / view.cell_height()).floor() as u16);
     }
 
     #[test]
@@ -645,8 +685,8 @@ mod tests {
     fn test_resize_to_fit() {
         let mut view = create_test_view();
         view.resize_to_fit(400.0, 200.0);
-        assert_eq!(view.terminal().cols(), 50);
-        assert_eq!(view.terminal().rows(), 12);
+        assert_eq!(view.terminal().cols(), (400.0 / view.cell_width()).floor() as u16);
+        assert_eq!(view.terminal().rows(), (200.0 / view.cell_height()).floor() as u16);
     }
 
     #[test]

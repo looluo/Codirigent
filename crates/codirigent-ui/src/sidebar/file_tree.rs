@@ -196,11 +196,17 @@ impl FileTreePanel {
     /// This method takes the visible entries from the file tree crate
     /// and converts them to render items.
     pub fn update_from_entries(&mut self, entries: Vec<(usize, FileTreeEntryData)>) {
+        let mut expanded_dirs = std::collections::HashSet::new();
+
         self.visible_items = entries
             .into_iter()
             .map(|(depth, entry)| {
+                if entry.is_dir && entry.expanded {
+                    expanded_dirs.insert(entry.path.clone());
+                }
+
                 let icon = if entry.is_dir {
-                    if self.expanded_dirs.contains(&entry.path) {
+                    if entry.expanded {
                         FileTreeIcon::FolderOpen
                     } else {
                         FileTreeIcon::Folder
@@ -226,6 +232,8 @@ impl FileTreePanel {
                 }
             })
             .collect();
+
+        self.expanded_dirs = expanded_dirs;
     }
 
     /// Get the visible items for rendering.

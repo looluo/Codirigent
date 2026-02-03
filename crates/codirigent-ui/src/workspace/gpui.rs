@@ -26,7 +26,7 @@ use crate::terminal::Terminal;
 use crate::terminal_view::TerminalView;
 // Imports from feature branch (UI components)
 use crate::empty_session::{EmptySessionEvent, EmptySessionPool};
-use crate::sidebar::{FileTreePanel, FileTreeEvent, WorktreePanel, WorktreeEvent};
+use crate::sidebar::{FileTreeEntryData, FileTreePanel, FileTreeEvent, WorktreePanel, WorktreeEvent};
 use crate::status_bar::StatusBar;
 use crate::task_board::TaskBoardPanel;
 use crate::terminal_header::TerminalHeader;
@@ -39,6 +39,7 @@ use codirigent_core::{
     SessionManager, SessionStatus, TaskManager, TaskManagerConfig, Task, TaskId,
     FileStorageService, WorktreeCreateOptions,
 };
+use codirigent_filetree::FileTree;
 use codirigent_detector::InputDetector;
 use codirigent_session::DefaultSessionManager;
 use crate::app::{
@@ -53,8 +54,30 @@ use gpui::{
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 use tracing::{info, warn};
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum SessionActionKind {
+    Rename,
+    AssignGroup,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct SessionActionModal {
+    pub(super) session_id: SessionId,
+    pub(super) kind: SessionActionKind,
+    pub(super) input: String,
+    pub(super) error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct TaskCreationModal {
+    pub(super) title: String,
+    pub(super) description: String,
+    pub(super) focused_field: usize, // 0=title, 1=description
+    pub(super) error: Option<String>,
+}
 
 /// GPUI View wrapper for Workspace.
 ///
@@ -93,14 +116,30 @@ pub struct WorkspaceView {
     pub(super) broadcast_enabled: bool,
     /// Session menu state: which session's menu is open (if any).
     pub(super) session_menu_open: Option<SessionId>,
+    /// Session action modal state (rename/group).
+    pub(super) session_action_modal: Option<SessionActionModal>,
+    /// Task creation modal state.
+    pub(super) task_creation_modal: Option<TaskCreationModal>,
     /// File tree panel for sidebar.
     pub(super) file_tree: FileTreePanel,
+    /// File tree model for filesystem-backed rendering.
+    pub(super) file_tree_model: Option<FileTree>,
+    /// Current project root path.
+    pub(super) project_root: Option<PathBuf>,
+    /// Project picker modal state.
+    pub(super) project_picker_open: bool,
+    pub(super) project_picker_input: String,
+    pub(super) project_picker_error: Option<String>,
     /// Per-tab task expansion state.
     pub(super) task_tab_expanded: HashMap<crate::task_board::TaskBoardTab, bool>,
     /// Worktree panel for git worktree management.
     pub(super) worktree_panel: WorktreePanel,
     /// Worktree manager for git worktree operations.
     pub(super) worktree_manager: Option<Arc<Mutex<codirigent_session::WorktreeManager>>>,
+    /// Click deduplication: track last click position and time to prevent double-creation.
+    last_click_position: Option<(GridPosition, Instant)>,
+    /// Current git branch name (if in a git repository).
+    pub(super) current_branch: Option<String>,
 }
 
 impl WorkspaceView {
@@ -173,11 +212,22 @@ impl WorkspaceView {
 
         // Initialize file tree panel with current working directory
         let mut file_tree = FileTreePanel::new();
+        let mut file_tree_model = None;
+        let mut project_root = None;
         if let Ok(cwd) = std::env::current_dir() {
-            file_tree.set_root(cwd);
+            file_tree.set_root(cwd.clone());
+            project_root = Some(cwd.clone());
+            match FileTree::new(cwd) {
+                Ok(tree) => {
+                    file_tree_model = Some(tree);
+                }
+                Err(e) => {
+                    warn!("Failed to initialize file tree: {}", e);
+                }
+            }
         }
 
-        Self {
+        let mut view = Self {
             workspace,
             focus_handle: cx.focus_handle(),
             event_bus,
@@ -194,11 +244,24 @@ impl WorkspaceView {
             terminal_headers: Vec::new(),
             broadcast_enabled: false,
             session_menu_open: None,
+            session_action_modal: None,
+            task_creation_modal: None,
             file_tree,
+            file_tree_model,
+            project_root,
+            project_picker_open: false,
+            project_picker_input: String::new(),
+            project_picker_error: None,
             task_tab_expanded: HashMap::new(),
             worktree_panel: WorktreePanel::new(),
             worktree_manager: Self::init_worktree_manager(),
-        }
+            last_click_position: None,
+            current_branch: Self::detect_git_branch(),
+        };
+
+        view.refresh_file_tree_panel();
+        view.refresh_worktree_panel();
+        view
     }
 
     /// Initialize worktree manager if in a git repository.
@@ -209,6 +272,85 @@ impl WorkspaceView {
             }
         }
         None
+    }
+
+    /// Detect the current git branch.
+    fn detect_git_branch() -> Option<String> {
+        use git2::Repository;
+
+        let cwd = std::env::current_dir().ok()?;
+        let repo = Repository::discover(cwd).ok()?;
+        let head = repo.head().ok()?;
+
+        if head.is_branch() {
+            head.shorthand().map(String::from)
+        } else {
+            // Detached HEAD - show short commit hash
+            let commit = head.peel_to_commit().ok()?;
+            Some(format!("{:.7}", commit.id()))
+        }
+    }
+
+    /// Refresh the file tree panel from the current model.
+    fn refresh_file_tree_panel(&mut self) {
+        let entries = if let Some(tree) = &self.file_tree_model {
+            let tree: &FileTree = tree;
+            tree.visible_entries()
+                .into_iter()
+                .map(|(depth, entry)| {
+                    (
+                        depth,
+                        FileTreeEntryData {
+                            path: entry.path.clone(),
+                            name: entry.name.clone(),
+                            is_dir: entry.is_dir,
+                            expanded: entry.expanded,
+                        },
+                    )
+                })
+                .collect()
+        } else {
+            Vec::new()
+        };
+
+        self.file_tree.update_from_entries(entries);
+    }
+
+    /// Refresh worktree panel from the worktree manager.
+    fn refresh_worktree_panel(&mut self) {
+        if let Some(ref manager) = self.worktree_manager {
+            if let Ok(mut mgr) = manager.lock() {
+                let _: Result<(), anyhow::Error> = mgr.refresh();
+                self.worktree_panel.set_worktrees(mgr.list().to_vec());
+                return;
+            }
+        }
+
+        self.worktree_panel.set_worktrees(Vec::new());
+    }
+
+    /// Set the current project root and update dependent UI.
+    fn set_project_root(&mut self, path: PathBuf) {
+        self.project_root = Some(path.clone());
+        self.title_bar.set_project_path(path.clone());
+        self.file_tree.set_root(path.clone());
+
+        match FileTree::new(path.clone()) {
+            Ok(tree) => {
+                self.file_tree_model = Some(tree);
+            }
+            Err(e) => {
+                warn!("Failed to initialize file tree for {:?}: {}", path, e);
+                self.file_tree_model = None;
+            }
+        }
+
+        self.refresh_file_tree_panel();
+
+        self.worktree_manager = codirigent_session::WorktreeManager::new(&path)
+            .ok()
+            .map(|manager| Arc::new(Mutex::new(manager)));
+        self.refresh_worktree_panel();
     }
 
     /// Poll PTY output and feed to terminal emulators.
@@ -252,12 +394,34 @@ impl WorkspaceView {
         }
     }
 
+    /// Check if a session should be created at the given position.
+    /// Returns true if this is not a duplicate click (same position within 100ms).
+    pub(super) fn should_create_session_at(&mut self, position: GridPosition) -> bool {
+        let now = Instant::now();
+
+        // Check if this is a duplicate click
+        if let Some((last_pos, last_time)) = self.last_click_position {
+            if last_pos == position && now.duration_since(last_time) < Duration::from_millis(100) {
+                info!(?position, "Ignoring duplicate click within 100ms");
+                return false;
+            }
+        }
+
+        // Update last click position
+        self.last_click_position = Some((position, now));
+        true
+    }
+
     /// Create a new session.
     pub fn create_session(&mut self, cx: &mut Context<Self>) {
         let name = format!("Session {}", self.next_session_id);
         self.next_session_id += 1;
 
-        let working_dir = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("/tmp"));
+        let working_dir = self
+            .project_root
+            .clone()
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("/tmp"));
 
         // Create session with real PTY via session manager (from main branch)
         let session_id = {
@@ -443,6 +607,37 @@ impl WorkspaceView {
             })
             .collect();
         self.empty_cells.setup_for_grid(rows, cols, &occupied);
+
+        // Sync task board counts from TaskManager
+        if let Ok(manager) = self.task_manager.lock() {
+            let all_tasks = manager.list_tasks();
+
+            let queue_count = all_tasks.iter()
+                .filter(|t| matches!(t.status,
+                    codirigent_core::TaskStatus::Queued | codirigent_core::TaskStatus::Blocked))
+                .count();
+
+            let in_progress_count = all_tasks.iter()
+                .filter(|t| matches!(t.status,
+                    codirigent_core::TaskStatus::Assigned | codirigent_core::TaskStatus::Working))
+                .count();
+
+            let review_count = all_tasks.iter()
+                .filter(|t| matches!(t.status,
+                    codirigent_core::TaskStatus::Verifying | codirigent_core::TaskStatus::Review))
+                .count();
+
+            let done_count = all_tasks.iter()
+                .filter(|t| t.status == codirigent_core::TaskStatus::Done)
+                .count();
+
+            self.task_board.set_task_counts(
+                queue_count,
+                in_progress_count,
+                review_count,
+                done_count
+            );
+        }
     }
 
     /// Get a terminal header for a session.
@@ -499,27 +694,72 @@ impl WorkspaceView {
     fn handle_title_bar_event(&mut self, event: TitleBarEvent, cx: &mut Context<Self>) {
         match event {
             TitleBarEvent::CloseClicked => {
-                info!("Title bar close clicked");
-                // Would typically close the window - defer to window management
+                info!("Title bar close clicked - quitting application");
+                // Close the application (quit for single-window app)
+                cx.quit();
             }
             TitleBarEvent::MinimizeClicked => {
                 info!("Title bar minimize clicked");
-                // Would typically minimize the window
+                // TODO: Implement window minimization once GPUI window management API is available
+                // Expected: cx.window().minimize() or similar
             }
             TitleBarEvent::MaximizeClicked => {
                 info!("Title bar maximize clicked");
-                // Would typically maximize/restore the window
+                // TODO: Implement window maximize/restore once GPUI window management API is available
+                // Expected: cx.window().toggle_maximize() or similar
+                // For now, toggle the state to show correct icon
+                self.title_bar.set_maximized(!self.title_bar.is_maximized());
             }
             TitleBarEvent::SettingsClicked => {
                 info!("Settings button clicked");
-                // Would open settings panel
+                // TODO: Open settings panel
             }
             TitleBarEvent::ProjectPathClicked => {
                 info!("Project path clicked");
-                // Would open file browser at project path
+                self.open_project_picker();
             }
         }
         cx.notify();
+    }
+
+    /// Open the project picker modal.
+    pub(super) fn open_project_picker(&mut self) {
+        self.project_picker_open = true;
+        self.project_picker_error = None;
+        self.project_picker_input = self
+            .project_root
+            .as_ref()
+            .map(|p| p.to_string_lossy().to_string())
+            .unwrap_or_default();
+    }
+
+    /// Close the project picker modal.
+    pub(super) fn close_project_picker(&mut self) {
+        self.project_picker_open = false;
+        self.project_picker_error = None;
+    }
+
+    /// Apply the project picker selection.
+    pub(super) fn apply_project_picker(&mut self) {
+        let input = self.project_picker_input.trim();
+        if input.is_empty() {
+            self.project_picker_error = Some("Enter a folder path.".to_string());
+            return;
+        }
+
+        let path = PathBuf::from(input);
+        if !path.exists() {
+            self.project_picker_error = Some("Folder does not exist.".to_string());
+            return;
+        }
+
+        if !path.is_dir() {
+            self.project_picker_error = Some("Path is not a directory.".to_string());
+            return;
+        }
+
+        self.set_project_root(path);
+        self.close_project_picker();
     }
 
     /// Handle toolbar events.
@@ -572,24 +812,7 @@ impl WorkspaceView {
             }
             crate::task_board::TaskBoardEvent::AddTaskClicked => {
                 info!("Add task clicked");
-                // TODO: Open task creation dialog
-                // For now, create a mock task to demonstrate functionality
-                let task_id = TaskId(format!("task-{}", self.next_session_id));
-                self.next_session_id += 1;
-
-                let task = Task::new(
-                    task_id.clone(),
-                    "New Task".to_string(),
-                    "Task created from UI".to_string(),
-                );
-
-                if let Ok(mut manager) = self.task_manager.lock() {
-                    if let Err(e) = manager.create_task(task) {
-                        warn!("Failed to create task: {}", e);
-                    } else {
-                        info!(%task_id, "Task created successfully");
-                    }
-                }
+                self.open_task_creation_modal();
             }
             crate::task_board::TaskBoardEvent::TaskSelected(id) => {
                 info!(%id, "Task selected");
@@ -646,31 +869,67 @@ impl WorkspaceView {
         match event {
             EmptySessionEvent::CreateSessionClicked { position } => {
                 info!(?position, "Create session at position");
-                self.create_session(cx);
+                if self.should_create_session_at(position) {
+                    self.create_session(cx);
+                }
             }
         }
         cx.notify();
     }
 
     /// Handle file tree events.
-    fn handle_file_tree_event(&mut self, event: FileTreeEvent, cx: &mut Context<Self>) {
+    pub(super) fn handle_file_tree_event(&mut self, event: FileTreeEvent, cx: &mut Context<Self>) {
         match event {
             FileTreeEvent::FileSelected(path) => {
                 info!(?path, "File selected");
-                // Could highlight the file or show preview
+                self.file_tree.select(&path);
+                if let Some(tree) = self.file_tree_model.as_mut() {
+                    let tree: &mut FileTree = tree;
+                    tree.select(&path);
+                }
+                self.refresh_file_tree_panel();
             }
             FileTreeEvent::FileActivated(path) => {
                 info!(?path, "File activated");
-                // Could open file in editor (future feature)
+
+                // Send vim command to focused terminal session
+                if let Some(session_id) = self.workspace.focused_session_id() {
+                    let path_str = if let Some(tree) = &self.file_tree_model {
+                        let tree: &FileTree = tree;
+                        tree.path_for_terminal(&path)
+                    } else {
+                        path.to_string_lossy().to_string()
+                    };
+
+                    let command = format!("vim {}\n", path_str);
+                    if let Ok(manager) = self.session_manager.lock() {
+                        if let Err(e) = manager.send_input(session_id, command.as_bytes()) {
+                            warn!("Failed to send vim command to terminal: {}", e);
+                        }
+                    }
+                }
             }
             FileTreeEvent::DirectoryToggled(path) => {
                 info!(?path, "Directory toggled");
-                self.file_tree.toggle_directory(&path);
+                if let Some(tree) = self.file_tree_model.as_mut() {
+                    let tree: &mut FileTree = tree;
+                    if let Err(e) = tree.toggle(&path) {
+                        warn!("Failed to toggle directory {:?}: {}", path, e);
+                    }
+                    self.refresh_file_tree_panel();
+                } else {
+                    self.file_tree.toggle_directory(&path);
+                }
             }
             FileTreeEvent::PathDraggedToTerminal { path, session_id } => {
                 info!(?path, ?session_id, "Path dragged to terminal");
                 // C3 implementation: insert path into terminal
-                let path_str = path.to_string_lossy();
+                let path_str = if let Some(tree) = &self.file_tree_model {
+                    let tree: &FileTree = tree;
+                    tree.path_for_terminal(&path)
+                } else {
+                    path.to_string_lossy().to_string()
+                };
                 let input = format!("{} ", path_str); // Add space after path
                 let session_id = SessionId(session_id);
                 if let Ok(manager) = self.session_manager.lock() {
@@ -822,6 +1081,130 @@ impl WorkspaceView {
         cx.notify();
     }
 
+    fn open_session_action_modal(&mut self, session_id: SessionId, kind: SessionActionKind) {
+        let input = match kind {
+            SessionActionKind::Rename => self
+                .workspace
+                .session(session_id)
+                .map(|session| session.name.clone())
+                .unwrap_or_default(),
+            SessionActionKind::AssignGroup => self
+                .workspace
+                .session(session_id)
+                .and_then(|session| session.group.clone())
+                .unwrap_or_default(),
+        };
+
+        self.session_action_modal = Some(SessionActionModal {
+            session_id,
+            kind,
+            input,
+            error: None,
+        });
+    }
+
+    pub(super) fn close_session_action_modal(&mut self) {
+        self.session_action_modal = None;
+    }
+
+    fn open_task_creation_modal(&mut self) {
+        self.task_creation_modal = Some(TaskCreationModal {
+            title: String::new(),
+            description: String::new(),
+            focused_field: 0,
+            error: None,
+        });
+    }
+
+    pub(super) fn close_task_creation_modal(&mut self) {
+        self.task_creation_modal = None;
+    }
+
+    pub(super) fn apply_task_creation_modal(&mut self, cx: &mut Context<Self>) {
+        let Some(modal) = self.task_creation_modal.clone() else {
+            return;
+        };
+
+        let title = modal.title.trim().to_string();
+        let description = modal.description.trim().to_string();
+
+        // Validate title is not empty
+        if title.is_empty() {
+            if let Some(ref mut active) = self.task_creation_modal {
+                active.error = Some("Title is required".to_string());
+            }
+            cx.notify();
+            return;
+        }
+
+        // Create task
+        let task_id = TaskId(format!("task-{}", self.next_session_id));
+        self.next_session_id += 1;
+
+        let task = Task::new(task_id.clone(), title, description);
+
+        if let Ok(mut manager) = self.task_manager.lock() {
+            if let Err(e) = manager.create_task(task) {
+                if let Some(ref mut active) = self.task_creation_modal {
+                    active.error = Some(format!("Failed to create task: {}", e));
+                }
+                cx.notify();
+                return;
+            }
+            info!(%task_id, "Task created successfully from modal");
+        } else {
+            if let Some(ref mut active) = self.task_creation_modal {
+                active.error = Some("Failed to access task manager".to_string());
+            }
+            cx.notify();
+            return;
+        }
+
+        self.close_task_creation_modal();
+        cx.notify();
+    }
+
+    pub(super) fn apply_session_action_modal(&mut self, cx: &mut Context<Self>) {
+        let Some(modal) = self.session_action_modal.clone() else {
+            return;
+        };
+
+        let value = modal.input.trim().to_string();
+        if value.is_empty() {
+            if let Some(ref mut active) = self.session_action_modal {
+                active.error = Some("Value is required".to_string());
+            }
+            cx.notify();
+            return;
+        }
+
+        match modal.kind {
+            SessionActionKind::Rename => {
+                if let Ok(manager) = self.session_manager.lock() {
+                    if let Err(e) = manager.rename_session(modal.session_id, value.clone()) {
+                        warn!("Failed to rename session: {}", e);
+                    }
+                }
+                if let Some(session) = self.workspace.session_mut(modal.session_id) {
+                    session.name = value;
+                }
+            }
+            SessionActionKind::AssignGroup => {
+                if let Ok(manager) = self.session_manager.lock() {
+                    if let Err(e) = manager.set_session_group(modal.session_id, Some(value.clone()), None) {
+                        warn!("Failed to set session group: {}", e);
+                    }
+                }
+                if let Some(session) = self.workspace.session_mut(modal.session_id) {
+                    session.group = Some(value);
+                }
+            }
+        }
+
+        self.close_session_action_modal();
+        cx.notify();
+    }
+
     /// Handle session menu action.
     pub fn handle_session_menu_action(
         &mut self,
@@ -835,16 +1218,14 @@ impl WorkspaceView {
 
         match action {
             SessionMenuAction::Rename => {
-                // TODO: Open rename modal with text input
-                info!(?session_id, "Rename action - modal not yet implemented");
-                // For now, just log
+                info!(?session_id, "Rename action");
                 self.close_session_menu(cx);
+                self.open_session_action_modal(session_id, SessionActionKind::Rename);
             }
             SessionMenuAction::AssignGroup => {
-                // TODO: Open group picker modal
-                info!(?session_id, "Assign to group action - modal not yet implemented");
-                // For now, just log
+                info!(?session_id, "Assign to group action");
                 self.close_session_menu(cx);
+                self.open_session_action_modal(session_id, SessionActionKind::AssignGroup);
             }
             SessionMenuAction::RemoveGroup => {
                 // Remove session from group
@@ -855,17 +1236,14 @@ impl WorkspaceView {
                         info!(?session_id, "Session removed from group");
                     }
                 }
+                if let Some(session) = self.workspace.session_mut(session_id) {
+                    session.group = None;
+                    session.color = None;
+                }
                 self.close_session_menu(cx);
             }
             SessionMenuAction::Close => {
-                // Close the session
-                if let Ok(manager) = self.session_manager.lock() {
-                    if let Err(e) = manager.close_session(session_id) {
-                        warn!("Failed to close session: {}", e);
-                    } else {
-                        info!(?session_id, "Session closed");
-                    }
-                }
+                self.close_session(session_id, cx);
                 self.close_session_menu(cx);
             }
         }
@@ -1025,6 +1403,11 @@ impl WorkspaceView {
 
     /// Handle keyboard input for the focused session.
     fn handle_key_down(&mut self, event: &KeyDownEvent, _cx: &mut Context<Self>) {
+        // Allow modals to capture input before sending to the terminal.
+        if self.handle_modal_key_down(event, _cx) {
+            return;
+        }
+
         // Don't send Cmd+ shortcuts to PTY
         if event.keystroke.modifiers.platform {
             return;
@@ -1058,6 +1441,279 @@ impl WorkspaceView {
                 warn!("Failed to send input to session {}: {}", session_id, e);
             }
         }
+    }
+
+    fn handle_modal_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        if self.handle_project_picker_key_down(event, cx) {
+            return true;
+        }
+        if self.handle_session_action_key_down(event, cx) {
+            return true;
+        }
+        if self.handle_task_creation_key_down(event, cx) {
+            return true;
+        }
+        if self.handle_custom_layout_key_down(event, cx) {
+            return true;
+        }
+        if self.handle_worktree_key_down(event, cx) {
+            return true;
+        }
+        false
+    }
+
+    fn handle_project_picker_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        if !self.project_picker_open {
+            return false;
+        }
+
+        let key = event.keystroke.key.to_lowercase();
+        match key.as_str() {
+            "escape" => {
+                self.close_project_picker();
+                cx.notify();
+                return true;
+            }
+            "enter" => {
+                self.apply_project_picker();
+                cx.notify();
+                return true;
+            }
+            "backspace" => {
+                self.project_picker_input.pop();
+                cx.notify();
+                return true;
+            }
+            _ => {}
+        }
+
+        if event.keystroke.modifiers.control
+            || event.keystroke.modifiers.alt
+            || event.keystroke.modifiers.platform
+        {
+            return true;
+        }
+
+        if let Some(ref key_char) = event.keystroke.key_char {
+            if let Some(ch) = key_char.chars().next() {
+                if ch.is_ascii_graphic() || ch == ' ' {
+                    self.project_picker_input.push(ch);
+                    cx.notify();
+                }
+            }
+        }
+
+        true
+    }
+
+    fn handle_session_action_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        let Some(modal) = self.session_action_modal.as_mut() else {
+            return false;
+        };
+
+        let key = event.keystroke.key.to_lowercase();
+        match key.as_str() {
+            "escape" => {
+                self.close_session_action_modal();
+                cx.notify();
+                return true;
+            }
+            "enter" => {
+                self.apply_session_action_modal(cx);
+                return true;
+            }
+            "backspace" => {
+                modal.input.pop();
+                cx.notify();
+                return true;
+            }
+            _ => {}
+        }
+
+        // Ignore modifier-based shortcuts inside the modal.
+        if event.keystroke.modifiers.control
+            || event.keystroke.modifiers.alt
+            || event.keystroke.modifiers.platform
+        {
+            return true;
+        }
+
+        if let Some(ref key_char) = event.keystroke.key_char {
+            if let Some(ch) = key_char.chars().next() {
+                if ch.is_ascii_graphic() || ch == ' ' {
+                    modal.input.push(ch);
+                    cx.notify();
+                }
+            }
+        }
+
+        true
+    }
+
+    fn handle_task_creation_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        let Some(modal) = self.task_creation_modal.as_mut() else {
+            return false;
+        };
+
+        let key = event.keystroke.key.to_lowercase();
+        match key.as_str() {
+            "escape" => {
+                self.close_task_creation_modal();
+                cx.notify();
+                return true;
+            }
+            "enter" => {
+                // Only submit if in title field, otherwise insert newline in description
+                if modal.focused_field == 0 {
+                    self.apply_task_creation_modal(cx);
+                } else {
+                    modal.description.push('\n');
+                    cx.notify();
+                }
+                return true;
+            }
+            "tab" => {
+                // Switch between title and description
+                modal.focused_field = if modal.focused_field == 0 { 1 } else { 0 };
+                cx.notify();
+                return true;
+            }
+            "backspace" => {
+                if modal.focused_field == 0 {
+                    modal.title.pop();
+                } else {
+                    modal.description.pop();
+                }
+                modal.error = None;
+                cx.notify();
+                return true;
+            }
+            _ => {}
+        }
+
+        // Ignore modifier-based shortcuts inside the modal.
+        if event.keystroke.modifiers.control
+            || event.keystroke.modifiers.alt
+            || event.keystroke.modifiers.platform
+        {
+            return true;
+        }
+
+        if let Some(ref key_char) = event.keystroke.key_char {
+            if let Some(ch) = key_char.chars().next() {
+                if ch.is_ascii_graphic() || ch == ' ' || ch == '\n' {
+                    if modal.focused_field == 0 {
+                        modal.title.push(ch);
+                    } else {
+                        modal.description.push(ch);
+                    }
+                    modal.error = None;
+                    cx.notify();
+                }
+            }
+        }
+
+        true
+    }
+
+    fn handle_custom_layout_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        if !self.toolbar.custom_picker().is_open {
+            return false;
+        }
+
+        let key = event.keystroke.key.to_lowercase();
+        match key.as_str() {
+            "escape" => {
+                self.toolbar.custom_picker_mut().close();
+                cx.notify();
+                return true;
+            }
+            "enter" => {
+                if let Some((rows, cols)) = self.toolbar.custom_picker_mut().validate() {
+                    self.toolbar.custom_picker_mut().close();
+                    let profile = crate::layout::LayoutProfile::Custom { rows, cols };
+                    self.workspace.set_layout(profile);
+                }
+                cx.notify();
+                return true;
+            }
+            "tab" => {
+                let current = self.toolbar.custom_picker().focused_input().unwrap_or(0);
+                let next = if current == 0 { 1 } else { 0 };
+                self.toolbar.custom_picker_mut().set_focus(next);
+                cx.notify();
+                return true;
+            }
+            "backspace" => {
+                self.toolbar.custom_picker_mut().handle_backspace();
+                cx.notify();
+                return true;
+            }
+            _ => {}
+        }
+
+        if event.keystroke.modifiers.control
+            || event.keystroke.modifiers.alt
+            || event.keystroke.modifiers.platform
+        {
+            return true;
+        }
+
+        if let Some(ref key_char) = event.keystroke.key_char {
+            if let Some(ch) = key_char.chars().next() {
+                if ch.is_ascii_digit() {
+                    self.toolbar.custom_picker_mut().handle_char_input(ch);
+                    cx.notify();
+                }
+            }
+        }
+
+        true
+    }
+
+    fn handle_worktree_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        if !self.worktree_panel.is_create_modal_open() {
+            return false;
+        }
+
+        let key = event.keystroke.key.to_lowercase();
+        match key.as_str() {
+            "escape" => {
+                self.handle_worktree_event(crate::sidebar::WorktreeEvent::CancelCreate, cx);
+                return true;
+            }
+            "tab" => {
+                let current = self.worktree_panel.focused_input().unwrap_or(0);
+                let next = if current == 0 { 1 } else { 0 };
+                self.worktree_panel.set_focus(next);
+                cx.notify();
+                return true;
+            }
+            "backspace" => {
+                self.worktree_panel.handle_backspace();
+                cx.notify();
+                return true;
+            }
+            _ => {}
+        }
+
+        if event.keystroke.modifiers.control
+            || event.keystroke.modifiers.alt
+            || event.keystroke.modifiers.platform
+        {
+            return true;
+        }
+
+        if let Some(ref key_char) = event.keystroke.key_char {
+            if let Some(ch) = key_char.chars().next() {
+                if ch.is_ascii_graphic() || ch == ' ' {
+                    self.worktree_panel.handle_char_input(ch);
+                    cx.notify();
+                }
+            }
+        }
+
+        true
     }
 }
 
@@ -1118,7 +1774,8 @@ impl Render for WorkspaceView {
             .flex_1()
             .flex()
             .flex_row()
-            .overflow_hidden();
+            .overflow_hidden()
+            .min_h(px(0.0));  // Allow flex shrinking
 
         // Sidebar (if visible)
         if show_sidebar {
@@ -1131,6 +1788,8 @@ impl Render for WorkspaceView {
             .flex_1()
             .flex()
             .flex_col()
+            .overflow_hidden()  // Prevent overflow
+            .min_h(px(0.0))     // Allow flex shrinking
             // Toolbar at top of grid area
             .child(self.render_toolbar(cx))
             // Session grid (fills remaining space)
@@ -1139,6 +1798,8 @@ impl Render for WorkspaceView {
                     .id("session-grid-container")
                     .flex_1()
                     .p(px(grid_gap))
+                    .overflow_hidden()  // Clip content
+                    .min_h(px(0.0))     // Allow shrinking
                     .child(self.render_grid_with_headers(cx)),
             );
 
@@ -1151,17 +1812,32 @@ impl Render for WorkspaceView {
         // 4. StatusBar at bottom (24px)
         container = container.child(self.render_status_bar());
 
-        // 5. Custom layout modal (if open)
+        // 5. Project picker modal (if open)
+        if let Some(modal) = self.render_project_picker_modal(cx) {
+            container = container.child(modal);
+        }
+
+        // 6. Custom layout modal (if open)
         if let Some(modal) = self.render_custom_layout_modal(cx) {
             container = container.child(modal);
         }
 
-        // 6. Session menu modal (if open)
+        // 7. Session menu modal (if open)
         if let Some(menu) = self.render_session_menu(cx) {
             container = container.child(menu);
         }
 
-        // 7. Worktree create modal (if open)
+        // 8. Session action modal (rename/group) (if open)
+        if let Some(modal) = self.render_session_action_modal(cx) {
+            container = container.child(modal);
+        }
+
+        // 8.5. Task creation modal (if open)
+        if let Some(modal) = self.render_task_creation_modal(cx) {
+            container = container.child(modal);
+        }
+
+        // 9. Worktree create modal (if open)
         if let Some(modal) = self.render_worktree_modal(cx) {
             container = container.child(modal);
         }
