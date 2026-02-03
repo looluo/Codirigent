@@ -33,11 +33,29 @@
 
 use codirigent_core::{GridPosition, LayoutMode, SessionId};
 
-/// Minimum cell width in pixels for readable terminal display.
-pub const MIN_CELL_WIDTH: f32 = 400.0;
+/// Recommended minimum cell width in pixels for comfortable terminal display.
+/// This is a soft limit - cells can be smaller, but will log warnings.
+pub const RECOMMENDED_MIN_CELL_WIDTH: f32 = 400.0;
 
-/// Minimum cell height in pixels for readable terminal display.
-pub const MIN_CELL_HEIGHT: f32 = 300.0;
+/// Recommended minimum cell height in pixels for comfortable terminal display.
+/// This is a soft limit - cells can be smaller, but will log warnings.
+pub const RECOMMENDED_MIN_CELL_HEIGHT: f32 = 300.0;
+
+/// Absolute minimum cell width in pixels for functional terminal display.
+/// This is a hard limit - cells will not be smaller than this.
+pub const ABSOLUTE_MIN_CELL_WIDTH: f32 = 200.0;
+
+/// Absolute minimum cell height in pixels for functional terminal display.
+/// This is a hard limit - cells will not be smaller than this.
+pub const ABSOLUTE_MIN_CELL_HEIGHT: f32 = 150.0;
+
+/// Legacy alias for recommended minimum width (deprecated).
+#[deprecated(since = "0.1.0", note = "Use RECOMMENDED_MIN_CELL_WIDTH instead")]
+pub const MIN_CELL_WIDTH: f32 = RECOMMENDED_MIN_CELL_WIDTH;
+
+/// Legacy alias for recommended minimum height (deprecated).
+#[deprecated(since = "0.1.0", note = "Use RECOMMENDED_MIN_CELL_HEIGHT instead")]
+pub const MIN_CELL_HEIGHT: f32 = RECOMMENDED_MIN_CELL_HEIGHT;
 
 /// Width of the sidebar in pixels (file tree + task board area).
 pub const SIDEBAR_WIDTH: f32 = 260.0;
@@ -359,30 +377,63 @@ impl LayoutProfile {
         }
     }
 
-    /// Calculate minimum window size needed for readable terminals.
+    /// Calculate recommended minimum window size for comfortable terminal display.
     ///
-    /// Returns (width, height) in pixels based on cell minimums and UI elements.
+    /// Returns (width, height) in pixels based on recommended cell sizes and UI elements.
+    /// The window can be made smaller than this, but terminals may be cramped.
     ///
     /// # Example
     ///
     /// ```
     /// use codirigent_ui::layout::LayoutProfile;
     ///
-    /// let (width, height) = LayoutProfile::Grid2x2.minimum_window_size();
+    /// let (width, height) = LayoutProfile::Grid2x2.recommended_window_size();
     /// assert!(width > 800.0);  // At least 2 columns of 400px + sidebar
     /// assert!(height > 600.0); // At least 2 rows of 300px + UI chrome
+    /// ```
+    pub fn recommended_window_size(self) -> (f32, f32) {
+        let (rows, cols) = self.dimensions();
+        let gap = 4.0;
+
+        let min_width = SIDEBAR_WIDTH
+            + (RECOMMENDED_MIN_CELL_WIDTH * cols as f32)
+            + (gap * (cols - 1) as f32);
+
+        let min_height = TITLE_BAR_HEIGHT
+            + TOOLBAR_HEIGHT
+            + (RECOMMENDED_MIN_CELL_HEIGHT * rows as f32)
+            + (gap * (rows - 1) as f32)
+            + STATUS_BAR_HEIGHT;
+
+        (min_width, min_height)
+    }
+
+    /// Calculate absolute minimum window size for functional (though cramped) display.
+    ///
+    /// Returns (width, height) in pixels based on absolute minimum cell sizes.
+    /// The window should not be made smaller than this.
+    ///
+    /// # Example
+    ///
+    /// ```
+    /// use codirigent_ui::layout::LayoutProfile;
+    ///
+    /// let (width, height) = LayoutProfile::Grid3x3.minimum_window_size();
+    /// // Minimum allows 200×150px cells - functional but very cramped
+    /// assert!(width > 600.0);  // At least 3 columns of 200px + sidebar
+    /// assert!(height > 450.0); // At least 3 rows of 150px + UI chrome
     /// ```
     pub fn minimum_window_size(self) -> (f32, f32) {
         let (rows, cols) = self.dimensions();
         let gap = 4.0;
 
         let min_width = SIDEBAR_WIDTH
-            + (MIN_CELL_WIDTH * cols as f32)
+            + (ABSOLUTE_MIN_CELL_WIDTH * cols as f32)
             + (gap * (cols - 1) as f32);
 
         let min_height = TITLE_BAR_HEIGHT
             + TOOLBAR_HEIGHT
-            + (MIN_CELL_HEIGHT * rows as f32)
+            + (ABSOLUTE_MIN_CELL_HEIGHT * rows as f32)
             + (gap * (rows - 1) as f32)
             + STATUS_BAR_HEIGHT;
 
@@ -526,7 +577,10 @@ impl GridLayout {
     ///
     /// The cell size is calculated by dividing the available space
     /// (after subtracting gaps) evenly among all cells.
-    /// Enforces minimum cell dimensions for readability.
+    ///
+    /// Enforces absolute minimum cell dimensions and warns if below recommended sizes.
+    /// This allows the layout to be flexible while still providing feedback about
+    /// potentially cramped terminal displays.
     pub fn cell_size(&self) -> Size {
         if self.rows == 0 || self.cols == 0 {
             return Size::zero();
@@ -535,12 +589,30 @@ impl GridLayout {
         let total_gap_x = self.gap * (self.cols.saturating_sub(1) as f32);
         let total_gap_y = self.gap * (self.rows.saturating_sub(1) as f32);
 
-        let cell_width = (self.bounds.size.width - total_gap_x) / self.cols as f32;
-        let cell_height = (self.bounds.size.height - total_gap_y) / self.rows as f32;
+        let calculated_width = (self.bounds.size.width - total_gap_x) / self.cols as f32;
+        let calculated_height = (self.bounds.size.height - total_gap_y) / self.rows as f32;
 
-        // Enforce minimums for readability
-        let cell_width = cell_width.max(MIN_CELL_WIDTH);
-        let cell_height = cell_height.max(MIN_CELL_HEIGHT);
+        // Enforce absolute minimums only (hard constraint)
+        let cell_width = calculated_width.max(ABSOLUTE_MIN_CELL_WIDTH);
+        let cell_height = calculated_height.max(ABSOLUTE_MIN_CELL_HEIGHT);
+
+        // Log warnings if below recommended sizes (soft constraint)
+        if cell_width < RECOMMENDED_MIN_CELL_WIDTH {
+            tracing::warn!(
+                "Terminal cell width ({:.0}px) is below recommended minimum ({:.0}px). \
+                 Display may be cramped. Consider using a smaller grid or larger window.",
+                cell_width,
+                RECOMMENDED_MIN_CELL_WIDTH
+            );
+        }
+        if cell_height < RECOMMENDED_MIN_CELL_HEIGHT {
+            tracing::warn!(
+                "Terminal cell height ({:.0}px) is below recommended minimum ({:.0}px). \
+                 Display may be cramped. Consider using a smaller grid or larger window.",
+                cell_height,
+                RECOMMENDED_MIN_CELL_HEIGHT
+            );
+        }
 
         Size::new(cell_width, cell_height)
     }
@@ -1536,5 +1608,192 @@ mod tests {
         // No focus, should set to first session
         state.focus_direction(FocusDirection::Right);
         assert_eq!(state.focused_index(), Some(0));
+    }
+
+    // Soft minimums tests
+    #[test]
+    fn test_cell_size_allows_below_recommended() {
+        // Simulate 3x3 grid on a tight but realistic window
+        // Use a window size where 3x3 results in cells below recommended but above absolute
+        // Example: 1200×900 window with 3x3 grid
+        let available_height = 900.0 - TITLE_BAR_HEIGHT - TOOLBAR_HEIGHT - STATUS_BAR_HEIGHT;
+        let available_width = 1200.0 - SIDEBAR_WIDTH;
+        let bounds = Bounds::from_size(available_width, available_height);
+        let layout = GridLayout::from_profile(LayoutProfile::Grid3x3, bounds, 4.0);
+
+        let size = layout.cell_size();
+
+        // Calculate expected: (900 - 32 - 48 - 24 - 8) / 3 = 788 / 3 = ~262px height
+        // This is below 300px recommended but above 150px absolute
+
+        assert!(
+            size.height >= ABSOLUTE_MIN_CELL_HEIGHT,
+            "Height {} should be >= absolute min {}",
+            size.height,
+            ABSOLUTE_MIN_CELL_HEIGHT
+        );
+        assert!(
+            size.height < RECOMMENDED_MIN_CELL_HEIGHT,
+            "Height {} should be < recommended min {}",
+            size.height,
+            RECOMMENDED_MIN_CELL_HEIGHT
+        );
+
+        // Width should also be below recommended for this tight scenario
+        // (1200 - 260 - 8) / 3 = 932 / 3 = ~310px width
+        assert!(
+            size.width >= ABSOLUTE_MIN_CELL_WIDTH,
+            "Width {} should be >= absolute min {}",
+            size.width,
+            ABSOLUTE_MIN_CELL_WIDTH
+        );
+        assert!(
+            size.width < RECOMMENDED_MIN_CELL_WIDTH,
+            "Width {} should be < recommended min {}",
+            size.width,
+            RECOMMENDED_MIN_CELL_WIDTH
+        );
+    }
+
+    #[test]
+    fn test_cell_size_enforces_absolute_minimum() {
+        // Very small window that would result in tiny cells
+        let bounds = Bounds::from_size(600.0, 450.0);
+        let layout = GridLayout::from_profile(LayoutProfile::Grid3x3, bounds, 4.0);
+
+        let size = layout.cell_size();
+
+        // Should enforce absolute minimums
+        assert!(
+            size.width >= ABSOLUTE_MIN_CELL_WIDTH,
+            "Width {} should be >= absolute min {}",
+            size.width,
+            ABSOLUTE_MIN_CELL_WIDTH
+        );
+        assert!(
+            size.height >= ABSOLUTE_MIN_CELL_HEIGHT,
+            "Height {} should be >= absolute min {}",
+            size.height,
+            ABSOLUTE_MIN_CELL_HEIGHT
+        );
+
+        // Will be at the minimums since window is too small
+        assert_eq!(size.width, ABSOLUTE_MIN_CELL_WIDTH);
+        assert_eq!(size.height, ABSOLUTE_MIN_CELL_HEIGHT);
+    }
+
+    #[test]
+    fn test_cell_size_comfortable_on_large_monitor() {
+        // 4K monitor (3840×2160) with 2x2 grid should be very comfortable
+        let _available_height = 2160.0 - TITLE_BAR_HEIGHT - TOOLBAR_HEIGHT - STATUS_BAR_HEIGHT;
+        let available_width = 3840.0 - SIDEBAR_WIDTH;
+        // Note: Using width for both dimensions to ensure very large cells
+        let bounds = Bounds::from_size(available_width, available_width);
+        let layout = GridLayout::from_profile(LayoutProfile::Grid2x2, bounds, 4.0);
+
+        let size = layout.cell_size();
+
+        // Should be well above recommended minimums
+        assert!(size.width > RECOMMENDED_MIN_CELL_WIDTH * 2.0);
+        assert!(size.height > RECOMMENDED_MIN_CELL_HEIGHT * 2.0);
+    }
+
+    #[test]
+    fn test_minimum_window_size_uses_absolute() {
+        let (width, height) = LayoutProfile::Grid3x3.minimum_window_size();
+
+        // Should use absolute minimums (200×150)
+        let expected_width =
+            SIDEBAR_WIDTH + (ABSOLUTE_MIN_CELL_WIDTH * 3.0) + (4.0 * 2.0);
+        let expected_height = TITLE_BAR_HEIGHT
+            + TOOLBAR_HEIGHT
+            + (ABSOLUTE_MIN_CELL_HEIGHT * 3.0)
+            + (4.0 * 2.0)
+            + STATUS_BAR_HEIGHT;
+
+        assert!((width - expected_width).abs() < 0.01);
+        assert!((height - expected_height).abs() < 0.01);
+
+        // 3x3 at absolute minimum should fit on even small laptops
+        assert!(width < 1000.0);
+        assert!(height < 700.0);
+    }
+
+    #[test]
+    fn test_recommended_window_size_uses_recommended() {
+        let (width, height) = LayoutProfile::Grid3x3.recommended_window_size();
+
+        // Should use recommended minimums (400×300)
+        let expected_width =
+            SIDEBAR_WIDTH + (RECOMMENDED_MIN_CELL_WIDTH * 3.0) + (4.0 * 2.0);
+        let expected_height = TITLE_BAR_HEIGHT
+            + TOOLBAR_HEIGHT
+            + (RECOMMENDED_MIN_CELL_HEIGHT * 3.0)
+            + (4.0 * 2.0)
+            + STATUS_BAR_HEIGHT;
+
+        assert!((width - expected_width).abs() < 0.01);
+        assert!((height - expected_height).abs() < 0.01);
+
+        // 3x3 at recommended should need ~1500×1100 window
+        assert!(width > 1400.0);
+        assert!(height > 1000.0);
+    }
+
+    #[test]
+    fn test_single_layout_comfortable_at_any_size() {
+        // Even at small window, single layout should be >= recommended
+        let bounds = Bounds::from_size(800.0, 600.0);
+        let layout = GridLayout::from_profile(LayoutProfile::Single, bounds, 4.0);
+
+        let size = layout.cell_size();
+
+        assert!(size.width >= RECOMMENDED_MIN_CELL_WIDTH);
+        assert!(size.height >= RECOMMENDED_MIN_CELL_HEIGHT);
+    }
+
+    #[test]
+    fn test_dynamic_gap_sizing() {
+        // Test that smaller gap helps when space is tight
+        let tight_bounds = Bounds::from_size(1300.0, 1000.0);
+
+        // With 4px gap
+        let layout_4px = GridLayout::from_profile(LayoutProfile::Grid3x3, tight_bounds, 4.0);
+        let size_4px = layout_4px.cell_size();
+
+        // With 2px gap (more space for cells)
+        let layout_2px = GridLayout::from_profile(LayoutProfile::Grid3x3, tight_bounds, 2.0);
+        let size_2px = layout_2px.cell_size();
+
+        // Smaller gap should give slightly larger cells
+        assert!(size_2px.width > size_4px.width);
+        assert!(size_2px.height > size_4px.height);
+    }
+
+    #[test]
+    fn test_cell_size_with_zero_gap() {
+        let bounds = Bounds::from_size(1000.0, 800.0);
+        let layout = GridLayout::new(LayoutMode::Grid { rows: 2, cols: 2 }, bounds, 0.0);
+
+        let size = layout.cell_size();
+
+        // With no gap, should get exactly 1/2 of bounds
+        assert_eq!(size.width, 500.0);
+        assert_eq!(size.height, 400.0);
+    }
+
+    #[test]
+    fn test_constants_are_consistent() {
+        // Absolute minimums should be less than recommended
+        assert!(ABSOLUTE_MIN_CELL_WIDTH < RECOMMENDED_MIN_CELL_WIDTH);
+        assert!(ABSOLUTE_MIN_CELL_HEIGHT < RECOMMENDED_MIN_CELL_HEIGHT);
+
+        // Absolute minimums should be reasonable (not too small)
+        assert!(ABSOLUTE_MIN_CELL_WIDTH >= 100.0);
+        assert!(ABSOLUTE_MIN_CELL_HEIGHT >= 100.0);
+
+        // Recommended minimums should be reasonable
+        assert!(RECOMMENDED_MIN_CELL_WIDTH >= 300.0);
+        assert!(RECOMMENDED_MIN_CELL_HEIGHT >= 200.0);
     }
 }
