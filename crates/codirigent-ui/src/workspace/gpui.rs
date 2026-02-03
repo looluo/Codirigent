@@ -1398,6 +1398,21 @@ impl WorkspaceView {
         &self.terminals
     }
 
+    /// Resize all terminals to fit their current grid cell bounds.
+    ///
+    /// This should be called when the window is resized or the layout changes,
+    /// to ensure terminals have the correct character dimensions for their pixel bounds.
+    fn resize_terminals_to_grid(&mut self) {
+        let cell_info = self.workspace.cell_info();
+
+        for info in cell_info {
+            if let Some(terminal_view) = self.terminals.get_mut(&info.session_id) {
+                // Resize terminal to fit the cell bounds
+                terminal_view.resize_to_fit(info.bounds.size.width, info.bounds.size.height);
+            }
+        }
+    }
+
     /// Handle keyboard input for the focused session.
     fn handle_key_down(&mut self, event: &KeyDownEvent, _cx: &mut Context<Self>) {
         // Allow modals to capture input before sending to the terminal.
@@ -1721,12 +1736,24 @@ impl Focusable for WorkspaceView {
 }
 
 impl Render for WorkspaceView {
-    fn render(&mut self, _window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Process any pending UI events first
         self.process_ui_events(cx);
 
         // Sync UI state before rendering
         self.sync_ui_state();
+
+        // Update workspace bounds from window size
+        // GPUI automatically re-renders when window resizes, so we update bounds here
+        let window_size = window.viewport_size();
+        let window_bounds = crate::layout::Bounds::from_size(
+            window_size.width.0,
+            window_size.height.0,
+        );
+        self.workspace.set_bounds(window_bounds);
+
+        // Resize terminals to fit the new grid cell bounds
+        self.resize_terminals_to_grid();
 
         // Clone theme values before any mutable borrows
         let theme = self.workspace.theme();
