@@ -364,6 +364,45 @@ impl std::fmt::Display for LearningCategory {
     }
 }
 
+/// Parameters for generating a session note.
+///
+/// Groups all the parameters needed to generate a session note
+/// into a single struct to avoid functions with too many arguments.
+///
+/// # Example
+///
+/// ```
+/// use codirigent_core::session_notes::{GenerateNoteParams, CompletionStatus};
+/// use codirigent_core::{SessionId, TaskId};
+///
+/// let params = GenerateNoteParams {
+///     task_id: TaskId("task-001".to_string()),
+///     session_id: SessionId(1),
+///     title: "Fix authentication bug".to_string(),
+///     duration_minutes: 45,
+///     completion_status: CompletionStatus::Completed,
+///     change_summary: None,
+///     verification: None,
+/// };
+/// ```
+#[derive(Debug, Clone)]
+pub struct GenerateNoteParams {
+    /// The task to document
+    pub task_id: TaskId,
+    /// The session that completed the task
+    pub session_id: SessionId,
+    /// Human-readable title
+    pub title: String,
+    /// How long the task took
+    pub duration_minutes: u32,
+    /// Final status
+    pub completion_status: CompletionStatus,
+    /// Optional file changes
+    pub change_summary: Option<ChangeSummary>,
+    /// Optional verification results
+    pub verification: Option<VerificationStatus>,
+}
+
 /// Trait for generating session notes.
 ///
 /// Implementors create session note documents, render them to markdown,
@@ -373,7 +412,7 @@ impl std::fmt::Display for LearningCategory {
 ///
 /// ```
 /// use codirigent_core::session_notes::{
-///     NotesGenerator, SessionNote, CompletionStatus,
+///     NotesGenerator, SessionNote, CompletionStatus, GenerateNoteParams,
 /// };
 /// use codirigent_core::{SessionId, TaskId, ChangeSummary};
 /// use codirigent_core::verification::VerificationStatus;
@@ -381,15 +420,16 @@ impl std::fmt::Display for LearningCategory {
 ///
 /// // Trait is typically implemented by dirigent-verification crate
 /// fn example_usage<T: NotesGenerator>(generator: &T) {
-///     let note = generator.generate(
-///         TaskId("task-001".to_string()),
-///         SessionId(1),
-///         "Test Task".to_string(),
-///         30,
-///         CompletionStatus::Completed,
-///         None,
-///         None,
-///     ).unwrap();
+///     let params = GenerateNoteParams {
+///         task_id: TaskId("task-001".to_string()),
+///         session_id: SessionId(1),
+///         title: "Test Task".to_string(),
+///         duration_minutes: 30,
+///         completion_status: CompletionStatus::Completed,
+///         change_summary: None,
+///         verification: None,
+///     };
+///     let note = generator.generate(params).unwrap();
 ///
 ///     let markdown = generator.render_markdown(&note);
 ///     println!("Note:\n{}", markdown);
@@ -400,27 +440,12 @@ pub trait NotesGenerator: Send + Sync {
     ///
     /// # Arguments
     ///
-    /// * `task_id` - The task to document
-    /// * `session_id` - The session that completed the task
-    /// * `title` - Human-readable title
-    /// * `duration_minutes` - How long the task took
-    /// * `completion_status` - Final status
-    /// * `change_summary` - Optional file changes
-    /// * `verification` - Optional verification results
+    /// * `params` - Parameters for note generation
     ///
     /// # Returns
     ///
     /// A session note ready for rendering or saving.
-    fn generate(
-        &self,
-        task_id: TaskId,
-        session_id: SessionId,
-        title: String,
-        duration_minutes: u32,
-        completion_status: CompletionStatus,
-        change_summary: Option<ChangeSummary>,
-        verification: Option<VerificationStatus>,
-    ) -> anyhow::Result<SessionNote>;
+    fn generate(&self, params: GenerateNoteParams) -> anyhow::Result<SessionNote>;
 
     /// Render a session note to markdown.
     ///

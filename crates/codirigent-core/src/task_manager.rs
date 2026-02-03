@@ -62,7 +62,7 @@ use std::sync::Arc;
 /// assert!(config.assignment.auto_assign);
 /// assert!(config.verification.auto_detect);
 /// ```
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct TaskManagerConfig {
     /// Scheduler configuration.
     pub scheduler: SchedulerConfig,
@@ -75,17 +75,6 @@ pub struct TaskManagerConfig {
 
     /// Context tracking configuration.
     pub context: ContextConfig,
-}
-
-impl Default for TaskManagerConfig {
-    fn default() -> Self {
-        Self {
-            scheduler: SchedulerConfig::default(),
-            assignment: AssignmentConfig::default(),
-            verification: VerificationRunnerConfig::default(),
-            context: ContextConfig::default(),
-        }
-    }
 }
 
 /// Central task manager coordinating all task operations.

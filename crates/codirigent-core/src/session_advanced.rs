@@ -634,7 +634,7 @@ impl OvernightConfig {
 
         let now = chrono::Local::now();
         let hour = now.hour() as u8;
-        let minute = now.minute() as u32;
+        let minute = now.minute();
 
         let end_minutes = (self.stop_hour as u32) * 60;
         let current_minutes = (hour as u32) * 60 + minute;

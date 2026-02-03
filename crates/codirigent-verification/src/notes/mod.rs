@@ -13,21 +13,23 @@
 //!
 //! ```
 //! use codirigent_verification::notes::{DefaultNotesGenerator, PatternLearningsExtractor};
-//! use codirigent_core::{
-//!     NotesGenerator, LearningsExtractor, CompletionStatus, SessionId, TaskId,
+//! use codirigent_core::session_notes::{
+//!     NotesGenerator, LearningsExtractor, CompletionStatus, GenerateNoteParams,
 //! };
+//! use codirigent_core::{SessionId, TaskId};
 //!
 //! // Generate a note
 //! let generator = DefaultNotesGenerator::new();
-//! let note = generator.generate(
-//!     TaskId("task-001".to_string()),
-//!     SessionId(1),
-//!     "Refactor Auth".to_string(),
-//!     45,
-//!     CompletionStatus::Completed,
-//!     None,
-//!     None,
-//! ).unwrap();
+//! let params = GenerateNoteParams {
+//!     task_id: TaskId("task-001".to_string()),
+//!     session_id: SessionId(1),
+//!     title: "Refactor Auth".to_string(),
+//!     duration_minutes: 45,
+//!     completion_status: CompletionStatus::Completed,
+//!     change_summary: None,
+//!     verification: None,
+//! };
+//! let note = generator.generate(params).unwrap();
 //!
 //! // Render to markdown
 //! let markdown = generator.render_markdown(&note);

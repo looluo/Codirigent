@@ -6,9 +6,8 @@
 use anyhow::{Context, Result};
 use codirigent_core::{
     change_summary::{ChangeSummary, ChangeType, RiskLevel},
-    session_notes::{CompletionStatus, Learning, NotesGenerator, SessionNote},
+    session_notes::{GenerateNoteParams, Learning, NotesGenerator, SessionNote},
     verification::{VerificationCheckType, VerificationStatus},
-    SessionId, TaskId,
 };
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -23,18 +22,20 @@ use tracing::info;
 ///
 /// ```
 /// use codirigent_verification::notes::DefaultNotesGenerator;
-/// use codirigent_core::{NotesGenerator, CompletionStatus, SessionId, TaskId};
+/// use codirigent_core::session_notes::{NotesGenerator, CompletionStatus, GenerateNoteParams};
+/// use codirigent_core::{SessionId, TaskId};
 ///
 /// let generator = DefaultNotesGenerator::new();
-/// let note = generator.generate(
-///     TaskId("task-001".to_string()),
-///     SessionId(1),
-///     "Test Task".to_string(),
-///     30,
-///     CompletionStatus::Completed,
-///     None,
-///     None,
-/// ).unwrap();
+/// let params = GenerateNoteParams {
+///     task_id: TaskId("task-001".to_string()),
+///     session_id: SessionId(1),
+///     title: "Test Task".to_string(),
+///     duration_minutes: 30,
+///     completion_status: CompletionStatus::Completed,
+///     change_summary: None,
+///     verification: None,
+/// };
+/// let note = generator.generate(params).unwrap();
 ///
 /// let markdown = generator.render_markdown(&note);
 /// assert!(markdown.contains("Test Task"));
@@ -199,26 +200,17 @@ impl DefaultNotesGenerator {
 }
 
 impl NotesGenerator for DefaultNotesGenerator {
-    fn generate(
-        &self,
-        task_id: TaskId,
-        session_id: SessionId,
-        title: String,
-        duration_minutes: u32,
-        completion_status: CompletionStatus,
-        change_summary: Option<ChangeSummary>,
-        verification: Option<VerificationStatus>,
-    ) -> Result<SessionNote> {
-        info!(%task_id, %session_id, "Generating session note");
+    fn generate(&self, params: GenerateNoteParams) -> Result<SessionNote> {
+        info!(%params.task_id, %params.session_id, "Generating session note");
 
         Ok(SessionNote {
-            task_id,
-            title,
-            session_id,
-            duration_minutes,
-            completion_status,
-            change_summary,
-            verification,
+            task_id: params.task_id,
+            title: params.title,
+            session_id: params.session_id,
+            duration_minutes: params.duration_minutes,
+            completion_status: params.completion_status,
+            change_summary: params.change_summary,
+            verification: params.verification,
             summary: None, // Will be set by AI if auto mode
             learnings: vec![],
             generated_at: chrono::Utc::now(),
@@ -324,17 +316,16 @@ mod tests {
     #[test]
     fn test_generate_note() {
         let generator = DefaultNotesGenerator::new();
-        let note = generator
-            .generate(
-                TaskId("task-001".to_string()),
-                SessionId(1),
-                "Test Task".to_string(),
-                30,
-                CompletionStatus::Completed,
-                None,
-                None,
-            )
-            .unwrap();
+        let params = GenerateNoteParams {
+            task_id: TaskId("task-001".to_string()),
+            session_id: SessionId(1),
+            title: "Test Task".to_string(),
+            duration_minutes: 30,
+            completion_status: CompletionStatus::Completed,
+            change_summary: None,
+            verification: None,
+        };
+        let note = generator.generate(params).unwrap();
 
         assert_eq!(note.task_id.0, "task-001");
         assert_eq!(note.duration_minutes, 30);
@@ -360,17 +351,16 @@ mod tests {
             generated_at: chrono::Utc::now(),
         };
 
-        let note = generator
-            .generate(
-                TaskId("task-001".to_string()),
-                SessionId(1),
-                "Test Task".to_string(),
-                30,
-                CompletionStatus::Completed,
-                Some(summary),
-                None,
-            )
-            .unwrap();
+        let params = GenerateNoteParams {
+            task_id: TaskId("task-001".to_string()),
+            session_id: SessionId(1),
+            title: "Test Task".to_string(),
+            duration_minutes: 30,
+            completion_status: CompletionStatus::Completed,
+            change_summary: Some(summary),
+            verification: None,
+        };
+        let note = generator.generate(params).unwrap();
 
         assert!(note.change_summary.is_some());
     }
@@ -388,17 +378,16 @@ mod tests {
             completed_at: Some(chrono::Utc::now()),
         };
 
-        let note = generator
-            .generate(
-                TaskId("task-001".to_string()),
-                SessionId(1),
-                "Test Task".to_string(),
-                30,
-                CompletionStatus::Completed,
-                None,
-                Some(verification),
-            )
-            .unwrap();
+        let params = GenerateNoteParams {
+            task_id: TaskId("task-001".to_string()),
+            session_id: SessionId(1),
+            title: "Test Task".to_string(),
+            duration_minutes: 30,
+            completion_status: CompletionStatus::Completed,
+            change_summary: None,
+            verification: Some(verification),
+        };
+        let note = generator.generate(params).unwrap();
 
         assert!(note.verification.is_some());
     }
