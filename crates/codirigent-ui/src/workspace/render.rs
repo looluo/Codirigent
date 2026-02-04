@@ -835,10 +835,13 @@ impl WorkspaceView {
                 .into_any_element();
         };
 
-        let cell_width = terminal_view.cell_width();
-        let cell_height = terminal_view.cell_height();
+        // Capture fallback dimensions (will be overridden by font metrics in prepaint)
+        let fallback_cell_width = terminal_view.cell_width();
+        let fallback_cell_height = terminal_view.cell_height();
         let font_size = terminal_view.font_size();
         let cursor_rect = terminal_view.cursor_rect();
+        let needs_dimension_init = !terminal_view.dimensions_initialized();
+        let line_height_factor = 1.3_f32;
 
         // Get cached content (only recomputes if dirty)
         let content = terminal_view.cached_content().clone();
@@ -878,6 +881,21 @@ impl WorkspaceView {
                 let padding = 4.0_f32;
                 let ox = origin_x + padding;
                 let oy = origin_y + padding;
+
+                // Compute cell dimensions from font metrics (Zed pattern)
+                // This ensures proper character spacing by using the actual 'm' advance width
+                let (cell_width, cell_height) = if needs_dimension_init {
+                    // Compute proper cell dimensions using text_system.advance('m')
+                    let (w, h) = crate::terminal_view::compute_cell_dimensions(
+                        window.text_system(),
+                        crate::terminal_view::default_terminal_font_family(),
+                        font_size,
+                        line_height_factor,
+                    );
+                    (w, h)
+                } else {
+                    (fallback_cell_width, fallback_cell_height)
+                };
 
                 // Shape text for each run (prepaint phase)
                 let mut shaped_runs: Vec<(usize, usize, gpui::ShapedLine)> = Vec::with_capacity(text_runs.len());
@@ -1036,8 +1054,9 @@ impl WorkspaceView {
         .size_full();
 
         // Wrap canvas in a container with terminal background
+        // Note: size_full() instead of flex_1() because parent has explicit dimensions
         div()
-            .flex_1()
+            .size_full()
             .bg(terminal_bg)
             .overflow_hidden()
             .child(terminal_canvas)
@@ -2013,8 +2032,8 @@ impl WorkspaceView {
         let profile = self.workspace().layout_profile();
         let (rows, cols) = profile.dimensions();
 
-        // Get grid layout to calculate cell bounds
-        let layout = self.workspace().grid_layout();
+        // Get grid layout to calculate cell bounds (accounting for task board height)
+        let layout = self.grid_layout_with_task_board();
         let cell_size = layout.cell_size();
 
         let mut grid = div()
@@ -2349,8 +2368,8 @@ impl WorkspaceView {
         let border_color: gpui::Hsla = theme.border.into();
         let muted: gpui::Hsla = theme.muted.into();
 
-        // Calculate cell bounds from grid layout
-        let layout = self.workspace().grid_layout();
+        // Calculate cell bounds from grid layout (accounting for task board height)
+        let layout = self.grid_layout_with_task_board();
         let cell_bounds = layout.cell_bounds(position.row, position.col);
 
         self.render_empty_cell_inline_with_colors(position, panel_bg, border_color, muted, cell_bounds, cx)

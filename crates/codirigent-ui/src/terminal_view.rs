@@ -222,6 +222,8 @@ pub struct TerminalView {
     cached_content: Option<CachedTerminalContent>,
     /// Whether the content needs to be recomputed.
     content_dirty: bool,
+    /// Whether cell dimensions have been initialized from font metrics.
+    dimensions_initialized: bool,
 }
 
 impl TerminalView {
@@ -251,6 +253,7 @@ impl TerminalView {
             focused: true,
             cached_content: None,
             content_dirty: true,
+            dimensions_initialized: false,
         }
     }
 
@@ -289,9 +292,13 @@ impl TerminalView {
     }
 
     /// Set the cell dimensions.
+    ///
+    /// Marks the view as having initialized dimensions and triggers a
+    /// terminal resize with the new cell metrics.
     pub fn set_cell_dimensions(&mut self, width: f32, height: f32) {
         self.cell_width = width;
         self.cell_height = height;
+        self.dimensions_initialized = true;
         self.content_dirty = true;
         self.terminal.resize_with_cells(TerminalSize::new(
             self.terminal.rows(),
@@ -299,6 +306,11 @@ impl TerminalView {
             width,
             height,
         ));
+    }
+
+    /// Check if cell dimensions have been initialized from font metrics.
+    pub fn dimensions_initialized(&self) -> bool {
+        self.dimensions_initialized
     }
 
     /// Get the font size.
@@ -385,6 +397,15 @@ impl TerminalView {
     pub fn page_down(&mut self) {
         let lines = self.terminal.rows() as usize;
         self.scroll_down(lines);
+    }
+
+    /// Clear the terminal screen while preserving the current line (prompt).
+    ///
+    /// This clears the scrollback and visible content while keeping
+    /// the current line (typically the shell prompt) at the top.
+    pub fn clear(&mut self) {
+        self.content_dirty = true;
+        self.terminal.clear();
     }
 
     /// Get all visible cells for rendering.
@@ -664,6 +685,37 @@ pub fn default_terminal_font_family() -> &'static str {
     {
         "monospace"
     }
+}
+
+/// Compute cell dimensions from actual font metrics using the text system.
+///
+/// Uses `text_system.advance('m')` to get the actual character width for the
+/// monospace font, matching Zed's approach in `terminal_element.rs`.
+///
+/// Returns `(cell_width, cell_height)` in pixels.
+pub fn compute_cell_dimensions(
+    text_system: &gpui::TextSystem,
+    font_family: &'static str,
+    font_size: f32,
+    line_height_factor: f32,
+) -> (f32, f32) {
+    use gpui::{Font, FontFeatures, FontStyle, FontWeight, px};
+
+    let font = Font {
+        family: font_family.into(),
+        features: FontFeatures::default(),
+        fallbacks: None,
+        weight: FontWeight::NORMAL,
+        style: FontStyle::Normal,
+    };
+
+    let font_id = text_system.resolve_font(&font);
+    let cell_width = text_system
+        .advance(font_id, px(font_size), 'm')
+        .map(|adv| f32::from(adv.width))
+        .unwrap_or(font_size * 0.6);
+
+    (cell_width, font_size * line_height_factor)
 }
 
 /// Cursor rendering information.
