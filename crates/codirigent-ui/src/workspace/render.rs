@@ -12,11 +12,12 @@ use crate::empty_session::EmptySessionRenderHints;
 use crate::status_bar::StatusBarItem;
 use crate::terminal_header::TerminalHeaderRenderHints;
 use crate::theme::CodirigentTheme;
+use crate::title_bar::TitleBar;
 use codirigent_core::SessionId;
 use gpui::{
     div, px, ClickEvent, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    WindowControlArea, prelude::FluentBuilder, SharedString, StatefulInteractiveElement, Styled,
-    MouseButton,
+    Window, WindowControlArea, prelude::FluentBuilder, SharedString, StatefulInteractiveElement,
+    Styled, MouseButton,
 };
 use tracing::info;
 
@@ -959,19 +960,19 @@ impl WorkspaceView {
 
     /// Render the title bar component.
     ///
-    /// Returns a GPUI element representing the title bar with window controls,
-    /// logo, project path, and settings button.
-    pub(super) fn render_title_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let hints = self.title_bar.render_hints();
+    /// Returns a GPUI element representing the title bar with logo, drag area,
+    /// and window controls.
+    pub(super) fn render_title_bar(&mut self, window: &mut Window, _cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.workspace().theme();
         let bg: gpui::Hsla = theme.panel_background.into();
         let border_color: gpui::Hsla = theme.border.into();
         let fg: gpui::Hsla = theme.foreground.into();
-        let muted: gpui::Hsla = theme.muted.into();
 
+        // The entire bar is a drag region. Caption buttons use .occlude() +
+        // their own WindowControlArea to carve out non-drag zones.
         let mut bar = div()
             .id("title-bar")
-            .h(px(hints.height))
+            .h(px(self.title_bar.height()))
             .w_full()
             .bg(bg)
             .border_b_1()
@@ -979,193 +980,151 @@ impl WorkspaceView {
             .flex()
             .items_center()
             .px_3()
-            .gap_4();
+            .gap_2()
+            .window_control_area(WindowControlArea::Drag);
 
-        // Window controls (macOS-style traffic lights)
+        // macOS: Native traffic lights are rendered by the OS.
+        // Reserve left padding so content doesn't overlap them, and handle
+        // double-click to trigger the system zoom behavior (following Zed's approach).
         #[cfg(target_os = "macos")]
         {
-              let mut controls = div().flex().gap_2().items_center().ml_2();
-              for btn in &hints.controls {
-                  let color: gpui::Hsla = btn.current_color().into();
-                  let control_area = match btn.control {
-                      crate::title_bar::WindowControl::Close => WindowControlArea::Close,
-                      crate::title_bar::WindowControl::Minimize => WindowControlArea::Min,
-                      crate::title_bar::WindowControl::Maximize => WindowControlArea::Max,
-                  };
-                  let mut control = div()
-                      .w(px(14.0))
-                      .h(px(14.0))
-                      .rounded_full()
-                      .bg(color)
-                      .border_1()
-                      .border_color(color.opacity(0.3))
-                      .cursor_pointer()
-                      .window_control_area(control_area);
+            // 71px accounts for the native traffic light buttons + 1px window border.
+            const TRAFFIC_LIGHT_PADDING: f32 = 71.0;
 
-                  control = match btn.control {
-                      crate::title_bar::WindowControl::Minimize => {
-                          control.on_click(cx.listener(|_this, _: &ClickEvent, window, _cx| {
-                              window.minimize_window();
-                          }))
-                      }
-                      crate::title_bar::WindowControl::Maximize => {
-                          control.on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                              window.zoom_window();
-                              this.title_bar.set_maximized(window.is_maximized());
-                              cx.notify();
-                          }))
-                      }
-                      crate::title_bar::WindowControl::Close => {
-                          control.on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
-                              info!("Close button clicked");
-                              cx.quit();
-                          }))
-                      }
-                  };
+            bar = if window.is_fullscreen() {
+                bar.pl_2()
+            } else {
+                bar.pl(px(TRAFFIC_LIGHT_PADDING))
+            };
 
-                  controls = controls.child(control);
-              }
-              bar = bar.child(controls);
-          }
-
-
-        // Logo and title
-        bar = bar.child(
-            div()
-                .flex()
-                .items_center()
-                .gap_2()
-                .child(self.render_logo_small())
-                .child(
-                    div()
-                        .text_sm()
-                        .font_weight(FontWeight::BOLD)
-                        .text_color(fg)
-                        .child(hints.logo),
-                ),
-        );
-
-        // Drag region (includes project path)
-        let mut drag_region = div()
-            .flex_1()
-            .h_full()
-            .flex()
-            .items_center()
-            .window_control_area(WindowControlArea::Drag)
-            .on_mouse_down(MouseButton::Left, cx.listener(|this, _event, window, cx| {
-                // On Windows, restore before dragging maximized window
-                #[cfg(target_os = "windows")]
-                if window.is_maximized() {
-                    window.zoom_window();
-                    this.title_bar.set_maximized(false);
-                    cx.notify();
+            bar = bar.on_click(|event: &ClickEvent, window, _cx| {
+                if event.click_count() == 2 {
+                    window.titlebar_double_click();
                 }
-
-                window.start_window_move();
-            }));
-
-        if let Some(path) = &hints.project_path {
-            drag_region = drag_region.child({
-                let path_div = div()
-                    .text_xs()
-                    .text_color(muted)
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .cursor_pointer()
-                    .hover(|style| style.text_color(fg));
-
-                path_div.on_mouse_down(gpui::MouseButton::Left, cx.listener(|this, _event, _window, _cx| {
-                        this.title_bar.click_project_path();
-                    }))
-                    .child(path.clone())
             });
         }
 
-        bar = bar.child(drag_region);
+        // Windows: GPUI 0.2.1 has a stale mouse_hit_test issue in WM_NCHITTEST,
+        // so WindowControlArea::Drag alone doesn't reliably initiate drags.
+        // Work around by sending WM_NCLBUTTONDOWN(HTCAPTION) on mouse-down,
+        // which tells Windows to start a native title-bar drag immediately.
+        // TODO: Remove this workaround after upgrading to a GPUI version with the fix.
+        #[cfg(target_os = "windows")]
+        {
+            use raw_window_handle::HasWindowHandle;
+            let raw_handle = window.window_handle().ok().map(|h| {
+                match h.as_raw() {
+                    raw_window_handle::RawWindowHandle::Win32(win32) => {
+                        win32.hwnd.get() as isize
+                    }
+                    _ => 0,
+                }
+            });
+            if let Some(hwnd) = raw_handle {
+                bar = bar.on_mouse_down(MouseButton::Left, move |_event, _window, _cx| {
+                    crate::platform_drag::begin_title_bar_drag(hwnd);
+                });
+            }
+        }
 
-        // Settings button
-        let settings_color = if hints.settings_hovered {
-            fg
-        } else {
-            muted
-        };
+        // Logo and title – placed directly in the bar so the bar's own
+        // items_center() handles vertical centering without an intermediate
+        // wrapper that GPUI/Taffy stretches to full height.
         bar = bar.child(
             div()
-                .id("settings-btn")
-                .px_2()
-                .cursor_pointer()
+                .flex_shrink_0()
+                .ml_2()
+                .child(self.render_logo_small()),
+        );
+        bar = bar.child(
+            div()
                 .text_sm()
-                .text_color(settings_color)
-                .on_click(cx.listener(|this, _: &ClickEvent, _window, _cx| {
-                    this.title_bar.click_settings();
-                }))
-                .child("Settings"),
+                .font_weight(FontWeight::BOLD)
+                .text_color(fg)
+                .child(TitleBar::LOGO_TEXT),
         );
 
+        // Spacer — fills remaining space so window controls stay on the right
+        bar = bar.child(div().flex_1());
+
         // Window controls (Windows/Linux)
+        // Uses native Segoe icon fonts and WindowControlArea for OS-level handling,
+        // following Zed's approach: no on_click handlers, GPUI handles WM_NCHITTEST natively.
         #[cfg(not(target_os = "macos"))]
         {
-            let mut controls = div().flex().items_center().gap_2();
-            controls = controls.child(
-                div()
-                    .id("window-minimize")
-                    .w(px(28.0))
-                    .h(px(20.0))
-                    .rounded_sm()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                      .text_xs()
-                      .text_color(muted)
-                      .cursor_pointer()
-                      .hover(|style| style.bg(border_color.opacity(0.2)))
-                      .on_click(cx.listener(|_this, _: &ClickEvent, window, _cx| {
-                          window.minimize_window();
-                      }))
-                      .window_control_area(WindowControlArea::Min)
-                      .child("_"),
-              );
-              controls = controls.child(
-                  div()
-                    .id("window-maximize")
-                    .w(px(28.0))
-                    .h(px(20.0))
-                    .rounded_sm()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                      .text_xs()
-                      .text_color(muted)
-                      .cursor_pointer()
-                      .hover(|style| style.bg(border_color.opacity(0.2)))
-                      .on_click(cx.listener(|this, _: &ClickEvent, window, cx| {
-                          window.zoom_window();
-                          this.title_bar.set_maximized(window.is_maximized());
-                          cx.notify();
-                      }))
-                      .window_control_area(WindowControlArea::Max)
-                      .child("[]"),
-              );
-            controls = controls.child(
-                div()
-                    .id("window-close")
-                    .w(px(28.0))
-                    .h(px(20.0))
-                    .rounded_sm()
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .text_xs()
-                    .text_color(muted)
-                    .cursor_pointer()
-                    .hover(|style| style.bg(border_color.opacity(0.2)))
-                    .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
-                        info!("Close button clicked");
-                        cx.quit();
-                    }))
-                    .window_control_area(WindowControlArea::Close)
-                    .child("X"),
-            );
+            // Segoe MDL2 Assets is available on Windows 10+ and 11.
+            // Segoe Fluent Icons is Win11-only. MDL2 shares the same codepoints and works everywhere.
+            let icon_font = "Segoe MDL2 Assets";
+
+            let close_hover_bg: gpui::Hsla = gpui::Rgba {
+                r: 232.0 / 255.0,
+                g: 17.0 / 255.0,
+                b: 32.0 / 255.0,
+                a: 1.0,
+            }.into();
+
+            let maximize_icon = if window.is_maximized() {
+                "\u{e923}" // Restore
+            } else {
+                "\u{e922}" // Maximize
+            };
+
+            let controls = div()
+                .flex()
+                .flex_row()
+                .items_center()
+                .font_family(icon_font)
+                // Minimize
+                .child(
+                    div()
+                        .id("window-minimize")
+                        .w(px(36.0))
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(10.0))
+                        .text_color(fg)
+                        .occlude()
+                        .hover(|style| style.bg(border_color.opacity(0.2)))
+                        .active(|style| style.bg(border_color.opacity(0.3)))
+                        .window_control_area(WindowControlArea::Min)
+                        .child("\u{e921}"),
+                )
+                // Maximize / Restore
+                .child(
+                    div()
+                        .id("window-maximize")
+                        .w(px(36.0))
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(10.0))
+                        .text_color(fg)
+                        .occlude()
+                        .hover(|style| style.bg(border_color.opacity(0.2)))
+                        .active(|style| style.bg(border_color.opacity(0.3)))
+                        .window_control_area(WindowControlArea::Max)
+                        .child(maximize_icon),
+                )
+                // Close
+                .child(
+                    div()
+                        .id("window-close")
+                        .w(px(36.0))
+                        .h_full()
+                        .flex()
+                        .items_center()
+                        .justify_center()
+                        .text_size(px(10.0))
+                        .text_color(fg)
+                        .occlude()
+                        .hover(|style| style.bg(close_hover_bg).text_color(gpui::Hsla::white()))
+                        .active(|style| style.bg(close_hover_bg.opacity(0.8)).text_color(gpui::Hsla::white().opacity(0.8)))
+                        .window_control_area(WindowControlArea::Close)
+                        .child("\u{e8bb}"),
+                );
             bar = bar.child(controls);
         }
 
@@ -2953,7 +2912,7 @@ impl WorkspaceView {
     fn render_logo_small(&self) -> impl IntoElement {
         // Scale for title bar (smaller than splash screen)
         // Reduced by additional 35% for better title bar fit
-        let cell_size = 3.25;  // 5px -> 3.25px (~35% reduction)
+        let cell_size = 4.0;   // Match text cap-height for visual balance
         let gap = 1.0;         // 1.5px -> 1.0px
         let radius = 1.0;      // 1.5px -> 1.0px
 
@@ -3540,161 +3499,6 @@ impl WorkspaceView {
                                             this.apply_task_creation_modal(cx);
                                         }))
                                         .child("Create Task"),
-                                ),
-                        ),
-                ),
-        )
-    }
-
-    /// Render the project picker modal.
-    pub(super) fn render_project_picker_modal(&mut self, cx: &mut Context<Self>) -> Option<impl IntoElement> {
-        if !self.project_picker_open {
-            return None;
-        }
-
-        let theme = self.workspace().theme();
-        let panel_bg: gpui::Hsla = theme.panel_background.into();
-        let border_color: gpui::Hsla = theme.border.into();
-        let fg: gpui::Hsla = theme.foreground.into();
-        let muted: gpui::Hsla = theme.muted.into();
-        let primary: gpui::Hsla = theme.primary.into();
-        let input_bg: gpui::Hsla = theme.terminal_background.into();
-        let error_color: gpui::Hsla = gpui::Hsla::red();
-        let input_style = TextInputStyle {
-            height: 36.0,
-            padding_x: 12.0,
-            bg: input_bg,
-            border: border_color,
-            focus_border: primary,
-            error_border: error_color,
-            text: fg,
-        };
-
-        let input_value = if self.project_picker_input.is_empty() {
-            "|".to_string()
-        } else {
-            format!("{}|", self.project_picker_input)
-        };
-        let has_error = self.project_picker_error.is_some();
-        let can_apply = !self.project_picker_input.trim().is_empty();
-
-        Some(
-            div()
-                .id("project-picker-overlay")
-                .absolute()
-                .inset_0()
-                .flex()
-                .items_center()
-                .justify_center()
-                .bg(gpui::Hsla::black().opacity(0.5))
-                .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
-                    this.close_project_picker();
-                    cx.notify();
-                }))
-                .child(
-                    div()
-                        .id("project-picker-modal")
-                        .w(px(520.0))
-                        .bg(panel_bg)
-                        .border_1()
-                        .border_color(border_color)
-                        .rounded_lg()
-                        .flex()
-                        .flex_col()
-                        // Header
-                        .child(
-                            div()
-                                .h(px(48.0))
-                                .px_4()
-                                .border_b_1()
-                                .border_color(border_color)
-                                .flex()
-                                .items_center()
-                                .child(
-                                    div()
-                                        .text_base()
-                                        .font_weight(FontWeight::SEMIBOLD)
-                                        .text_color(fg)
-                                        .child("Open Project"),
-                                ),
-                        )
-                        // Content
-                        .child(
-                            div()
-                                .p_4()
-                                .flex()
-                                .flex_col()
-                                .gap_3()
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(muted)
-                                        .child("Project folder path:"),
-                                )
-                                .child(text_input(
-                                    "project-picker-input",
-                                    input_value,
-                                    false,
-                                    has_error,
-                                    &input_style,
-                                ))
-                                .when_some(self.project_picker_error.clone(), |this, error| {
-                                    this.child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(error_color)
-                                            .child(error),
-                                    )
-                                }),
-                        )
-                        // Footer
-                        .child(
-                            div()
-                                .h(px(60.0))
-                                .px_4()
-                                .border_t_1()
-                                .border_color(border_color)
-                                .flex()
-                                .items_center()
-                                .justify_end()
-                                .gap_2()
-                                .child(
-                                    div()
-                                        .id("project-picker-cancel")
-                                        .px_4()
-                                        .py_2()
-                                        .border_1()
-                                        .border_color(border_color)
-                                        .rounded_md()
-                                        .text_sm()
-                                        .text_color(fg)
-                                        .cursor_pointer()
-                                        .hover(|style| style.bg(border_color.opacity(0.1)))
-                                        .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
-                                            this.close_project_picker();
-                                            cx.notify();
-                                        }))
-                                        .child("Cancel"),
-                                )
-                                .child(
-                                    div()
-                                        .id("project-picker-open")
-                                        .px_4()
-                                        .py_2()
-                                        .bg(if can_apply { primary } else { muted })
-                                        .rounded_md()
-                                        .text_sm()
-                                        .text_color(gpui::Hsla::white())
-                                        .cursor(if can_apply { gpui::CursorStyle::PointingHand } else { gpui::CursorStyle::OperationNotAllowed })
-                                        .when(can_apply, |style| {
-                                            style
-                                                .hover(|style| style.bg(primary.opacity(0.8)))
-                                                .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
-                                                    this.apply_project_picker();
-                                                    cx.notify();
-                                                }))
-                                        })
-                                        .child("Open"),
                                 ),
                         ),
                 ),
