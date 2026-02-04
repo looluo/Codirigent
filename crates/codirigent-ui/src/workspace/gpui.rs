@@ -31,7 +31,7 @@ use crate::status_bar::StatusBar;
 use crate::task_board::TaskBoardPanel;
 use crate::terminal_header::TerminalHeader;
 use crate::theme::CodirigentTheme;
-use crate::title_bar::{TitleBar, TitleBarEvent};
+use crate::title_bar::TitleBar;
 use crate::toolbar::{SessionsToolbar, ToolbarEvent};
 // Core imports (combined)
 use codirigent_core::{
@@ -126,10 +126,6 @@ pub struct WorkspaceView {
     pub(super) file_tree_model: Option<FileTree>,
     /// Current project root path.
     pub(super) project_root: Option<PathBuf>,
-    /// Project picker modal state.
-    pub(super) project_picker_open: bool,
-    pub(super) project_picker_input: String,
-    pub(super) project_picker_error: Option<String>,
     /// Worktree panel for git worktree management.
     pub(super) worktree_panel: WorktreePanel,
     /// Worktree manager for git worktree operations.
@@ -138,6 +134,14 @@ pub struct WorkspaceView {
     last_click_position: Option<(GridPosition, Instant)>,
     /// Current git branch name (if in a git repository).
     pub(super) current_branch: Option<String>,
+    /// Last time terminals were resized to grid (for throttling during drag).
+    last_resize_time: Instant,
+    /// Whether a deferred resize is pending.
+    pending_resize: bool,
+    /// Whether the last poll received output (for adaptive polling).
+    last_poll_had_output: bool,
+    /// Count of consecutive polls with no output (for adaptive polling).
+    idle_poll_count: u32,
 }
 
 impl WorkspaceView {
@@ -160,14 +164,28 @@ impl WorkspaceView {
         let mut workspace = Workspace::new();
         workspace.set_theme(theme);
 
-        // Start output polling background task (from main branch)
+        // Start output polling background task with adaptive timing.
+        // Uses 4ms when output is being received (low latency for typing),
+        // increases to 16ms after idle period (saves CPU when nothing happening).
         cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+            let mut poll_interval_ms: u64 = 4;
             loop {
                 cx.background_executor()
-                    .timer(Duration::from_millis(16))
+                    .timer(Duration::from_millis(poll_interval_ms))
                     .await;
                 let result = this.update(cx, |this, cx| {
                     this.poll_output(cx);
+                    // Adaptive polling: fast when active, slow when idle
+                    if this.last_poll_had_output {
+                        this.idle_poll_count = 0;
+                        poll_interval_ms = 4; // Fast polling during activity
+                    } else {
+                        this.idle_poll_count = this.idle_poll_count.saturating_add(1);
+                        if this.idle_poll_count > 12 {
+                            // ~50ms of no output, slow down
+                            poll_interval_ms = 16;
+                        }
+                    }
                 });
                 if result.is_err() {
                     // View was dropped, stop the task
@@ -177,11 +195,7 @@ impl WorkspaceView {
         })
         .detach();
 
-        // Initialize title bar with current working directory (from feature branch)
-        let mut title_bar = TitleBar::new();
-        if let Ok(cwd) = std::env::current_dir() {
-            title_bar.set_project_path(cwd);
-        }
+        let title_bar = TitleBar::new();
 
         // Initialize toolbar with current layout (from feature branch)
         let mut toolbar = SessionsToolbar::new();
@@ -247,13 +261,14 @@ impl WorkspaceView {
             file_tree,
             file_tree_model,
             project_root,
-            project_picker_open: false,
-            project_picker_input: String::new(),
-            project_picker_error: None,
             worktree_panel: WorktreePanel::new(),
             worktree_manager: Self::init_worktree_manager(),
             last_click_position: None,
             current_branch: Self::detect_git_branch(),
+            last_resize_time: Instant::now(),
+            pending_resize: false,
+            last_poll_had_output: false,
+            idle_poll_count: 0,
         };
 
         view.refresh_file_tree_panel();
@@ -329,7 +344,6 @@ impl WorkspaceView {
     /// Set the current project root and update dependent UI.
     fn set_project_root(&mut self, path: PathBuf) {
         self.project_root = Some(path.clone());
-        self.title_bar.set_project_path(path.clone());
         self.file_tree.set_root(path.clone());
 
         match FileTree::new(path.clone()) {
@@ -385,6 +399,9 @@ impl WorkspaceView {
                 self.workspace.update_session_status(session_id, status);
             }
         }
+
+        // Track output activity for adaptive polling
+        self.last_poll_had_output = any_dirty;
 
         if any_dirty {
             cx.notify();
@@ -666,11 +683,6 @@ impl WorkspaceView {
     /// This method is called at the start of each render cycle to handle
     /// any pending events from title bar, toolbar, task board, etc.
     fn process_ui_events(&mut self, cx: &mut Context<Self>) {
-        // Process title bar events
-        for event in self.title_bar.take_events() {
-            self.handle_title_bar_event(event, cx);
-        }
-
         // Process toolbar events
         for event in self.toolbar.take_events() {
             self.handle_toolbar_event(event, cx);
@@ -685,78 +697,6 @@ impl WorkspaceView {
         for event in self.empty_cells.take_events() {
             self.handle_empty_session_event(event, cx);
         }
-    }
-
-    /// Handle title bar events.
-    fn handle_title_bar_event(&mut self, event: TitleBarEvent, cx: &mut Context<Self>) {
-        match event {
-            TitleBarEvent::CloseClicked => {
-                info!("Title bar close clicked - quitting application");
-                // Close the application (quit for single-window app)
-                cx.quit();
-            }
-            TitleBarEvent::MinimizeClicked => {
-                info!("Title bar minimize clicked");
-                // TODO: Implement window minimization once GPUI window management API is available
-                // Expected: cx.window().minimize() or similar
-            }
-            TitleBarEvent::MaximizeClicked => {
-                info!("Title bar maximize clicked");
-                // TODO: Implement window maximize/restore once GPUI window management API is available
-                // Expected: cx.window().toggle_maximize() or similar
-                // For now, toggle the state to show correct icon
-                self.title_bar.set_maximized(!self.title_bar.is_maximized());
-            }
-            TitleBarEvent::SettingsClicked => {
-                info!("Settings button clicked");
-                // TODO: Open settings panel
-            }
-            TitleBarEvent::ProjectPathClicked => {
-                info!("Project path clicked");
-                self.open_project_picker();
-            }
-        }
-        cx.notify();
-    }
-
-    /// Open the project picker modal.
-    pub(super) fn open_project_picker(&mut self) {
-        self.project_picker_open = true;
-        self.project_picker_error = None;
-        self.project_picker_input = self
-            .project_root
-            .as_ref()
-            .map(|p| p.to_string_lossy().to_string())
-            .unwrap_or_default();
-    }
-
-    /// Close the project picker modal.
-    pub(super) fn close_project_picker(&mut self) {
-        self.project_picker_open = false;
-        self.project_picker_error = None;
-    }
-
-    /// Apply the project picker selection.
-    pub(super) fn apply_project_picker(&mut self) {
-        let input = self.project_picker_input.trim();
-        if input.is_empty() {
-            self.project_picker_error = Some("Enter a folder path.".to_string());
-            return;
-        }
-
-        let path = PathBuf::from(input);
-        if !path.exists() {
-            self.project_picker_error = Some("Folder does not exist.".to_string());
-            return;
-        }
-
-        if !path.is_dir() {
-            self.project_picker_error = Some("Path is not a directory.".to_string());
-            return;
-        }
-
-        self.set_project_root(path);
-        self.close_project_picker();
     }
 
     /// Handle toolbar events.
@@ -1398,17 +1338,28 @@ impl WorkspaceView {
         &self.terminals
     }
 
+    /// Get a mutable reference to the terminals HashMap.
+    ///
+    /// Used by the render module for canvas-based rendering with content caching.
+    pub(super) fn terminals_mut(&mut self) -> &mut HashMap<SessionId, TerminalView> {
+        &mut self.terminals
+    }
+
     /// Resize all terminals to fit their current grid cell bounds.
     ///
     /// This should be called when the window is resized or the layout changes,
     /// to ensure terminals have the correct character dimensions for their pixel bounds.
     fn resize_terminals_to_grid(&mut self) {
+        const HEADER_HEIGHT: f32 = 32.0;
         let cell_info = self.workspace.cell_info();
 
         for info in cell_info {
             if let Some(terminal_view) = self.terminals.get_mut(&info.session_id) {
-                // Resize terminal to fit the cell bounds
-                terminal_view.resize_to_fit(info.bounds.size.width, info.bounds.size.height);
+                // Subtract header height from available cell height
+                let available_height = (info.bounds.size.height - HEADER_HEIGHT).max(0.0);
+
+                // Resize terminal to fit the remaining space
+                terminal_view.resize_to_fit(info.bounds.size.width, available_height);
             }
         }
     }
@@ -1456,9 +1407,6 @@ impl WorkspaceView {
     }
 
     fn handle_modal_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
-        if self.handle_project_picker_key_down(event, cx) {
-            return true;
-        }
         if self.handle_session_action_key_down(event, cx) {
             return true;
         }
@@ -1472,50 +1420,6 @@ impl WorkspaceView {
             return true;
         }
         false
-    }
-
-    fn handle_project_picker_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
-        if !self.project_picker_open {
-            return false;
-        }
-
-        let key = event.keystroke.key.to_lowercase();
-        match key.as_str() {
-            "escape" => {
-                self.close_project_picker();
-                cx.notify();
-                return true;
-            }
-            "enter" => {
-                self.apply_project_picker();
-                cx.notify();
-                return true;
-            }
-            "backspace" => {
-                self.project_picker_input.pop();
-                cx.notify();
-                return true;
-            }
-            _ => {}
-        }
-
-        if event.keystroke.modifiers.control
-            || event.keystroke.modifiers.alt
-            || event.keystroke.modifiers.platform
-        {
-            return true;
-        }
-
-        if let Some(ref key_char) = event.keystroke.key_char {
-            if let Some(ch) = key_char.chars().next() {
-                if ch.is_ascii_graphic() || ch == ' ' {
-                    self.project_picker_input.push(ch);
-                    cx.notify();
-                }
-            }
-        }
-
-        true
     }
 
     fn handle_session_action_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
@@ -1752,8 +1656,28 @@ impl Render for WorkspaceView {
         );
         self.workspace.set_bounds(window_bounds);
 
-        // Resize terminals to fit the new grid cell bounds
-        self.resize_terminals_to_grid();
+        // Resize terminals to fit the new grid cell bounds (throttled to ~10/sec
+        // to avoid resize feedback loop during window drag/resize)
+        let now = Instant::now();
+        if now.duration_since(self.last_resize_time) > Duration::from_millis(100) {
+            self.resize_terminals_to_grid();
+            self.last_resize_time = now;
+            self.pending_resize = false;
+        } else if !self.pending_resize {
+            self.pending_resize = true;
+            cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    this.resize_terminals_to_grid();
+                    this.last_resize_time = Instant::now();
+                    this.pending_resize = false;
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
 
         // Clone theme values before any mutable borrows
         let theme = self.workspace.theme();
@@ -1790,7 +1714,7 @@ impl Render for WorkspaceView {
             .flex_col();
 
         // 1. TitleBar at top (32px)
-        container = container.child(self.render_title_bar(cx));
+        container = container.child(self.render_title_bar(window, cx));
 
         // 2. Main content area (flex-row: sidebar + grid area)
         let mut main_content = div()
@@ -1836,12 +1760,7 @@ impl Render for WorkspaceView {
         // 4. StatusBar at bottom (24px)
         container = container.child(self.render_status_bar());
 
-        // 5. Project picker modal (if open)
-        if let Some(modal) = self.render_project_picker_modal(cx) {
-            container = container.child(modal);
-        }
-
-        // 6. Custom layout modal (if open)
+        // 5. Custom layout modal (if open)
         if let Some(modal) = self.render_custom_layout_modal(cx) {
             container = container.child(modal);
         }

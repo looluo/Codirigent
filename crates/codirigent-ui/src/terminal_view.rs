@@ -43,6 +43,44 @@ use alacritty_terminal::vte::ansi::{Color as TermColor, NamedColor};
 #[allow(unused_imports)]
 use codirigent_core::SessionId;
 
+/// A run of text with uniform style for efficient canvas painting.
+#[derive(Debug, Clone)]
+pub struct TextRunSegment {
+    /// Concatenated characters in this run.
+    pub text: String,
+    /// Foreground color for the run.
+    pub foreground: Rgba,
+    /// Background color for the run.
+    pub background: Rgba,
+    /// Whether the run is bold.
+    pub bold: bool,
+    /// Whether the run is italic.
+    pub italic: bool,
+    /// Whether the run is underlined.
+    pub underline: bool,
+    /// Whether the run has strikethrough.
+    pub strikethrough: bool,
+    /// Row of the run.
+    pub row: usize,
+    /// Starting column of the run.
+    pub start_col: usize,
+    /// Number of cells in the run.
+    pub cell_count: usize,
+}
+
+/// Pre-computed terminal content for canvas rendering.
+#[derive(Debug, Clone)]
+pub struct CachedTerminalContent {
+    /// Background rectangles grouped by color (row, start_col, end_col, color).
+    pub background_rects: Vec<(usize, usize, usize, Rgba)>,
+    /// Text runs batched by style for efficient painting.
+    pub text_runs: Vec<TextRunSegment>,
+    /// Terminal rows at time of caching.
+    pub rows: usize,
+    /// Terminal columns at time of caching.
+    pub cols: usize,
+}
+
 /// Cursor shape for rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CursorShape {
@@ -180,6 +218,10 @@ pub struct TerminalView {
     cursor_shape: CursorShape,
     /// Whether the terminal view is focused.
     focused: bool,
+    /// Cached terminal content for canvas rendering.
+    cached_content: Option<CachedTerminalContent>,
+    /// Whether the content needs to be recomputed.
+    content_dirty: bool,
 }
 
 impl TerminalView {
@@ -207,6 +249,8 @@ impl TerminalView {
             selection: Selection::new(),
             cursor_shape: CursorShape::Block,
             focused: true,
+            cached_content: None,
+            content_dirty: true,
         }
     }
 
@@ -216,7 +260,10 @@ impl TerminalView {
     }
 
     /// Get a mutable reference to the terminal.
+    ///
+    /// Marks content as dirty since callers typically modify terminal state.
     pub fn terminal_mut(&mut self) -> &mut Terminal {
+        self.content_dirty = true;
         &mut self.terminal
     }
 
@@ -228,6 +275,7 @@ impl TerminalView {
     /// Set the theme.
     pub fn set_theme(&mut self, theme: CodirigentTheme) {
         self.theme = theme;
+        self.content_dirty = true;
     }
 
     /// Get the cell width in pixels.
@@ -244,6 +292,7 @@ impl TerminalView {
     pub fn set_cell_dimensions(&mut self, width: f32, height: f32) {
         self.cell_width = width;
         self.cell_height = height;
+        self.content_dirty = true;
         self.terminal.resize_with_cells(TerminalSize::new(
             self.terminal.rows(),
             self.terminal.cols(),
@@ -260,6 +309,7 @@ impl TerminalView {
     /// Set the font size.
     pub fn set_font_size(&mut self, size: f32) {
         self.font_size = size;
+        self.content_dirty = true;
     }
 
     /// Get the current selection.
@@ -299,6 +349,7 @@ impl TerminalView {
 
     /// Scroll up by the specified number of lines.
     pub fn scroll_up(&mut self, lines: usize) {
+        self.content_dirty = true;
         self.terminal
             .term_mut()
             .scroll_display(Scroll::Delta(-(lines as i32)));
@@ -306,6 +357,7 @@ impl TerminalView {
 
     /// Scroll down by the specified number of lines.
     pub fn scroll_down(&mut self, lines: usize) {
+        self.content_dirty = true;
         self.terminal
             .term_mut()
             .scroll_display(Scroll::Delta(lines as i32));
@@ -313,11 +365,13 @@ impl TerminalView {
 
     /// Scroll to the bottom (most recent output).
     pub fn scroll_to_bottom(&mut self) {
+        self.content_dirty = true;
         self.terminal.term_mut().scroll_display(Scroll::Bottom);
     }
 
     /// Scroll to the top (oldest output in scrollback).
     pub fn scroll_to_top(&mut self) {
+        self.content_dirty = true;
         self.terminal.term_mut().scroll_display(Scroll::Top);
     }
 
@@ -451,7 +505,125 @@ impl TerminalView {
     /// Resize the terminal to fit within the given pixel dimensions.
     pub fn resize_to_fit(&mut self, width: f32, height: f32) {
         let (rows, cols) = self.dimensions_from_pixels(width, height);
+        self.content_dirty = true;
         self.terminal.resize(rows, cols);
+    }
+
+    /// Mark content as dirty, forcing recomputation on next access.
+    pub fn mark_dirty(&mut self) {
+        self.content_dirty = true;
+    }
+
+    /// Check if content is dirty (needs recomputation).
+    pub fn is_dirty(&self) -> bool {
+        self.content_dirty
+    }
+
+    /// Get cached terminal content, recomputing only if dirty.
+    ///
+    /// Returns pre-computed text runs and background rects for efficient
+    /// canvas-based rendering.
+    pub fn cached_content(&mut self) -> &CachedTerminalContent {
+        if self.content_dirty || self.cached_content.is_none() {
+            let cells = self.visible_cells();
+            let rows = self.terminal.rows() as usize;
+            let cols = self.terminal.cols() as usize;
+            let content = Self::build_cached_content(cells, rows, cols, &self.theme);
+            self.cached_content = Some(content);
+            self.content_dirty = false;
+        }
+        self.cached_content.as_ref().unwrap()
+    }
+
+    /// Build cached content from visible cells.
+    ///
+    /// Groups cells into text runs (adjacent cells with same style) and
+    /// background rectangles for efficient canvas painting.
+    fn build_cached_content(
+        cells: Vec<RenderedCell>,
+        rows: usize,
+        cols: usize,
+        theme: &CodirigentTheme,
+    ) -> CachedTerminalContent {
+        let mut text_runs = Vec::new();
+        let mut background_rects = Vec::new();
+
+        // Group cells by row
+        let mut by_row: Vec<Vec<&RenderedCell>> = vec![Vec::new(); rows];
+        for cell in &cells {
+            if cell.row < rows {
+                by_row[cell.row].push(cell);
+            }
+        }
+
+        for (row_idx, row_cells) in by_row.iter_mut().enumerate() {
+            row_cells.sort_by_key(|c| c.column);
+
+            // Build text runs: merge adjacent cells with same styling
+            let mut current_run: Option<TextRunSegment> = None;
+
+            for cell in row_cells.iter() {
+                let same_style = current_run.as_ref().is_some_and(|run| {
+                    run.foreground == cell.foreground
+                        && run.bold == cell.bold
+                        && run.italic == cell.italic
+                        && run.underline == cell.underline
+                        && run.strikethrough == cell.strikethrough
+                        && run.start_col + run.cell_count == cell.column
+                });
+
+                if same_style {
+                    let run = current_run.as_mut().unwrap();
+                    run.text.push(cell.character);
+                    run.cell_count += 1;
+                } else {
+                    if let Some(run) = current_run.take() {
+                        text_runs.push(run);
+                    }
+                    current_run = Some(TextRunSegment {
+                        text: String::from(cell.character),
+                        foreground: cell.foreground,
+                        background: cell.background,
+                        bold: cell.bold,
+                        italic: cell.italic,
+                        underline: cell.underline,
+                        strikethrough: cell.strikethrough,
+                        row: row_idx,
+                        start_col: cell.column,
+                        cell_count: 1,
+                    });
+                }
+
+                // Collect non-default background rects
+                if cell.background != theme.terminal_background {
+                    // Check if we can merge with the previous background rect
+                    let merged = background_rects.last_mut().and_then(
+                        |last: &mut (usize, usize, usize, Rgba)| {
+                            if last.0 == row_idx && last.2 == cell.column && last.3 == cell.background {
+                                last.2 = cell.column + 1;
+                                Some(())
+                            } else {
+                                None
+                            }
+                        },
+                    );
+                    if merged.is_none() {
+                        background_rects.push((row_idx, cell.column, cell.column + 1, cell.background));
+                    }
+                }
+            }
+
+            if let Some(run) = current_run.take() {
+                text_runs.push(run);
+            }
+        }
+
+        CachedTerminalContent {
+            background_rects,
+            text_runs,
+            rows,
+            cols,
+        }
     }
 
     /// Convert pixel coordinates to terminal cell position.

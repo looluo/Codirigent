@@ -12,7 +12,7 @@
 //! ```text
 //! ┌─────────────────────────────────────────────────────────────────┐
 //! │                        TitleBar                                  │
-//! │  [●●●] DIRIGENT    /path/to/project           ⚙                │
+//! │  [●●●] CODIRIGENT            (drag area)          [─] [□] [✕]  │
 //! ├─────────────┬───────────────────────────────────────────────────┤
 //! │  Sidebar    │              SessionsToolbar                       │
 //! │             │  [2×2] [3×2] [3×3] [Custom]    [Broadcast] [+ New] │
@@ -39,7 +39,7 @@
 //!
 //! ## Components
 //!
-//! - [`title_bar::TitleBar`] - Window controls, logo, project path, settings
+//! - [`title_bar::TitleBar`] - Logo and drag area
 //! - [`sidebar::SessionSidebar`] - Session list with status indicators
 //! - [`sidebar::FileTreePanel`] - File tree with expandable folders
 //! - [`toolbar::SessionsToolbar`] - Layout tabs and new session button
@@ -63,8 +63,7 @@
 //! };
 //!
 //! // Create all UI components
-//! let mut title_bar = TitleBar::new();
-//! title_bar.set_project_path("/path/to/project");
+//! let title_bar = TitleBar::new();
 //!
 //! let mut sidebar = SessionSidebar::new();
 //! // Add sessions...
@@ -90,7 +89,6 @@
 //!
 //! Each component emits events that should be handled by the parent:
 //!
-//! - `TitleBarEvent` - Window controls, settings clicked
 //! - `SidebarEvent` - Session selection, new session
 //! - `ToolbarEvent` - Layout changes, broadcast toggle
 //! - `TerminalHeaderEvent` - Header actions
@@ -99,12 +97,8 @@
 //!
 //! ```ignore
 //! // Example event handling loop
-//! for event in title_bar.take_events() {
-//!     match event {
-//!         TitleBarEvent::CloseClicked => { /* close window */ }
-//!         TitleBarEvent::SettingsClicked => { /* open settings */ }
-//!         _ => {}
-//!     }
+//! for event in sidebar.take_events() {
+//!     // Handle sidebar events...
 //! }
 //! ```
 //!
@@ -115,13 +109,12 @@
 //!
 //! ```ignore
 //! // Get render hints
-//! let title_hints = title_bar.render_hints();
 //! let sidebar_hints = sidebar.render_hints();
 //! let toolbar_hints = toolbar.render_hints();
 //!
 //! // Use hints in GPUI render function
 //! div()
-//!     .child(render_title_bar(&title_hints))
+//!     .child(render_title_bar(title_bar.height()))
 //!     .child(
 //!         div().flex_row()
 //!             .child(render_sidebar(&sidebar_hints))
@@ -136,7 +129,7 @@ use codirigent_core::GridPosition;
 use crate::status_bar::StatusBar;
 use crate::task_board::{TaskBoardPanel, TaskBoardEvent};
 use crate::terminal_header::TerminalHeader;
-use crate::title_bar::{TitleBar, TitleBarEvent};
+use crate::title_bar::TitleBar;
 use crate::toolbar::{SessionsToolbar, ToolbarEvent};
 use codirigent_core::{SessionId, SessionStatus};
 
@@ -180,11 +173,6 @@ impl AppUiState {
             empty_cells: EmptySessionPool::new(),
             terminal_headers: Vec::new(),
         }
-    }
-
-    /// Set the project path (displayed in title bar).
-    pub fn set_project_path(&mut self, path: impl Into<std::path::PathBuf>) {
-        self.title_bar.set_project_path(path);
     }
 
     /// Set the active layout profile.
@@ -240,7 +228,6 @@ impl AppUiState {
     /// Take all pending events from all components.
     pub fn take_events(&mut self) -> AppUiEvents {
         AppUiEvents {
-            title_bar: self.title_bar.take_events(),
             sidebar: self.sidebar.take_events(),
             toolbar: self.toolbar.take_events(),
             task_board: self.task_board.take_events(),
@@ -248,17 +235,11 @@ impl AppUiState {
         }
     }
 
-    /// Set window focused state (affects title bar).
-    pub fn set_window_focused(&mut self, focused: bool) {
-        self.title_bar.set_focused(focused);
-    }
 }
 
 /// Collected events from all UI components.
 #[derive(Debug, Default)]
 pub struct AppUiEvents {
-    /// Events from title bar.
-    pub title_bar: Vec<TitleBarEvent>,
     /// Events from sidebar.
     pub sidebar: Vec<SidebarEvent>,
     /// Events from toolbar.
@@ -272,8 +253,7 @@ pub struct AppUiEvents {
 impl AppUiEvents {
     /// Check if there are any pending events.
     pub fn is_empty(&self) -> bool {
-        self.title_bar.is_empty()
-            && self.sidebar.is_empty()
+        self.sidebar.is_empty()
             && self.toolbar.is_empty()
             && self.task_board.is_empty()
             && self.empty_session.is_empty()
@@ -355,13 +335,6 @@ mod tests {
     }
 
     #[test]
-    fn test_set_project_path() {
-        let mut state = AppUiState::new();
-        state.set_project_path("/home/user/project");
-        assert!(state.title_bar.project_path().is_some());
-    }
-
-    #[test]
     fn test_set_layout() {
         let mut state = AppUiState::new();
         state.set_layout(LayoutProfile::Grid3x3);
@@ -427,22 +400,6 @@ mod tests {
         let mut state = AppUiState::new();
         let events = state.take_events();
         assert!(events.is_empty());
-    }
-
-    #[test]
-    fn test_take_events_with_events() {
-        let mut state = AppUiState::new();
-        state.title_bar.click_settings();
-
-        let events = state.take_events();
-        assert!(!events.title_bar.is_empty());
-    }
-
-    #[test]
-    fn test_set_window_focused() {
-        let mut state = AppUiState::new();
-        state.set_window_focused(false);
-        assert!(!state.title_bar.is_focused());
     }
 
     #[test]

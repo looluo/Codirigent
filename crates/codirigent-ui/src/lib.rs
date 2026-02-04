@@ -87,6 +87,7 @@ pub mod keybindings;
 pub mod layout;
 pub mod layout_profile;
 pub mod platform;
+pub mod platform_drag;
 pub mod sidebar;
 pub mod smart_clipboard;
 pub mod status_bar;

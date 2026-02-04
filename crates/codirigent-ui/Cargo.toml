@@ -34,6 +34,9 @@ image = { version = "0.25", default-features = false, features = ["png", "jpeg"]
 # Terminal rendering (requires Rust 1.75+ for latest version)
 alacritty_terminal = { version = "0.25", optional = true }
 
+# raw-window-handle for Windows titlebar drag workaround (GPUI 0.2.x compat)
+raw-window-handle = "0.6"
+
 # GPUI with cross-platform support (enabled via gpui-full feature)
 gpui = { workspace = true, optional = true, features = [
     "wayland",           # Linux Wayland

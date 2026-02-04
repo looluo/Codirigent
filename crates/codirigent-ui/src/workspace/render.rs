@@ -712,8 +712,8 @@ impl WorkspaceView {
     }
 
     /// Render the grid of session panes.
-    pub(super) fn render_grid(&self) -> impl IntoElement {
-        let theme = self.workspace().theme();
+    pub(super) fn render_grid(&mut self) -> impl IntoElement {
+        let theme = self.workspace().theme().clone();
         let panel_bg: gpui::Hsla = theme.panel_background.into();
         let border_color: gpui::Hsla = theme.border.into();
         let fg: gpui::Hsla = theme.foreground.into();
@@ -809,12 +809,13 @@ impl WorkspaceView {
         grid
     }
 
-    /// Render the terminal content for a session.
+    /// Render the terminal content for a session using canvas-based rendering.
     ///
-    /// This method renders actual terminal cells from the TerminalView,
-    /// including character rendering with proper colors and cursor display.
+    /// Uses GPUI's `canvas()` element to paint terminal cells directly with
+    /// `paint_quad()` and `ShapedLine::paint()`, reducing element count from
+    /// ~8,000 divs to a single canvas element per terminal.
     fn render_terminal_content(
-        &self,
+        &mut self,
         session_id: SessionId,
         theme: &CodirigentTheme,
     ) -> gpui::AnyElement {
@@ -822,7 +823,7 @@ impl WorkspaceView {
         let terminal_fg: gpui::Hsla = theme.terminal_foreground.into();
 
         // Get the terminal view for this session
-        let Some(terminal_view) = self.terminals().get(&session_id) else {
+        let Some(terminal_view) = self.terminals_mut().get_mut(&session_id) else {
             // No terminal yet, show placeholder
             return div()
                 .flex_1()
@@ -836,126 +837,211 @@ impl WorkspaceView {
 
         let cell_width = terminal_view.cell_width();
         let cell_height = terminal_view.cell_height();
-        let cells_by_row = terminal_view.cells_by_row();
+        let font_size = terminal_view.font_size();
         let cursor_rect = terminal_view.cursor_rect();
-        let term_rows = terminal_view.terminal().rows() as usize;
-        let term_cols = terminal_view.terminal().cols() as usize;
 
-        // Build terminal grid
-        let mut terminal_div = div()
+        // Get cached content (only recomputes if dirty)
+        let content = terminal_view.cached_content().clone();
+
+        // Pre-convert background rects to GPUI colors
+        let bg_rects: Vec<(usize, usize, usize, gpui::Hsla)> = content
+            .background_rects
+            .iter()
+            .map(|(row, start, end, color)| (*row, *start, *end, (*color).into()))
+            .collect();
+
+        // Pre-convert text runs to GPUI colors
+        let text_runs: Vec<(crate::terminal_view::TextRunSegment, gpui::Hsla)> = content
+            .text_runs
+            .iter()
+            .map(|run| {
+                let fg: gpui::Hsla = run.foreground.into();
+                (run.clone(), fg)
+            })
+            .collect();
+
+        // Pre-convert cursor
+        let cursor_data = cursor_rect.map(|c| {
+            let color: gpui::Hsla = c.color.into();
+            (c, color)
+        });
+
+        let font_family: gpui::SharedString = crate::terminal_view::default_terminal_font_family().into();
+
+        // Build canvas element that paints directly
+        let terminal_canvas = gpui::canvas(
+            // Prepaint: shape text lines for each row's text runs
+            move |bounds, window: &mut gpui::Window, _cx: &mut gpui::App| {
+                // Store origin as f32 for arithmetic (Pixels doesn't support Add in gpui 0.2.1)
+                let origin_x: f32 = bounds.origin.x.into();
+                let origin_y: f32 = bounds.origin.y.into();
+                let padding = 4.0_f32;
+                let ox = origin_x + padding;
+                let oy = origin_y + padding;
+
+                // Shape text for each run (prepaint phase)
+                let mut shaped_runs: Vec<(usize, usize, gpui::ShapedLine)> = Vec::with_capacity(text_runs.len());
+                let font_size_px = px(font_size);
+
+                for (run, fg_color) in &text_runs {
+                    let weight = if run.bold {
+                        gpui::FontWeight::BOLD
+                    } else {
+                        gpui::FontWeight::NORMAL
+                    };
+                    let style = if run.italic {
+                        gpui::FontStyle::Italic
+                    } else {
+                        gpui::FontStyle::Normal
+                    };
+
+                    let font = gpui::Font {
+                        family: font_family.clone(),
+                        features: gpui::FontFeatures::default(),
+                        fallbacks: None,
+                        weight,
+                        style,
+                    };
+
+                    let underline = if run.underline {
+                        Some(gpui::UnderlineStyle {
+                            thickness: px(1.0),
+                            color: Some(*fg_color),
+                            wavy: false,
+                        })
+                    } else {
+                        None
+                    };
+
+                    let strikethrough = if run.strikethrough {
+                        Some(gpui::StrikethroughStyle {
+                            thickness: px(1.0),
+                            color: Some(*fg_color),
+                        })
+                    } else {
+                        None
+                    };
+
+                    let text: gpui::SharedString = run.text.clone().into();
+                    let text_run = gpui::TextRun {
+                        len: text.len(),
+                        font,
+                        color: *fg_color,
+                        background_color: None,
+                        underline,
+                        strikethrough,
+                    };
+
+                    let shaped = window
+                        .text_system()
+                        .shape_line(text, font_size_px, &[text_run], None);
+
+                    shaped_runs.push((run.row, run.start_col, shaped));
+                }
+
+                (ox, oy, bg_rects, shaped_runs, cursor_data, cell_width, cell_height)
+            },
+            // Paint: draw backgrounds, text, and cursor
+            move |_bounds: gpui::Bounds<gpui::Pixels>,
+                  prepaint_data: (
+                      f32,
+                      f32,
+                      Vec<(usize, usize, usize, gpui::Hsla)>,
+                      Vec<(usize, usize, gpui::ShapedLine)>,
+                      Option<(crate::terminal_view::CursorRect, gpui::Hsla)>,
+                      f32,
+                      f32,
+                  ),
+                  window: &mut gpui::Window,
+                  cx: &mut gpui::App| {
+                let (ox, oy, bg_rects, shaped_runs, cursor_data, cell_w, cell_h) =
+                    prepaint_data;
+
+                // 1. Paint background rectangles
+                for (row, start_col, end_col, bg_color) in &bg_rects {
+                    let rect_x = ox + *start_col as f32 * cell_w;
+                    let rect_y = oy + *row as f32 * cell_h;
+                    let rect_w = (*end_col - *start_col) as f32 * cell_w;
+                    let rect_bounds = gpui::Bounds {
+                        origin: gpui::Point { x: px(rect_x), y: px(rect_y) },
+                        size: gpui::Size { width: px(rect_w), height: px(cell_h) },
+                    };
+                    window.paint_quad(gpui::fill(rect_bounds, *bg_color));
+                }
+
+                // 2. Paint shaped text runs
+                for (row, start_col, shaped_line) in &shaped_runs {
+                    let text_x = ox + *start_col as f32 * cell_w;
+                    let text_y = oy + *row as f32 * cell_h;
+                    let text_origin = gpui::Point { x: px(text_x), y: px(text_y) };
+                    let _ = shaped_line.paint(
+                        text_origin,
+                        px(cell_h),
+                        window,
+                        cx,
+                    );
+                }
+
+                // 3. Paint cursor
+                if let Some((cursor, cursor_color)) = &cursor_data {
+                    let cx_pos = ox + cursor.x;
+                    let cy_pos = oy + cursor.y;
+
+                    match cursor.shape {
+                        CursorShape::Block => {
+                            let cursor_bounds = gpui::Bounds {
+                                origin: gpui::Point { x: px(cx_pos), y: px(cy_pos) },
+                                size: gpui::Size { width: px(cell_w), height: px(cell_h) },
+                            };
+                            window.paint_quad(gpui::fill(
+                                cursor_bounds,
+                                cursor_color.opacity(0.7),
+                            ));
+                        }
+                        CursorShape::HollowBlock => {
+                            let cursor_bounds = gpui::Bounds {
+                                origin: gpui::Point { x: px(cx_pos), y: px(cy_pos) },
+                                size: gpui::Size { width: px(cell_w), height: px(cell_h) },
+                            };
+                            window.paint_quad(gpui::quad(
+                                cursor_bounds,
+                                px(0.0),
+                                gpui::transparent_black(),
+                                px(1.0),
+                                *cursor_color,
+                                gpui::BorderStyle::default(),
+                            ));
+                        }
+                        CursorShape::Beam => {
+                            let cursor_bounds = gpui::Bounds {
+                                origin: gpui::Point { x: px(cx_pos), y: px(cy_pos) },
+                                size: gpui::Size { width: px(2.0), height: px(cell_h) },
+                            };
+                            window.paint_quad(gpui::fill(cursor_bounds, *cursor_color));
+                        }
+                        CursorShape::Underline => {
+                            let cursor_bounds = gpui::Bounds {
+                                origin: gpui::Point {
+                                    x: px(cx_pos),
+                                    y: px(cy_pos + cell_h - 2.0),
+                                },
+                                size: gpui::Size { width: px(cell_w), height: px(2.0) },
+                            };
+                            window.paint_quad(gpui::fill(cursor_bounds, *cursor_color));
+                        }
+                    }
+                }
+            },
+        )
+        .size_full();
+
+        // Wrap canvas in a container with terminal background
+        div()
             .flex_1()
             .bg(terminal_bg)
-            .p_1()
             .overflow_hidden()
-            .flex()
-            .flex_col()
-            .font_family(crate::terminal_view::default_terminal_font_family())
-            .text_size(px(terminal_view.font_size()));
-
-        // Render each row
-        for row_idx in 0..term_rows {
-            let row_cells = cells_by_row.get(row_idx);
-            let mut row_div = div().h(px(cell_height)).flex().flex_row();
-
-            // Create a map of column -> cell for quick lookup
-            let cell_map: std::collections::HashMap<usize, _> = row_cells
-                .map(|cells| cells.iter().map(|c| (c.column, c)).collect())
-                .unwrap_or_default();
-
-            // Render each column
-            for col_idx in 0..term_cols {
-                let cell_div = if let Some(cell) = cell_map.get(&col_idx) {
-                    let fg: gpui::Hsla = cell.foreground.into();
-                    let bg: gpui::Hsla = cell.background.into();
-
-                    let mut d = div()
-                        .w(px(cell_width))
-                        .h(px(cell_height))
-                        .text_color(fg)
-                        .child(cell.character.to_string());
-
-                    // Only set background if not default
-                    if cell.background != theme.terminal_background {
-                        d = d.bg(bg);
-                    }
-
-                    // Apply text decorations
-                    if cell.bold {
-                        d = d.font_weight(FontWeight::BOLD);
-                    }
-                    if cell.italic {
-                        d = d.italic();
-                    }
-                    if cell.underline {
-                        d = d.underline();
-                    }
-
-                    d
-                } else {
-                    // Empty cell
-                    div()
-                        .w(px(cell_width))
-                        .h(px(cell_height))
-                        .text_color(terminal_fg)
-                        .child(" ")
-                };
-
-                row_div = row_div.child(cell_div);
-            }
-
-            terminal_div = terminal_div.child(row_div);
-        }
-
-        // Add cursor overlay if visible
-        if let Some(cursor) = cursor_rect {
-            let cursor_color: gpui::Hsla = cursor.color.into();
-            let cursor_x = cursor.x;
-            let cursor_y = cursor.y;
-            let cursor_w = cursor.width;
-            let cursor_h = cursor.height;
-
-            let cursor_div = match cursor.shape {
-                CursorShape::Block => div()
-                    .absolute()
-                    .left(px(cursor_x + 4.0)) // +4 for padding
-                    .top(px(cursor_y + 4.0))
-                    .w(px(cursor_w))
-                    .h(px(cursor_h))
-                    .bg(cursor_color.opacity(0.7)),
-                CursorShape::HollowBlock => div()
-                    .absolute()
-                    .left(px(cursor_x + 4.0))
-                    .top(px(cursor_y + 4.0))
-                    .w(px(cursor_w))
-                    .h(px(cursor_h))
-                    .border_1()
-                    .border_color(cursor_color),
-                CursorShape::Beam => div()
-                    .absolute()
-                    .left(px(cursor_x + 4.0))
-                    .top(px(cursor_y + 4.0))
-                    .w(px(2.0))
-                    .h(px(cursor_h))
-                    .bg(cursor_color),
-                CursorShape::Underline => div()
-                    .absolute()
-                    .left(px(cursor_x + 4.0))
-                    .top(px(cursor_y + cursor_h - 2.0 + 4.0))
-                    .w(px(cursor_w))
-                    .h(px(2.0))
-                    .bg(cursor_color),
-            };
-
-            // Wrap in relative container for cursor positioning
-            terminal_div = div()
-                .flex_1()
-                .relative()
-                .overflow_hidden()
-                .child(terminal_div)
-                .child(cursor_div);
-        }
-
-        terminal_div.into_any_element()
+            .child(terminal_canvas)
+            .into_any_element()
     }
 
     /// Render the title bar component.
@@ -1927,6 +2013,10 @@ impl WorkspaceView {
         let profile = self.workspace().layout_profile();
         let (rows, cols) = profile.dimensions();
 
+        // Get grid layout to calculate cell bounds
+        let layout = self.workspace().grid_layout();
+        let cell_size = layout.cell_size();
+
         let mut grid = div()
             .flex_1()
             .flex()
@@ -1935,7 +2025,7 @@ impl WorkspaceView {
 
         for row in 0..rows {
             let mut row_div = div()
-                .flex_1()
+                .h(px(cell_size.height))  // Explicit row height
                 .flex()
                 .flex_row()
                 .gap(px(grid_gap));
@@ -1943,6 +2033,9 @@ impl WorkspaceView {
             for col in 0..cols {
                 let index = (row * cols + col) as usize;
                 let position = codirigent_core::GridPosition { row, col };
+
+                // Calculate cell bounds from layout
+                let cell_bounds = layout.cell_bounds(row, col);
 
                 let cell_div = if let Some(info) = cells.get(index) {
                     // Session cell with terminal header
@@ -1970,13 +2063,20 @@ impl WorkspaceView {
                         cell_border,
                         border_color,
                         &theme,
+                        cell_bounds,  // Pass bounds explicitly
                     )
                 } else {
                     // Empty cell - render inline
-                    self.render_empty_cell_inline_with_colors(position, panel_bg, border_color, muted, cx)
+                    self.render_empty_cell_inline_with_colors(position, panel_bg, border_color, muted, cell_bounds, cx)
                 };
 
-                row_div = row_div.child(cell_div);
+                // Apply explicit dimensions to cell container
+                row_div = row_div.child(
+                    div()
+                        .w(px(cell_bounds.size.width))
+                        .h(px(cell_bounds.size.height))
+                        .child(cell_div)
+                );
             }
 
             grid = grid.child(row_div);
@@ -1987,14 +2087,16 @@ impl WorkspaceView {
 
     /// Render a session cell with terminal header and actual terminal content.
     fn render_session_cell_with_terminal(
-        &self,
+        &mut self,
         session_id: SessionId,
         hints: &TerminalHeaderRenderHints,
         panel_bg: gpui::Hsla,
         cell_border: gpui::Hsla,
         border_color: gpui::Hsla,
         theme: &CodirigentTheme,
+        cell_bounds: crate::layout::Bounds,
     ) -> gpui::Stateful<gpui::Div> {
+        const HEADER_HEIGHT: f32 = 32.0;
         let fg: gpui::Hsla = theme.foreground.into();
 
         let header_border = if hints.is_focused {
@@ -2073,9 +2175,12 @@ impl WorkspaceView {
             );
         }
 
+        let terminal_height = cell_bounds.size.height - HEADER_HEIGHT;
+
         div()
             .id(SharedString::from(format!("session-cell-{}", session_id.0)))
-            .flex_1()
+            .w(px(cell_bounds.size.width))
+            .h(px(cell_bounds.size.height))
             .bg(panel_bg)
             .border_1()
             .border_color(cell_border)
@@ -2086,7 +2191,8 @@ impl WorkspaceView {
             .child(header)
             .child(
                 div()
-                    .flex_1()
+                    .w(px(cell_bounds.size.width))
+                    .h(px(terminal_height))
                     .overflow_hidden()
                     .child(self.render_terminal_content(session_id, theme)),
             )
@@ -2195,11 +2301,13 @@ impl WorkspaceView {
         panel_bg: gpui::Hsla,
         border_color: gpui::Hsla,
         muted: gpui::Hsla,
+        cell_bounds: crate::layout::Bounds,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         div()
             .id(SharedString::from(format!("empty-cell-{}-{}", position.row, position.col)))
-            .flex_1()
+            .w(px(cell_bounds.size.width))
+            .h(px(cell_bounds.size.height))
             .bg(panel_bg)
             .border_1()
             .border_color(border_color)
@@ -2241,7 +2349,11 @@ impl WorkspaceView {
         let border_color: gpui::Hsla = theme.border.into();
         let muted: gpui::Hsla = theme.muted.into();
 
-        self.render_empty_cell_inline_with_colors(position, panel_bg, border_color, muted, cx)
+        // Calculate cell bounds from grid layout
+        let layout = self.workspace().grid_layout();
+        let cell_bounds = layout.cell_bounds(position.row, position.col);
+
+        self.render_empty_cell_inline_with_colors(position, panel_bg, border_color, muted, cell_bounds, cx)
     }
 
     /// Render the custom layout picker modal.

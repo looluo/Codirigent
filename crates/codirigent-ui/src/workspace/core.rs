@@ -26,7 +26,10 @@
 //! workspace.add_session(session);
 //! ```
 
-use crate::layout::{Bounds, FocusDirection, GridLayout, LayoutProfile, LayoutState, Point};
+use crate::layout::{
+    Bounds, FocusDirection, GridLayout, LayoutProfile, LayoutState, Point, TITLE_BAR_HEIGHT,
+    TOOLBAR_HEIGHT, STATUS_BAR_HEIGHT,
+};
 use crate::theme::CodirigentTheme;
 use codirigent_core::{Session, SessionId, SessionStatus};
 
@@ -301,15 +304,29 @@ impl Workspace {
         self.bounds
     }
 
-    /// Get the bounds available for the grid (excluding sidebar).
+    /// Get the bounds available for the grid (excluding sidebar and chrome).
     pub fn grid_bounds(&self) -> Bounds {
-        if self.show_sidebar {
-            let x = self.sidebar_width;
-            let width = (self.bounds.size.width - self.sidebar_width).max(0.0);
-            Bounds::new(x, self.bounds.origin.y, width, self.bounds.size.height)
+        // Calculate chrome height (title bar + toolbar + status bar)
+        // Title bar: 32px, Toolbar: 48px, Status bar: 24px (total: 104px)
+        let chrome_height = TITLE_BAR_HEIGHT + TOOLBAR_HEIGHT + STATUS_BAR_HEIGHT;
+
+        let x = if self.show_sidebar {
+            self.sidebar_width
         } else {
-            self.bounds
-        }
+            self.bounds.origin.x
+        };
+
+        let width = if self.show_sidebar {
+            (self.bounds.size.width - self.sidebar_width).max(0.0)
+        } else {
+            self.bounds.size.width
+        };
+
+        // Subtract chrome heights from vertical space
+        let y = self.bounds.origin.y + chrome_height;
+        let height = (self.bounds.size.height - chrome_height).max(0.0);
+
+        Bounds::new(x, y, width, height)
     }
 
     /// Get the sidebar bounds.
