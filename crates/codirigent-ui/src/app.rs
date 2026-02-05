@@ -398,21 +398,18 @@ impl CodirigentApp {
             let event_bus = self.event_bus.clone();
             let theme = self.theme.clone();
 
-            // Calculate optimal size for default layout (Grid2x2)
+            // Use Zed's default window size (1536x864) for a comfortable default
             let default_layout = LayoutProfile::Grid2x2;
             let (min_width, min_height) = default_layout.minimum_window_size();
 
-            // Add 20% padding for comfort
-            let optimal_width = min_width * 1.2;
-            let optimal_height = min_height * 1.2;
-
-            let bounds = Bounds::centered(None, size(px(optimal_width), px(optimal_height)), cx);
+            let bounds = Bounds::centered(None, size(px(1536.0), px(864.0)), cx);
 
             if show_splash {
                 // Show splash screen with transition to workspace
                 cx.open_window(
                     WindowOptions {
                         window_bounds: Some(WindowBounds::Windowed(bounds)),
+                        window_min_size: Some(size(px(min_width), px(min_height))),
                         titlebar: Some(TitlebarOptions {
                             title: Some("Codirigent".into()),
                             appears_transparent: true,  // Custom titlebar like Zed
@@ -440,6 +437,7 @@ impl CodirigentApp {
                 cx.open_window(
                     WindowOptions {
                         window_bounds: Some(WindowBounds::Windowed(bounds)),
+                        window_min_size: Some(size(px(min_width), px(min_height))),
                         titlebar: Some(TitlebarOptions {
                             title: Some("Codirigent".into()),
                             appears_transparent: true,  // Custom titlebar like Zed
