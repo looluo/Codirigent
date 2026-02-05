@@ -1647,28 +1647,28 @@ impl WorkspaceView {
             .flex()
             .flex_col();
 
-        // Header row
+        // Header row (clicking anywhere on header toggles expand/collapse)
         let mut header = div()
+            .id("task-board-header")
             .h(px(hints.header_height))
             .w_full()
             .flex()
             .items_center()
             .px_3()
-            .gap_2();
+            .gap_2()
+            .cursor_pointer()
+            .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                this.task_board.toggle_expanded();
+                cx.notify();
+            }));
 
-        // Expand/collapse button
+        // Expand/collapse icon indicator
         let toggle_icon = if hints.is_expanded { "v" } else { ">" };
         header = header.child(
             div()
-                .id("task-board-toggle")
                 .px_1()
-                .cursor_pointer()
                 .text_xs()
                 .text_color(muted)
-                .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
-                    this.task_board.toggle_expanded();
-                    cx.notify();
-                }))
                 .child(toggle_icon),
         );
 
