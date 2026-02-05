@@ -230,9 +230,12 @@ impl TerminalView {
     /// Create a new terminal view.
     pub fn new(terminal: Terminal, theme: CodirigentTheme) -> Self {
         let font_size = theme.font_size_base;
-        // Keep cell metrics aligned with the chosen font size to reduce spacing issues.
-        let cell_width = (font_size * 0.6).max(7.0);
-        let cell_height = (font_size * 1.3).max(14.0);
+        // Approximate cell dimensions until real font metrics arrive via
+        // compute_cell_dimensions() on first render. Using conservative
+        // ratios that slightly overestimate so the initial grid doesn't
+        // allocate more rows/cols than will fit after correction.
+        let cell_width = (font_size * 0.55).max(7.0);
+        let cell_height = font_size.max(14.0);
 
         let mut terminal = terminal;
         terminal.resize_with_cells(TerminalSize::new(
@@ -689,15 +692,15 @@ pub fn default_terminal_font_family() -> &'static str {
 
 /// Compute cell dimensions from actual font metrics using the text system.
 ///
-/// Uses `text_system.advance('m')` to get the actual character width for the
-/// monospace font, matching Zed's approach in `terminal_element.rs`.
+/// Uses `text_system.advance('m')` to get the actual character width and
+/// `text_system.ascent() + text_system.descent()` to get the actual line
+/// height for the monospace font.
 ///
 /// Returns `(cell_width, cell_height)` in pixels.
 pub fn compute_cell_dimensions(
     text_system: &gpui::TextSystem,
     font_family: &'static str,
     font_size: f32,
-    line_height_factor: f32,
 ) -> (f32, f32) {
     use gpui::{Font, FontFeatures, FontStyle, FontWeight, px};
 
@@ -710,12 +713,21 @@ pub fn compute_cell_dimensions(
     };
 
     let font_id = text_system.resolve_font(&font);
+    let font_size_px = px(font_size);
+
     let cell_width = text_system
-        .advance(font_id, px(font_size), 'm')
+        .advance(font_id, font_size_px, 'm')
         .map(|adv| f32::from(adv.width))
         .unwrap_or(font_size * 0.6);
 
-    (cell_width, font_size * line_height_factor)
+    // Use actual font ascent + descent for line height instead of an
+    // arbitrary multiplier. This prevents the double-spacing artifact
+    // caused by the previous hardcoded 1.3x factor.
+    let ascent: f32 = text_system.ascent(font_id, font_size_px).into();
+    let descent: f32 = text_system.descent(font_id, font_size_px).into();
+    let cell_height = ascent + descent;
+
+    (cell_width, cell_height)
 }
 
 /// Cursor rendering information.
@@ -920,5 +932,62 @@ mod tests {
         let brightened = brighten_color(original);
         assert_eq!(dimmed.r, 70);
         assert_eq!(brightened.r, 120);
+    }
+
+    #[test]
+    fn test_visible_cells_consecutive_rows() {
+        let mut view = create_test_view();
+        // Simulate multi-line output with Windows-style \r\n endings
+        // This mimics what ConPTY sends for a simple dir/ls listing
+        view.terminal_mut().process_output(
+            b"file1.txt\x1b[K\r\nfile2.txt\x1b[K\r\nfile3.txt\x1b[K\r\nfile4.txt\x1b[K\r\n"
+        );
+        let cells = view.visible_cells();
+
+        // Collect unique sorted row indices
+        let mut rows: Vec<usize> = cells.iter().map(|c| c.row).collect();
+        rows.sort();
+        rows.dedup();
+
+        println!("Content rows: {:?}", rows);
+        assert!(rows.len() >= 4, "Expected at least 4 content rows, got {:?}", rows);
+
+        // Verify rows are consecutive (no gaps)
+        for i in 1..rows.len() {
+            assert_eq!(
+                rows[i], rows[i - 1] + 1,
+                "Rows must be consecutive but found gap: {:?}", rows
+            );
+        }
+    }
+
+    #[test]
+    fn test_visible_cells_row_indices_with_ansi() {
+        let mut view = create_test_view();
+        // More realistic ConPTY output with ANSI sequences
+        view.terminal_mut().process_output(
+            b"\x1b[?25l\x1b[2J\x1b[H\
+            Row0 text here\x1b[K\r\n\
+            Row1 text here\x1b[K\r\n\
+            Row2 text here\x1b[K\r\n\
+            Row3 text here\x1b[K\r\n\
+            Row4 text here\x1b[K\r\n\
+            \x1b[?25h"
+        );
+        let cells = view.visible_cells();
+
+        let mut rows: Vec<usize> = cells.iter().map(|c| c.row).collect();
+        rows.sort();
+        rows.dedup();
+
+        println!("ANSI content rows: {:?}", rows);
+        assert!(rows.len() >= 5, "Expected at least 5 content rows, got {:?}", rows);
+
+        for i in 1..rows.len() {
+            assert_eq!(
+                rows[i], rows[i - 1] + 1,
+                "Rows must be consecutive with ANSI output: {:?}", rows
+            );
+        }
     }
 }

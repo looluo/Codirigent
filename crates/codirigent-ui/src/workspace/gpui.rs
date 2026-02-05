@@ -142,6 +142,8 @@ pub struct WorkspaceView {
     last_poll_had_output: bool,
     /// Count of consecutive polls with no output (for adaptive polling).
     idle_poll_count: u32,
+    /// Last PTY-resized dimensions per session, used to skip redundant resize calls.
+    pty_sizes: HashMap<SessionId, (u16, u16)>,
 }
 
 impl WorkspaceView {
@@ -269,6 +271,7 @@ impl WorkspaceView {
             pending_resize: false,
             last_poll_had_output: false,
             idle_poll_count: 0,
+            pty_sizes: HashMap::new(),
         };
 
         view.refresh_file_tree_panel();
@@ -476,6 +479,10 @@ impl WorkspaceView {
             // Create terminal header for this session (from feature branch)
             let header = TerminalHeader::new(&name, SessionStatus::Idle);
             self.terminal_headers.push((session_id, header));
+
+            // Immediately resize PTY to match actual grid cell bounds
+            // so the shell knows the correct dimensions from the start
+            self.resize_terminals_to_grid();
 
             // Event is already published by session manager
             info!(%name, "Created new session with PTY");
@@ -1363,8 +1370,22 @@ impl WorkspaceView {
                 // Subtract header height from available cell height
                 let available_height = (info.bounds.size.height - HEADER_HEIGHT).max(0.0);
 
-                // Resize terminal to fit the remaining space
+                // Resize terminal emulator to fit the remaining space
                 terminal_view.resize_to_fit(info.bounds.size.width, available_height);
+
+                // Propagate resize to actual PTY (ConPTY) so the shell
+                // knows the correct terminal dimensions
+                let rows = terminal_view.terminal().rows();
+                let cols = terminal_view.terminal().cols();
+                let last = self.pty_sizes.get(&info.session_id);
+                if last != Some(&(rows, cols)) {
+                    let manager = self.session_manager.lock().unwrap();
+                    if let Err(e) = manager.resize(info.session_id, rows, cols) {
+                        warn!("Failed to resize PTY for session {}: {}", info.session_id, e);
+                    }
+                    drop(manager);
+                    self.pty_sizes.insert(info.session_id, (rows, cols));
+                }
             }
         }
     }
@@ -1660,6 +1681,21 @@ impl Render for WorkspaceView {
             window_size.height.into(),
         );
         self.workspace.set_bounds(window_bounds);
+
+        // Sync terminal cell dimensions with actual font metrics so the
+        // emulator calculates the correct row/col counts.
+        {
+            let (real_w, real_h) = crate::terminal_view::compute_cell_dimensions(
+                window.text_system(),
+                crate::terminal_view::default_terminal_font_family(),
+                self.workspace.theme().font_size_base,
+            );
+            for tv in self.terminals.values_mut() {
+                if !tv.dimensions_initialized() {
+                    tv.set_cell_dimensions(real_w, real_h);
+                }
+            }
+        }
 
         // Resize terminals to fit the new grid cell bounds (throttled to ~10/sec
         // to avoid resize feedback loop during window drag/resize)

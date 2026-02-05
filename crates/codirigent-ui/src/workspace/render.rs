@@ -841,7 +841,6 @@ impl WorkspaceView {
         let font_size = terminal_view.font_size();
         let cursor_rect = terminal_view.cursor_rect();
         let needs_dimension_init = !terminal_view.dimensions_initialized();
-        let line_height_factor = 1.3_f32;
 
         // Get cached content (only recomputes if dirty)
         let content = terminal_view.cached_content().clone();
@@ -885,14 +884,11 @@ impl WorkspaceView {
                 // Compute cell dimensions from font metrics (Zed pattern)
                 // This ensures proper character spacing by using the actual 'm' advance width
                 let (cell_width, cell_height) = if needs_dimension_init {
-                    // Compute proper cell dimensions using text_system.advance('m')
-                    let (w, h) = crate::terminal_view::compute_cell_dimensions(
+                    crate::terminal_view::compute_cell_dimensions(
                         window.text_system(),
                         crate::terminal_view::default_terminal_font_family(),
                         font_size,
-                        line_height_factor,
-                    );
-                    (w, h)
+                    )
                 } else {
                     (fallback_cell_width, fallback_cell_height)
                 };
