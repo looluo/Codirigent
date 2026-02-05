@@ -1414,11 +1414,13 @@ impl WorkspaceView {
             return;
         };
 
-        // Get terminal mode for proper escape sequence generation
-        let Some(terminal_view) = self.terminals.get(&session_id) else {
-            return;
+        // Get terminal mode for proper escape sequence generation (immutable borrow)
+        let term_mode = {
+            let Some(terminal_view) = self.terminals.get(&session_id) else {
+                return;
+            };
+            terminal_view.terminal().mode()
         };
-        let term_mode = terminal_view.terminal().mode();
 
         // Convert GPUI keystroke to terminal keystroke
         let modifiers = TerminalModifiers {
@@ -1431,6 +1433,13 @@ impl WorkspaceView {
 
         // Convert to bytes
         if let Some(bytes) = key_to_bytes(&keystroke, term_mode) {
+            // Auto-scroll to bottom when user types while scrolled up in scrollback.
+            // This is standard terminal behavior: typing should return the view
+            // to the cursor position.
+            if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
+                terminal_view.scroll_to_bottom();
+            }
+
             // Send to PTY
             let manager = self.session_manager.lock().unwrap();
             if let Err(e) = manager.send_input(session_id, &bytes) {
