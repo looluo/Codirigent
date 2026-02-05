@@ -553,6 +553,38 @@ impl Terminal {
     pub fn bracketed_paste_mode(&self) -> bool {
         self.term.mode().contains(TermMode::BRACKETED_PASTE)
     }
+
+    /// Clear the terminal screen while preserving the current line (prompt).
+    pub fn clear(&mut self) {
+        use alacritty_terminal::vte::ansi::{ClearMode, Handler};
+        use alacritty_terminal::index::{Column, Line};
+
+        self.term.clear_screen(ClearMode::Saved);
+
+        let cursor = self.term.grid().cursor.point;
+        self.term.grid_mut().reset_region(..cursor.line);
+
+        let cols = self.term.grid().columns();
+        let line: Vec<_> = self.term.grid()[cursor.line][..Column(cols)]
+            .iter()
+            .cloned()
+            .enumerate()
+            .collect();
+
+        for (i, cell) in line {
+            self.term.grid_mut()[Line(0)][Column(i)] = cell;
+        }
+
+        self.term.grid_mut().cursor.point =
+            alacritty_terminal::index::Point::new(Line(0), cursor.column);
+        let new_cursor = self.term.grid().cursor.point;
+
+        if (new_cursor.line.0 as usize) < self.term.screen_lines() - 1 {
+            self.term.grid_mut().reset_region((new_cursor.line + 1)..);
+        }
+
+        self.dirty = true;
+    }
 }
 
 #[cfg(test)]

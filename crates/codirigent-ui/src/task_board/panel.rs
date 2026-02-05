@@ -194,7 +194,7 @@ impl TaskBoardPanel {
             tabs: Self::create_tabs(active_tab, &task_counts),
             active_tab,
             auto_assign: AutoAssignToggle::default(),
-            is_expanded: true,
+            is_expanded: false,
             expanded_height: Self::DEFAULT_EXPANDED_HEIGHT,
             collapsed_height: Self::DEFAULT_COLLAPSED_HEIGHT,
             pending_events: Vec::new(),

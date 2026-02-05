@@ -306,9 +306,10 @@ impl Workspace {
 
     /// Get the bounds available for the grid (excluding sidebar and chrome).
     pub fn grid_bounds(&self) -> Bounds {
-        // Calculate chrome height (title bar + toolbar + status bar)
-        // Title bar: 32px, Toolbar: 48px, Status bar: 24px (total: 104px)
-        let chrome_height = TITLE_BAR_HEIGHT + TOOLBAR_HEIGHT + STATUS_BAR_HEIGHT;
+        // Calculate chrome height (title bar + toolbar + task board header + status bar)
+        // Title bar: 32px, Toolbar: 48px, Task board header: 44px, Status bar: 24px (total: 148px)
+        let task_board_collapsed_height = 44.0;
+        let chrome_height = TITLE_BAR_HEIGHT + TOOLBAR_HEIGHT + task_board_collapsed_height + STATUS_BAR_HEIGHT;
 
         let x = if self.show_sidebar {
             self.sidebar_width

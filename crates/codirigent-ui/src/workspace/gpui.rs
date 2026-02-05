@@ -1331,6 +1331,11 @@ impl WorkspaceView {
         &self.workspace
     }
 
+    /// Get grid layout accounting for task board height.
+    pub(super) fn grid_layout_with_task_board(&self) -> crate::layout::GridLayout {
+        self.workspace.grid_layout()
+    }
+
     /// Get a reference to the terminals HashMap.
     ///
     /// Used by the render module to access terminal views.
