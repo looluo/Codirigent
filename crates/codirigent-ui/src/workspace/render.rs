@@ -17,7 +17,7 @@ use codirigent_core::SessionId;
 use gpui::{
     div, px, ClickEvent, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
     Window, WindowControlArea, prelude::FluentBuilder, SharedString, StatefulInteractiveElement,
-    Styled, MouseButton,
+    Styled, MouseButton, ScrollWheelEvent,
 };
 use tracing::info;
 
@@ -877,6 +877,7 @@ impl WorkspaceView {
                 // Store origin as f32 for arithmetic (Pixels doesn't support Add in gpui 0.2.1)
                 let origin_x: f32 = bounds.origin.x.into();
                 let origin_y: f32 = bounds.origin.y.into();
+                // Must match TERMINAL_CONTENT_PADDING in resize_terminals_to_grid
                 let padding = 4.0_f32;
                 let ox = origin_x + padding;
                 let oy = origin_y + padding;
@@ -2078,7 +2079,8 @@ impl WorkspaceView {
                         cell_border,
                         border_color,
                         &theme,
-                        cell_bounds,  // Pass bounds explicitly
+                        cell_bounds,
+                        cx,
                     )
                 } else {
                     // Empty cell - render inline
@@ -2110,6 +2112,7 @@ impl WorkspaceView {
         border_color: gpui::Hsla,
         theme: &CodirigentTheme,
         cell_bounds: crate::layout::Bounds,
+        cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         const HEADER_HEIGHT: f32 = 32.0;
         let fg: gpui::Hsla = theme.foreground.into();
@@ -2192,6 +2195,10 @@ impl WorkspaceView {
 
         let terminal_height = cell_bounds.size.height - HEADER_HEIGHT;
 
+        // Render terminal content before building the div tree so the
+        // mutable borrow on `self` is released before `cx.listener()`.
+        let terminal_content = self.render_terminal_content(session_id, theme);
+
         div()
             .id(SharedString::from(format!("session-cell-{}", session_id.0)))
             .w(px(cell_bounds.size.width))
@@ -2209,7 +2216,22 @@ impl WorkspaceView {
                     .w(px(cell_bounds.size.width))
                     .h(px(terminal_height))
                     .overflow_hidden()
-                    .child(self.render_terminal_content(session_id, theme)),
+                    .on_scroll_wheel(cx.listener(move |this, event: &ScrollWheelEvent, _window, cx| {
+                        if let Some(tv) = this.terminals_mut().get_mut(&session_id) {
+                            let cell_h: f32 = tv.cell_height();
+                            let delta_y: f32 = event.delta.pixel_delta(px(cell_h)).y.into();
+                            // GPUI on Windows: positive y = finger/wheel up = show older content
+                            if delta_y > 0.0 {
+                                let lines = (delta_y / cell_h).ceil().max(1.0) as usize;
+                                tv.scroll_up(lines);
+                            } else if delta_y < 0.0 {
+                                let lines = (-delta_y / cell_h).ceil().max(1.0) as usize;
+                                tv.scroll_down(lines);
+                            }
+                            cx.notify();
+                        }
+                    }))
+                    .child(terminal_content),
             )
     }
 

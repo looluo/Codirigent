@@ -414,20 +414,29 @@ impl TerminalView {
     /// Get all visible cells for rendering.
     pub fn visible_cells(&self) -> Vec<RenderedCell> {
         let content = self.terminal.term().renderable_content();
+        let display_offset = content.display_offset;
+        let rows = self.terminal.rows() as usize;
         let mut cells = Vec::new();
 
         for indexed in content.display_iter {
             let cell = &indexed.cell;
             let point = indexed.point;
 
+            // Convert grid-relative line to viewport-relative row.
+            // Grid lines are negative for scrollback, 0+ for active screen.
+            // Viewport row = grid_line + display_offset.
+            let viewport_line = point.line.0 + display_offset as i32;
+            if viewport_line < 0 || viewport_line as usize >= rows {
+                continue;
+            }
+            let row = viewport_line as usize;
+            let col = point.column.0;
+
             // Skip empty cells (optimization)
             let c = cell.c;
             if c == ' ' && cell.bg == TermColor::Named(NamedColor::Background) {
                 continue;
             }
-
-            let row = point.line.0 as usize;
-            let col = point.column.0;
 
             // Resolve colors
             let mut foreground = convert_color(cell.fg, &self.theme, true);
@@ -487,12 +496,28 @@ impl TerminalView {
     }
 
     /// Get cursor rendering information.
+    ///
+    /// Returns `None` if the cursor is not visible or is scrolled off-screen.
+    /// Uses viewport-relative coordinates from `renderable_content()` so the
+    /// cursor position is correct when the terminal is scrolled.
     pub fn cursor_rect(&self) -> Option<CursorRect> {
         if !self.terminal.cursor_visible() {
             return None;
         }
 
-        let (row, col) = self.terminal.cursor_position();
+        let content = self.terminal.term().renderable_content();
+        let display_offset = content.display_offset;
+        let cursor_point = content.cursor.point;
+
+        // Convert grid-relative cursor line to viewport-relative row.
+        let viewport_line = cursor_point.line.0 + display_offset as i32;
+        let rows = self.terminal.rows() as usize;
+        if viewport_line < 0 || viewport_line as usize >= rows {
+            return None; // Cursor is off-screen
+        }
+
+        let row = viewport_line as usize;
+        let col = cursor_point.column.0;
         let x = col as f32 * self.cell_width;
         let y = row as f32 * self.cell_height;
 

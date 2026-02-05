@@ -1363,15 +1363,22 @@ impl WorkspaceView {
     /// to ensure terminals have the correct character dimensions for their pixel bounds.
     fn resize_terminals_to_grid(&mut self) {
         const HEADER_HEIGHT: f32 = 32.0;
+        // Must match the padding used in render_terminal_content's canvas prepaint
+        const TERMINAL_CONTENT_PADDING: f32 = 4.0;
         let cell_info = self.workspace.cell_info();
 
         for info in cell_info {
             if let Some(terminal_view) = self.terminals.get_mut(&info.session_id) {
-                // Subtract header height from available cell height
-                let available_height = (info.bounds.size.height - HEADER_HEIGHT).max(0.0);
+                // Subtract header height and rendering padding from available space.
+                // The canvas prepaint offsets content by TERMINAL_CONTENT_PADDING from
+                // the top-left, so we subtract 2*padding (top+bottom, left+right) to
+                // prevent the last row/column from being clipped by overflow_hidden.
+                let padding2 = TERMINAL_CONTENT_PADDING * 2.0;
+                let available_width = (info.bounds.size.width - padding2).max(0.0);
+                let available_height = (info.bounds.size.height - HEADER_HEIGHT - padding2).max(0.0);
 
                 // Resize terminal emulator to fit the remaining space
-                terminal_view.resize_to_fit(info.bounds.size.width, available_height);
+                terminal_view.resize_to_fit(available_width, available_height);
 
                 // Propagate resize to actual PTY (ConPTY) so the shell
                 // knows the correct terminal dimensions
