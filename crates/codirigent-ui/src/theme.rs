@@ -385,11 +385,11 @@ impl CodirigentTheme {
 
             // === Session Group Colors ===
             session_colors: [
-                hex("#4ECDC4"), // Teal
-                hex("#5B8DEF"), // Blue
+                hex("#6366f1"), // Indigo
+                hex("#818cf8"), // Indigo-400
                 hex("#A78BFA"), // Purple
                 hex("#F59E0B"), // Orange
-                hex("#FF6B6B"), // Red/Pink
+                hex("#f43f5e"), // Rose
                 hex("#10B981"), // Green
             ],
 
@@ -753,10 +753,10 @@ mod tests {
     #[test]
     fn test_terminal_colors() {
         let theme = CodirigentTheme::dark();
-        // #0a0a0c
-        assert_eq!(theme.terminal_background.r, 10);
-        assert_eq!(theme.terminal_background.g, 10);
-        assert_eq!(theme.terminal_background.b, 12);
+        // #050505
+        assert_eq!(theme.terminal_background.r, 5);
+        assert_eq!(theme.terminal_background.g, 5);
+        assert_eq!(theme.terminal_background.b, 5);
     }
 
     #[test]
