@@ -272,14 +272,32 @@ pub struct CodirigentTheme {
     pub muted: Hsla,
 
     // === Accent Colors ===
-    /// Primary accent color (teal).
+    /// Primary accent color (indigo).
     pub primary: Hsla,
-    /// Secondary accent color (blue).
+    /// Secondary accent color (indigo-light).
     pub secondary: Hsla,
     /// Purple accent color.
     pub purple: Hsla,
     /// Orange accent color.
     pub orange: Hsla,
+
+    // === Mockup-Specific Colors ===
+    /// Icon rail background (narrow left bar).
+    pub icon_rail_background: Hsla,
+    /// Drawer panel background (expandable left panel).
+    pub drawer_background: Hsla,
+    /// Selected/focused session ring color.
+    pub selected_ring: Hsla,
+    /// Broadcast mode accent color (rose).
+    pub broadcast_accent: Hsla,
+    /// AI summary pill background (indigo tint).
+    pub ai_summary_background: Hsla,
+    /// AI summary pill text color.
+    pub ai_summary_text: Hsla,
+    /// Input required overlay background.
+    pub input_required_background: Hsla,
+    /// Input required accent color.
+    pub input_required_accent: Hsla,
 
     // === Session Status Colors ===
     /// Color for idle sessions.
@@ -371,6 +389,16 @@ impl CodirigentTheme {
             purple: hex("#A78BFA"),           // Purple
             orange: hex("#F59E0B"),           // Orange
 
+            // === Mockup-Specific Colors ===
+            icon_rail_background: hex("#0c0c0e"),
+            drawer_background: hex("#121214"),
+            selected_ring: hex("#6366f1"),
+            broadcast_accent: hex("#f43f5e"),
+            ai_summary_background: Hsla { a: 0.05, ..hex("#6366f1") },
+            ai_summary_text: Hsla { a: 0.8, ..hex("#c7d2fe") },
+            input_required_background: Hsla { a: 0.2, ..hex("#4c0519") },
+            input_required_accent: hex("#f43f5e"),
+
             // === Session Status Colors ===
             session_idle: hex("#52525b"),     // Zinc-600 for idle
             session_working: hex("#f59e0b"),  // Amber-500 for working
@@ -445,6 +473,16 @@ impl CodirigentTheme {
             secondary: hex("#6366f1"),        // Indigo-500
             purple: hex("#8B6FD9"),           // Darker purple
             orange: hex("#D98A0B"),           // Darker orange
+
+            // === Mockup-Specific Colors ===
+            icon_rail_background: hex("#f0f0f4"),
+            drawer_background: hex("#ffffff"),
+            selected_ring: hex("#4f46e5"),
+            broadcast_accent: hex("#e11d48"),
+            ai_summary_background: Hsla { a: 0.08, ..hex("#4f46e5") },
+            ai_summary_text: hex("#3730a3"),
+            input_required_background: Hsla { a: 0.1, ..hex("#e11d48") },
+            input_required_accent: hex("#e11d48"),
 
             // === Session Status Colors ===
             session_idle: hex("#71717a"),     // Zinc-500
@@ -825,5 +863,27 @@ mod tests {
         assert_ne!(theme.priority_high, theme.priority_medium);
         assert_ne!(theme.priority_medium, theme.priority_low);
         assert_ne!(theme.priority_high, theme.priority_low);
+    }
+
+    #[test]
+    fn test_mockup_specific_colors() {
+        let dark = CodirigentTheme::dark();
+        // All new fields should be opaque or have intentional alpha
+        assert!(dark.icon_rail_background.a >= 0.9);
+        assert!(dark.drawer_background.a >= 0.9);
+        assert!(dark.selected_ring.a >= 0.9);
+        assert!(dark.broadcast_accent.a >= 0.9);
+        assert!(dark.input_required_accent.a >= 0.9);
+        // Semi-transparent fields
+        assert!(dark.ai_summary_background.a < 0.5);
+        assert!(dark.input_required_background.a < 0.5);
+    }
+
+    #[test]
+    fn test_light_theme_mockup_colors() {
+        let light = CodirigentTheme::light();
+        assert!(light.icon_rail_background.a >= 0.9);
+        assert!(light.broadcast_accent.a >= 0.9);
+        assert!(light.selected_ring.a >= 0.9);
     }
 }
