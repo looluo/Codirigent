@@ -433,7 +433,7 @@ impl CodirigentTheme {
             border: hex("#d0d0d8"),
             hover: hex("#e8e8ec"),
             active: hex("#d8d8e0"),
-            selection: Hsla { a: 0.2, ..hex("#3BA89E") }, // Darker teal @ 20%
+            selection: Hsla { a: 0.2, ..hex("#4f46e5") }, // Indigo-600 @ 20%
 
             // === Text Colors ===
             foreground: hex("#1a1a1c"),
@@ -441,40 +441,40 @@ impl CodirigentTheme {
             muted: hex("#999999"),
 
             // === Accent Colors (slightly darker for light bg) ===
-            primary: hex("#3BA89E"),          // Darker teal
-            secondary: hex("#4A7BD8"),        // Darker blue
+            primary: hex("#4f46e5"),          // Indigo-600
+            secondary: hex("#6366f1"),        // Indigo-500
             purple: hex("#8B6FD9"),           // Darker purple
             orange: hex("#D98A0B"),           // Darker orange
 
             // === Session Status Colors ===
-            session_idle: hex("#888888"),
-            session_working: hex("#3BA89E"),
-            session_waiting: hex("#D85555"),
-            session_done: hex("#3BA89E"),
-            session_error: hex("#D85555"),
+            session_idle: hex("#71717a"),     // Zinc-500
+            session_working: hex("#d97706"),  // Amber-600
+            session_waiting: hex("#e11d48"),  // Rose-600
+            session_done: hex("#059669"),     // Emerald-600
+            session_error: hex("#dc2626"),    // Red-600
 
             // === Priority Colors ===
-            priority_high: hex("#D85555"),
+            priority_high: hex("#dc2626"),
             priority_medium: hex("#D98A0B"),
-            priority_low: hex("#4A7BD8"),
+            priority_low: hex("#6366f1"),
 
             // === Session Group Colors ===
             session_colors: [
-                hex("#3BA89E"), // Teal
-                hex("#4A7BD8"), // Blue
+                hex("#4f46e5"), // Indigo-600
+                hex("#6366f1"), // Indigo-500
                 hex("#8B6FD9"), // Purple
                 hex("#D98A0B"), // Orange
-                hex("#D85555"), // Red/Pink
-                hex("#0D9668"), // Green
+                hex("#e11d48"), // Rose
+                hex("#059669"), // Emerald
             ],
 
             // === Terminal Colors ===
-            cursor: hex("#3BA89E"),
+            cursor: hex("#4f46e5"),
             ansi: AnsiColors::default(),
             terminal_background: Rgba::rgb(245, 245, 247),
             terminal_foreground: Rgba::rgb(26, 26, 28),
-            terminal_cursor: Rgba::rgb(59, 168, 158),
-            terminal_selection_bg: Rgba::new(59, 168, 158, 51),
+            terminal_cursor: Rgba::rgb(79, 70, 229),        // #4f46e5
+            terminal_selection_bg: Rgba::new(79, 70, 229, 51), // #4f46e5 @ 20%
             terminal_selection_fg: Rgba::rgb(26, 26, 28),
 
             // === Layout ===
