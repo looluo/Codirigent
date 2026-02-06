@@ -349,16 +349,16 @@ impl CodirigentTheme {
     pub fn dark() -> Self {
         Self {
             // === Background Colors (from mockup) ===
-            background: hex("#0a0a0c"),        // Darkest background
-            panel_background: hex("#0d0d10"),  // Panel background
-            header_background: hex("#141418"), // Header/toolbar background
-            sidebar_background: hex("#0d0d10"), // Same as panel
+            background: hex("#050505"),        // Darkest background
+            panel_background: hex("#0c0c0e"),  // Panel background
+            header_background: hex("#09090b"), // Header/toolbar background
+            sidebar_background: hex("#0c0c0e"), // Same as panel
 
             // === Border & Interaction Colors ===
             border: hex("#1a1a1f"),           // Border color
             hover: hex("#151518"),            // Hover state
             active: hex("#1a1a22"),           // Active/focused state
-            selection: Hsla { a: 0.3, ..hex("#4ECDC4") }, // Primary @ 30%
+            selection: Hsla { a: 0.3, ..hex("#6366f1") }, // Primary @ 30%
 
             // === Text Colors ===
             foreground: hex("#e0e0e0"),       // Primary text
@@ -366,8 +366,8 @@ impl CodirigentTheme {
             muted: hex("#555555"),            // Muted text
 
             // === Accent Colors ===
-            primary: hex("#4ECDC4"),          // Teal (main accent)
-            secondary: hex("#5B8DEF"),        // Blue
+            primary: hex("#6366f1"),          // Indigo-500 (main accent)
+            secondary: hex("#818cf8"),        // Indigo-400
             purple: hex("#A78BFA"),           // Purple
             orange: hex("#F59E0B"),           // Orange
 
@@ -394,12 +394,12 @@ impl CodirigentTheme {
             ],
 
             // === Terminal Colors ===
-            cursor: hex("#4ECDC4"),           // Teal cursor
+            cursor: hex("#6366f1"),           // Indigo cursor
             ansi: AnsiColors::default(),
-            terminal_background: Rgba::rgb(10, 10, 12),    // #0a0a0c
+            terminal_background: Rgba::rgb(5, 5, 5),      // #050505
             terminal_foreground: Rgba::rgb(224, 224, 224), // #e0e0e0
-            terminal_cursor: Rgba::rgb(78, 205, 196),      // #4ECDC4
-            terminal_selection_bg: Rgba::new(78, 205, 196, 77), // #4ECDC4 @ 30%
+            terminal_cursor: Rgba::rgb(99, 102, 241),      // #6366f1
+            terminal_selection_bg: Rgba::new(99, 102, 241, 77), // #6366f1 @ 30%
             terminal_selection_fg: Rgba::rgb(224, 224, 224), // #e0e0e0
 
             // === Layout ===
