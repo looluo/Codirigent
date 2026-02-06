@@ -372,11 +372,11 @@ impl CodirigentTheme {
             orange: hex("#F59E0B"),           // Orange
 
             // === Session Status Colors ===
-            session_idle: hex("#666666"),     // Gray for idle
-            session_working: hex("#4ECDC4"),  // Teal for working
-            session_waiting: hex("#FF6B6B"),  // Red for waiting input
-            session_done: hex("#4ECDC4"),     // Teal for done
-            session_error: hex("#FF6B6B"),    // Red for error
+            session_idle: hex("#52525b"),     // Zinc-600 for idle
+            session_working: hex("#f59e0b"),  // Amber-500 for working
+            session_waiting: hex("#f43f5e"),  // Rose-500 for waiting input
+            session_done: hex("#10b981"),     // Emerald-500 for done
+            session_error: hex("#ef4444"),    // Red-500 for error
 
             // === Priority Colors ===
             priority_high: hex("#FF6B6B"),    // Red
