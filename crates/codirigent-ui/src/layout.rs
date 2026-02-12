@@ -1437,7 +1437,7 @@ impl SplitLayoutState {
 
             if in_direction {
                 let dist = (sx - cx).powi(2) + (sy - cy).powi(2);
-                if best.is_none() || dist < best.unwrap().1 {
+                if best.map_or(true, |(_, best_dist)| dist < best_dist) {
                     best = Some((*slot, dist));
                 }
             }
