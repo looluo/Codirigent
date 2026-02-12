@@ -630,7 +630,9 @@ impl TerminalView {
             self.cached_content = Some(content);
             self.content_dirty = false;
         }
-        self.cached_content.as_ref().unwrap()
+        self.cached_content
+            .as_ref()
+            .expect("BUG: cached_content must be Some after rebuild")
     }
 
     /// Build cached content from visible cells.
