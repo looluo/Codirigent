@@ -146,6 +146,22 @@ Fixed compilation errors related to `clipboard-win` v5.4 API changes:
 
 See commit: `871c202` for details.
 
+## Error Handling
+
+Codirigent uses Rust's `Result` and `Option` types for safe error handling.
+
+**Key Principles:**
+- ✅ Never use `.unwrap()` in production code
+- ✅ Use `?` operator for error propagation
+- ✅ Use pattern matching (`if let`, `let Some ... else`) for Options
+- ❌ Avoid panics - prefer graceful degradation
+
+See [Error Handling Guidelines](docs/coding-guidelines/error-handling.md) for details.
+
+**Recent Improvements:**
+- 2026-02-12: Eliminated all unwrap() calls in settings panels (8 fixes)
+- CI now prevents new unwrap() calls in production code
+
 ## Contributing
 
 1. Fork the repository
