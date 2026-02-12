@@ -162,6 +162,25 @@ See [Error Handling Guidelines](docs/coding-guidelines/error-handling.md) for de
 - 2026-02-12: Eliminated all unwrap() calls in settings panels (8 fixes)
 - CI now prevents new unwrap() calls in production code
 
+## 📚 Documentation
+
+### For Developers
+
+- **[Onboarding Guide](docs/development/onboarding.md)** - Start here! Get productive in 1-2 weeks
+- **[Architecture Overview](docs/architecture/overview.md)** - System design and components
+- **[Data Flow](docs/architecture/data-flow.md)** - Sequence diagrams for key operations
+- **[Error Handling Guidelines](docs/coding-guidelines/error-handling.md)** - Best practices
+
+### Project Guides
+
+- **[Implementation Plans](docs/plans/)** - Detailed task breakdowns for features
+- **[Dependency Analysis](docs/dependency-analysis.md)** - Dependency investigation and optimization
+
+### Quick Links
+
+- **Architecture:** [Overview](docs/architecture/overview.md) | [Data Flow](docs/architecture/data-flow.md)
+- **Development:** [Onboarding](docs/development/onboarding.md) | [Clone Optimization](docs/development/clone-optimization.md)
+
 ## Contributing
 
 1. Fork the repository
