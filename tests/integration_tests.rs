@@ -4,6 +4,8 @@
 //! including session lifecycle, event flow, state persistence, and component
 //! integration.
 
+mod integration;
+
 use codirigent_core::{
     CodirigentEvent, DefaultEventBus, EventBus, FileStorageService, ProcessMonitor, Session,
     SessionId, SessionManager, SessionStatus, StorageService,
