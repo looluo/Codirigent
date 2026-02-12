@@ -16,7 +16,16 @@ use super::types::DROPDOWN_TRIGGER_HEIGHT;
 impl super::gpui::WorkspaceView {
     /// Render the full settings overlay (sidebar + content area).
     pub(super) fn render_settings_overlay(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let page = self.settings.page.as_ref().unwrap();
+        let Some(page) = self.settings.page.as_ref() else {
+            return div()
+                .w_full()
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child("Settings not available")
+                .into_any_element();
+        };
         let theme = self.workspace.theme();
         let bg: Hsla = theme.background.into();
         let panel_bg: Hsla = theme.panel_background.into();
@@ -128,7 +137,10 @@ impl super::gpui::WorkspaceView {
 
     /// Dispatch to the active category's render method.
     fn render_settings_content(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let cat = self.settings.page.as_ref().unwrap().active_category();
+        let cat = self.settings.page
+            .as_ref()
+            .map(|p| p.active_category())
+            .unwrap_or(SettingsCategory::Appearance);
         match cat {
             SettingsCategory::General => self.render_general_settings(cx),
             SettingsCategory::Appearance => self.render_appearance_settings(cx),
@@ -307,7 +319,9 @@ impl super::gpui::WorkspaceView {
     // ── General ──────────────────────────────────────────────────────
 
     fn render_general_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let page = self.settings.page.as_ref().unwrap();
+        let page = self.settings.page
+            .as_ref()
+            .expect("BUG: settings page should exist when rendering settings");
         let editor = page.user_settings.general.editor_command.clone();
         let shell = page.user_settings.general.default_shell.clone();
         let working_dir = page.user_settings.general.default_working_dir.clone();
@@ -421,7 +435,9 @@ impl super::gpui::WorkspaceView {
     // ── Appearance ───────────────────────────────────────────────────
 
     fn render_appearance_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let page = self.settings.page.as_ref().unwrap();
+        let page = self.settings.page
+            .as_ref()
+            .expect("BUG: settings page should exist when rendering settings");
         let theme_name = page.user_settings.appearance.theme.clone();
         let font_size = page.user_settings.appearance.font_size;
         let grid_gap = page.user_settings.appearance.grid_gap;
@@ -544,7 +560,9 @@ impl super::gpui::WorkspaceView {
     // ── Terminal ─────────────────────────────────────────────────────
 
     fn render_terminal_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let page = self.settings.page.as_ref().unwrap();
+        let page = self.settings.page
+            .as_ref()
+            .expect("BUG: settings page should exist when rendering settings");
         let font_family = page.user_settings.terminal.font_family.clone();
         let font_size = page.user_settings.terminal.font_size;
         let cursor_style = page.user_settings.terminal.cursor_style.clone();
@@ -672,7 +690,9 @@ impl super::gpui::WorkspaceView {
     // ── Keyboard Shortcuts ───────────────────────────────────────────
 
     fn render_shortcuts_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let page = self.settings.page.as_ref().unwrap();
+        let page = self.settings.page
+            .as_ref()
+            .expect("BUG: settings page should exist when rendering settings");
         let theme = self.workspace.theme();
         let fg: Hsla = theme.foreground.into();
         let muted: Hsla = theme.muted.into();
@@ -772,7 +792,9 @@ impl super::gpui::WorkspaceView {
     // ── Sessions ─────────────────────────────────────────────────────
 
     fn render_sessions_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let page = self.settings.page.as_ref().unwrap();
+        let page = self.settings.page
+            .as_ref()
+            .expect("BUG: settings page should exist when rendering settings");
         let max_concurrent = page.project_config.sessions.max_concurrent;
         let default_cli = page.project_config.sessions.default_cli.clone();
         let auto_cleanup = page.project_config.sessions.auto_cleanup;
@@ -856,7 +878,9 @@ impl super::gpui::WorkspaceView {
     // ── Advanced ─────────────────────────────────────────────────────
 
     fn render_advanced_settings(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let page = self.settings.page.as_ref().unwrap();
+        let page = self.settings.page
+            .as_ref()
+            .expect("BUG: settings page should exist when rendering settings");
         let scheduler_mode = format!("{:?}", page.project_config.scheduler.mode);
         let auto_assign = page.project_config.scheduler.auto_assign;
         let ver_enabled = page.project_config.verification.enabled;
