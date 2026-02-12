@@ -1,7 +1,7 @@
 //! Platform-specific process monitoring.
 //!
 //! This module provides a unified interface for process monitoring across
-//! Linux, macOS, and Windows platforms. Each platform has its own implementation
+//! macOS and Windows platforms. Each platform has its own implementation
 //! that uses native APIs for optimal performance.
 
 use anyhow::Result;
@@ -148,16 +148,12 @@ pub trait PlatformMonitor: Send + Sync {
 }
 
 // Platform-specific implementations
-#[cfg(target_os = "linux")]
-pub mod linux;
 #[cfg(target_os = "macos")]
 pub mod macos;
 #[cfg(target_os = "windows")]
 pub mod windows;
 
 // Re-export the native implementation for the current platform
-#[cfg(target_os = "linux")]
-pub use linux::LinuxMonitor as NativeMonitor;
 #[cfg(target_os = "macos")]
 pub use macos::MacOSMonitor as NativeMonitor;
 #[cfg(target_os = "windows")]
@@ -167,7 +163,7 @@ pub use windows::WindowsMonitor as NativeMonitor;
 ///
 /// This is a convenience function that creates the appropriate monitor
 /// for the current platform.
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub fn create_native_monitor() -> NativeMonitor {
     NativeMonitor::new()
 }

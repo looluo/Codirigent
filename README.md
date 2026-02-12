@@ -7,7 +7,7 @@ A terminal-based development environment with clipboard integration and session 
 ### Prerequisites
 
 - Rust toolchain (stable channel)
-- Windows, macOS, or Linux
+- Windows or macOS
 
 ### Quick Start
 
@@ -26,7 +26,7 @@ cargo run --release
 **Note:** Currently, the GUI feature has platform compatibility issues on Windows. See [Known Issues](#known-issues) below.
 
 ```bash
-# macOS/Linux only
+# macOS only
 cargo run --release --features gpui-full
 ```
 
@@ -77,12 +77,6 @@ codirigent/
 - Uses native macOS clipboard APIs
 - Full GUI support available with `--features gpui-full`
 - Notifications via AppleScript integration
-
-### Linux
-
-- Uses X11 or Wayland clipboard protocols
-- Requires `notify-send` for desktop notifications
-- Full GUI support available with `--features gpui-full`
 
 ## Testing
 
@@ -201,7 +195,6 @@ The clipboard implementation is platform-specific:
 
 - **Windows** (`clipboard_windows.rs`): Uses `clipboard-win` crate with DIB (Device Independent Bitmap) format
 - **macOS** (`clipboard_macos.rs`): Native Pasteboard APIs
-- **Linux** (`clipboard_linux.rs`): X11/Wayland clipboard protocols
 
 ### Session Detection
 

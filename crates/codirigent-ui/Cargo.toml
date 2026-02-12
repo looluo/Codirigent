@@ -40,8 +40,6 @@ raw-window-handle = "0.6"
 
 # GPUI with cross-platform support (enabled via gpui-full feature)
 gpui = { workspace = true, optional = true, features = [
-    "wayland",           # Linux Wayland
-    "x11",              # Linux X11
     "font-kit",         # Font rendering
     "windows-manifest", # Windows
 ] }
@@ -54,10 +52,6 @@ objc2 = "0.6"
 objc2-app-kit = { version = "0.3", features = ["NSPasteboard", "NSPasteboardItem"] }
 objc2-foundation = { version = "0.3", features = ["NSString", "NSData", "NSArray", "NSURL"] }
 dispatch = "0.2"
-
-# Linux-specific dependencies (X11/Wayland clipboard)
-[target.'cfg(target_os = "linux")'.dependencies]
-arboard = "3.6"
 
 # Windows-specific dependencies (Win32 clipboard)
 [target.'cfg(target_os = "windows")'.dependencies]

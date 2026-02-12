@@ -6,7 +6,6 @@
 //! # Platform Support
 //!
 //! - **macOS**: Uses `osascript` to display native notifications
-//! - **Linux**: Uses `notify-send` (requires libnotify)
 //! - **Windows**: Logs notification intent (full toast support planned)
 //!
 //! # Example
@@ -41,7 +40,6 @@ pub const DEFAULT_TITLE: &str = "Codirigent - Input Required";
 /// # Platform Behavior
 ///
 /// - **macOS**: Uses AppleScript via `osascript`
-/// - **Linux**: Uses `notify-send` command
 /// - **Windows**: Currently logs the notification (toast support planned)
 ///
 /// # Example
@@ -61,9 +59,6 @@ pub fn send_notification(title: &str, body: &str) {
 
     #[cfg(target_os = "macos")]
     send_macos_notification(title, body);
-
-    #[cfg(target_os = "linux")]
-    send_linux_notification(title, body);
 
     #[cfg(target_os = "windows")]
     send_windows_notification(title, body);
@@ -191,32 +186,6 @@ fn send_macos_notification(title: &str, body: &str) {
     }
 }
 
-/// Linux notification using notify-send.
-#[cfg(target_os = "linux")]
-fn send_linux_notification(title: &str, body: &str) {
-    use std::process::Command;
-
-    match Command::new("notify-send")
-        .arg("--app-name=Codirigent")
-        .arg(title)
-        .arg(body)
-        .output()
-    {
-        Ok(output) => {
-            if output.status.success() {
-                debug!("Linux notification sent successfully");
-            } else {
-                let stderr = String::from_utf8_lossy(&output.stderr);
-                warn!(error = %stderr, "notify-send returned error");
-            }
-        }
-        Err(e) => {
-            // notify-send might not be installed
-            warn!(error = %e, "Failed to send Linux notification (is notify-send installed?)");
-        }
-    }
-}
-
 /// Windows toast notification using winrt-notification.
 ///
 /// Shows a Windows toast notification using the PowerShell App ID,
@@ -270,17 +239,6 @@ pub fn notifications_supported() -> bool {
     {
         // osascript is always available on macOS
         return true;
-    }
-
-    #[cfg(target_os = "linux")]
-    {
-        // Check if notify-send is available
-        use std::process::Command;
-        return Command::new("which")
-            .arg("notify-send")
-            .output()
-            .map(|o| o.status.success())
-            .unwrap_or(false);
     }
 
     #[cfg(target_os = "windows")]
@@ -466,23 +424,6 @@ mod tests {
         fn test_notifications_supported_macos() {
             // macOS always has osascript
             assert!(notifications_supported());
-        }
-    }
-
-    #[cfg(target_os = "linux")]
-    mod linux_tests {
-        use super::*;
-
-        #[test]
-        fn test_linux_notification_basic() {
-            // This might fail if notify-send is not installed
-            send_notification("Test", "Test notification");
-        }
-
-        #[test]
-        fn test_notifications_supported_linux() {
-            // This depends on whether notify-send is installed
-            let _ = notifications_supported();
         }
     }
 

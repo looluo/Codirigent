@@ -10,8 +10,8 @@
 //!
 //! The detector uses a combination of strategies:
 //!
-//! - **Platform-specific process monitoring** via `/proc` on Linux,
-//!   `libproc` on macOS, and Win32 APIs on Windows
+//! - **Platform-specific process monitoring** via `libproc` on macOS
+//!   and Win32 APIs on Windows
 //! - **Output pattern matching** to detect common input prompts
 //! - **Timing heuristics** to identify idle processes
 //!
@@ -48,9 +48,8 @@
 //!
 //! # Platform Support
 //!
-//! The crate supports three platforms:
+//! The crate supports two platforms:
 //!
-//! - **Linux**: Uses the `/proc` filesystem via the `procfs` crate
 //! - **macOS**: Uses `libproc` for BSD process information
 //! - **Windows**: Uses Win32 APIs (ToolHelp32, process status)
 //!
@@ -96,7 +95,7 @@ pub use patterns::{DEFAULT_PATTERNS, DEFAULT_RECENT_LINES_TO_CHECK};
 pub use platform::{NativeMonitor, PlatformMonitor, ProcessInfo, ProcessState};
 
 // Re-export the factory function
-#[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 pub use platform::create_native_monitor;
 
 use std::path::PathBuf;
@@ -104,7 +103,6 @@ use std::path::PathBuf;
 /// Find which file from `candidates` the given PID currently has open.
 ///
 /// Uses platform-specific APIs:
-/// - **Linux**: reads `/proc/<pid>/fd/` symlinks
 /// - **macOS**: uses `lsof -p <PID> -Fn`
 /// - **Windows**: uses the Restart Manager API
 ///
@@ -116,7 +114,7 @@ pub fn find_file_opened_by_pid(candidates: &[PathBuf], pid: u32) -> Option<PathB
 
 /// Build a lookup from canonical path → original candidate path.
 /// Entries that fail to canonicalize are skipped.
-#[cfg(any(target_os = "linux", target_os = "macos"))]
+#[cfg(target_os = "macos")]
 fn canonical_candidate_map(candidates: &[PathBuf]) -> Vec<(PathBuf, PathBuf)> {
     candidates
         .iter()
@@ -126,22 +124,6 @@ fn canonical_candidate_map(candidates: &[PathBuf]) -> Vec<(PathBuf, PathBuf)> {
                 .map(|canon| (canon, c.clone()))
         })
         .collect()
-}
-
-#[cfg(target_os = "linux")]
-fn find_file_opened_by_pid_impl(candidates: &[PathBuf], pid: u32) -> Option<PathBuf> {
-    let canon_map = canonical_candidate_map(candidates);
-    let fd_dir = format!("/proc/{}/fd", pid);
-    let entries = std::fs::read_dir(&fd_dir).ok()?;
-    for entry in entries.flatten() {
-        if let Ok(target) = std::fs::read_link(entry.path()) {
-            // /proc/pid/fd symlinks already resolve to canonical paths
-            if let Some((_, original)) = canon_map.iter().find(|(canon, _)| *canon == target) {
-                return Some(original.clone());
-            }
-        }
-    }
-    None
 }
 
 #[cfg(target_os = "macos")]
@@ -217,7 +199,7 @@ mod tests {
     use std::sync::Arc;
 
     #[test]
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn test_find_file_opened_by_pid_with_current_process() {
         let tmp = tempfile::TempDir::new().unwrap();
         let file_path = tmp.path().join("test.jsonl");
@@ -233,7 +215,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn test_find_file_opened_by_pid_no_match() {
         let tmp = tempfile::TempDir::new().unwrap();
         // This file doesn't exist and isn't opened by anyone
@@ -266,7 +248,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn test_native_monitor_reexport() {
         // Verify that NativeMonitor is accessible from the crate root
         let monitor = NativeMonitor::new();
@@ -276,7 +258,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn test_create_native_monitor_reexport() {
         // Verify that create_native_monitor is accessible from the crate root
         let monitor = create_native_monitor();
@@ -286,7 +268,7 @@ mod tests {
     }
 
     #[test]
-    #[cfg(any(target_os = "linux", target_os = "macos", target_os = "windows"))]
+    #[cfg(any(target_os = "macos", target_os = "windows"))]
     fn test_platform_monitor_trait_reexport() {
         // Verify that PlatformMonitor trait is usable with NativeMonitor
         fn use_monitor(monitor: &dyn PlatformMonitor) -> bool {
