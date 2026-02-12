@@ -55,3 +55,30 @@ jobs:
       - uses: Swatinem/rust-cache@v2
       - name: Build
         run: cargo build --release
+
+  check-unwraps:
+    name: Check for new unwrap() calls
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Check for new unwrap() calls
+        run: |
+          # Count unwraps in current branch
+          CURRENT=$(grep -r "\.unwrap()" crates/*/src --include="*.rs" | grep -v "tests/" | grep -v "///" | wc -l)
+
+          # Count unwraps in main branch
+          git checkout origin/main
+          BASELINE=$(grep -r "\.unwrap()" crates/*/src --include="*.rs" | grep -v "tests/" | grep -v "///" | wc -l)
+
+          echo "Baseline unwraps: $BASELINE"
+          echo "Current unwraps: $CURRENT"
+
+          if [ $CURRENT -gt $BASELINE ]; then
+            echo "❌ New unwrap() calls detected! ($((CURRENT - BASELINE)) added)"
+            echo "Please use safe error handling instead. See docs/coding-guidelines/error-handling.md"
+            exit 1
+          else
+            echo "✅ No new unwrap() calls added"
+          fi
