@@ -137,7 +137,10 @@ impl super::gpui::WorkspaceView {
 
     /// Dispatch to the active category's render method.
     fn render_settings_content(&mut self, cx: &mut Context<Self>) -> AnyElement {
-        let cat = self.settings.page.as_ref().unwrap().active_category();
+        let cat = self.settings.page
+            .as_ref()
+            .map(|p| p.active_category())
+            .unwrap_or(SettingsCategory::Appearance);
         match cat {
             SettingsCategory::General => self.render_general_settings(cx),
             SettingsCategory::Appearance => self.render_appearance_settings(cx),
