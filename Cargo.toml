@@ -30,7 +30,7 @@ tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 chrono = { version = "0.4.43", features = ["serde"] }
 
 # PTY and terminal
-portable-pty = "0.8.1"
+portable-pty = "0.9"
 
 # Platform-specific
 procfs = "0.18.0"
@@ -50,7 +50,7 @@ humantime-serde = "1.1.1"
 image = { version = "0.25.9", default-features = false, features = ["png", "bmp", "tiff", "jpeg"] }
 
 # Git operations
-git2 = "0.17"
+git2 = "0.20"
 
 # Directories
 dirs = "5"
