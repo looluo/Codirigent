@@ -16,7 +16,16 @@ use super::types::DROPDOWN_TRIGGER_HEIGHT;
 impl super::gpui::WorkspaceView {
     /// Render the full settings overlay (sidebar + content area).
     pub(super) fn render_settings_overlay(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
-        let page = self.settings.page.as_ref().unwrap();
+        let Some(page) = self.settings.page.as_ref() else {
+            return div()
+                .w_full()
+                .h_full()
+                .flex()
+                .items_center()
+                .justify_center()
+                .child("Settings not available")
+                .into_any_element();
+        };
         let theme = self.workspace.theme();
         let bg: Hsla = theme.background.into();
         let panel_bg: Hsla = theme.panel_background.into();
