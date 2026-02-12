@@ -50,7 +50,7 @@ impl TestFixture {
 
     /// Create a new session in this fixture.
     pub fn create_session(&self, name: &str) -> anyhow::Result<SessionId> {
-        let mut manager = self.session_manager.lock().unwrap();
+        let manager = self.session_manager.lock().unwrap();
         let id = manager.create_session(name.to_string(), self.temp_dir.path().to_path_buf(), None)?;
         Ok(id)
     }
