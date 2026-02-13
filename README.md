@@ -1,216 +1,118 @@
-# Codirigent
+<p align="center">
+  <img src="assets/icons/logo-primary-dark.svg" alt="Codirigent Logo" width="128" height="128" />
+</p>
 
-A terminal-based development environment with clipboard integration and session management.
+<h1 align="center">Codirigent</h1>
 
-## Building and Running
+<p align="center">
+  <strong>An Intelligent Terminal-Based Development Environment</strong>
+</p>
+
+<p align="center">
+  <img src="https://img.shields.io/badge/status-alpha-orange" alt="Project Status" />
+  <img src="https://img.shields.io/badge/version-0.1.0-blue" alt="Version" />
+  <img src="https://img.shields.io/badge/license-MIT%2FApache--2.0-green" alt="License" />
+  <img src="https://img.shields.io/badge/rust-1.75%2B-red" alt="Rust Version" />
+</p>
+
+---
+
+Codirigent is a terminal-based development environment (TDE) designed for the age of AI-assisted coding. It seamlessly orchestrates terminal sessions, clipboard state, and file navigation into a unified workflow, providing a robust foundation for both manual development and AI agent integration.
+
+## ✨ Features
+
+- 📋 **Smart Clipboard Integration**: Unified monitoring across Windows and macOS with support for text and image buffers.
+- 🐚 **Advanced Session Management**: Persistent tracking of terminal sessions with deep process tree analysis.
+- 📂 **Integrated File Navigation**: High-performance file tree visualization for rapid project exploration.
+- 🤖 **Agent-Ready Architecture**: Built from the ground up to support AI coding agents with reliable PTY and state management.
+- 🚀 **Performance First**: Written in Rust for minimal latency and memory footprint.
+
+## 🚀 Quick Start
 
 ### Prerequisites
 
-- Rust toolchain (stable channel)
-- Windows or macOS
+- **Rust**: Latest stable toolchain (1.75+)
+- **OS**: Windows or macOS (Linux support coming soon)
 
-### Quick Start
-
-#### Development Build
+### Installation
 
 ```bash
-# Build and run (no GUI)
-cargo run
+# Clone the repository
+git clone https://github.com/user/codirigent.git
+cd codirigent
 
-# Build and run in release mode (recommended for performance)
+# Build and run (Terminal mode)
 cargo run --release
 ```
 
-#### With Full GUI (GPUI)
+### GUI Features (Experimental)
 
-**Note:** Currently, the GUI feature has platform compatibility issues on Windows. See [Known Issues](#known-issues) below.
+On macOS, you can enable the experimental GPUI-based interface:
 
 ```bash
-# macOS only
 cargo run --release --features gpui-full
 ```
 
-### Building Only
+## 🏗️ Project Structure
+
+The codebase is organized into highly modular crates to ensure separation of concerns:
+
+- `codirigent-core`: Fundamental data structures, configuration, and shared traits.
+- `codirigent-session`: PTY management, shell detection, and session lifecycle.
+- `codirigent-detector`: Intelligent monitoring of system and process events.
+- `codirigent-ui`: Cross-platform UI components (both TUI and experimental GUI).
+- `codirigent-filetree`: Specialized logic for efficient file system traversal and display.
+
+## 🛠️ Development
+
+### Testing
+
+We maintain high testing standards across all platforms:
 
 ```bash
-# Debug build
-cargo build
-
-# Release build (optimized)
-cargo build --release
-```
-
-The compiled binary will be located at:
-- Debug: `target/debug/codirigent.exe` (Windows) or `target/debug/codirigent` (Unix)
-- Release: `target/release/codirigent.exe` (Windows) or `target/release/codirigent` (Unix)
-
-## Project Structure
-
-```
-codirigent/
-├── crates/
-│   ├── codirigent-core/      # Core data structures and types
-│   ├── codirigent-detector/  # Session detection and notifications
-│   ├── codirigent-filetree/  # File tree visualization
-│   ├── codirigent-session/   # Session management
-│   └── codirigent-ui/        # UI and clipboard handling
-└── src/                       # Main application entry point
-```
-
-## Features
-
-- **Smart Clipboard Integration**: Cross-platform clipboard monitoring with support for text and images
-- **Session Management**: Track and manage terminal sessions
-- **File Tree Visualization**: Navigate project structures efficiently
-- **PTY Integration**: Pseudo-terminal support for interactive shells
-
-## Platform-Specific Notes
-
-### Windows
-
-- Clipboard support uses the Win32 API via `clipboard-win` crate
-- Full GUI features (`gpui-full`) are not currently supported due to dependency conflicts
-- Use standard build without feature flags: `cargo run --release`
-
-### macOS
-
-- Uses native macOS clipboard APIs
-- Full GUI support available with `--features gpui-full`
-- Notifications via AppleScript integration
-
-## Testing
-
-### Run All Tests
-
-```bash
+# Run all workspace tests
 cargo test
+
+# Test a specific component
+cargo test -p codirigent-session
 ```
 
-### Run Tests for Specific Crate
+### Quality Control
 
 ```bash
-# Test clipboard functionality
-cargo test --package codirigent-ui --lib platform::clipboard_windows
+# Linting
+cargo clippy --workspace -- -D warnings
 
-# Test core functionality
-cargo test --package codirigent-core
-
-# Test session management
-cargo test --package codirigent-session
+# Formatting
+cargo fmt --all --check
 ```
-
-### Run with Logging
-
-```bash
-RUST_LOG=debug cargo run
-```
-
-## Known Issues
-
-### Windows GUI Build Failure
-
-The `--features gpui-full` flag currently fails on Windows with the error:
-
-```
-error[E0433]: failed to resolve: could not find `unix` in `os`
-  --> core-foundation-0.10.1\src\filedescriptor.rs:19:14
-```
-
-**Cause**: The GPUI dependency tree includes `core-foundation`, a macOS-specific library that should not be compiled on Windows.
-
-**Workaround**: Run without the `gpui-full` feature on Windows:
-```bash
-cargo run --release
-```
-
-**Fix**: The project's `Cargo.toml` needs platform-specific dependency configuration:
-```toml
-[target.'cfg(target_os = "macos")'.dependencies]
-core-foundation = "..."
-```
-
-## Recent Fixes
-
-### Windows Clipboard Compilation (2026-02-02)
-
-Fixed compilation errors related to `clipboard-win` v5.4 API changes:
-- Updated `seq_num()` handling to work with `Option<NonZeroU32>`
-- Changed `.unwrap_or(0)` to `.map_or(0, |nz| nz.get())`
-- All clipboard tests passing
-
-See commit: `871c202` for details.
-
-## Error Handling
-
-Codirigent uses Rust's `Result` and `Option` types for safe error handling.
-
-**Key Principles:**
-- ✅ Never use `.unwrap()` in production code
-- ✅ Use `?` operator for error propagation
-- ✅ Use pattern matching (`if let`, `let Some ... else`) for Options
-- ❌ Avoid panics - prefer graceful degradation
-
-See [Error Handling Guidelines](docs/coding-guidelines/error-handling.md) for details.
-
-**Recent Improvements:**
-- 2026-02-12: Eliminated all unwrap() calls in settings panels (8 fixes)
-- CI now prevents new unwrap() calls in production code
 
 ## 📚 Documentation
 
-### For Developers
+Detailed technical documentation is available in the [`docs/`](docs/) directory:
 
-- **[Onboarding Guide](docs/development/onboarding.md)** - Start here! Get productive in 1-2 weeks
-- **[Architecture Overview](docs/architecture/overview.md)** - System design and components
-- **[Data Flow](docs/architecture/data-flow.md)** - Sequence diagrams for key operations
-- **[Error Handling Guidelines](docs/coding-guidelines/error-handling.md)** - Best practices
+- 🏛️ **[Architecture Overview](docs/architecture/overview.md)**: High-level system design.
+- 🔄 **[Data Flow](docs/architecture/data-flow.md)**: Sequence diagrams and state transitions.
+- 🗺️ **[Implementation Plans](docs/plans/)**: Detailed roadmap and design docs for major features.
 
-### Project Guides
+## 🤝 Contributing
 
-- **[Implementation Plans](docs/plans/)** - Detailed task breakdowns for features
-- **[Dependency Analysis](docs/dependency-analysis.md)** - Dependency investigation and optimization
+We welcome contributions! Please feel free to open issues or submit pull requests. For major changes, please open an issue first to discuss what you would like to change.
 
-### Quick Links
+1. Fork the Project
+2. Create your Feature Branch (`git checkout -b feature/AmazingFeature`)
+3. Commit your Changes (`git commit -m 'feat: add some amazing feature'`)
+4. Push to the Branch (`git push origin feature/AmazingFeature`)
+5. Open a Pull Request
 
-- **Architecture:** [Overview](docs/architecture/overview.md) | [Data Flow](docs/architecture/data-flow.md)
-- **Development:** [Onboarding](docs/development/onboarding.md) | [Clone Optimization](docs/development/clone-optimization.md)
+## ⚖️ License
 
-## Contributing
+Codirigent is distributed under the terms of both the MIT License and the Apache License (Version 2.0).
 
-1. Fork the repository
-2. Create a feature branch
-3. Make your changes with tests
-4. Ensure all tests pass: `cargo test`
-5. Submit a pull request
+See [LICENSE](LICENSE) for details.
 
-## License
+---
 
-[License information to be added]
-
-## Development Notes
-
-### Clipboard Implementation
-
-The clipboard implementation is platform-specific:
-
-- **Windows** (`clipboard_windows.rs`): Uses `clipboard-win` crate with DIB (Device Independent Bitmap) format
-- **macOS** (`clipboard_macos.rs`): Native Pasteboard APIs
-
-### Session Detection
-
-Sessions are detected through:
-- PTY session monitoring
-- Process tree analysis
-- Input detector integration
-
-### Terminal Integration
-
-Uses `portable-pty` for cross-platform pseudo-terminal support with:
-- Shell command execution
-- Interactive terminal sessions
-- Output capture and redirection
-
-### Performance Guidelines
-
-- See [Clone Optimization](docs/development/clone-optimization.md) for best practices
-- Run benchmarks before major refactors: `cargo bench`
+<p align="center">
+  Built with ❤️ by the Codirigent Contributors
+</p>
