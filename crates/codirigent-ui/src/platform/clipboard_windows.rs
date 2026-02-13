@@ -362,9 +362,9 @@ mod tests {
         let _ = clipboard.has_changed();
 
         // Consecutive calls without external changes should return false
-        let changed = clipboard.has_changed();
         // This will be false unless another process modified the clipboard
-        assert!(!changed || changed); // Always true, just verify no panic
+        // Just verify no panic occurs
+        let _ = clipboard.has_changed();
     }
 
     #[test]

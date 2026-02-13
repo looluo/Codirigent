@@ -206,7 +206,7 @@ mod tests {
 
     #[test]
     fn test_windows_monitor_default() {
-        let monitor = WindowsMonitor::default();
+        let monitor = WindowsMonitor;
         let _ = format!("{:?}", monitor);
     }
 
