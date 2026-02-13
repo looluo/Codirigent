@@ -61,3 +61,13 @@ let output = Command::new("git").output()
 ## CI Check
 
 Our CI runs `scripts/audit-unwraps.sh` and fails if new unwraps are added.
+
+## Progress
+
+- **2026-02-12:** ✅ Eliminated all 6 production unwrap() calls
+  - layout.rs: distance comparison (1)
+  - terminal_view.rs: cached content access (2)
+  - theme_manager.rs: theme lookups (2)
+  - workspace/render.rs: session access (1)
+- **2026-02-12:** Eliminated all unwrap() calls in settings panels (8 fixes)
+- **CI Protection:** Automatic prevention of new unwrap() calls
