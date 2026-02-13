@@ -600,7 +600,8 @@ mod tests {
         let repo = Repository::init(&repo_path).unwrap();
 
         // Create an initial commit (required for worktree operations)
-        let sig = repo.signature().unwrap();
+        // Use explicit signature for CI environments that don't have git config
+        let sig = git2::Signature::now("Test User", "test@example.com").unwrap();
         let tree_id = repo.index().unwrap().write_tree().unwrap();
         let tree = repo.find_tree(tree_id).unwrap();
         repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])

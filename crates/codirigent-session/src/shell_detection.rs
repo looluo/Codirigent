@@ -436,6 +436,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[serial_test::serial]
     fn test_setup_zsh_integration_creates_files() {
         let zdotdir = setup_zsh_integration().expect("should succeed");
         assert!(zdotdir.join(".zshenv").exists());
@@ -445,6 +446,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[serial_test::serial]
     fn test_setup_zsh_integration_idempotent() {
         let dir1 = setup_zsh_integration().unwrap();
         let content1 = std::fs::read_to_string(dir1.join(".zshrc")).unwrap();
