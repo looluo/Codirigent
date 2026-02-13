@@ -15,8 +15,8 @@ version = "0.1.0"
 edition = "2021"
 rust-version = "1.75"
 authors = ["Codirigent Contributors"]
-license = "MIT OR Apache-2.0"
-repository = "https://github.com/user/codirigent"
+license = "GPL-3.0-only"
+repository = "https://github.com/oso95/Codirigent"
 
 [workspace.dependencies]
 # Core dependencies
