@@ -39,9 +39,10 @@ Codirigent is engineered for high-performance orchestration with minimal overhea
 | **Architecture** | Native Rust | Node.js + Chromium |
 
 ### Key Optimization Pillars
-- **Zero-Copy Event Bus**: Internal communication uses `Arc<T>` to avoid expensive data cloning between services.
-- **Asynchronous I/O**: Built on `tokio`, allowing thousands of concurrent terminal operations with minimal thread context switching.
-- **Memory Safety**: No garbage collector pauses, ensuring consistent latency for real-time terminal interactions.
+- **Asynchronous Event-Driven Design**: Built on a high-throughput event bus using `tokio` broadcast channels, ensuring decoupled and responsive service interactions.
+- **Efficient PTY Handling**: Utilizes `portable-pty` for low-latency terminal emulation with minimal CPU overhead even under high output volume.
+- **Asynchronous I/O**: Leverages the `tokio` runtime to manage thousands of concurrent operations with minimal thread context switching.
+- **Memory Safety**: Native execution without garbage collection pauses, providing consistent latency for real-time developer tools.
 
 ## Quick Start
 
