@@ -1458,7 +1458,7 @@ impl WorkspaceView {
                 );
         }
 
-        let session = session.unwrap();
+        let session = session.expect("BUG: session should be Some after is_none() guard");
 
         let gi = match session.git_info.as_ref() {
             Some(gi) => gi,
