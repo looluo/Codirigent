@@ -706,7 +706,10 @@ mod tests {
             }
         }
 
-        assert!(received_data, "spawn_output_reader should receive data from PTY");
+        assert!(
+            received_data,
+            "spawn_output_reader should receive data from PTY"
+        );
     }
 
     #[tokio::test]
@@ -822,14 +825,11 @@ mod tests {
         // Shell startup should produce some output (prompt, escape sequences, etc.)
         let mut received_data = false;
         for _ in 0..50 {
-            if tokio::time::timeout(
-                std::time::Duration::from_millis(200),
-                output_reader.recv(),
-            )
-            .await
-            .ok()
-            .flatten()
-            .is_some()
+            if tokio::time::timeout(std::time::Duration::from_millis(200), output_reader.recv())
+                .await
+                .ok()
+                .flatten()
+                .is_some()
             {
                 received_data = true;
                 break;
