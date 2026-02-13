@@ -303,7 +303,9 @@ impl SmartClipboardProvider for WindowsSmartClipboard {
     /// (PNG, JPEG), they may need conversion before calling this method.
     fn write_image(&self, image: &ImageData) -> Result<()> {
         if image.bytes.is_empty() {
-            return Err(anyhow!("Failed to write image to clipboard: empty image data"));
+            return Err(anyhow!(
+                "Failed to write image to clipboard: empty image data"
+            ));
         }
 
         // Write CF_DIB raw bytes directly. This matches how read_content()
