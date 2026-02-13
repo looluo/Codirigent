@@ -1,0 +1,10 @@
+title: "Codirigent"
+description: "AI Coding Agent Orchestration IDE"
+url: "https://codirigent.dev"
+baseurl: ""
+markdown: kramdown
+permalink: pretty
+exclude:
+  - README.md
+  - Gemfile
+  - Gemfile.lock
