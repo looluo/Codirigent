@@ -103,14 +103,6 @@ cargo clippy --workspace -- -D warnings
 cargo fmt --all --check
 ```
 
-## Documentation
-
-Detailed technical documentation is available in the [`docs/`](docs/) directory:
-
-- [Architecture Overview](docs/architecture/overview.md): High-level system design.
-- [Data Flow](docs/architecture/data-flow.md): Sequence diagrams and state transitions.
-- [Implementation Plans](docs/plans/): Detailed roadmap and design docs for major features.
-
 ## Contributing
 
 We welcome contributions! Please feel free to open issues or submit pull requests. For major changes, please open an issue first to discuss what you would like to change.
