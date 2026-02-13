@@ -195,9 +195,18 @@ fn test_threshold_state_values() {
     let _critical = ContextThresholdState::Critical;
 
     // Verify they're different
-    assert_ne!(ContextThresholdState::Normal, ContextThresholdState::Warning);
-    assert_ne!(ContextThresholdState::Warning, ContextThresholdState::Critical);
-    assert_ne!(ContextThresholdState::Normal, ContextThresholdState::Critical);
+    assert_ne!(
+        ContextThresholdState::Normal,
+        ContextThresholdState::Warning
+    );
+    assert_ne!(
+        ContextThresholdState::Warning,
+        ContextThresholdState::Critical
+    );
+    assert_ne!(
+        ContextThresholdState::Normal,
+        ContextThresholdState::Critical
+    );
 }
 
 /// Test ANSI code stripping.

@@ -16,7 +16,6 @@ use codirigent_ui::integration::{CodirigentIntegration, IntegrationConfig};
 use std::path::PathBuf;
 use std::sync::Arc;
 use tempfile::TempDir;
-use chrono;
 
 // ============================================================================
 // Helper Functions

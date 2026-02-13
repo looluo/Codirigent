@@ -615,7 +615,12 @@ impl WorkspaceView {
                         .text_color(git_muted)
                         .child(icons::git_branch()),
                 )
-                .child(div().text_xs().text_color(git_muted).child(branch_label.as_ref()));
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(git_muted)
+                        .child(branch_label.as_ref()),
+                );
 
             if let Some(count) = hints.git_dirty_count {
                 if count > 0 {
@@ -662,7 +667,12 @@ impl WorkspaceView {
                     .items_center()
                     .gap_1()
                     .child(div().w(px(6.0)).h(px(6.0)).rounded_full().bg(group_color))
-                    .child(div().text_xs().text_color(group_color).child(group_label.as_ref())),
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(group_color)
+                            .child(group_label.as_ref()),
+                    ),
             );
         }
 
@@ -853,7 +863,12 @@ impl WorkspaceView {
                         .text_color(git_muted)
                         .child(icons::git_branch()),
                 )
-                .child(div().text_xs().text_color(git_muted).child(branch_label.as_ref()));
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(git_muted)
+                        .child(branch_label.as_ref()),
+                );
 
             if let Some(count) = hints.git_dirty_count {
                 if count > 0 {
@@ -900,7 +915,12 @@ impl WorkspaceView {
                     .items_center()
                     .gap_1()
                     .child(div().w(px(6.0)).h(px(6.0)).rounded_full().bg(group_color))
-                    .child(div().text_xs().text_color(group_color).child(group_label.as_ref())),
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(group_color)
+                            .child(group_label.as_ref()),
+                    ),
             );
         }
 
@@ -1715,7 +1735,8 @@ impl WorkspaceView {
         // Branches section — show branches not already in a worktree
         let available_branches = self.project.worktree_panel.available_branches();
         let worktree_branches: Vec<&str> = self
-            .project.worktree_panel
+            .project
+            .worktree_panel
             .worktrees()
             .iter()
             .map(|wt| wt.branch.as_str())
@@ -1833,7 +1854,8 @@ impl WorkspaceView {
 
         // Project root name for sub-header
         let root_name = self
-            .project.project_root
+            .project
+            .project_root
             .as_ref()
             .and_then(|p| p.file_name())
             .and_then(|n| n.to_str())
@@ -1911,7 +1933,9 @@ impl WorkspaceView {
                                         cx.listener(|this, _, _, cx| {
                                             let new_val = !this.project.file_tree.show_hidden();
                                             this.project.file_tree.set_show_hidden(new_val);
-                                            if let Some(tree) = this.project.file_tree_model.as_mut() {
+                                            if let Some(tree) =
+                                                this.project.file_tree_model.as_mut()
+                                            {
                                                 tree.set_show_hidden(new_val);
                                                 if let Err(e) = tree.refresh() {
                                                     tracing::warn!(
@@ -1944,7 +1968,9 @@ impl WorkspaceView {
                                     .on_mouse_down(
                                         MouseButton::Left,
                                         cx.listener(|this, _, _, cx| {
-                                            if let Some(tree) = this.project.file_tree_model.as_mut() {
+                                            if let Some(tree) =
+                                                this.project.file_tree_model.as_mut()
+                                            {
                                                 if let Err(e) = tree.refresh() {
                                                     tracing::warn!(
                                                         "Failed to refresh file tree: {}",
@@ -2422,11 +2448,13 @@ impl WorkspaceView {
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| {
                     let current = this
-                        .cache.drawer_group_expanded
+                        .cache
+                        .drawer_group_expanded
                         .get(&toggle_key)
                         .copied()
                         .unwrap_or(true);
-                    this.cache.drawer_group_expanded
+                    this.cache
+                        .drawer_group_expanded
                         .insert(toggle_key.clone(), !current);
                     cx.notify();
                 }),
@@ -2452,8 +2480,6 @@ impl WorkspaceView {
                 6.0,
             ))
     }
-
-
 }
 
 /// Session menu actions.

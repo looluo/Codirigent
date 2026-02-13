@@ -13,7 +13,8 @@ impl WorkspaceView {
     /// Open a file in the user's configured editor.
     pub(super) fn open_in_editor(&mut self, path: &Path) {
         let editor = self
-            .settings.config_service
+            .settings
+            .config_service
             .as_ref()
             .and_then(|cs| cs.load_user_settings().ok())
             .map(|s| s.general.editor_command)

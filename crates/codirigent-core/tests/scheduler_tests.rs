@@ -60,7 +60,9 @@ fn test_priority_ordering() {
     assert_eq!(next.id, TaskId::from("critical"));
 
     // Mark as completed
-    queue.complete_task(&TaskId::from("critical"), true).unwrap();
+    queue
+        .complete_task(&TaskId::from("critical"), true)
+        .unwrap();
 
     // Should get high next
     let next = queue.next_task(&[]).unwrap();
@@ -254,10 +256,7 @@ fn test_multiple_dependencies() {
         "Task C".to_string(),
         "Depends on both A and B".to_string(),
     );
-    task_c.dependencies = vec![
-        TaskId::from("A"),
-        TaskId::from("B"),
-    ];
+    task_c.dependencies = vec![TaskId::from("A"), TaskId::from("B")];
 
     queue.enqueue(task_a).unwrap();
     queue.enqueue(task_b).unwrap();

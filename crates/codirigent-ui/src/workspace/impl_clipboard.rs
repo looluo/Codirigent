@@ -60,10 +60,17 @@ impl WorkspaceView {
             }
             ClipboardContent::Image(ref _image_data) => {
                 // Get the CLI type for the focused session (defaults to ClaudeCode)
-                let cli_type = self.clipboard.clipboard_service.get_session_cli_type(session_id);
+                let cli_type = self
+                    .clipboard
+                    .clipboard_service
+                    .get_session_cli_type(session_id);
 
                 // Format for CLI: saves image to temp file and returns path string
-                match self.clipboard.clipboard_service.format_for_cli(&content, cli_type) {
+                match self
+                    .clipboard
+                    .clipboard_service
+                    .format_for_cli(&content, cli_type)
+                {
                     Ok(formatted_path) => {
                         if formatted_path.is_empty() {
                             return;
@@ -133,7 +140,12 @@ impl WorkspaceView {
     /// - If a text selection is active in the focused terminal, copies the
     ///   selected text to the system clipboard and clears the selection.
     /// - If no selection is active, sends Ctrl+C (interrupt, `\x03`) to the PTY.
-    pub(super) fn handle_copy(&mut self, _action: &Copy, _window: &mut Window, cx: &mut Context<Self>) {
+    pub(super) fn handle_copy(
+        &mut self,
+        _action: &Copy,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
         let Some(session_id) = self.workspace.focused_session_id() else {
             return;
         };

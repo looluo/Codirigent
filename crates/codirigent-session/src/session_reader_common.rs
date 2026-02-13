@@ -56,12 +56,7 @@ pub fn find_most_recent_file(dir: &Path, extension: &str) -> Option<std::path::P
 
     entries
         .flatten()
-        .filter(|entry| {
-            entry
-                .path()
-                .extension()
-                .is_some_and(|ext| ext == extension)
-        })
+        .filter(|entry| entry.path().extension().is_some_and(|ext| ext == extension))
         .filter_map(|entry| {
             let mtime = entry.metadata().ok()?.modified().ok()?;
             Some((entry.path(), mtime))

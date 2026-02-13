@@ -96,10 +96,7 @@ mod tests {
             "/clear"
         );
         assert_eq!(clear_command(codirigent_core::CliType::CodexCli), "/new");
-        assert_eq!(
-            clear_command(codirigent_core::CliType::GeminiCli),
-            "/clear"
-        );
+        assert_eq!(clear_command(codirigent_core::CliType::GeminiCli), "/clear");
         assert_eq!(clear_command(codirigent_core::CliType::GenericShell), "");
     }
 }

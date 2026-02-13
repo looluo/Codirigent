@@ -673,7 +673,9 @@ impl TerminalView {
                 });
 
                 if same_style {
-                    let run = current_run.as_mut().expect("BUG: current_run must be Some when same_style is true");
+                    let run = current_run
+                        .as_mut()
+                        .expect("BUG: current_run must be Some when same_style is true");
                     run.text.push(cell.character);
                     run.cell_count += 1;
                 } else {

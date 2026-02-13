@@ -106,9 +106,9 @@ pub use manager::DefaultSessionManager;
 pub use osc133::{extract_osc133_events, ShellState};
 pub use osc7::extract_osc7_path;
 pub use pty::{spawn_output_reader, OutputReader, PtyHandle, PtySize, ShellCommand};
-pub use shell_detection::{detect_available_shells, resolve_shell};
 pub use ralph_controller::{DefaultRalphLoopController, LoopStats};
 pub use session::SessionState;
+pub use shell_detection::{detect_available_shells, resolve_shell};
 pub use skill_manager::DefaultSkillManager;
 pub use worktree::WorktreeManager;
 

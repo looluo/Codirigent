@@ -716,10 +716,7 @@ mod tests {
 
         let loaded_session = &loaded.sessions[0];
         assert_eq!(loaded_session.status, SessionStatus::Working);
-        assert_eq!(
-            loaded_session.current_task,
-            Some(TaskId::from("task-001"))
-        );
+        assert_eq!(loaded_session.current_task, Some(TaskId::from("task-001")));
         assert_eq!(loaded_session.context_usage, Some(0.75));
         assert_eq!(loaded_session.group, Some("backend".to_string()));
         assert_eq!(loaded_session.color, Some("#FF5733".to_string()));
@@ -747,9 +744,7 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let storage = FileStorageService::new(temp.path()).unwrap();
 
-        let result = storage
-            .load_task(&TaskId::from("nonexistent"))
-            .unwrap();
+        let result = storage.load_task(&TaskId::from("nonexistent")).unwrap();
         assert!(result.is_none());
     }
 

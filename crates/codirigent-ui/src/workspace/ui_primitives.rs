@@ -91,31 +91,23 @@ pub fn section_header_with_count(
         .justify_between()
         .items_center()
         .child(
-            div()
-                .flex()
-                .items_center()
-                .gap_1()
-                .child(icon)
-                .child(
+            div().flex().items_center().gap_1().child(icon).child(
+                div().h(px(label_row_height)).flex().items_center().child(
                     div()
-                        .h(px(label_row_height))
-                        .flex()
-                        .items_center()
-                        .child(
-                            div()
-                                .text_size(px(icon_size))
-                                .font_weight(FontWeight::BOLD)
-                                .text_color(muted)
-                                .child(label.into()),
-                        ),
+                        .text_size(px(icon_size))
+                        .font_weight(FontWeight::BOLD)
+                        .text_color(muted)
+                        .child(label.into()),
                 ),
+            ),
         )
         .child(
-            div()
-                .px(px(6.0))
-                .rounded_full()
-                .bg(active_bg)
-                .child(div().text_xs().text_color(muted).child(format!("{}", count))),
+            div().px(px(6.0)).rounded_full().bg(active_bg).child(
+                div()
+                    .text_xs()
+                    .text_color(muted)
+                    .child(format!("{}", count)),
+            ),
         )
 }
 

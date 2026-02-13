@@ -13,7 +13,11 @@ use std::path::Path;
 use tracing::{info, warn};
 
 impl WorkspaceView {
-    pub(super) fn open_session_action_modal(&mut self, session_id: SessionId, kind: SessionActionKind) {
+    pub(super) fn open_session_action_modal(
+        &mut self,
+        session_id: SessionId,
+        kind: SessionActionKind,
+    ) {
         let input = match kind {
             SessionActionKind::Rename => self
                 .workspace
@@ -77,7 +81,8 @@ impl WorkspaceView {
     /// Open the task creation modal pre-filled with a file's name and path.
     pub(super) fn open_task_creation_modal_for_file(&mut self, path: &Path) {
         let project_dir = self
-            .project.file_tree_model
+            .project
+            .file_tree_model
             .as_ref()
             .map(|t| t.root().to_path_buf());
 

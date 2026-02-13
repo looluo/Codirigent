@@ -857,10 +857,8 @@ mod tests {
 
         // Set file to old modification time (2 hours ago)
         let now = filetime::FileTime::now();
-        let two_hours_ago = filetime::FileTime::from_unix_time(
-            now.unix_seconds() - 7200,
-            now.nanoseconds(),
-        );
+        let two_hours_ago =
+            filetime::FileTime::from_unix_time(now.unix_seconds() - 7200, now.nanoseconds());
         filetime::set_file_mtime(&file, two_hours_ago).unwrap();
 
         // Cleanup should not remove directories

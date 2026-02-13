@@ -16,14 +16,14 @@ use crate::workspace::gpui::WorkspaceView;
 use crate::workspace::types::HEADER_HEIGHT;
 use codirigent_core::{LayoutNode, Session, SessionId, SlotId, SplitDirection};
 use gpui::{
-    div, prelude::FluentBuilder, px, relative, ClickEvent, Context, FontWeight, Image,
-    ImageFormat, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, ObjectFit, ParentElement, ScrollWheelEvent, SharedString,
-    StatefulInteractiveElement, Styled, StyledImage,
+    div, prelude::FluentBuilder, px, relative, ClickEvent, Context, FontWeight, Image, ImageFormat,
+    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ObjectFit, ParentElement, ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled,
+    StyledImage,
 };
 use std::rc::Rc;
-use tracing::info;
 use std::sync::Arc;
+use tracing::info;
 
 impl WorkspaceView {
     /// Render the grid of session panes.
@@ -718,7 +718,9 @@ impl WorkspaceView {
                 .on_mouse_up(
                     MouseButton::Left,
                     cx.listener(move |this, _event: &MouseUpEvent, _window, cx| {
-                        if this.selection.is_selecting && this.selection.selecting_session_id == Some(session_id) {
+                        if this.selection.is_selecting
+                            && this.selection.selecting_session_id == Some(session_id)
+                        {
                             if let Some(tv) = this.terminals_mut().get_mut(&session_id) {
                                 tv.end_selection();
                             }
@@ -731,5 +733,4 @@ impl WorkspaceView {
                 .child(terminal_content),
         )
     }
-
 }

@@ -1500,16 +1500,10 @@ mod tests {
     #[test]
     fn test_queue_state_serialization() {
         let state = QueueState {
-            order: vec![
-                TaskId::from("task-001"),
-                TaskId::from("task-002"),
-            ],
+            order: vec![TaskId::from("task-001"), TaskId::from("task-002")],
             blocked: {
                 let mut m = HashMap::new();
-                m.insert(
-                    TaskId::from("task-003"),
-                    vec![TaskId::from("task-001")],
-                );
+                m.insert(TaskId::from("task-003"), vec![TaskId::from("task-001")]);
                 m
             },
             updated_at: Some(chrono::Utc::now()),
@@ -1955,20 +1949,14 @@ mod tests {
             "Has deps".to_string(),
             "".to_string(),
         );
-        task.dependencies = vec![
-            TaskId::from("task-001"),
-            TaskId::from("task-000"),
-        ];
+        task.dependencies = vec![TaskId::from("task-001"), TaskId::from("task-000")];
 
         // Not satisfied
         assert!(!task.dependencies_satisfied(&[]));
         assert!(!task.dependencies_satisfied(&[TaskId::from("task-001")]));
 
         // Satisfied
-        assert!(task.dependencies_satisfied(&[
-            TaskId::from("task-001"),
-            TaskId::from("task-000"),
-        ]));
+        assert!(task.dependencies_satisfied(&[TaskId::from("task-001"), TaskId::from("task-000"),]));
 
         // Satisfied with extra tasks
         assert!(task.dependencies_satisfied(&[

@@ -46,7 +46,9 @@ impl WorkspaceView {
         if let Some(ref manager) = self.project.worktree_manager {
             if let Ok(mut mgr) = manager.lock() {
                 let _: Result<(), anyhow::Error> = mgr.refresh();
-                self.project.worktree_panel.set_worktrees(mgr.list().to_vec());
+                self.project
+                    .worktree_panel
+                    .set_worktrees(mgr.list().to_vec());
                 if let Ok(branches) = mgr.list_local_branches() {
                     self.project.worktree_panel.set_available_branches(branches);
                 }
@@ -55,7 +57,9 @@ impl WorkspaceView {
         }
 
         self.project.worktree_panel.set_worktrees(Vec::new());
-        self.project.worktree_panel.set_available_branches(Vec::new());
+        self.project
+            .worktree_panel
+            .set_available_branches(Vec::new());
     }
 
     /// Set the current project root and update dependent UI.
@@ -98,7 +102,11 @@ impl WorkspaceView {
         }
     }
 
-    pub(super) fn handle_file_tree_event(&mut self, event: FileTreeEvent, cx: &mut gpui::Context<Self>) {
+    pub(super) fn handle_file_tree_event(
+        &mut self,
+        event: FileTreeEvent,
+        cx: &mut gpui::Context<Self>,
+    ) {
         match event {
             FileTreeEvent::FileSelected(path) => {
                 info!(?path, "File selected");
@@ -147,7 +155,11 @@ impl WorkspaceView {
     }
 
     /// Handle worktree panel events.
-    pub(super) fn handle_worktree_event(&mut self, event: WorktreeEvent, cx: &mut gpui::Context<Self>) {
+    pub(super) fn handle_worktree_event(
+        &mut self,
+        event: WorktreeEvent,
+        cx: &mut gpui::Context<Self>,
+    ) {
         match event {
             WorktreeEvent::RemoveRequested(path) => {
                 info!(?path, "Remove worktree requested");
@@ -158,7 +170,9 @@ impl WorkspaceView {
                         } else {
                             // Refresh the list
                             if let Ok(()) = mgr.refresh() {
-                                self.project.worktree_panel.set_worktrees(mgr.list().to_vec());
+                                self.project
+                                    .worktree_panel
+                                    .set_worktrees(mgr.list().to_vec());
                             }
                         }
                     }
@@ -174,7 +188,9 @@ impl WorkspaceView {
                         if mgr.bind_session(&worktree_path, session_id).is_ok() {
                             // Refresh the list
                             mgr.refresh().ok();
-                            self.project.worktree_panel.set_worktrees(mgr.list().to_vec());
+                            self.project
+                                .worktree_panel
+                                .set_worktrees(mgr.list().to_vec());
                         }
                     }
                 }
@@ -186,7 +202,9 @@ impl WorkspaceView {
                         if mgr.unbind_session(session_id).is_ok() {
                             // Refresh the list
                             mgr.refresh().ok();
-                            self.project.worktree_panel.set_worktrees(mgr.list().to_vec());
+                            self.project
+                                .worktree_panel
+                                .set_worktrees(mgr.list().to_vec());
                         }
                     }
                 }
@@ -199,7 +217,9 @@ impl WorkspaceView {
                             info!("Removed {} merged worktrees", removed.len());
                             // Refresh the list
                             let _: Result<(), anyhow::Error> = mgr.refresh();
-                            self.project.worktree_panel.set_worktrees(mgr.list().to_vec());
+                            self.project
+                                .worktree_panel
+                                .set_worktrees(mgr.list().to_vec());
                         }
                     }
                 }
@@ -209,7 +229,9 @@ impl WorkspaceView {
                 if let Some(ref manager) = self.project.worktree_manager {
                     if let Ok(mut mgr) = manager.lock() {
                         let _: Result<(), anyhow::Error> = mgr.refresh();
-                        self.project.worktree_panel.set_worktrees(mgr.list().to_vec());
+                        self.project
+                            .worktree_panel
+                            .set_worktrees(mgr.list().to_vec());
                     }
                 }
             }

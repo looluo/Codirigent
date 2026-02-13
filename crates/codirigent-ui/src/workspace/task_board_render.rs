@@ -5,7 +5,10 @@
 
 use crate::components::text_input::{text_input, TextInputStyle};
 use crate::icons;
-use crate::task_board::{TaskAction, TaskItem, TaskItemAction, TaskPriority as UIPriority, TaskStatus as UIStatus, AutoAssignMode};
+use crate::task_board::{
+    AutoAssignMode, TaskAction, TaskItem, TaskItemAction, TaskPriority as UIPriority,
+    TaskStatus as UIStatus,
+};
 use crate::theme::CodirigentTheme;
 use crate::workspace::gpui::WorkspaceView;
 use crate::workspace::render::SessionMenuAction;
@@ -219,11 +222,14 @@ impl WorkspaceView {
                 .items_center()
                 .justify_center()
                 .bg(gpui::Hsla::black().opacity(0.5))
-                .on_mouse_down(MouseButton::Left, cx.listener(|this, _: &MouseDownEvent, _window, cx| {
-                    this.close_task_creation_modal();
-                    cx.notify();
-                    cx.stop_propagation();
-                }))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|this, _: &MouseDownEvent, _window, cx| {
+                        this.close_task_creation_modal();
+                        cx.notify();
+                        cx.stop_propagation();
+                    }),
+                )
                 .child(
                     div()
                         .id("task-creation-modal")
@@ -235,9 +241,12 @@ impl WorkspaceView {
                         .flex()
                         .flex_col()
                         // Prevent click from closing modal or reaching sessions behind
-                        .on_mouse_down(MouseButton::Left, cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
-                            cx.stop_propagation();
-                        }))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                                cx.stop_propagation();
+                            }),
+                        )
                         // Header
                         .child(
                             div()
@@ -247,19 +256,25 @@ impl WorkspaceView {
                                 .border_color(border_color)
                                 .flex()
                                 .items_center()
-                                .child(
-                                    self.aligned_icon_label_row(
-                                        if is_editing { icons::pencil() } else { icons::clipboard_plus() },
-                                        fg,
-                                        16.0,
-                                        if is_editing { "Edit Task" } else { "Create New Task" },
-                                        fg,
-                                        16.0,
-                                        FontWeight::SEMIBOLD,
-                                        20.0,
-                                        8.0,
-                                    ),
-                                ),
+                                .child(self.aligned_icon_label_row(
+                                    if is_editing {
+                                        icons::pencil()
+                                    } else {
+                                        icons::clipboard_plus()
+                                    },
+                                    fg,
+                                    16.0,
+                                    if is_editing {
+                                        "Edit Task"
+                                    } else {
+                                        "Create New Task"
+                                    },
+                                    fg,
+                                    16.0,
+                                    FontWeight::SEMIBOLD,
+                                    20.0,
+                                    8.0,
+                                )),
                         )
                         // Content
                         .child(
@@ -273,40 +288,48 @@ impl WorkspaceView {
                                         .flex()
                                         .flex_col()
                                         .gap_2()
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(muted)
-                                                .child(format!("Title:{}",
-                                                    if modal.focused_field == 0 { " (active)" } else { "" }
-                                                )),
-                                        )
-                                        .child(text_input(
-                                            "task-title-input",
-                                            title_value,
-                                            title_focused,
-                                            modal.error.is_some(),
-                                            &input_style,
-                                        ).on_mouse_down(MouseButton::Left, cx.listener(|this, _event, _window, cx| {
-                                            if let Some(modal) = &mut this.modals.task_creation {
-                                                modal.focused_field = 0;
+                                        .child(div().text_sm().text_color(muted).child(format!(
+                                            "Title:{}",
+                                            if modal.focused_field == 0 {
+                                                " (active)"
+                                            } else {
+                                                ""
                                             }
-                                            cx.notify();
-                                        }))),
+                                        )))
+                                        .child(
+                                            text_input(
+                                                "task-title-input",
+                                                title_value,
+                                                title_focused,
+                                                modal.error.is_some(),
+                                                &input_style,
+                                            )
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event, _window, cx| {
+                                                    if let Some(modal) =
+                                                        &mut this.modals.task_creation
+                                                    {
+                                                        modal.focused_field = 0;
+                                                    }
+                                                    cx.notify();
+                                                }),
+                                            ),
+                                        ),
                                 )
                                 .child(
                                     div()
                                         .flex()
                                         .flex_col()
                                         .gap_2()
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(muted)
-                                                .child(format!("Description:{}",
-                                                    if modal.focused_field == 1 { " (active)" } else { "" }
-                                                )),
-                                        )
+                                        .child(div().text_sm().text_color(muted).child(format!(
+                                            "Description:{}",
+                                            if modal.focused_field == 1 {
+                                                " (active)"
+                                            } else {
+                                                ""
+                                            }
+                                        )))
                                         .child(
                                             div()
                                                 .h(px(120.0))
@@ -314,17 +337,33 @@ impl WorkspaceView {
                                                 .p_3()
                                                 .bg(input_bg)
                                                 .border_1()
-                                                .border_color(if desc_focused { primary } else { border_color })
+                                                .border_color(if desc_focused {
+                                                    primary
+                                                } else {
+                                                    border_color
+                                                })
                                                 .rounded_md()
                                                 .text_sm()
-                                                .text_color(if desc_focused || !modal.description.is_empty() { fg } else { muted })
+                                                .text_color(
+                                                    if desc_focused || !modal.description.is_empty()
+                                                    {
+                                                        fg
+                                                    } else {
+                                                        muted
+                                                    },
+                                                )
                                                 .cursor_pointer()
-                                                .on_mouse_down(MouseButton::Left, cx.listener(|this, _event, _window, cx| {
-                                                    if let Some(modal) = &mut this.modals.task_creation {
-                                                        modal.focused_field = 1;
-                                                    }
-                                                    cx.notify();
-                                                }))
+                                                .on_mouse_down(
+                                                    MouseButton::Left,
+                                                    cx.listener(|this, _event, _window, cx| {
+                                                        if let Some(modal) =
+                                                            &mut this.modals.task_creation
+                                                        {
+                                                            modal.focused_field = 1;
+                                                        }
+                                                        cx.notify();
+                                                    }),
+                                                )
                                                 .child(description_value),
                                         ),
                                 )
@@ -334,19 +373,22 @@ impl WorkspaceView {
                                         .flex()
                                         .flex_col()
                                         .gap_2()
+                                        .child(div().text_sm().text_color(muted).child("Priority:"))
                                         .child(
                                             div()
-                                                .text_sm()
-                                                .text_color(muted)
-                                                .child("Priority:"),
-                                        )
-                                        .child(
-                                            div().flex().items_center().gap_2()
+                                                .flex()
+                                                .items_center()
+                                                .gap_2()
                                                 .child(self.build_priority_button(
                                                     "priority-high",
                                                     codirigent_core::TaskPriority::High,
                                                     "High",
-                                                    gpui::Hsla::from(gpui::Rgba { r: 1.0, g: 0.42, b: 0.42, a: 1.0 }),
+                                                    gpui::Hsla::from(gpui::Rgba {
+                                                        r: 1.0,
+                                                        g: 0.42,
+                                                        b: 0.42,
+                                                        a: 1.0,
+                                                    }),
                                                     modal.priority,
                                                     fg,
                                                     muted,
@@ -358,7 +400,12 @@ impl WorkspaceView {
                                                     "priority-medium",
                                                     codirigent_core::TaskPriority::Medium,
                                                     "Medium",
-                                                    gpui::Hsla::from(gpui::Rgba { r: 0.96, g: 0.62, b: 0.04, a: 1.0 }),
+                                                    gpui::Hsla::from(gpui::Rgba {
+                                                        r: 0.96,
+                                                        g: 0.62,
+                                                        b: 0.04,
+                                                        a: 1.0,
+                                                    }),
                                                     modal.priority,
                                                     fg,
                                                     muted,
@@ -370,7 +417,12 @@ impl WorkspaceView {
                                                     "priority-low",
                                                     codirigent_core::TaskPriority::Low,
                                                     "Low",
-                                                    gpui::Hsla::from(gpui::Rgba { r: 0.36, g: 0.55, b: 0.94, a: 1.0 }),
+                                                    gpui::Hsla::from(gpui::Rgba {
+                                                        r: 0.36,
+                                                        g: 0.55,
+                                                        b: 0.94,
+                                                        a: 1.0,
+                                                    }),
                                                     modal.priority,
                                                     fg,
                                                     muted,
@@ -381,53 +433,48 @@ impl WorkspaceView {
                                         ),
                                 )
                                 // Project dir label (read-only)
-                                .child(
-                                    div()
-                                        .text_sm()
-                                        .text_color(muted)
-                                        .child(project_dir_display),
-                                )
+                                .child(div().text_sm().text_color(muted).child(project_dir_display))
                                 // Plan file input
                                 .child(
                                     div()
                                         .flex()
                                         .flex_col()
                                         .gap_2()
-                                        .child(
-                                            div()
-                                                .text_sm()
-                                                .text_color(muted)
-                                                .child(format!("Plan File (relative path):{}",
-                                                    if modal.focused_field == 2 { " (active)" } else { "" }
-                                                )),
-                                        )
-                                        .child(text_input(
-                                            "task-plan-file-input",
-                                            plan_file_value,
-                                            plan_focused,
-                                            false,
-                                            &input_style,
-                                        ).on_mouse_down(MouseButton::Left, cx.listener(|this, _event, _window, cx| {
-                                            if let Some(modal) = &mut this.modals.task_creation {
-                                                modal.focused_field = 2;
+                                        .child(div().text_sm().text_color(muted).child(format!(
+                                            "Plan File (relative path):{}",
+                                            if modal.focused_field == 2 {
+                                                " (active)"
+                                            } else {
+                                                ""
                                             }
-                                            cx.notify();
-                                        }))),
+                                        )))
+                                        .child(
+                                            text_input(
+                                                "task-plan-file-input",
+                                                plan_file_value,
+                                                plan_focused,
+                                                false,
+                                                &input_style,
+                                            )
+                                            .on_mouse_down(
+                                                MouseButton::Left,
+                                                cx.listener(|this, _event, _window, cx| {
+                                                    if let Some(modal) =
+                                                        &mut this.modals.task_creation
+                                                    {
+                                                        modal.focused_field = 2;
+                                                    }
+                                                    cx.notify();
+                                                }),
+                                            ),
+                                        ),
                                 )
                                 .when_some(modal.error.clone(), |this, error| {
-                                    this.child(
-                                        div()
-                                            .text_sm()
-                                            .text_color(error_color)
-                                            .child(error),
-                                    )
+                                    this.child(div().text_sm().text_color(error_color).child(error))
                                 })
-                                .child(
-                                    div()
-                                        .text_xs()
-                                        .text_color(muted)
-                                        .child("Press Tab to switch fields, Enter to create, Esc to cancel"),
-                                ),
+                                .child(div().text_xs().text_color(muted).child(
+                                    "Press Tab to switch fields, Enter to create, Esc to cancel",
+                                )),
                         )
                         // Footer
                         .child(
@@ -452,10 +499,12 @@ impl WorkspaceView {
                                         .text_color(fg)
                                         .cursor_pointer()
                                         .hover(|style| style.bg(border_color.opacity(0.1)))
-                                        .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
-                                            this.close_task_creation_modal();
-                                            cx.notify();
-                                        }))
+                                        .on_click(cx.listener(
+                                            |this, _: &ClickEvent, _window, cx| {
+                                                this.close_task_creation_modal();
+                                                cx.notify();
+                                            },
+                                        ))
                                         .child(self.aligned_icon_label_row(
                                             icons::x(),
                                             fg,
@@ -479,14 +528,20 @@ impl WorkspaceView {
                                         .text_color(gpui::Hsla::white())
                                         .cursor_pointer()
                                         .hover(|style| style.bg(primary.opacity(0.8)))
-                                        .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
-                                            this.apply_task_creation_modal(cx);
-                                        }))
+                                        .on_click(cx.listener(
+                                            |this, _: &ClickEvent, _window, cx| {
+                                                this.apply_task_creation_modal(cx);
+                                            },
+                                        ))
                                         .child(self.aligned_icon_label_row(
                                             icons::plus(),
                                             gpui::Hsla::white(),
                                             12.0,
-                                            if is_editing { "Save Changes" } else { "Create Task" },
+                                            if is_editing {
+                                                "Save Changes"
+                                            } else {
+                                                "Create Task"
+                                            },
                                             gpui::Hsla::white(),
                                             14.0,
                                             FontWeight::MEDIUM,

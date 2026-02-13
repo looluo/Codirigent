@@ -108,7 +108,6 @@ pub struct WorkspaceView {
     pub(super) persistence: super::persistence_state::PersistenceServices,
 
     // --- Grouped sub-state ---
-
     /// Modal dialog state (session action, task creation, profile deletion).
     pub(super) modals: ModalState,
     /// Selection and interaction state (session selection, menus, click tracking).
@@ -253,7 +252,10 @@ impl WorkspaceView {
     /// Initialize task manager with file storage in platform-appropriate data directory.
     fn init_task_manager(
         event_bus: Arc<DefaultEventBus>,
-    ) -> (Arc<dyn codirigent_core::StorageService>, Arc<Mutex<TaskManager>>) {
+    ) -> (
+        Arc<dyn codirigent_core::StorageService>,
+        Arc<Mutex<TaskManager>>,
+    ) {
         let data_dir = dirs::data_dir()
             .map(|d| d.join("Codirigent"))
             .unwrap_or_else(|| std::env::temp_dir().join("codirigent-fallback"));
@@ -349,7 +351,6 @@ impl WorkspaceView {
     }
 
     /// Create a new session.
-
 
     /// Save current session state to disk.
     pub(super) fn save_state_to_disk(&self) {
@@ -698,7 +699,10 @@ impl WorkspaceView {
     /// })
     /// ```
     pub(super) fn with_task_manager<R>(&self, f: impl FnOnce(&mut TaskManager) -> R) -> Option<R> {
-        self.task_manager.lock().ok().map(|mut manager| f(&mut manager))
+        self.task_manager
+            .lock()
+            .ok()
+            .map(|mut manager| f(&mut manager))
     }
 
     /// Execute a closure with a locked session manager reference.
@@ -718,8 +722,14 @@ impl WorkspaceView {
     ///     manager.get_session(&session_id)
     /// })
     /// ```
-    pub(super) fn with_session_manager<R>(&self, f: impl FnOnce(&mut DefaultSessionManager) -> R) -> R {
-        let mut manager = self.session_manager.lock().expect("session manager mutex poisoned");
+    pub(super) fn with_session_manager<R>(
+        &self,
+        f: impl FnOnce(&mut DefaultSessionManager) -> R,
+    ) -> R {
+        let mut manager = self
+            .session_manager
+            .lock()
+            .expect("session manager mutex poisoned");
         f(&mut manager)
     }
 
@@ -968,7 +978,8 @@ impl WorkspaceView {
         // Settings page overlay (replaces all content below title bar)
         if self.settings.open && self.settings.page.is_some() {
             let should_flush = self
-                .settings.page
+                .settings
+                .page
                 .as_ref()
                 .map(|p| p.user_save_pending || p.project_save_pending)
                 .unwrap_or(false);
@@ -1216,8 +1227,6 @@ impl WorkspaceView {
         }
         false
     }
-
-
 }
 
 impl Focusable for WorkspaceView {
@@ -1430,7 +1439,6 @@ mod tests {
         let ws = Workspace::new();
         assert!(ws.sessions().is_empty());
     }
-
 
     #[cfg(unix)]
     #[test]

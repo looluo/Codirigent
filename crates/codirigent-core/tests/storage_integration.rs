@@ -108,9 +108,7 @@ fn test_task_lifecycle() {
     assert_eq!(ids[0].0.as_ref(), "task-001");
 
     // Delete task
-    storage
-        .delete_task(&TaskId::from("task-001"))
-        .unwrap();
+    storage.delete_task(&TaskId::from("task-001")).unwrap();
     assert!(storage
         .load_task(&TaskId::from("task-001"))
         .unwrap()
@@ -137,12 +135,8 @@ fn test_multiple_tasks() {
     }
 
     // Delete some tasks
-    storage
-        .delete_task(&TaskId::from("task-003"))
-        .unwrap();
-    storage
-        .delete_task(&TaskId::from("task-007"))
-        .unwrap();
+    storage.delete_task(&TaskId::from("task-003")).unwrap();
+    storage.delete_task(&TaskId::from("task-007")).unwrap();
 
     let ids = storage.list_task_ids().unwrap();
     assert_eq!(ids.len(), 8);
@@ -278,10 +272,7 @@ fn test_task_with_dependencies() {
 
     // Create child task with dependencies
     let mut child = create_task("child-001", "Child Task");
-    child.dependencies = vec![
-        TaskId::from("parent-001"),
-        TaskId::from("parent-002"),
-    ];
+    child.dependencies = vec![TaskId::from("parent-001"), TaskId::from("parent-002")];
     storage.save_task(&child).unwrap();
 
     // Load and verify
@@ -290,12 +281,8 @@ fn test_task_with_dependencies() {
         .unwrap()
         .unwrap();
     assert_eq!(loaded.dependencies.len(), 2);
-    assert!(loaded
-        .dependencies
-        .contains(&TaskId::from("parent-001")));
-    assert!(loaded
-        .dependencies
-        .contains(&TaskId::from("parent-002")));
+    assert!(loaded.dependencies.contains(&TaskId::from("parent-001")));
+    assert!(loaded.dependencies.contains(&TaskId::from("parent-002")));
 }
 
 #[test]

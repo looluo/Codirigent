@@ -145,22 +145,30 @@ impl VerificationGate {
 
     /// Acquire read lock on statuses.
     fn lock_statuses_read(&self) -> RwLockReadGuard<'_, HashMap<TaskId, VerificationStatus>> {
-        self.statuses.read().expect("verification statuses lock poisoned")
+        self.statuses
+            .read()
+            .expect("verification statuses lock poisoned")
     }
 
     /// Acquire write lock on statuses.
     fn lock_statuses_write(&self) -> RwLockWriteGuard<'_, HashMap<TaskId, VerificationStatus>> {
-        self.statuses.write().expect("verification statuses lock poisoned")
+        self.statuses
+            .write()
+            .expect("verification statuses lock poisoned")
     }
 
     /// Acquire read lock on working_dirs.
     fn lock_working_dirs_read(&self) -> RwLockReadGuard<'_, HashMap<TaskId, PathBuf>> {
-        self.working_dirs.read().expect("verification working_dirs lock poisoned")
+        self.working_dirs
+            .read()
+            .expect("verification working_dirs lock poisoned")
     }
 
     /// Acquire write lock on working_dirs.
     fn lock_working_dirs_write(&self) -> RwLockWriteGuard<'_, HashMap<TaskId, PathBuf>> {
-        self.working_dirs.write().expect("verification working_dirs lock poisoned")
+        self.working_dirs
+            .write()
+            .expect("verification working_dirs lock poisoned")
     }
 
     /// Store a verification status.

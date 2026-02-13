@@ -191,7 +191,7 @@ impl CodirigentIntegration {
     /// to move into the spawned task. Arc::clone is cheap - it only increments a reference
     /// count and shares the same underlying data. No deep copies occur.
     pub fn start_event_loop(&self) {
-        let event_bus = self.event_bus.clone();  // Cheap: Arc ref count increment
+        let event_bus = self.event_bus.clone(); // Cheap: Arc ref count increment
         let session_manager = self.session_manager.clone();
         let storage = self.storage.clone();
         let task_manager = self.task_manager.clone();

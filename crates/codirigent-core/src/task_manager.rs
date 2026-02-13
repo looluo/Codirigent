@@ -1052,11 +1052,7 @@ mod tests {
     fn test_get_task() {
         let (mut manager, _temp) = create_task_manager();
 
-        let task = Task::new(
-            TaskId::from("task-001"),
-            "Test".to_string(),
-            "".to_string(),
-        );
+        let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         manager.create_task(task).unwrap();
 
         let retrieved = manager.get_task(&TaskId::from("task-001"));
@@ -1096,17 +1092,11 @@ mod tests {
     fn test_delete_task() {
         let (mut manager, _temp) = create_task_manager();
 
-        let task = Task::new(
-            TaskId::from("task-001"),
-            "Test".to_string(),
-            "".to_string(),
-        );
+        let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         manager.create_task(task).unwrap();
         assert_eq!(manager.queued_tasks().len(), 1);
 
-        manager
-            .delete_task(&TaskId::from("task-001"))
-            .unwrap();
+        manager.delete_task(&TaskId::from("task-001")).unwrap();
         assert!(manager.queued_tasks().is_empty());
     }
 
@@ -1114,11 +1104,7 @@ mod tests {
     fn test_queued_tasks() {
         let (mut manager, _temp) = create_task_manager();
 
-        let task = Task::new(
-            TaskId::from("task-001"),
-            "Test".to_string(),
-            "".to_string(),
-        );
+        let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         manager.create_task(task).unwrap();
 
         let queued = manager.queued_tasks();
@@ -1139,11 +1125,7 @@ mod tests {
     fn test_on_session_idle() {
         let (mut manager, _temp) = create_task_manager();
 
-        let task = Task::new(
-            TaskId::from("task-001"),
-            "Test".to_string(),
-            "".to_string(),
-        );
+        let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         manager.create_task(task).unwrap();
 
         let session = Session::new(
@@ -1184,11 +1166,7 @@ mod tests {
     fn test_start_task() {
         let (mut manager, _temp) = create_task_manager();
 
-        let task = Task::new(
-            TaskId::from("task-001"),
-            "Test".to_string(),
-            "".to_string(),
-        );
+        let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         manager.create_task(task).unwrap();
 
         let result = manager.start_task(&TaskId::from("task-001"));
@@ -1199,11 +1177,7 @@ mod tests {
     fn test_approve_task() {
         let (mut manager, _temp) = create_task_manager();
 
-        let task = Task::new(
-            TaskId::from("task-001"),
-            "Test".to_string(),
-            "".to_string(),
-        );
+        let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         manager.create_task(task).unwrap();
 
         // Assign first
@@ -1214,9 +1188,7 @@ mod tests {
         }
 
         // Approve
-        manager
-            .approve_task(&TaskId::from("task-001"))
-            .unwrap();
+        manager.approve_task(&TaskId::from("task-001")).unwrap();
 
         assert!(manager
             .completed_task_ids()
@@ -1318,11 +1290,7 @@ mod tests {
     fn test_service_create() {
         let (mut manager, _temp) = create_task_manager();
 
-        let task = Task::new(
-            TaskId::from("task-001"),
-            "Test".to_string(),
-            "".to_string(),
-        );
+        let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
 
         TaskManagementService::create(&mut manager, task).unwrap();
         assert_eq!(manager.queued_tasks().len(), 1);
@@ -1332,11 +1300,7 @@ mod tests {
     fn test_service_assign_to_session() {
         let (mut manager, _temp) = create_task_manager();
 
-        let task = Task::new(
-            TaskId::from("task-001"),
-            "Test".to_string(),
-            "".to_string(),
-        );
+        let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         manager.create_task(task).unwrap();
 
         let session = Session::new(SessionId(1), "Test".to_string(), PathBuf::from("/test"));
@@ -1349,11 +1313,7 @@ mod tests {
     fn test_service_approve() {
         let (mut manager, _temp) = create_task_manager();
 
-        let task = Task::new(
-            TaskId::from("task-001"),
-            "Test".to_string(),
-            "".to_string(),
-        );
+        let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         manager.create_task(task).unwrap();
 
         // Assign first
@@ -1372,11 +1332,7 @@ mod tests {
     fn test_service_list_by_status() {
         let (mut manager, _temp) = create_task_manager();
 
-        let task = Task::new(
-            TaskId::from("task-001"),
-            "Test".to_string(),
-            "".to_string(),
-        );
+        let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         manager.create_task(task).unwrap();
 
         let queued = TaskManagementService::list_by_status(&manager, TaskStatus::Queued);
@@ -1473,11 +1429,7 @@ mod tests {
         let event_bus = Arc::new(DefaultEventBus::new(16));
 
         // Create and save a task
-        let task = Task::new(
-            TaskId::from("task-001"),
-            "Test".to_string(),
-            "".to_string(),
-        );
+        let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         storage.save_task(&task).unwrap();
 
         // Load task manager
@@ -1500,11 +1452,7 @@ mod tests {
         let mut manager = TaskManager::new(config, storage, event_bus);
 
         // Task without verification
-        let task = Task::new(
-            TaskId::from("task-001"),
-            "Test".to_string(),
-            "".to_string(),
-        );
+        let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         manager.create_task(task).unwrap();
 
         let result = manager
@@ -1533,11 +1481,7 @@ mod tests {
     fn test_find_task_by_session() {
         let (mut manager, _temp) = create_task_manager();
 
-        let task = Task::new(
-            TaskId::from("task-001"),
-            "Test".to_string(),
-            "".to_string(),
-        );
+        let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         manager.create_task(task).unwrap();
 
         // Assign to session
@@ -1561,11 +1505,7 @@ mod tests {
         let (mut manager, _temp) = create_task_manager();
 
         // Create and assign task
-        let task = Task::new(
-            TaskId::from("task-001"),
-            "Test".to_string(),
-            "".to_string(),
-        );
+        let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         manager.create_task(task).unwrap();
         manager
             .queue
@@ -1593,11 +1533,7 @@ mod tests {
         let (mut manager, _temp) = create_task_manager();
 
         // Create and assign task
-        let task = Task::new(
-            TaskId::from("task-001"),
-            "Test".to_string(),
-            "".to_string(),
-        );
+        let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         // Manually set to Working
         manager.create_task(task).unwrap();
         manager
@@ -1632,11 +1568,7 @@ mod tests {
         let (mut manager, _temp) = create_task_manager();
 
         // Create and assign task
-        let task = Task::new(
-            TaskId::from("task-001"),
-            "Test".to_string(),
-            "".to_string(),
-        );
+        let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         manager.create_task(task).unwrap();
         manager
             .queue
@@ -1685,11 +1617,7 @@ mod tests {
         let (mut manager, _temp) = create_task_manager();
 
         // Create and assign task
-        let task = Task::new(
-            TaskId::from("task-001"),
-            "Test".to_string(),
-            "".to_string(),
-        );
+        let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         manager.create_task(task).unwrap();
         manager
             .queue
@@ -1711,19 +1639,12 @@ mod tests {
     fn test_transition_task_status_idempotent() {
         let (mut manager, _temp) = create_task_manager();
 
-        let task = Task::new(
-            TaskId::from("task-001"),
-            "Test".to_string(),
-            "".to_string(),
-        );
+        let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         manager.create_task(task).unwrap();
 
         // Transition to same status should be no-op
-        let result = manager.transition_task_status(
-            &TaskId::from("task-001"),
-            TaskStatus::Queued,
-            None,
-        );
+        let result =
+            manager.transition_task_status(&TaskId::from("task-001"), TaskStatus::Queued, None);
         assert!(result.is_ok());
     }
 

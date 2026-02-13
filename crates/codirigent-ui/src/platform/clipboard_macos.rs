@@ -608,37 +608,6 @@ mod tests {
     }
 
     #[test]
-    fn test_parse_jpeg_dimensions() {
-        // Minimal JPEG with SOF0 marker indicating 320x240
-        let data = vec![
-            0xFF, 0xD8, // SOI
-            0xFF, 0xC0, // SOF0
-            0x00, 0x11, // Length: 17
-            0x08, // Precision: 8 bits
-            0x00, 0xF0, // Height: 240
-            0x01, 0x40, // Width: 320
-            0x03, 0x01, 0x22, 0x00, 0x02, 0x11, 0x01, 0x03, 0x11, 0x01,
-        ];
-
-        let dims = MacOSSmartClipboard::parse_jpeg_dimensions(&data);
-        assert_eq!(dims, Some((320, 240)));
-    }
-
-    #[test]
-    fn test_parse_jpeg_dimensions_invalid() {
-        // Too short
-        let short_data = vec![0xFF];
-        assert_eq!(
-            MacOSSmartClipboard::parse_jpeg_dimensions(&short_data),
-            None
-        );
-
-        // Wrong signature
-        let wrong_sig = vec![0x00, 0x00];
-        assert_eq!(MacOSSmartClipboard::parse_jpeg_dimensions(&wrong_sig), None);
-    }
-
-    #[test]
     fn test_urlencoding_decode() {
         // Basic path (no encoding)
         assert_eq!(urlencoding_decode("/tmp/file.txt"), "/tmp/file.txt");

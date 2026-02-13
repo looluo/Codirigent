@@ -373,8 +373,7 @@ mod tests {
     fn test_mock_failure_formatter() {
         let formatter = MockFailureFormatter;
 
-        let status =
-            VerificationStatus::new(TaskId::from("task-001"), crate::types::SessionId(1));
+        let status = VerificationStatus::new(TaskId::from("task-001"), crate::types::SessionId(1));
         assert_eq!(formatter.format(&status), "No failures");
 
         let failure = VerificationFailure::new("test_auth", "assertion failed");

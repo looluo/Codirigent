@@ -963,5 +963,4 @@ mod tests {
 
         output_reader.stop();
     }
-
 }

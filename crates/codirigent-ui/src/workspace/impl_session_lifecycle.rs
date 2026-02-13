@@ -10,8 +10,11 @@ use super::gpui::WorkspaceView;
 use crate::terminal::Terminal;
 use crate::terminal_header::TerminalHeader;
 use crate::terminal_view::TerminalView;
-use codirigent_core::{CodirigentEvent, EventBus, GridPosition, ProcessMonitor, Session, SessionId, SessionManager, SessionStatus, SlotId};
 use codirigent_core::config_service::ConfigService;
+use codirigent_core::{
+    CodirigentEvent, EventBus, GridPosition, ProcessMonitor, Session, SessionId, SessionManager,
+    SessionStatus, SlotId,
+};
 use gpui::Context;
 use std::path::PathBuf;
 use tracing::{info, warn};
@@ -57,7 +60,8 @@ impl WorkspaceView {
         self.next_session_id = num + 1;
 
         let working_dir = self
-            .settings.config_service
+            .settings
+            .config_service
             .as_ref()
             .and_then(|cs| cs.load_user_settings().ok())
             .and_then(|s| s.general.default_working_dir)
@@ -69,7 +73,8 @@ impl WorkspaceView {
 
         // Determine shell from user settings (empty string = auto-detect)
         let shell = self
-            .settings.config_service
+            .settings
+            .config_service
             .as_ref()
             .and_then(|cs| cs.load_user_settings().ok())
             .map(|s| s.general.default_shell)
@@ -91,9 +96,7 @@ impl WorkspaceView {
         };
 
         // Get child PID for monitoring
-        let child_pid = self.with_session_manager(|manager| {
-            manager.get_child_pid(session_id)
-        });
+        let child_pid = self.with_session_manager(|manager| manager.get_child_pid(session_id));
 
         // Start monitoring session status
         if let Some(pid) = child_pid {
@@ -175,7 +178,8 @@ impl WorkspaceView {
             let working_dir = if saved.working_directory.exists() {
                 saved.working_directory.clone()
             } else {
-                self.project.project_root
+                self.project
+                    .project_root
                     .clone()
                     .or_else(|| std::env::current_dir().ok())
                     .unwrap_or_else(|| PathBuf::from("."))
@@ -183,7 +187,8 @@ impl WorkspaceView {
 
             // Determine shell from user settings (empty string = auto-detect)
             let shell = self
-                .settings.config_service
+                .settings
+                .config_service
                 .as_ref()
                 .and_then(|cs| cs.load_user_settings().ok())
                 .map(|s| s.general.default_shell)
@@ -206,14 +211,16 @@ impl WorkspaceView {
             // Restore group/color
             if saved.group.is_some() || saved.color.is_some() {
                 self.with_session_manager(|manager| {
-                    let _ = manager.set_session_group(session_id, saved.group.clone(), saved.color.clone());
+                    let _ = manager.set_session_group(
+                        session_id,
+                        saved.group.clone(),
+                        saved.color.clone(),
+                    );
                 });
             }
 
             // Start monitoring
-            let child_pid = self.with_session_manager(|manager| {
-                manager.get_child_pid(session_id)
-            });
+            let child_pid = self.with_session_manager(|manager| manager.get_child_pid(session_id));
             if let Some(pid) = child_pid {
                 self.with_detector(|detector| {
                     let _ = detector.start_monitoring(session_id, pid);

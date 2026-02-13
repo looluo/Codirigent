@@ -960,11 +960,7 @@ mod tests {
         ];
 
         for priority in priorities {
-            let mut task = Task::new(
-                TaskId::from("task"),
-                "Task".to_string(),
-                "".to_string(),
-            );
+            let mut task = Task::new(TaskId::from("task"), "Task".to_string(), "".to_string());
             task.priority = priority;
 
             let prompt = manager.generate_prompt(&task);
@@ -1090,11 +1086,7 @@ mod tests {
 
         let session = Session::new(SessionId(1), "Test".to_string(), PathBuf::from("/test"));
 
-        let task = Task::new(
-            TaskId::from("task-001"),
-            "Test".to_string(),
-            "".to_string(),
-        );
+        let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         queue.enqueue(task).unwrap();
 
         let action = manager.on_session_idle(&session, &mut queue, &[]);
@@ -1119,11 +1111,7 @@ mod tests {
 
         let session = Session::new(SessionId(1), "Test".to_string(), PathBuf::from("/test"));
 
-        let task = Task::new(
-            TaskId::from("task-001"),
-            "Test".to_string(),
-            "".to_string(),
-        );
+        let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         queue.enqueue(task).unwrap();
 
         let action = manager.on_session_idle(&session, &mut queue, &[]);
@@ -1139,11 +1127,7 @@ mod tests {
         session.current_task = Some(TaskId::from("existing"));
 
         // Add a task to the queue
-        let task = Task::new(
-            TaskId::from("task-001"),
-            "Test".to_string(),
-            "".to_string(),
-        );
+        let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         queue.enqueue(task).unwrap();
 
         let action = manager.on_session_idle(&session, &mut queue, &[]);
@@ -1405,11 +1389,7 @@ mod tests {
     fn test_assignment_service_on_idle() {
         let (mut manager, mut queue, session) = create_test_setup();
 
-        let task = Task::new(
-            TaskId::from("task-001"),
-            "Test".to_string(),
-            "".to_string(),
-        );
+        let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         queue.enqueue(task).unwrap();
 
         let action = AssignmentService::on_idle(&mut manager, &session, &mut queue, &[]);
@@ -1427,8 +1407,7 @@ mod tests {
             proposed_at: chrono::Utc::now(),
         });
 
-        let prompt =
-            AssignmentService::confirm(&mut manager, &TaskId::from("task-001")).unwrap();
+        let prompt = AssignmentService::confirm(&mut manager, &TaskId::from("task-001")).unwrap();
         assert_eq!(prompt, "Test prompt");
     }
 

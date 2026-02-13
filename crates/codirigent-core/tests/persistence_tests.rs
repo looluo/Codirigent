@@ -29,7 +29,9 @@ fn test_save_and_load_state() {
     };
 
     let mut state = PersistentState::default();
-    state.sessions.push(PersistentSession::from_session(&session));
+    state
+        .sessions
+        .push(PersistentSession::from_session(&session));
 
     // Save state
     service.save_state(&state).unwrap();
@@ -92,7 +94,9 @@ fn test_overwrite_state() {
     };
 
     let mut state = PersistentState::default();
-    state.sessions.push(PersistentSession::from_session(&session1));
+    state
+        .sessions
+        .push(PersistentSession::from_session(&session1));
     service.save_state(&state).unwrap();
 
     // Overwrite with 2 sessions
@@ -109,7 +113,9 @@ fn test_overwrite_state() {
         git_info: None,
     };
 
-    state.sessions.push(PersistentSession::from_session(&session2));
+    state
+        .sessions
+        .push(PersistentSession::from_session(&session2));
     service.save_state(&state).unwrap();
 
     // Load and verify
@@ -147,23 +153,23 @@ fn test_list_checkpoints() {
     assert_eq!(checkpoints.len(), 0);
 
     // Create some checkpoints
-    let cp1 = service
-        .create_checkpoint("checkpoint-1", &state)
-        .unwrap();
+    let cp1 = service.create_checkpoint("checkpoint-1", &state).unwrap();
 
     // Small delay to ensure unique timestamps
     std::thread::sleep(std::time::Duration::from_millis(10));
 
-    let cp2 = service
-        .create_checkpoint("checkpoint-2", &state)
-        .unwrap();
+    let cp2 = service.create_checkpoint("checkpoint-2", &state).unwrap();
 
     // Ensure they have different IDs
     assert_ne!(cp1.id, cp2.id);
 
     // List should have at least 2
     let checkpoints = service.list_checkpoints().unwrap();
-    assert!(checkpoints.len() >= 2, "Expected at least 2 checkpoints, got {}", checkpoints.len());
+    assert!(
+        checkpoints.len() >= 2,
+        "Expected at least 2 checkpoints, got {}",
+        checkpoints.len()
+    );
 }
 
 /// Test loading a specific checkpoint.
@@ -175,7 +181,9 @@ fn test_load_checkpoint() {
     let state = PersistentState::default();
 
     // Create checkpoint
-    let created = service.create_checkpoint("test-checkpoint", &state).unwrap();
+    let created = service
+        .create_checkpoint("test-checkpoint", &state)
+        .unwrap();
 
     // Load it back
     let loaded = service.load_checkpoint(&created.id).unwrap();
@@ -240,7 +248,9 @@ fn test_multiple_checkpoints_independent() {
         color: None,
         git_info: None,
     };
-    state1.sessions.push(PersistentSession::from_session(&session1));
+    state1
+        .sessions
+        .push(PersistentSession::from_session(&session1));
 
     let mut state2 = PersistentState::default();
     let session2 = Session {
@@ -255,7 +265,9 @@ fn test_multiple_checkpoints_independent() {
         color: None,
         git_info: None,
     };
-    state2.sessions.push(PersistentSession::from_session(&session2));
+    state2
+        .sessions
+        .push(PersistentSession::from_session(&session2));
 
     // Create checkpoints
     let cp1 = service.create_checkpoint("checkpoint-1", &state1).unwrap();
@@ -277,8 +289,14 @@ fn test_multiple_checkpoints_independent() {
     assert_eq!(loaded2.name, "checkpoint-2");
 
     // Verify states are correct
-    assert!(!loaded1.state.sessions.is_empty(), "Checkpoint 1 should have sessions");
-    assert!(!loaded2.state.sessions.is_empty(), "Checkpoint 2 should have sessions");
+    assert!(
+        !loaded1.state.sessions.is_empty(),
+        "Checkpoint 1 should have sessions"
+    );
+    assert!(
+        !loaded2.state.sessions.is_empty(),
+        "Checkpoint 2 should have sessions"
+    );
 
     // Verify the session names match what we saved
     assert_eq!(loaded1.state.sessions[0].name, "State 1");

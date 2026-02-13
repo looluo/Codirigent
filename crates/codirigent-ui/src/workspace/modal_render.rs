@@ -3,22 +3,22 @@
 //! This module handles rendering of modal dialogs including
 //! custom layout modal and session action modal.
 
+use super::gpui::WorkspaceView;
+use super::render::SessionMenuAction;
+use super::types::{SessionActionKind, SessionActionModal};
 use crate::components::text_input::{text_input, TextInputStyle};
 use crate::icons;
 use crate::layout::LayoutProfile;
 use crate::toolbar::CustomLayoutMode;
-use super::gpui::WorkspaceView;
-use super::types::{SessionActionKind, SessionActionModal};
-use super::render::SessionMenuAction;
 use codirigent_core::{LayoutNode, SessionId, SlotId, SplitDirection};
-use std::sync::Arc;
 use gpui::{
-    div, prelude::FluentBuilder, px, relative, ClickEvent, Context, FontWeight, Image,
-    ImageFormat, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ObjectFit,
-    ParentElement, SharedString, StatefulInteractiveElement, Styled, StyledImage,
+    div, prelude::FluentBuilder, px, relative, ClickEvent, Context, FontWeight, Image, ImageFormat,
+    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ObjectFit, ParentElement,
+    SharedString, StatefulInteractiveElement, Styled, StyledImage,
 };
 use std::cell::Cell;
 use std::rc::Rc;
+use std::sync::Arc;
 
 impl WorkspaceView {
     /// interactive split tree builder with preview.

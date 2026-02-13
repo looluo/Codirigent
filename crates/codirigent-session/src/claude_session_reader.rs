@@ -716,21 +716,12 @@ mod tests {
     #[test]
     fn test_is_timestamp_recent() {
         let now = chrono::Utc::now().to_rfc3339();
-        assert_eq!(
-            is_timestamp_recent(&now, 10),
-            Some(true)
-        );
+        assert_eq!(is_timestamp_recent(&now, 10), Some(true));
 
         let old = (chrono::Utc::now() - chrono::Duration::seconds(60)).to_rfc3339();
-        assert_eq!(
-            is_timestamp_recent(&old, 10),
-            Some(false)
-        );
+        assert_eq!(is_timestamp_recent(&old, 10), Some(false));
 
-        assert_eq!(
-            is_timestamp_recent("not-a-timestamp", 10),
-            None
-        );
+        assert_eq!(is_timestamp_recent("not-a-timestamp", 10), None);
     }
 
     #[test]

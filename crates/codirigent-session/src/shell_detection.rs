@@ -355,10 +355,7 @@ preexec_functions+=(__codirigent_preexec)
 ///
 /// Sets OSC 7 and OSC 133 hooks via PROMPT_COMMAND (bash) or ZDOTDIR (zsh).
 #[cfg(unix)]
-pub(crate) fn configure_shell_integration(
-    cmd: &mut portable_pty::CommandBuilder,
-    command: &str,
-) {
+pub(crate) fn configure_shell_integration(cmd: &mut portable_pty::CommandBuilder, command: &str) {
     cmd.env(
         "CODIRIGENT_OSC7",
         r#"printf '\e]7;file://%s%s\e\\' "$(hostname)" "$PWD""#,

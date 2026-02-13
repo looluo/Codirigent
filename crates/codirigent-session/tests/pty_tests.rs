@@ -24,14 +24,21 @@ fn test_pty_initialization_with_invalid_shell() {
     );
 
     // Should fail with an error
-    assert!(result.is_err(), "PTY spawn should fail with nonexistent shell");
+    assert!(
+        result.is_err(),
+        "PTY spawn should fail with nonexistent shell"
+    );
 
     // Verify the error contains helpful information
     if let Err(e) = result {
         let err_msg = e.to_string();
         assert!(
-            err_msg.contains("spawn") || err_msg.contains("command") || err_msg.contains("not found") || err_msg.contains("Failed"),
-            "Error message should mention spawn or command failure: {}", err_msg
+            err_msg.contains("spawn")
+                || err_msg.contains("command")
+                || err_msg.contains("not found")
+                || err_msg.contains("Failed"),
+            "Error message should mention spawn or command failure: {}",
+            err_msg
         );
     } else {
         panic!("Expected error for nonexistent shell");
@@ -52,32 +59,30 @@ fn test_pty_resize() {
     #[cfg(unix)]
     let shell = "sh";
 
-    let mut pty = PtyHandle::spawn_command(
-        &temp_dir,
-        shell,
-        &[],
-        24,
-        80,
-        &[],
-    ).expect("PTY creation failed");
+    let mut pty =
+        PtyHandle::spawn_command(&temp_dir, shell, &[], 24, 80, &[]).expect("PTY creation failed");
 
     // Test resizing to various dimensions
     let test_sizes = vec![
-        (20, 10),    // Small
-        (40, 120),   // Wide
-        (100, 50),   // Tall
-        (24, 80),    // Default
+        (20, 10),  // Small
+        (40, 120), // Wide
+        (100, 50), // Tall
+        (24, 80),  // Default
     ];
 
     for (rows, cols) in test_sizes {
-        pty.resize(rows, cols).expect(&format!("Resize to {}x{} failed", rows, cols));
+        pty.resize(rows, cols)
+            .unwrap_or_else(|_| panic!("Resize to {}x{} failed", rows, cols));
         let size = pty.size();
         assert_eq!(size.rows, rows, "Rows should match after resize");
         assert_eq!(size.cols, cols, "Cols should match after resize");
     }
 
     // Verify PTY still has valid PID after resizing
-    assert!(pty.child_pid() > 0, "PTY should still be alive after resize");
+    assert!(
+        pty.child_pid() > 0,
+        "PTY should still be alive after resize"
+    );
 }
 
 /// Test PTY handles control sequences without crashing.
@@ -94,14 +99,8 @@ fn test_pty_handles_control_sequences() {
     #[cfg(unix)]
     let shell = "sh";
 
-    let mut pty = PtyHandle::spawn_command(
-        &temp_dir,
-        shell,
-        &[],
-        24,
-        80,
-        &[],
-    ).expect("PTY creation failed");
+    let mut pty =
+        PtyHandle::spawn_command(&temp_dir, shell, &[], 24, 80, &[]).expect("PTY creation failed");
 
     // Test various control sequences:
     // - Clear screen: ESC[2J
@@ -109,10 +108,10 @@ fn test_pty_handles_control_sequences() {
     // - Color codes: ESC[31m (red foreground)
     // - Reset: ESC[0m
     let control_sequences: Vec<&[u8]> = vec![
-        b"\x1b[2J\x1b[H",           // Clear screen + home
-        b"\x1b[31mRed\x1b[0m",       // Color codes
-        b"\x1b[1A\x1b[2K",           // Cursor up + clear line
-        b"\x1b[s\x1b[u",             // Save/restore cursor position
+        b"\x1b[2J\x1b[H",      // Clear screen + home
+        b"\x1b[31mRed\x1b[0m", // Color codes
+        b"\x1b[1A\x1b[2K",     // Cursor up + clear line
+        b"\x1b[s\x1b[u",       // Save/restore cursor position
     ];
 
     for sequence in control_sequences {
@@ -144,14 +143,7 @@ fn test_pty_minimal_dimensions() {
     let shell = "sh";
 
     // Try to create PTY with minimal size (1x1)
-    let result = PtyHandle::spawn_command(
-        &temp_dir,
-        shell,
-        &[],
-        1,
-        1,
-        &[],
-    );
+    let result = PtyHandle::spawn_command(&temp_dir, shell, &[], 1, 1, &[]);
 
     // On most platforms, this should succeed
     // (portable-pty handles this gracefully)
@@ -177,14 +169,7 @@ fn test_pty_large_dimensions() {
     let shell = "sh";
 
     // Try to create PTY with large size
-    let result = PtyHandle::spawn_command(
-        &temp_dir,
-        shell,
-        &[],
-        9999,
-        9999,
-        &[],
-    );
+    let result = PtyHandle::spawn_command(&temp_dir, shell, &[], 9999, 9999, &[]);
 
     // Should succeed - portable-pty handles large sizes
     match result {
@@ -220,7 +205,8 @@ fn test_pty_custom_environment() {
         24,
         80,
         &[("TEST_VAR", "test_value_xyz123")],
-    ).expect("PTY creation failed");
+    )
+    .expect("PTY creation failed");
 
     // Verify PTY was created successfully
     assert!(pty.child_pid() > 0, "PTY should have valid PID");
@@ -244,16 +230,12 @@ fn test_pty_working_directory() {
     #[cfg(unix)]
     let shell = "sh";
 
-    let result = PtyHandle::spawn_command(
-        &temp_dir,
-        shell,
-        &[],
-        24,
-        80,
-        &[],
-    );
+    let result = PtyHandle::spawn_command(&temp_dir, shell, &[], 24, 80, &[]);
 
-    assert!(result.is_ok(), "PTY spawn should succeed with valid working directory");
+    assert!(
+        result.is_ok(),
+        "PTY spawn should succeed with valid working directory"
+    );
 
     let pty = result.unwrap();
     assert!(pty.child_pid() > 0, "PTY should have valid PID");
@@ -275,14 +257,7 @@ fn test_pty_invalid_working_directory() {
     #[cfg(unix)]
     let shell = "sh";
 
-    let result = PtyHandle::spawn_command(
-        &invalid_dir,
-        shell,
-        &[],
-        24,
-        80,
-        &[],
-    );
+    let result = PtyHandle::spawn_command(&invalid_dir, shell, &[], 24, 80, &[]);
 
     // Platform-specific behavior:
     // - Unix: Usually fails immediately

@@ -9,7 +9,8 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 /// Known GUI-based code editors with CLI support.
-pub(super) const KNOWN_GUI_EDITORS: &[&str] = &["code", "zed", "cursor", "windsurf", "codium", "subl"];
+pub(super) const KNOWN_GUI_EDITORS: &[&str] =
+    &["code", "zed", "cursor", "windsurf", "codium", "subl"];
 
 /// Known terminal-based code editors.
 pub(super) const KNOWN_TERMINAL_EDITORS: &[&str] =

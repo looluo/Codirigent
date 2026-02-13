@@ -155,8 +155,10 @@ impl WorkspaceView {
                                 match manager.direct_assign(&task_id, session.id) {
                                     Ok(prompt) => {
                                         // Check CLI type to decide how to send the prompt
-                                        let cli_type =
-                                            self.clipboard.clipboard_service.get_session_cli_type(session.id);
+                                        let cli_type = self
+                                            .clipboard
+                                            .clipboard_service
+                                            .get_session_cli_type(session.id);
 
                                         // Release task_manager before session_manager
                                         drop(manager);
@@ -174,7 +176,8 @@ impl WorkspaceView {
                                                 warn!("Failed to send task prompt: {}", e);
                                             }
                                         }
-                                        self.polling.pending_enters
+                                        self.polling
+                                            .pending_enters
                                             .insert(session.id, (Instant::now(), false));
                                         if let Some(ws_session) =
                                             self.workspace.session_mut(session.id)
@@ -257,7 +260,10 @@ impl WorkspaceView {
                 }
 
                 // Send prompt to PTY
-                let cli_type = self.clipboard.clipboard_service.get_session_cli_type(session_id);
+                let cli_type = self
+                    .clipboard
+                    .clipboard_service
+                    .get_session_cli_type(session_id);
                 let input = format_task_input(&prompt, cli_type);
                 if let Ok(mgr) = self.session_manager.lock() {
                     if let Err(e) = mgr.send_input(session_id, input.as_bytes()) {
@@ -267,7 +273,8 @@ impl WorkspaceView {
                         );
                     }
                 }
-                self.polling.pending_enters
+                self.polling
+                    .pending_enters
                     .insert(session_id, (Instant::now(), false));
 
                 info!(?task_id, ?session_id, "Confirmed and sent task to session");

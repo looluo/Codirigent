@@ -29,9 +29,7 @@ pub fn detect_cli_from_output(data: &[u8]) -> Option<CliType> {
     {
         return Some(CliType::ClaudeCode);
     }
-    if lower.windows(10).any(|w| w == b"gemini cli")
-        || lower.windows(7).any(|w| w == b"gemini>")
-    {
+    if lower.windows(10).any(|w| w == b"gemini cli") || lower.windows(7).any(|w| w == b"gemini>") {
         return Some(CliType::GeminiCli);
     }
     if lower.windows(5).any(|w| w == b"codex") || lower.windows(6).any(|w| w == b"codex>") {

@@ -10,7 +10,10 @@
 
 use super::cli_helpers::{clear_command, detect_cli_from_output, format_task_input};
 use super::gpui::WorkspaceView;
-use codirigent_core::{AssignmentAction, CodirigentEvent, EventBus, ProcessMonitor, SessionId, SessionManager, SessionStatus, TaskStatus};
+use codirigent_core::{
+    AssignmentAction, CodirigentEvent, EventBus, ProcessMonitor, SessionId, SessionManager,
+    SessionStatus, TaskStatus,
+};
 use codirigent_session::cli_detector::CliDetector;
 use codirigent_session::clipboard_service::ClipboardService;
 use gpui::Context;
@@ -23,7 +26,8 @@ impl WorkspaceView {
         // as a separate write so ink treats it as a distinct stdin event).
         // Phase 1: entries where Enter hasn't been sent yet and 100ms elapsed → send \r.
         let need_enter: Vec<SessionId> = self
-            .polling.pending_enters
+            .polling
+            .pending_enters
             .iter()
             .filter(|(_, (when, sent))| !sent && when.elapsed() >= Duration::from_millis(100))
             .map(|(id, _)| *id)
@@ -34,12 +38,14 @@ impl WorkspaceView {
             }
             // Flip to phase 2: keep entry for a grace period so the CLI can
             // process the command before auto-assign considers this session.
-            self.polling.pending_enters
+            self.polling
+                .pending_enters
                 .insert(session_id, (Instant::now(), true));
         }
         // Phase 2: remove entries where Enter was already sent and grace period elapsed.
         let expired: Vec<SessionId> = self
-            .polling.pending_enters
+            .polling
+            .pending_enters
             .iter()
             .filter(|(_, (when, sent))| *sent && when.elapsed() >= Duration::from_millis(500))
             .map(|(id, _)| *id)
@@ -63,9 +69,7 @@ impl WorkspaceView {
 
         for session_id in session_ids {
             // Try to drain output from the session manager
-            let output = self.with_session_manager(|manager| {
-                manager.try_drain_output(session_id)
-            });
+            let output = self.with_session_manager(|manager| manager.try_drain_output(session_id));
 
             if let Some(data) = output {
                 // Feed output to terminal emulator
@@ -76,9 +80,13 @@ impl WorkspaceView {
 
                 // Detect CLI type from output banners
                 if let Some(cli_type) = detect_cli_from_output(&data) {
-                    let current = self.clipboard.clipboard_service.get_session_cli_type(session_id);
+                    let current = self
+                        .clipboard
+                        .clipboard_service
+                        .get_session_cli_type(session_id);
                     if current == codirigent_core::CliType::GenericShell {
-                        self.clipboard.clipboard_service
+                        self.clipboard
+                            .clipboard_service
                             .set_session_cli_type(session_id, cli_type);
                         info!(?session_id, ?cli_type, "Detected CLI type from output");
                     }
@@ -102,9 +110,8 @@ impl WorkspaceView {
                     });
                     if changed {
                         // Force immediate git refresh (updates the manager's copy)
-                        let git_info = self.with_session_manager(|manager| {
-                            manager.refresh_git_status(session_id)
-                        });
+                        let git_info = self
+                            .with_session_manager(|manager| manager.refresh_git_status(session_id));
 
                         // Update terminal header (UI-only state, not part of Session)
                         if let Some((_, header)) = self
@@ -122,9 +129,8 @@ impl WorkspaceView {
                         }
 
                         // Sync workspace cache so file tree sees the new CWD
-                        let manager_sessions = self.with_session_manager(|manager| {
-                            manager.list_sessions()
-                        });
+                        let manager_sessions =
+                            self.with_session_manager(|manager| manager.list_sessions());
                         self.workspace.sync_sessions_from_manager(&manager_sessions);
 
                         // Update file tree panel if this is the focused session
@@ -149,12 +155,14 @@ impl WorkspaceView {
             if check_jsonl {
                 if let Some(session) = self.workspace.session(session_id) {
                     let working_dir = session.working_directory.clone();
-                    let cli_type = self.clipboard.clipboard_service.get_session_cli_type(session_id);
+                    let cli_type = self
+                        .clipboard
+                        .clipboard_service
+                        .get_session_cli_type(session_id);
 
                     // Get child PID for PID-based JSONL matching
-                    let child_pid = self.with_session_manager(|manager| {
-                        manager.get_child_pid(session_id)
-                    });
+                    let child_pid =
+                        self.with_session_manager(|manager| manager.get_child_pid(session_id));
 
                     let cli_status = match cli_type {
                         codirigent_core::CliType::ClaudeCode => {
@@ -178,7 +186,8 @@ impl WorkspaceView {
                             if let Some(pid) = child_pid {
                                 let detected = self.cli_readers.detector.detect_cli_type(pid);
                                 if detected != codirigent_core::CliType::GenericShell {
-                                    self.clipboard.clipboard_service
+                                    self.clipboard
+                                        .clipboard_service
                                         .set_session_cli_type(session_id, detected);
                                     match detected {
                                         codirigent_core::CliType::ClaudeCode => {
@@ -215,7 +224,8 @@ impl WorkspaceView {
 
                     if let Some((new_status, tool_name)) = cli_status.clone() {
                         // Cache the JSONL result so it persists between checks
-                        self.cli_readers.cached_status
+                        self.cli_readers
+                            .cached_status
                             .insert(session_id, (new_status, tool_name.clone()));
 
                         if new_status == SessionStatus::NeedsAttention {
@@ -280,16 +290,21 @@ impl WorkspaceView {
                                 session.current_task = None;
                             }
                             // Start context clear — reuse compaction infrastructure
-                            let cli_type = self.clipboard.clipboard_service.get_session_cli_type(session_id);
+                            let cli_type = self
+                                .clipboard
+                                .clipboard_service
+                                .get_session_cli_type(session_id);
                             let clear_cmd = clear_command(cli_type);
                             if let Ok(mut svc) = self.persistence.compaction.lock() {
                                 if svc.begin_compaction(session_id) {
                                     if let Ok(mgr) = self.session_manager.lock() {
                                         let _ = mgr.send_input(session_id, clear_cmd.as_bytes());
                                     }
-                                    self.polling.pending_enters
+                                    self.polling
+                                        .pending_enters
                                         .insert(session_id, (Instant::now(), false));
-                                    self.cache.compaction_start_times
+                                    self.cache
+                                        .compaction_start_times
                                         .insert(session_id, Instant::now());
                                     just_started_compaction = true;
                                 }
@@ -306,7 +321,8 @@ impl WorkspaceView {
                     && !self.polling.pending_enters.contains_key(&session_id)
                 {
                     let is_compacting = self
-                        .persistence.compaction
+                        .persistence
+                        .compaction
                         .lock()
                         .map(|svc| svc.is_compacting(session_id))
                         .unwrap_or(false);
@@ -343,12 +359,14 @@ impl WorkspaceView {
 
         // Compaction timeout: end compaction for sessions that exceeded the limit
         let timeout_secs = self
-            .persistence.compaction
+            .persistence
+            .compaction
             .lock()
             .map(|svc| svc.timeout_secs())
             .unwrap_or(120);
         let timed_out: Vec<SessionId> = self
-            .cache.compaction_start_times
+            .cache
+            .compaction_start_times
             .iter()
             .filter(|(_, start)| start.elapsed() > Duration::from_secs(timeout_secs))
             .map(|(id, _)| *id)
@@ -394,22 +412,23 @@ impl WorkspaceView {
 
             // Collect git info from manager
             let git_infos = self.with_session_manager(|manager| {
-                session_ids.iter().filter_map(|id| {
-                    manager.refresh_git_status(*id).map(|info| (*id, info))
-                }).collect::<Vec<_>>()
+                session_ids
+                    .iter()
+                    .filter_map(|id| manager.refresh_git_status(*id).map(|info| (*id, info)))
+                    .collect::<Vec<_>>()
             });
 
             // Update terminal headers with git info
             for (id, git_info) in git_infos {
-                if let Some((_, header)) = self.terminal_headers.iter_mut().find(|(sid, _)| *sid == id) {
+                if let Some((_, header)) =
+                    self.terminal_headers.iter_mut().find(|(sid, _)| *sid == id)
+                {
                     header.git_branch = Some(git_info.branch.clone());
                     header.git_dirty_count = Some(git_info.dirty_count);
                 }
             }
             // Bulk-sync git_info (and all other fields) from manager
-            let manager_sessions = self.with_session_manager(|manager| {
-                manager.list_sessions()
-            });
+            let manager_sessions = self.with_session_manager(|manager| manager.list_sessions());
             self.workspace.sync_sessions_from_manager(&manager_sessions);
             any_dirty = true;
         }
@@ -423,7 +442,8 @@ impl WorkspaceView {
                 if let Ok(content) = self.clipboard.smart_clipboard.read_content() {
                     if let codirigent_core::ClipboardContent::Image(ref image_data) = content {
                         let path = self
-                            .clipboard.clipboard_service
+                            .clipboard
+                            .clipboard_service
                             .save_image(image_data)
                             .unwrap_or_default();
                         let file_size = image_data.bytes.len() as u64;
@@ -490,11 +510,13 @@ impl WorkspaceView {
             }
         }
 
-        self.cache.compaction_start_times
+        self.cache
+            .compaction_start_times
             .insert(session_id, Instant::now());
 
         let focus = self
-            .persistence.compaction
+            .persistence
+            .compaction
             .lock()
             .ok()
             .and_then(|svc| svc.config().focus_instructions.clone());
@@ -522,7 +544,10 @@ impl WorkspaceView {
         }
 
         // Never auto-assign to bare shell sessions — CLI must be detected first
-        let cli_type = self.clipboard.clipboard_service.get_session_cli_type(session_id);
+        let cli_type = self
+            .clipboard
+            .clipboard_service
+            .get_session_cli_type(session_id);
         if cli_type == codirigent_core::CliType::GenericShell {
             return;
         }
@@ -572,14 +597,18 @@ impl WorkspaceView {
                 }
 
                 // Send prompt to PTY (format based on CLI type)
-                let cli_type = self.clipboard.clipboard_service.get_session_cli_type(target_id);
+                let cli_type = self
+                    .clipboard
+                    .clipboard_service
+                    .get_session_cli_type(target_id);
                 let input = format_task_input(&prompt, cli_type);
                 if let Ok(mgr) = self.session_manager.lock() {
                     if let Err(e) = mgr.send_input(target_id, input.as_bytes()) {
                         warn!("Failed to send task prompt to session {}: {}", target_id, e);
                     }
                 }
-                self.polling.pending_enters
+                self.polling
+                    .pending_enters
                     .insert(target_id, (Instant::now(), false));
 
                 info!(?task_id, ?target_id, "Auto-assigned task to session");

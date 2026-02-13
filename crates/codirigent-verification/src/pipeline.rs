@@ -548,9 +548,7 @@ mod tests {
     fn test_get_state_not_found() {
         let temp = TempDir::new().unwrap();
         let pipeline = PipelineOrchestrator::new(temp.path().to_path_buf());
-        assert!(pipeline
-            .get_state(&TaskId::from("nonexistent"))
-            .is_none());
+        assert!(pipeline.get_state(&TaskId::from("nonexistent")).is_none());
     }
 
     #[test]
@@ -904,11 +902,17 @@ mod tests {
         let task_id = TaskId::from("test-task");
         let task_id_arc = task_id.0.clone(); // Get Arc reference
 
-        let _ = pipeline.start(task_id.clone(), SessionId(1), temp.path().to_path_buf()).await;
+        let _ = pipeline
+            .start(task_id.clone(), SessionId(1), temp.path().to_path_buf())
+            .await;
 
         // Check that emitted events use same Arc allocation
         while let Ok(event) = rx.try_recv() {
-            if let PipelineEvent::Started { task_id: emitted_id, .. } = event {
+            if let PipelineEvent::Started {
+                task_id: emitted_id,
+                ..
+            } = event
+            {
                 assert!(Arc::ptr_eq(&task_id_arc, &emitted_id.0));
                 break;
             }
