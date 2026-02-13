@@ -8,3 +8,5 @@ exclude:
   - README.md
   - Gemfile
   - Gemfile.lock
+github_username: oso95
+version: 0.1.0
