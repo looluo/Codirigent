@@ -57,6 +57,24 @@ impl WorkspaceView {
         let session_ids: Vec<SessionId> = self.terminals.keys().copied().collect();
         let mut any_dirty = false;
 
+        // Drain VTE PtyWrite responses (DSR, DA1, etc.) and forward to PTY immediately.
+        // This is critical: PowerShell blocks on DSR (\x1b[6n]) until it gets a response.
+        for sid in &session_ids {
+            if let Some(rx) = self.pty_write_receivers.get_mut(sid) {
+                let mut buf = Vec::new();
+                while let Ok(bytes) = rx.try_recv() {
+                    buf.extend_from_slice(&bytes);
+                }
+                if !buf.is_empty() {
+                    if let Ok(mgr) = self.session_manager.lock() {
+                        if let Err(e) = mgr.send_input(*sid, &buf) {
+                            warn!(?sid, error = %e, "Failed to forward VTE PtyWrite response");
+                        }
+                    }
+                }
+            }
+        }
+
         // Decide once whether to run JSONL checks this cycle (throttled to ~1/second)
         let has_any_reader = self.cli_readers.claude.is_some()
             || self.cli_readers.codex.is_some()

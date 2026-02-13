@@ -25,7 +25,8 @@
 //! use codirigent_ui::{Terminal, TerminalView, CodirigentTheme};
 //! use codirigent_core::SessionId;
 //!
-//! let terminal = Terminal::new(24, 80, SessionId(1));
+//! let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+//! let terminal = Terminal::new(24, 80, SessionId(1), tx);
 //! let theme = CodirigentTheme::dark();
 //! let mut view = TerminalView::new(terminal, theme);
 //!
@@ -844,7 +845,8 @@ mod tests {
     use crate::terminal_colors::brighten_color;
 
     fn create_test_view() -> TerminalView {
-        let terminal = Terminal::new(24, 80, SessionId(1));
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let terminal = Terminal::new(24, 80, SessionId(1), tx);
         let theme = CodirigentTheme::dark();
         TerminalView::new(terminal, theme)
     }

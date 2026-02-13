@@ -133,6 +133,7 @@ impl super::gpui::WorkspaceView {
             .text_size(px(base_font_size))
             .child(sidebar)
             .child(content)
+            .into_any_element()
     }
 
     /// Dispatch to the active category's render method.

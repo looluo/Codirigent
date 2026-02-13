@@ -619,7 +619,7 @@ impl WorkspaceView {
                     div()
                         .text_xs()
                         .text_color(git_muted)
-                        .child(branch_label.as_ref()),
+                        .child(branch_label.into_owned()),
                 );
 
             if let Some(count) = hints.git_dirty_count {
@@ -671,7 +671,7 @@ impl WorkspaceView {
                         div()
                             .text_xs()
                             .text_color(group_color)
-                            .child(group_label.as_ref()),
+                            .child(group_label.into_owned()),
                     ),
             );
         }
@@ -867,7 +867,7 @@ impl WorkspaceView {
                     div()
                         .text_xs()
                         .text_color(git_muted)
-                        .child(branch_label.as_ref()),
+                        .child(branch_label.into_owned()),
                 );
 
             if let Some(count) = hints.git_dirty_count {
@@ -919,7 +919,7 @@ impl WorkspaceView {
                         div()
                             .text_xs()
                             .text_color(group_color)
-                            .child(group_label.as_ref()),
+                            .child(group_label.into_owned()),
                     ),
             );
         }

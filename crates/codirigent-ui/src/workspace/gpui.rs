@@ -80,6 +80,8 @@ pub struct WorkspaceView {
     pub(super) task_manager: Arc<Mutex<TaskManager>>,
     /// Terminal views for each session.
     pub(super) terminals: HashMap<SessionId, TerminalView>,
+    /// Receivers for VTE PtyWrite events (DSR responses, etc.) per session.
+    pub(super) pty_write_receivers: HashMap<SessionId, tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>>,
     /// Next session ID counter (kept for UI session tracking).
     pub(super) next_session_id: u64,
     /// Custom layout picker modal state (extracted from deprecated SessionsToolbar).
@@ -158,6 +160,7 @@ impl WorkspaceView {
             detector,
             task_manager,
             terminals: HashMap::new(),
+            pty_write_receivers: HashMap::new(),
             next_session_id: 1,
             custom_picker: CustomLayoutPicker::new(),
             title_bar: crate::title_bar::TitleBar::new(),

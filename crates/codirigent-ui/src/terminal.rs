@@ -17,7 +17,8 @@
 //! use codirigent_ui::terminal::Terminal;
 //! use codirigent_core::SessionId;
 //!
-//! let mut terminal = Terminal::new(24, 80, SessionId(1));
+//! let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+//! let mut terminal = Terminal::new(24, 80, SessionId(1), tx);
 //! terminal.process_output(b"Hello, \x1b[32mWorld\x1b[0m!");
 //! let (row, col) = terminal.cursor_position();
 //! ```
@@ -109,12 +110,15 @@ pub struct TerminalEventHandler {
 }
 
 impl TerminalEventHandler {
-    /// Create a new event handler for the given session.
-    pub fn new(session_id: SessionId) -> Self {
+    /// Create a new event handler with PTY writer (for forwarding VTE responses).
+    pub fn with_pty_writer(
+        session_id: SessionId,
+        pty_writer: mpsc::UnboundedSender<Vec<u8>>,
+    ) -> Self {
         Self {
             session_id,
             clipboard: None,
-            pty_writer: None,
+            pty_writer: Some(pty_writer),
         }
     }
 
@@ -307,24 +311,26 @@ pub struct Terminal {
 impl Terminal {
     /// Create a new terminal with the given dimensions.
     ///
+    /// A `pty_writer` channel is **required** so VTE can forward protocol
+    /// responses (e.g. DSR cursor position reports triggered by `\x1b[6n`)
+    /// back to the PTY. Without this, PowerShell blocks on startup and
+    /// terminals appear black.
+    ///
     /// # Arguments
     ///
     /// * `rows` - Number of visible rows
     /// * `cols` - Number of visible columns
     /// * `session_id` - The session this terminal belongs to
-    ///
-    /// # Example
-    ///
-    /// ```rust,ignore
-    /// use codirigent_ui::terminal::Terminal;
-    /// use codirigent_core::SessionId;
-    ///
-    /// let terminal = Terminal::new(24, 80, SessionId(1));
-    /// ```
-    pub fn new(rows: u16, cols: u16, session_id: SessionId) -> Self {
+    /// * `pty_writer` - Channel for forwarding VTE responses to the PTY
+    pub fn new(
+        rows: u16,
+        cols: u16,
+        session_id: SessionId,
+        pty_writer: mpsc::UnboundedSender<Vec<u8>>,
+    ) -> Self {
         let size = TerminalSize::with_default_cells(rows, cols);
         let config = Config::default();
-        let handler = TerminalEventHandler::new(session_id);
+        let handler = TerminalEventHandler::with_pty_writer(session_id, pty_writer);
 
         let term = Term::new(config, &size, handler);
         let processor = VteProcessor::new();
@@ -333,7 +339,7 @@ impl Terminal {
             session_id = %session_id,
             rows,
             cols,
-            "Created new terminal"
+            "Created new terminal with PTY writer"
         );
 
         Self {
@@ -351,9 +357,14 @@ impl Terminal {
     ///
     /// * `size` - Terminal size configuration
     /// * `session_id` - The session this terminal belongs to
-    pub fn with_size(size: TerminalSize, session_id: SessionId) -> Self {
+    /// * `pty_writer` - Channel for forwarding VTE responses to the PTY
+    pub fn with_size(
+        size: TerminalSize,
+        session_id: SessionId,
+        pty_writer: mpsc::UnboundedSender<Vec<u8>>,
+    ) -> Self {
         let config = Config::default();
-        let handler = TerminalEventHandler::new(session_id);
+        let handler = TerminalEventHandler::with_pty_writer(session_id, pty_writer);
 
         let term = Term::new(config, &size, handler);
         let processor = VteProcessor::new();
@@ -591,6 +602,14 @@ impl Terminal {
 mod tests {
     use super::*;
 
+    /// Create a test terminal with a throwaway PTY writer channel.
+    /// Returns `(terminal, receiver)` — the receiver can be used to
+    /// assert on VTE protocol responses, or simply dropped.
+    fn test_terminal(rows: u16, cols: u16, session_id: SessionId) -> (Terminal, tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>) {
+        let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
+        (Terminal::new(rows, cols, session_id, tx), rx)
+    }
+
     #[test]
     fn test_terminal_size_default() {
         let size = TerminalSize::default();
@@ -610,7 +629,7 @@ mod tests {
 
     #[test]
     fn test_terminal_creation() {
-        let terminal = Terminal::new(24, 80, SessionId(1));
+        let (terminal, _rx) = test_terminal(24, 80, SessionId(1));
         assert!(terminal.is_dirty());
         assert_eq!(terminal.cursor_position(), (0, 0));
         assert_eq!(terminal.rows(), 24);
@@ -621,7 +640,8 @@ mod tests {
     #[test]
     fn test_terminal_with_size() {
         let size = TerminalSize::new(48, 120, 9.0, 18.0);
-        let terminal = Terminal::with_size(size, SessionId(2));
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let terminal = Terminal::with_size(size, SessionId(2), tx);
         assert_eq!(terminal.rows(), 48);
         assert_eq!(terminal.cols(), 120);
         assert_eq!(terminal.size().cell_width, 9.0);
@@ -629,7 +649,7 @@ mod tests {
 
     #[test]
     fn test_process_output_marks_dirty() {
-        let mut terminal = Terminal::new(24, 80, SessionId(1));
+        let (mut terminal, _rx) = test_terminal(24, 80, SessionId(1));
         terminal.mark_clean();
         assert!(!terminal.is_dirty());
 
@@ -639,7 +659,7 @@ mod tests {
 
     #[test]
     fn test_resize() {
-        let mut terminal = Terminal::new(24, 80, SessionId(1));
+        let (mut terminal, _rx) = test_terminal(24, 80, SessionId(1));
         terminal.mark_clean();
 
         terminal.resize(48, 120);
@@ -650,7 +670,7 @@ mod tests {
 
     #[test]
     fn test_resize_with_cells() {
-        let mut terminal = Terminal::new(24, 80, SessionId(1));
+        let (mut terminal, _rx) = test_terminal(24, 80, SessionId(1));
         let new_size = TerminalSize::new(30, 100, 10.0, 20.0);
 
         terminal.resize_with_cells(new_size);
@@ -660,14 +680,14 @@ mod tests {
 
     #[test]
     fn test_cursor_visibility() {
-        let terminal = Terminal::new(24, 80, SessionId(1));
+        let (terminal, _rx) = test_terminal(24, 80, SessionId(1));
         // Default state should have visible cursor
         assert!(terminal.cursor_visible());
     }
 
     #[test]
     fn test_process_escape_sequences() {
-        let mut terminal = Terminal::new(24, 80, SessionId(1));
+        let (mut terminal, _rx) = test_terminal(24, 80, SessionId(1));
 
         // Move cursor to position (5, 10) using ANSI escape sequence
         // ESC [ row ; col H
@@ -681,7 +701,7 @@ mod tests {
 
     #[test]
     fn test_chunked_processing() {
-        let mut terminal = Terminal::new(24, 80, SessionId(1));
+        let (mut terminal, _rx) = test_terminal(24, 80, SessionId(1));
 
         // Process a longer string in chunks
         let data = b"Hello, World! This is a test of chunked processing.";
@@ -692,13 +712,14 @@ mod tests {
 
     #[test]
     fn test_event_handler_session_id() {
-        let handler = TerminalEventHandler::new(SessionId(42));
+        let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
+        let handler = TerminalEventHandler::with_pty_writer(SessionId(42), tx);
         assert_eq!(handler.session_id(), SessionId(42));
     }
 
     #[test]
     fn test_calculate_size_from_pixels() {
-        let terminal = Terminal::new(24, 80, SessionId(1));
+        let (terminal, _rx) = test_terminal(24, 80, SessionId(1));
         // Default cell size is 8x16
         let (rows, cols) = terminal.calculate_size_from_pixels(800.0, 480.0);
         assert_eq!(cols, 100); // 800 / 8 = 100
@@ -707,7 +728,7 @@ mod tests {
 
     #[test]
     fn test_calculate_size_minimum() {
-        let terminal = Terminal::new(24, 80, SessionId(1));
+        let (terminal, _rx) = test_terminal(24, 80, SessionId(1));
         // Very small dimensions should return minimum 1x1
         let (rows, cols) = terminal.calculate_size_from_pixels(1.0, 1.0);
         assert_eq!(rows, 1);
@@ -716,7 +737,7 @@ mod tests {
 
     #[test]
     fn test_resize_to_fit() {
-        let mut terminal = Terminal::new(24, 80, SessionId(1));
+        let (mut terminal, _rx) = test_terminal(24, 80, SessionId(1));
         terminal.resize_to_fit(640.0, 400.0);
         assert_eq!(terminal.cols(), 80); // 640 / 8 = 80
         assert_eq!(terminal.rows(), 25); // 400 / 16 = 25
@@ -724,7 +745,7 @@ mod tests {
 
     #[test]
     fn test_cell_dimensions() {
-        let terminal = Terminal::new(24, 80, SessionId(1));
+        let (terminal, _rx) = test_terminal(24, 80, SessionId(1));
         let (width, height) = terminal.cell_dimensions();
         assert_eq!(width, 8.0);
         assert_eq!(height, 16.0);
@@ -732,15 +753,44 @@ mod tests {
 
     #[test]
     fn test_app_cursor_mode() {
-        let terminal = Terminal::new(24, 80, SessionId(1));
+        let (terminal, _rx) = test_terminal(24, 80, SessionId(1));
         // Default should be off
         assert!(!terminal.app_cursor_mode());
     }
 
     #[test]
     fn test_bracketed_paste_mode() {
-        let terminal = Terminal::new(24, 80, SessionId(1));
+        let (terminal, _rx) = test_terminal(24, 80, SessionId(1));
         // Default should be off
         assert!(!terminal.bracketed_paste_mode());
+    }
+
+    /// Regression test: PowerShell sends DSR (\x1b[6n) on startup and blocks
+    /// until it receives a cursor position response. Without a pty_writer, the
+    /// VTE-generated response is silently dropped and terminals stay black.
+    ///
+    /// This test verifies that Terminal::new forwards VTE PtyWrite events
+    /// (triggered by DSR) back through the channel.
+    #[test]
+    fn test_dsr_response_forwarded_via_pty_writer() {
+        let (mut terminal, mut rx) = test_terminal(24, 80, SessionId(1));
+
+        // Feed a DSR (Device Status Report) query — PowerShell sends this on startup.
+        // The VTE parser should respond with \x1b[<row>;<col>R
+        terminal.process_output(b"\x1b[6n");
+
+        // The response should have been sent through the pty_writer channel
+        let response = rx.try_recv().expect(
+            "VTE PtyWrite response not forwarded — terminals will be black! \
+             Ensure TerminalEventHandler has a pty_writer set.",
+        );
+
+        // Response should be a cursor position report: \x1b[<row>;<col>R
+        let text = String::from_utf8_lossy(&response);
+        assert!(
+            text.contains("\x1b[") && text.ends_with('R'),
+            "Expected cursor position report (\\x1b[row;colR), got: {:?}",
+            text,
+        );
     }
 }

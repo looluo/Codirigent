@@ -107,11 +107,14 @@ impl WorkspaceView {
             });
         }
 
-        // Create terminal emulator for this session
-        let terminal = Terminal::new(24, 80, session_id);
+        // Create terminal emulator for this session with PTY writer channel
+        // so VTE can forward protocol responses (e.g. DSR cursor position) back
+        let (pty_tx, pty_rx) = tokio::sync::mpsc::unbounded_channel();
+        let terminal = Terminal::new(24, 80, session_id, pty_tx);
         let theme = self.workspace.theme();
         let terminal_view = TerminalView::new(terminal, theme.clone());
         self.terminals.insert(session_id, terminal_view);
+        self.pty_write_receivers.insert(session_id, pty_rx);
 
         // Get session from manager (has git_info populated during creation)
         let session = self.with_session_manager(|manager| {
@@ -227,11 +230,13 @@ impl WorkspaceView {
                 });
             }
 
-            // Create terminal view
-            let terminal = Terminal::new(24, 80, session_id);
+            // Create terminal view with PTY writer channel for VTE responses
+            let (pty_tx, pty_rx) = tokio::sync::mpsc::unbounded_channel();
+            let terminal = Terminal::new(24, 80, session_id, pty_tx);
             let theme = self.workspace.theme();
             let terminal_view = TerminalView::new(terminal, theme.clone());
             self.terminals.insert(session_id, terminal_view);
+            self.pty_write_receivers.insert(session_id, pty_rx);
 
             // Get session from manager (has git_info)
             let session = self.with_session_manager(|manager| {
@@ -272,8 +277,9 @@ impl WorkspaceView {
                 detector.stop_monitoring(id);
             });
 
-            // Remove terminal view (from main branch)
+            // Remove terminal view and PTY writer (from main branch)
             self.terminals.remove(&id);
+            self.pty_write_receivers.remove(&id);
 
             // Close PTY session (from main branch)
             self.with_session_manager(|manager| {
@@ -307,8 +313,9 @@ impl WorkspaceView {
             detector.stop_monitoring(id);
         });
 
-        // Remove terminal view
+        // Remove terminal view and PTY writer
         self.terminals.remove(&id);
+        self.pty_write_receivers.remove(&id);
 
         // Close PTY session
         self.with_session_manager(|manager| {
