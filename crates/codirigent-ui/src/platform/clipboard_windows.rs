@@ -220,21 +220,36 @@ impl SmartClipboardProvider for WindowsSmartClipboard {
     /// Returns an error if clipboard access fails.
     fn read_content(&self) -> Result<ClipboardContent> {
         // Check for image first (higher priority for AI CLI use cases)
+        // Prefer CF_DIB raw bytes to avoid format conversion/handle paths.
         if is_format_avail(format_ids::CF_DIB) {
-            // Read raw DIB data
-            let dib_data: Vec<u8> = get_clipboard(formats::Bitmap)
-                .map_err(|e| anyhow!("Failed to read DIB data: {}", e))?;
+            if let Ok(dib_data) = get_clipboard(formats::RawData(format_ids::CF_DIB)) {
+                if !dib_data.is_empty() {
+                    // Ignore malformed DIBs and continue checking other formats.
+                    if let Ok((width, height)) = Self::parse_dib_dimensions(&dib_data) {
+                        return Ok(ClipboardContent::Image(ImageData {
+                            bytes: dib_data,
+                            width,
+                            height,
+                            format: ImageFormat::Dib, // Windows Device Independent Bitmap
+                        }));
+                    }
+                }
+            }
+        }
 
-            if !dib_data.is_empty() {
-                // Parse dimensions from DIB header
-                let (width, height) = Self::parse_dib_dimensions(&dib_data)?;
-
-                return Ok(ClipboardContent::Image(ImageData {
-                    bytes: dib_data,
-                    width,
-                    height,
-                    format: ImageFormat::Dib, // Windows Device Independent Bitmap
-                }));
+        // Fallback for environments that only expose CF_BITMAP.
+        if is_format_avail(format_ids::CF_BITMAP) {
+            if let Ok(bitmap_data) = get_clipboard(formats::Bitmap) {
+                if !bitmap_data.is_empty() {
+                    if let Ok((width, height)) = Self::parse_dib_dimensions(&bitmap_data) {
+                        return Ok(ClipboardContent::Image(ImageData {
+                            bytes: bitmap_data,
+                            width,
+                            height,
+                            format: ImageFormat::Dib,
+                        }));
+                    }
+                }
             }
         }
 
@@ -287,7 +302,13 @@ impl SmartClipboardProvider for WindowsSmartClipboard {
     /// clipboard compatibility. If the bytes are in another format
     /// (PNG, JPEG), they may need conversion before calling this method.
     fn write_image(&self, image: &ImageData) -> Result<()> {
-        set_clipboard(formats::Bitmap, &image.bytes)
+        if image.bytes.is_empty() {
+            return Err(anyhow!("Failed to write image to clipboard: empty image data"));
+        }
+
+        // Write CF_DIB raw bytes directly. This matches how read_content()
+        // prioritizes and parses Windows image clipboard data.
+        set_clipboard(formats::RawData(format_ids::CF_DIB), &image.bytes)
             .map_err(|e| anyhow!("Failed to write image to clipboard: {}", e))
     }
 
@@ -310,6 +331,7 @@ impl SmartClipboardProvider for WindowsSmartClipboard {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serial_test::serial;
 
     #[test]
     fn test_windows_clipboard_new() {
@@ -328,6 +350,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(clipboard)]
     fn test_windows_clipboard_read_write_text() {
         // Note: This test may not work in all CI environments
         // as it requires actual clipboard access
@@ -354,6 +377,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(clipboard)]
     fn test_windows_clipboard_has_changed() {
         let clipboard = WindowsSmartClipboard::new();
 
@@ -462,6 +486,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(clipboard)]
     fn test_windows_clipboard_has_image_returns_bool() {
         let clipboard = WindowsSmartClipboard::new();
         // Should return a boolean without panicking
@@ -470,6 +495,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(clipboard)]
     fn test_windows_clipboard_write_image() {
         let clipboard = WindowsSmartClipboard::new();
 
@@ -491,6 +517,7 @@ mod tests {
     }
 
     #[test]
+    #[serial(clipboard)]
     fn test_windows_clipboard_sequence_number_update() {
         let clipboard = WindowsSmartClipboard::new();
 
