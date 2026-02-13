@@ -140,7 +140,9 @@ impl ThemeManager {
         let theme = Theme::from_json(&content)?;
         let id = theme.id.clone();
         self.themes.insert(id.clone(), theme);
-        Ok(self.themes.get(&id).unwrap())
+        self.themes
+            .get(&id)
+            .ok_or_else(|| anyhow::anyhow!("Theme '{}' not found after insertion", id))
     }
 
     /// Load a theme from a JSON string.
@@ -156,7 +158,9 @@ impl ThemeManager {
         let theme = Theme::from_json(json)?;
         let id = theme.id.clone();
         self.themes.insert(id.clone(), theme);
-        Ok(self.themes.get(&id).unwrap())
+        self.themes
+            .get(&id)
+            .ok_or_else(|| anyhow::anyhow!("Theme '{}' not found after insertion", id))
     }
 
     /// Get the active theme.
