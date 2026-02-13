@@ -484,3 +484,13 @@ footer a:hover {
     justify-content: center;
   }
 }
+
+@keyframes slideIn {
+  from {
+    width: 0;
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
