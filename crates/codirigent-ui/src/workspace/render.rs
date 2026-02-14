@@ -38,7 +38,7 @@ impl WorkspaceView {
         &mut self,
         session_id: SessionId,
         theme: &CodirigentTheme,
-        ime_context: Option<(Entity<WorkspaceView>, FocusHandle, bool)>,
+        ime_context: Option<(Entity<WorkspaceView>, FocusHandle, bool, bool)>,
     ) -> (gpui::AnyElement, Rc<Cell<(f32, f32)>>) {
         let terminal_bg: gpui::Hsla = theme.terminal_background.into();
         let terminal_fg: gpui::Hsla = theme.terminal_foreground.into();
@@ -47,12 +47,11 @@ impl WorkspaceView {
         let canvas_origin: Rc<Cell<(f32, f32)>> = Rc::new(Cell::new((0.0, 0.0)));
 
         // IME pre-edit text should only be shown in the focused terminal pane.
-        let ime_preedit_text = if matches!(ime_context.as_ref(), Some((_, _, true))) {
+        let ime_preedit_text = if matches!(ime_context.as_ref(), Some((_, _, true, true))) {
             self.ime_preedit_text.clone()
         } else {
             None
         };
-
 
         // Get the terminal view for this session
         let Some(terminal_view) = self.terminals_mut().get_mut(&session_id) else {
@@ -274,8 +273,10 @@ impl WorkspaceView {
                     prepaint_data;
 
                 // Register input handler for IME if context is provided and it's the focused pane
-                if let Some((ref entity, ref focus_handle, is_focused)) = ime_context_for_paint {
-                    if is_focused {
+                if let Some((ref entity, ref focus_handle, is_focused, input_enabled)) =
+                    ime_context_for_paint
+                {
+                    if is_focused && input_enabled {
                         window.handle_input(
                             focus_handle,
                             gpui::ElementInputHandler::new(bounds, entity.clone()),

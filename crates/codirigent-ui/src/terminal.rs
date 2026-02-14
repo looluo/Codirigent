@@ -605,7 +605,11 @@ mod tests {
     /// Create a test terminal with a throwaway PTY writer channel.
     /// Returns `(terminal, receiver)` — the receiver can be used to
     /// assert on VTE protocol responses, or simply dropped.
-    fn test_terminal(rows: u16, cols: u16, session_id: SessionId) -> (Terminal, tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>) {
+    fn test_terminal(
+        rows: u16,
+        cols: u16,
+        session_id: SessionId,
+    ) -> (Terminal, tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>) {
         let (tx, rx) = tokio::sync::mpsc::unbounded_channel();
         (Terminal::new(rows, cols, session_id, tx), rx)
     }

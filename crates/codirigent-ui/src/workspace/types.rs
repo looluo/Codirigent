@@ -93,6 +93,9 @@ pub(super) struct TaskCreationModal {
     pub(super) priority: codirigent_core::TaskPriority,
     /// Currently focused form field (0=title, 1=description, 2=plan_file).
     pub(super) focused_field: usize,
+    /// Cursor position (char index) for each field:
+    /// [title, description, plan_file].
+    pub(super) cursor_positions: [usize; 3],
     /// Optional error message if validation fails.
     pub(super) error: Option<String>,
     /// Project directory for this task.
@@ -125,6 +128,8 @@ pub(super) struct ModalState {
     pub task_creation: Option<TaskCreationModal>,
     /// Pending layout profile deletion: (tab_index, profile_name) awaiting confirmation.
     pub pending_profile_deletion: Option<(usize, String)>,
+    /// Whether text cursors in modals should currently be visible.
+    pub cursor_blink_on: bool,
 }
 
 impl ModalState {
@@ -133,6 +138,7 @@ impl ModalState {
             session_action: None,
             task_creation: None,
             pending_profile_deletion: None,
+            cursor_blink_on: true,
         }
     }
 }

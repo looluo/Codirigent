@@ -10,8 +10,8 @@ use crate::toolbar::CustomLayoutMode;
 use codirigent_core::{LayoutNode, SlotId, SplitDirection};
 use gpui::{
     div, prelude::FluentBuilder, px, relative, ClickEvent, Context, FontWeight, Image, ImageFormat,
-    InteractiveElement, IntoElement, MouseButton, ObjectFit, ParentElement,
-    SharedString, StatefulInteractiveElement, Styled, StyledImage,
+    InteractiveElement, IntoElement, MouseButton, ObjectFit, ParentElement, SharedString,
+    StatefulInteractiveElement, Styled, StyledImage,
 };
 use std::sync::Arc;
 
@@ -800,11 +800,14 @@ impl WorkspaceView {
             super::types::SessionActionKind::AssignGroup => "Group Name:",
         };
 
-        // Always show cursor since modal input is always focused
-        let input_value = if modal.input.is_empty() {
-            "|".to_string()
+        let input_value = if self.modals.cursor_blink_on {
+            if modal.input.is_empty() {
+                "|".to_string()
+            } else {
+                format!("{}|", modal.input)
+            }
         } else {
-            format!("{}|", modal.input)
+            modal.input.clone()
         };
 
         Some(

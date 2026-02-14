@@ -5,9 +5,7 @@
 
 use crate::icons;
 use crate::workspace::gpui::WorkspaceView;
-use gpui::{
-    div, px, Context, InteractiveElement, IntoElement, MouseButton, ParentElement, Styled,
-};
+use gpui::{div, px, Context, InteractiveElement, IntoElement, MouseButton, ParentElement, Styled};
 
 impl WorkspaceView {
     pub(super) fn render_icon_rail(&mut self, cx: &mut Context<Self>) -> impl IntoElement {

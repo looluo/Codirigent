@@ -13,9 +13,9 @@ use crate::workspace::gpui::WorkspaceView;
 use crate::workspace::types::HEADER_HEIGHT;
 use codirigent_core::{LayoutNode, SessionId, SlotId, SplitDirection};
 use gpui::{
-    div, px, relative, ClickEvent, Context, Focusable, FontWeight, InteractiveElement,
-    IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement,
-    ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled,
+    div, px, relative, ClickEvent, Context, Focusable, FontWeight, InteractiveElement, IntoElement,
+    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, ScrollWheelEvent,
+    SharedString, StatefulInteractiveElement, Styled,
 };
 use std::rc::Rc;
 use tracing::info;
@@ -592,8 +592,12 @@ impl WorkspaceView {
         let entity = cx.entity();
         let fh = self.focus_handle(cx);
         let is_focused = self.workspace.focused_session_id() == Some(session_id);
-        let (terminal_content, canvas_origin) =
-            self.render_terminal_content(session_id, theme, Some((entity, fh, is_focused)));
+        let input_enabled = !self.has_blocking_modal();
+        let (terminal_content, canvas_origin) = self.render_terminal_content(
+            session_id,
+            theme,
+            Some((entity, fh, is_focused, input_enabled)),
+        );
 
         // Clone canvas_origin for each mouse handler closure
         let origin_for_down = Rc::clone(&canvas_origin);

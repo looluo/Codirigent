@@ -49,10 +49,9 @@ use codirigent_filetree::FileTree;
 use codirigent_session::clipboard_service::DefaultClipboardService;
 use codirigent_session::DefaultSessionManager;
 use gpui::{
-    div, px, App, AppContext, ClickEvent, Context, Entity, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render,
-    StatefulInteractiveElement, Styled, Window, Bounds, EntityInputHandler, Pixels,
-    UTF16Selection,
+    div, px, App, AppContext, Bounds, ClickEvent, Context, Entity, EntityInputHandler, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels, Render,
+    StatefulInteractiveElement, Styled, UTF16Selection, Window,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -84,7 +83,8 @@ pub struct WorkspaceView {
     /// Terminal views for each session.
     pub(super) terminals: HashMap<SessionId, TerminalView>,
     /// Receivers for VTE PtyWrite events (DSR responses, etc.) per session.
-    pub(super) pty_write_receivers: HashMap<SessionId, tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>>,
+    pub(super) pty_write_receivers:
+        HashMap<SessionId, tokio::sync::mpsc::UnboundedReceiver<Vec<u8>>>,
     /// Next session ID counter (kept for UI session tracking).
     pub(super) next_session_id: u64,
     /// Custom layout picker modal state (extracted from deprecated SessionsToolbar).
@@ -161,6 +161,7 @@ impl WorkspaceView {
         workspace.set_theme(theme);
 
         Self::start_output_polling(cx);
+        Self::start_modal_cursor_blink(cx);
 
         let (storage, task_manager) = Self::init_task_manager(event_bus.clone());
         let (file_tree, file_tree_model, project_root) = Self::init_file_tree();
@@ -265,6 +266,25 @@ impl WorkspaceView {
                 if result.is_err() {
                     break;
                 }
+            }
+        })
+        .detach();
+    }
+
+    /// Blink modal text cursors at a steady cadence.
+    fn start_modal_cursor_blink(cx: &mut Context<Self>) {
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(500))
+                .await;
+            let result = this.update(cx, |this, cx| {
+                this.modals.cursor_blink_on = !this.modals.cursor_blink_on;
+                if this.modals.task_creation.is_some() || this.modals.session_action.is_some() {
+                    cx.notify();
+                }
+            });
+            if result.is_err() {
+                break;
             }
         })
         .detach();
@@ -899,6 +919,7 @@ impl WorkspaceView {
 
         // Allow modals to capture input before sending to the terminal.
         if self.handle_modal_key_down(event, cx) {
+            cx.stop_propagation();
             return;
         }
 
@@ -1001,7 +1022,8 @@ impl WorkspaceView {
             alt: event.keystroke.modifiers.alt,
         };
 
-        let mut keystroke = TerminalKeystroke::with_modifiers(event.keystroke.key.clone(), modifiers);
+        let mut keystroke =
+            TerminalKeystroke::with_modifiers(event.keystroke.key.clone(), modifiers);
 
         // Use key_char for IME-composed characters (non-ASCII input like CJK, accented chars)
         if let Some(ref key_char) = event.keystroke.key_char {
@@ -1292,6 +1314,14 @@ impl WorkspaceView {
         }
         false
     }
+
+    /// Returns true when a modal/dialog should block terminal text input.
+    pub(super) fn has_blocking_modal(&self) -> bool {
+        self.custom_picker.is_open
+            || self.modals.session_action.is_some()
+            || self.modals.task_creation.is_some()
+            || self.modals.pending_profile_deletion.is_some()
+    }
 }
 
 impl Focusable for WorkspaceView {
@@ -1356,6 +1386,11 @@ impl EntityInputHandler for WorkspaceView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.has_blocking_modal() {
+            // Modal text fields are handled via key events; do not leak input to PTY.
+            return;
+        }
+
         self.ime_marked_range = None;
         self.ime_preedit_text = None;
         if let Some(session_id) = self.workspace.focused_session_id() {
@@ -1382,6 +1417,12 @@ impl EntityInputHandler for WorkspaceView {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) {
+        if self.has_blocking_modal() {
+            self.ime_marked_range = None;
+            self.ime_preedit_text = None;
+            return;
+        }
+
         let len = text.encode_utf16().count();
         if len == 0 {
             self.ime_marked_range = None;

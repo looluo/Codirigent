@@ -281,4 +281,3 @@ mod tests {
         assert!(!is_terminal_editor("zed"));
     }
 }
-

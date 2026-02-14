@@ -159,48 +159,53 @@ impl WorkspaceView {
         let title_focused = modal.focused_field == 0;
         let desc_focused = modal.focused_field == 1;
         let plan_focused = modal.focused_field == 2;
+        let cursor_visible = self.modals.cursor_blink_on;
 
-        let title_value = if title_focused {
-            if modal.title.is_empty() {
-                "|".to_string()
-            } else {
-                format!("{}|", modal.title)
-            }
-        } else {
-            if modal.title.is_empty() {
-                "Enter task title...".to_string()
-            } else {
-                modal.title.clone()
-            }
-        };
+        let with_cursor =
+            |value: &str, focused: bool, cursor: usize, placeholder: &str| -> String {
+                if !focused {
+                    return if value.is_empty() {
+                        placeholder.to_string()
+                    } else {
+                        value.to_string()
+                    };
+                }
 
-        let description_value = if desc_focused {
-            if modal.description.is_empty() {
-                "|".to_string()
-            } else {
-                format!("{}|", modal.description)
-            }
-        } else {
-            if modal.description.is_empty() {
-                "Enter description...".to_string()
-            } else {
-                modal.description.clone()
-            }
-        };
+                if !cursor_visible {
+                    return value.to_string();
+                }
 
-        let plan_file_value = if plan_focused {
-            if modal.plan_file.is_empty() {
-                "|".to_string()
-            } else {
-                format!("{}|", modal.plan_file)
-            }
-        } else {
-            if modal.plan_file.is_empty() {
-                "e.g. plans/phase-1-stage-2.md".to_string()
-            } else {
-                modal.plan_file.clone()
-            }
-        };
+                let cursor = cursor.min(value.chars().count());
+                let cursor_byte = value
+                    .char_indices()
+                    .nth(cursor)
+                    .map(|(i, _)| i)
+                    .unwrap_or(value.len());
+                let mut out = String::with_capacity(value.len() + 1);
+                out.push_str(&value[..cursor_byte]);
+                out.push('|');
+                out.push_str(&value[cursor_byte..]);
+                out
+            };
+
+        let title_value = with_cursor(
+            &modal.title,
+            title_focused,
+            modal.cursor_positions[0],
+            "Enter task title...",
+        );
+        let description_value = with_cursor(
+            &modal.description,
+            desc_focused,
+            modal.cursor_positions[1],
+            "Enter description...",
+        );
+        let plan_file_value = with_cursor(
+            &modal.plan_file,
+            plan_focused,
+            modal.cursor_positions[2],
+            "e.g. plans/phase-1-stage-2.md",
+        );
 
         let project_dir_display = modal
             .project_dir
@@ -306,6 +311,8 @@ impl WorkspaceView {
                                                         &mut this.modals.task_creation
                                                     {
                                                         modal.focused_field = 0;
+                                                        modal.cursor_positions[0] =
+                                                            modal.title.chars().count();
                                                     }
                                                     cx.notify();
                                                 }),
@@ -355,6 +362,8 @@ impl WorkspaceView {
                                                             &mut this.modals.task_creation
                                                         {
                                                             modal.focused_field = 1;
+                                                            modal.cursor_positions[1] =
+                                                                modal.description.chars().count();
                                                         }
                                                         cx.notify();
                                                     }),
@@ -458,6 +467,8 @@ impl WorkspaceView {
                                                         &mut this.modals.task_creation
                                                     {
                                                         modal.focused_field = 2;
+                                                        modal.cursor_positions[2] =
+                                                            modal.plan_file.chars().count();
                                                     }
                                                     cx.notify();
                                                 }),

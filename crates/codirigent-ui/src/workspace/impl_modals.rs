@@ -71,6 +71,7 @@ impl WorkspaceView {
             description: String::new(),
             priority: codirigent_core::TaskPriority::Medium,
             focused_field: 0,
+            cursor_positions: [0, 0, 0],
             error: None,
             project_dir,
             plan_file: String::new(),
@@ -101,6 +102,13 @@ impl WorkspaceView {
             description: String::new(),
             priority: codirigent_core::TaskPriority::Medium,
             focused_field: 0,
+            cursor_positions: [
+                path.file_name()
+                    .map(|n| n.to_string_lossy().chars().count())
+                    .unwrap_or(0),
+                0,
+                relative_path.to_string_lossy().chars().count(),
+            ],
             error: None,
             project_dir,
             plan_file: relative_path.to_string_lossy().to_string(),
@@ -125,6 +133,14 @@ impl WorkspaceView {
             description: task.description.clone(),
             priority: task.priority,
             focused_field: 0,
+            cursor_positions: [
+                task.title.chars().count(),
+                task.description.chars().count(),
+                task.plan_file
+                    .as_ref()
+                    .map(|s| s.chars().count())
+                    .unwrap_or(0),
+            ],
             error: None,
             project_dir: task.project_dir.clone(),
             plan_file: task.plan_file.clone().unwrap_or_default(),
@@ -321,6 +337,89 @@ impl WorkspaceView {
         true
     }
 
+    fn char_count(text: &str) -> usize {
+        text.chars().count()
+    }
+
+    fn byte_index_for_char(text: &str, char_index: usize) -> usize {
+        if char_index == 0 {
+            return 0;
+        }
+        text.char_indices()
+            .nth(char_index)
+            .map(|(i, _)| i)
+            .unwrap_or(text.len())
+    }
+
+    fn focused_field_and_cursor_mut(
+        modal: &mut TaskCreationModal,
+    ) -> Option<(&mut String, &mut usize)> {
+        match modal.focused_field {
+            0 => Some((&mut modal.title, &mut modal.cursor_positions[0])),
+            1 => Some((&mut modal.description, &mut modal.cursor_positions[1])),
+            2 => Some((&mut modal.plan_file, &mut modal.cursor_positions[2])),
+            _ => None,
+        }
+    }
+
+    fn clamp_task_modal_cursor(modal: &mut TaskCreationModal) {
+        let title_len = Self::char_count(&modal.title);
+        let desc_len = Self::char_count(&modal.description);
+        let plan_len = Self::char_count(&modal.plan_file);
+        modal.cursor_positions[0] = modal.cursor_positions[0].min(title_len);
+        modal.cursor_positions[1] = modal.cursor_positions[1].min(desc_len);
+        modal.cursor_positions[2] = modal.cursor_positions[2].min(plan_len);
+    }
+
+    fn insert_at_cursor(field: &mut String, cursor: &mut usize, text: &str) {
+        let cursor_byte = Self::byte_index_for_char(field, *cursor);
+        field.insert_str(cursor_byte, text);
+        *cursor += text.chars().count();
+    }
+
+    fn backspace_at_cursor(field: &mut String, cursor: &mut usize) {
+        if *cursor == 0 {
+            return;
+        }
+        let end = Self::byte_index_for_char(field, *cursor);
+        let start = Self::byte_index_for_char(field, *cursor - 1);
+        field.replace_range(start..end, "");
+        *cursor -= 1;
+    }
+
+    fn delete_at_cursor(field: &mut String, cursor: &mut usize) {
+        let len = Self::char_count(field);
+        if *cursor >= len {
+            return;
+        }
+        let start = Self::byte_index_for_char(field, *cursor);
+        let end = Self::byte_index_for_char(field, *cursor + 1);
+        field.replace_range(start..end, "");
+    }
+
+    fn move_cursor_left(field: &str, cursor: &mut usize) {
+        let len = Self::char_count(field);
+        *cursor = (*cursor).min(len);
+        if *cursor > 0 {
+            *cursor -= 1;
+        }
+    }
+
+    fn move_cursor_right(field: &str, cursor: &mut usize) {
+        let len = Self::char_count(field);
+        if *cursor < len {
+            *cursor += 1;
+        }
+    }
+
+    fn move_cursor_home(cursor: &mut usize) {
+        *cursor = 0;
+    }
+
+    fn move_cursor_end(field: &str, cursor: &mut usize) {
+        *cursor = Self::char_count(field);
+    }
+
     pub(super) fn handle_task_creation_key_down(
         &mut self,
         event: &KeyDownEvent,
@@ -329,6 +428,7 @@ impl WorkspaceView {
         let Some(modal) = self.modals.task_creation.as_mut() else {
             return false;
         };
+        Self::clamp_task_modal_cursor(modal);
 
         let key = event.keystroke.key.to_lowercase();
         match key.as_str() {
@@ -342,7 +442,9 @@ impl WorkspaceView {
                 if modal.focused_field == 0 || modal.focused_field == 2 {
                     self.apply_task_creation_modal(cx);
                 } else {
-                    modal.description.push('\n');
+                    if let Some((field, cursor)) = Self::focused_field_and_cursor_mut(modal) {
+                        Self::insert_at_cursor(field, cursor, "\n");
+                    }
                     cx.notify();
                 }
                 return true;
@@ -354,28 +456,52 @@ impl WorkspaceView {
                 return true;
             }
             "backspace" => {
-                match modal.focused_field {
-                    0 => {
-                        modal.title.pop();
-                    }
-                    1 => {
-                        modal.description.pop();
-                    }
-                    2 => {
-                        modal.plan_file.pop();
-                    }
-                    _ => {}
+                if let Some((field, cursor)) = Self::focused_field_and_cursor_mut(modal) {
+                    Self::backspace_at_cursor(field, cursor);
                 }
                 modal.error = None;
                 cx.notify();
                 return true;
             }
+            "delete" => {
+                if let Some((field, cursor)) = Self::focused_field_and_cursor_mut(modal) {
+                    Self::delete_at_cursor(field, cursor);
+                }
+                modal.error = None;
+                cx.notify();
+                return true;
+            }
+            "left" | "arrowleft" => {
+                if let Some((field, cursor)) = Self::focused_field_and_cursor_mut(modal) {
+                    Self::move_cursor_left(field, cursor);
+                }
+                cx.notify();
+                return true;
+            }
+            "right" | "arrowright" => {
+                if let Some((field, cursor)) = Self::focused_field_and_cursor_mut(modal) {
+                    Self::move_cursor_right(field, cursor);
+                }
+                cx.notify();
+                return true;
+            }
+            "home" => {
+                if let Some((_, cursor)) = Self::focused_field_and_cursor_mut(modal) {
+                    Self::move_cursor_home(cursor);
+                }
+                cx.notify();
+                return true;
+            }
+            "end" => {
+                if let Some((field, cursor)) = Self::focused_field_and_cursor_mut(modal) {
+                    Self::move_cursor_end(field, cursor);
+                }
+                cx.notify();
+                return true;
+            }
             "space" => {
-                match modal.focused_field {
-                    0 => modal.title.push(' '),
-                    1 => modal.description.push(' '),
-                    2 => modal.plan_file.push(' '),
-                    _ => {}
+                if let Some((field, cursor)) = Self::focused_field_and_cursor_mut(modal) {
+                    Self::insert_at_cursor(field, cursor, " ");
                 }
                 modal.error = None;
                 cx.notify();
@@ -386,11 +512,9 @@ impl WorkspaceView {
 
         // Ctrl+A selects all (clears focused field for easy replacement)
         if (event.keystroke.modifiers.control || event.keystroke.modifiers.platform) && key == "a" {
-            match modal.focused_field {
-                0 => modal.title.clear(),
-                1 => modal.description.clear(),
-                2 => modal.plan_file.clear(),
-                _ => {}
+            if let Some((field, cursor)) = Self::focused_field_and_cursor_mut(modal) {
+                field.clear();
+                *cursor = 0;
             }
             modal.error = None;
             cx.notify();
@@ -401,11 +525,8 @@ impl WorkspaceView {
         if (event.keystroke.modifiers.control || event.keystroke.modifiers.platform) && key == "v" {
             if let Ok(content) = self.clipboard.smart_clipboard.read_content() {
                 if let codirigent_core::ClipboardContent::Text(text) = content {
-                    match modal.focused_field {
-                        0 => modal.title.push_str(&text),
-                        1 => modal.description.push_str(&text),
-                        2 => modal.plan_file.push_str(&text),
-                        _ => {}
+                    if let Some((field, cursor)) = Self::focused_field_and_cursor_mut(modal) {
+                        Self::insert_at_cursor(field, cursor, &text);
                     }
                     modal.error = None;
                     cx.notify();
@@ -423,14 +544,9 @@ impl WorkspaceView {
         }
 
         if let Some(ref key_char) = event.keystroke.key_char {
-            if let Some(ch) = key_char.chars().next() {
-                if ch.is_ascii_graphic() || ch == ' ' || ch == '\n' {
-                    match modal.focused_field {
-                        0 => modal.title.push(ch),
-                        1 => modal.description.push(ch),
-                        2 => modal.plan_file.push(ch),
-                        _ => {}
-                    }
+            if !key_char.is_empty() {
+                if let Some((field, cursor)) = Self::focused_field_and_cursor_mut(modal) {
+                    Self::insert_at_cursor(field, cursor, key_char);
                     modal.error = None;
                     cx.notify();
                 }
