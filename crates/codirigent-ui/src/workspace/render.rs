@@ -27,10 +27,10 @@ use crate::title_bar::TitleBar;
 use crate::toolbar::CustomLayoutMode;
 use codirigent_core::{LayoutNode, Session, SessionId, SlotId, SplitDirection};
 use gpui::{
-    div, prelude::FluentBuilder, px, relative, ClickEvent, Context, FontWeight, Image, ImageFormat,
-    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ObjectFit, ParentElement, ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled,
-    StyledImage, Window, WindowControlArea,
+    div, prelude::FluentBuilder, px, relative, ClickEvent, Context, Entity, FocusHandle,
+    FontWeight, Image, ImageFormat, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ObjectFit, ParentElement, ScrollWheelEvent, SharedString,
+    StatefulInteractiveElement, Styled, StyledImage, Window, WindowControlArea,
 };
 use std::borrow::Cow;
 use std::cell::Cell;
@@ -43,12 +43,14 @@ impl WorkspaceView {
         &mut self,
         session_id: SessionId,
         theme: &CodirigentTheme,
+        ime_context: Option<(Entity<WorkspaceView>, FocusHandle, bool)>,
     ) -> (gpui::AnyElement, Rc<Cell<(f32, f32)>>) {
         let terminal_bg: gpui::Hsla = theme.terminal_background.into();
         let terminal_fg: gpui::Hsla = theme.terminal_foreground.into();
 
         // Shared cell for canvas origin (updated during prepaint)
         let canvas_origin: Rc<Cell<(f32, f32)>> = Rc::new(Cell::new((0.0, 0.0)));
+
 
         // Get the terminal view for this session
         let Some(terminal_view) = self.terminals_mut().get_mut(&session_id) else {
@@ -110,6 +112,9 @@ impl WorkspaceView {
 
         // Clone Rc for capture into the canvas prepaint closure
         let canvas_origin_for_prepaint = Rc::clone(&canvas_origin);
+
+        // Capture IME context for paint closure
+        let ime_context_for_paint = ime_context.clone();
 
         // Build canvas element that paints directly
         let terminal_canvas = gpui::canvas(
@@ -211,7 +216,7 @@ impl WorkspaceView {
                 )
             },
             // Paint: draw backgrounds, text, and cursor
-            move |_bounds: gpui::Bounds<gpui::Pixels>,
+            move |bounds: gpui::Bounds<gpui::Pixels>,
                   prepaint_data: (
                 f32,
                 f32,
@@ -224,6 +229,17 @@ impl WorkspaceView {
                   window: &mut gpui::Window,
                   cx: &mut gpui::App| {
                 let (ox, oy, bg_rects, shaped_runs, cursor_data, cell_w, cell_h) = prepaint_data;
+
+                // Register input handler for IME if context is provided and it's the focused pane
+                if let Some((ref entity, ref focus_handle, is_focused)) = ime_context_for_paint {
+                    if is_focused {
+                        window.handle_input(
+                            focus_handle,
+                            gpui::ElementInputHandler::new(bounds, entity.clone()),
+                            cx,
+                        );
+                    }
+                }
 
                 // 1. Paint background rectangles
                 for (row, start_col, end_col, bg_color) in &bg_rects {

@@ -16,10 +16,10 @@ use crate::workspace::gpui::WorkspaceView;
 use crate::workspace::types::HEADER_HEIGHT;
 use codirigent_core::{LayoutNode, Session, SessionId, SlotId, SplitDirection};
 use gpui::{
-    div, prelude::FluentBuilder, px, relative, ClickEvent, Context, FontWeight, Image, ImageFormat,
-    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
-    ObjectFit, ParentElement, ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled,
-    StyledImage,
+    div, prelude::FluentBuilder, px, relative, ClickEvent, Context, Focusable, FontWeight, Image,
+    ImageFormat, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
+    MouseUpEvent, ObjectFit, ParentElement, ScrollWheelEvent, SharedString,
+    StatefulInteractiveElement, Styled, StyledImage,
 };
 use std::rc::Rc;
 use std::sync::Arc;
@@ -88,7 +88,7 @@ impl WorkspaceView {
                         .child({
                             // Terminal content area
                             let (terminal_content, _canvas_origin) =
-                                self.render_terminal_content(info.session_id, &theme);
+                                self.render_terminal_content(info.session_id, &theme, None);
                             terminal_content
                         })
                 } else {
@@ -595,7 +595,11 @@ impl WorkspaceView {
 
         // Render terminal content before building the div tree so the
         // mutable borrow on `self` is released before `cx.listener()`.
-        let (terminal_content, canvas_origin) = self.render_terminal_content(session_id, theme);
+        let entity = cx.entity();
+        let fh = self.focus_handle(cx);
+        let is_focused = self.workspace.focused_session_id() == Some(session_id);
+        let (terminal_content, canvas_origin) =
+            self.render_terminal_content(session_id, theme, Some((entity, fh, is_focused)));
 
         // Clone canvas_origin for each mouse handler closure
         let origin_for_down = Rc::clone(&canvas_origin);

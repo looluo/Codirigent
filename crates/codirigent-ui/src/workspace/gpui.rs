@@ -54,6 +54,7 @@ use gpui::{
     div, px, App, AppContext, ClickEvent, Context, Entity, FocusHandle, Focusable,
     InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render,
     StatefulInteractiveElement, Styled, Window,
+    ElementInputHandler, EntityInputHandler, UTF16Selection, Bounds, Pixels,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -70,6 +71,8 @@ pub struct WorkspaceView {
     pub(super) workspace: Workspace,
     /// Focus handle for keyboard navigation.
     focus_handle: FocusHandle,
+    /// IME composition state: range of marked (composing) text.
+    pub(super) ime_marked_range: Option<std::ops::Range<usize>>,
     /// Event bus for cross-module communication.
     pub(super) event_bus: Arc<DefaultEventBus>,
     /// Session manager for PTY and session lifecycle.
@@ -155,6 +158,7 @@ impl WorkspaceView {
         let mut view = Self {
             workspace,
             focus_handle: cx.focus_handle(),
+            ime_marked_range: None,
             event_bus,
             session_manager,
             detector,
@@ -946,7 +950,14 @@ impl WorkspaceView {
             alt: event.keystroke.modifiers.alt,
         };
 
-        let keystroke = TerminalKeystroke::with_modifiers(event.keystroke.key.clone(), modifiers);
+        let mut keystroke = TerminalKeystroke::with_modifiers(event.keystroke.key.clone(), modifiers);
+
+        // Use key_char for IME-composed characters (non-ASCII input like CJK, accented chars)
+        if let Some(ref key_char) = event.keystroke.key_char {
+            if key_char.chars().any(|c| !c.is_ascii()) {
+                keystroke.ime_key = Some(key_char.clone());
+            }
+        }
 
         // Convert to bytes
         if let Some(bytes) = key_to_bytes(&keystroke, term_mode) {
@@ -1235,6 +1246,91 @@ impl WorkspaceView {
 impl Focusable for WorkspaceView {
     fn focus_handle(&self, _cx: &App) -> FocusHandle {
         self.focus_handle.clone()
+    }
+}
+
+impl EntityInputHandler for WorkspaceView {
+    fn text_for_range(
+        &mut self,
+        _range: std::ops::Range<usize>,
+        _adjusted_range: &mut Option<std::ops::Range<usize>>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<String> {
+        None
+    }
+
+    fn selected_text_range(
+        &mut self,
+        _ignore_selection_if_not_focused: bool,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<UTF16Selection> {
+        Some(UTF16Selection {
+            range: 0..0,
+            reversed: false,
+        })
+    }
+
+    fn marked_text_range(
+        &self,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<std::ops::Range<usize>> {
+        self.ime_marked_range.clone()
+    }
+
+    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+        self.ime_marked_range = None;
+    }
+
+    fn replace_text_in_range(
+        &mut self,
+        _range: Option<std::ops::Range<usize>>,
+        text: &str,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.ime_marked_range = None;
+        if let Some(session_id) = self.workspace.focused_session_id() {
+            let text_bytes = text.as_bytes().to_vec();
+
+            self.with_session_manager(move |sm| {
+                let _ = sm.send_input(session_id, &text_bytes);
+            });
+        }
+        cx.notify();
+    }
+
+    fn replace_and_mark_text_in_range(
+        &mut self,
+        _range: Option<std::ops::Range<usize>>,
+        text: &str,
+        _mark_range: Option<std::ops::Range<usize>>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) {
+        let len = text.encode_utf16().count();
+        self.ime_marked_range = Some(0..len);
+    }
+
+    fn bounds_for_range(
+        &mut self,
+        _range: std::ops::Range<usize>,
+        _element_bounds: Bounds<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<Bounds<Pixels>> {
+        Some(_element_bounds)
+    }
+
+    fn character_index_for_point(
+        &mut self,
+        _point: gpui::Point<Pixels>,
+        _window: &mut Window,
+        _cx: &mut Context<Self>,
+    ) -> Option<usize> {
+        Some(0)
     }
 }
 
