@@ -11,12 +11,13 @@
 //! - `response_item` — messages and function calls
 //! - `event_msg` — events like turn completion
 
-use crate::session_reader_common::read_file_tail;
+use crate::session_reader_common::{is_file_recent, read_file_tail};
 use crate::CliSessionStatus;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use std::time::SystemTime;
 use tracing::{debug, trace};
 
@@ -92,20 +93,42 @@ impl CodexSessionReader {
     /// project-specific rollout file under `~/.codex/sessions/`.
     /// `_pid` is accepted for API consistency but not used (Codex uses different file naming).
     pub fn get_status(&mut self, working_dir: &Path, _pid: Option<u32>) -> CodexSessionStatus {
+        self.get_status_if_recent(working_dir, _pid, Duration::MAX)
+            .unwrap_or(CodexSessionStatus::Unknown)
+    }
+
+    /// Get the status of a Codex CLI session if its rollout file is recent enough.
+    ///
+    /// This avoids false positives from old rollout files on generic shells.
+    pub fn get_status_if_recent(
+        &mut self,
+        working_dir: &Path,
+        _pid: Option<u32>,
+        max_age: Duration,
+    ) -> Option<CodexSessionStatus> {
         let Some(rollout_path) = self.find_rollout_file(working_dir) else {
             trace!(?working_dir, "No Codex rollout file found");
-            return CodexSessionStatus::Unknown;
+            return None;
         };
+
+        if !is_file_recent(&rollout_path, max_age) {
+            debug!(
+                ?rollout_path,
+                ?max_age,
+                "Skip stale Codex rollout file while probing GenericShell"
+            );
+            return None;
+        }
 
         // Read session metadata (first line) for approval mode
         let approval_mode = self.read_approval_mode(&rollout_path);
 
         // Read tail of file for recent entries
         let Some(tail) = read_file_tail(&rollout_path, 131_072) else {
-            return CodexSessionStatus::Unknown;
+            return Some(CodexSessionStatus::Unknown);
         };
 
-        self.determine_status(&tail, &approval_mode)
+        Some(self.determine_status(&tail, &approval_mode))
     }
 
     /// Find the rollout file for a given working directory.
@@ -390,6 +413,49 @@ mod tests {
             reader.determine_status(tail, &ApprovalMode::Suggest),
             CodexSessionStatus::NeedsAttention { detail: None }
         );
+    }
+
+    #[test]
+    fn test_get_status_if_recent_applies_age_gate() {
+        let tmp = TempDir::new().unwrap();
+        let sessions_dir = tmp
+            .path()
+            .join("sessions")
+            .join("2026")
+            .join("02")
+            .join("14");
+        std::fs::create_dir_all(&sessions_dir).unwrap();
+
+        let rollout_path = sessions_dir.join("rollout-recent.jsonl");
+        std::fs::write(
+            &rollout_path,
+            r#"{"type":"session_meta","payload":{"cwd":"/Users/test/project","approval_mode":"suggest"}}
+{"type":"event_msg","payload":{"type":"turn_complete"}}"#,
+        )
+        .unwrap();
+
+        let mut reader = CodexSessionReader {
+            codex_home: tmp.path().to_path_buf(),
+            session_file_cache: HashMap::new(),
+        };
+
+        let fresh = reader.get_status_if_recent(
+            Path::new("/Users/test/project"),
+            None,
+            std::time::Duration::from_secs(10),
+        );
+        assert_eq!(
+            fresh,
+            Some(CodexSessionStatus::NeedsAttention { detail: None })
+        );
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let stale = reader.get_status_if_recent(
+            Path::new("/Users/test/project"),
+            None,
+            std::time::Duration::from_nanos(1),
+        );
+        assert!(stale.is_none());
     }
 
     #[test]

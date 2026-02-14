@@ -9,13 +9,16 @@
 //! - Whether it has a pending tool use awaiting permission
 //! - Whether it has finished its turn and is idle
 
-use crate::session_reader_common::{is_timestamp_recent, read_file_tail};
+use crate::session_reader_common::{is_file_recent, is_timestamp_recent, read_file_tail};
 use crate::CliSessionStatus;
+use chrono::{DateTime, Utc};
 use serde::Deserialize;
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use std::time::SystemTime;
+use std::time::UNIX_EPOCH;
 use tracing::{debug, trace};
 
 /// Status derived from Claude Code's JSONL logs.
@@ -25,11 +28,33 @@ pub type ClaudeSessionStatus = CliSessionStatus;
 pub struct ClaudeSessionReader {
     /// Path to ~/.claude
     claude_home: PathBuf,
+    /// Cached session file selection per working directory.
+    ///
+    /// Claude can reuse a project directory across many sessions. Keeping the last
+    /// identified session file avoids re-anchoring to stale history files between
+    /// status polls.
+    session_file_cache: HashMap<String, SessionFileHint>,
+}
+
+#[derive(Debug, Clone)]
+struct SessionFileHint {
+    /// Last resolved Claude session file path for the working directory.
+    path: PathBuf,
+    /// Optional session identifier parsed from the file.
+    session_id: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+struct WorkingDirSessionCandidate {
+    has_entries: bool,
+    latest_ts: Option<SystemTime>,
+    mtime: SystemTime,
+    path: PathBuf,
 }
 
 /// Parsed entry from a Claude Code JSONL conversation log.
 ///
-/// Uses `#[serde(deny_unknown_fields)]` is intentionally NOT set — JSONL entries
+/// Uses `#[serde(deny_unknown_fields)]` is intentionally NOT set; JSONL entries
 /// contain many fields we don't need; lenient deserialization skips them.
 #[derive(Debug, Deserialize)]
 struct JsonlEntry {
@@ -45,6 +70,34 @@ struct JsonlEntry {
     /// Nested payload for newer "progress" envelope format.
     #[serde(default)]
     data: Option<JsonlData>,
+}
+
+#[derive(Debug, Deserialize)]
+struct JsonlProbe {
+    #[serde(rename = "sessionId", default)]
+    session_id: Option<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+}
+
+/// `sessions-index.json` entry used by Claude CLI.
+#[derive(Debug, Deserialize)]
+struct SessionsIndex {
+    #[serde(default)]
+    entries: Vec<SessionsIndexEntry>,
+}
+
+/// One entry in `sessions-index.json`.
+#[derive(Debug, Deserialize)]
+struct SessionsIndexEntry {
+    #[serde(rename = "sessionId", default)]
+    _session_id: Option<String>,
+    #[serde(rename = "fullPath", default)]
+    full_path: Option<String>,
+    #[serde(rename = "fileMtime", default)]
+    file_mtime: Option<i64>,
+    #[serde(rename = "projectPath", default)]
+    project_path: Option<String>,
 }
 
 /// Data payload in newer Claude JSONL "progress" envelope format.
@@ -112,7 +165,10 @@ impl ClaudeSessionReader {
             debug!("~/.claude not found, Claude session reader disabled");
             return None;
         }
-        Some(Self { claude_home })
+        Some(Self {
+            claude_home,
+            session_file_cache: HashMap::new(),
+        })
     }
 
     /// Get the status of a Claude Code session by reading its JSONL log.
@@ -122,18 +178,67 @@ impl ClaudeSessionReader {
     /// `pid` is the Claude Code child PID, used to find the correct JSONL file
     /// via `lsof` when multiple sessions share the same project directory.
     pub fn get_status(&mut self, working_dir: &Path, pid: Option<u32>) -> ClaudeSessionStatus {
+        self.get_status_if_recent(working_dir, pid, Duration::MAX)
+            .unwrap_or(ClaudeSessionStatus::Unknown)
+    }
+
+    /// Get the status of a Claude Code session if its JSONL file is recent enough.
+    ///
+    /// This is used to avoid false positives from stale log files on sessions
+    /// that are actually still generic shells.
+    pub fn get_status_if_recent(
+        &mut self,
+        working_dir: &Path,
+        pid: Option<u32>,
+        max_age: Duration,
+    ) -> Option<ClaudeSessionStatus> {
         let Some(session_dir) = self.find_session_dir(working_dir) else {
             debug!(?working_dir, "No Claude session dir found");
-            return ClaudeSessionStatus::Unknown;
+            return None;
         };
 
-        let entries = self.read_recent_entries(&session_dir, 20, pid);
-        if entries.is_empty() {
-            debug!(?session_dir, "JSONL: no entries parsed from session dir");
-            return ClaudeSessionStatus::Unknown;
+        let Some(jsonl_path) = self.find_jsonl_for_pid(&session_dir, working_dir, pid) else {
+            debug!(?session_dir, ?pid, "No Claude JSONL file found");
+            return None;
+        };
+
+        if !is_file_recent(&jsonl_path, max_age) {
+            self.clear_cached_session_file_for_working_dir(working_dir);
+            debug!(
+                ?jsonl_path,
+                ?max_age,
+                "Skip stale Claude JSONL file while in GenericShell probe"
+            );
+            return None;
         }
 
-        self.determine_status(&entries)
+        self.cache_session_file(working_dir, &jsonl_path);
+
+        let entries = Self::read_recent_entries_from_path(&jsonl_path, 20);
+        if entries.is_empty() {
+            debug!(
+                ?jsonl_path,
+                "JSONL: no entries parsed from Claude session file"
+            );
+            return Some(ClaudeSessionStatus::Unknown);
+        }
+
+        Some(self.determine_status(&entries))
+    }
+
+    fn clear_cached_session_file_for_working_dir(&mut self, working_dir: &Path) {
+        self.session_file_cache
+            .remove(&Self::path_lookup_key(working_dir));
+    }
+
+    fn cache_session_file(&mut self, working_dir: &Path, jsonl_path: &Path) {
+        self.session_file_cache.insert(
+            Self::path_lookup_key(working_dir),
+            SessionFileHint {
+                path: jsonl_path.to_path_buf(),
+                session_id: Self::read_session_id_from_file(jsonl_path),
+            },
+        );
     }
 
     /// Find the Claude Code session directory for a given working directory.
@@ -276,21 +381,27 @@ impl ClaudeSessionReader {
     ///
     /// Uses PID-based matching (via `lsof`) when available, falling back to
     /// most-recently-modified file. Uses seek-from-end for efficiency.
+    #[cfg(test)]
     fn read_recent_entries(
-        &self,
+        &mut self,
         session_dir: &Path,
         max_entries: usize,
         pid: Option<u32>,
     ) -> Vec<JsonlEntry> {
-        let Some(jsonl_path) = Self::find_jsonl_for_pid(session_dir, pid) else {
+        let Some(jsonl_path) = self.find_jsonl_for_pid(session_dir, session_dir, pid) else {
             return Vec::new();
         };
+        Self::read_recent_entries_from_path(&jsonl_path, max_entries)
+    }
+
+    /// Read recent entries from a specific Claude JSONL file.
+    fn read_recent_entries_from_path(jsonl_path: &Path, max_entries: usize) -> Vec<JsonlEntry> {
         let Some(tail) = read_file_tail(&jsonl_path, 524_288) else {
             return Vec::new();
         };
 
         // Parse JSONL lines (last N entries).
-        // Only keep assistant and human entries — progress/system/queue-operation
+        // Only keep assistant and human entries --progress/system/queue-operation
         // entries are never used by determine_status() and can flood the buffer
         // (Claude Code emits many large progress entries during streaming).
         let mut entries = Vec::new();
@@ -338,18 +449,46 @@ impl ClaudeSessionReader {
         entries
     }
 
-    /// Find the JSONL file that the given Claude Code PID has open.
-    /// Uses cross-platform PID-based file detection, falling back to
-    /// most-recently-modified file if no match is found or no PID provided.
-    fn find_jsonl_for_pid(dir: &Path, pid: Option<u32>) -> Option<PathBuf> {
+    /// Find the JSONL file for the active Claude session.
+    ///
+    /// Resolution strategy:
+    /// 1. Return cached session file if it still matches.
+    /// 2. PID-based file-handle match if possible.
+    /// 3. Project `sessions-index.json` mapping.
+    /// 4. Working-directory scan.
+    /// 5. Most-recently-modified `.jsonl` fallback.
+    fn find_jsonl_for_pid(
+        &mut self,
+        dir: &Path,
+        working_dir: &Path,
+        pid: Option<u32>,
+    ) -> Option<PathBuf> {
+        let working_dir_key = Self::path_lookup_key(working_dir);
+
+        if let Some(cached) = self.session_file_cache.get(&working_dir_key).cloned() {
+            if self.is_working_dir_session_match(
+                &cached.path,
+                working_dir,
+                cached.session_id.as_deref(),
+            ) {
+                debug!(
+                    ?working_dir_key,
+                    ?cached.path,
+                    "Using cached Claude session file by working directory"
+                );
+                return Some(cached.path);
+            }
+            self.session_file_cache.remove(&working_dir_key);
+        }
+
         if let Some(pid) = pid {
             let candidates: Vec<PathBuf> = fs::read_dir(dir)
                 .ok()
                 .into_iter()
                 .flatten()
                 .flatten()
-                .filter(|e| e.path().extension().and_then(|x| x.to_str()) == Some("jsonl"))
-                .map(|e| e.path())
+                .filter(|entry| entry.path().extension().and_then(|x| x.to_str()) == Some("jsonl"))
+                .map(|entry| entry.path())
                 .collect();
 
             if !candidates.is_empty() {
@@ -357,12 +496,272 @@ impl ClaudeSessionReader {
                     codirigent_detector::find_file_opened_by_pid(&candidates, pid)
                 {
                     debug!(pid, ?match_path, "PID-based JSONL match found");
+                    self.cache_session_file(working_dir, &match_path);
                     return Some(match_path);
                 }
-                debug!(pid, "No PID-based JSONL match, falling back to mtime");
+                debug!(
+                    pid,
+                    "No PID-based JSONL match, falling back to directory scan"
+                );
             }
         }
-        Self::find_most_recent_jsonl(dir)
+
+        if let Some(index_path) = Self::find_jsonl_from_index(dir, working_dir) {
+            self.cache_session_file(working_dir, &index_path);
+            return Some(index_path);
+        }
+
+        if let Some(session_file) = Self::find_jsonl_by_working_dir(dir, working_dir) {
+            self.cache_session_file(working_dir, &session_file);
+            return Some(session_file);
+        }
+
+        if let Some(session_file) = Self::find_most_recent_jsonl(dir) {
+            self.cache_session_file(working_dir, &session_file);
+            return Some(session_file);
+        }
+
+        None
+    }
+
+    /// Validate a candidate session file for the provided working directory.
+    /// If an expected session_id is provided, require that id to match.
+    fn is_working_dir_session_match(
+        &self,
+        path: &Path,
+        working_dir: &Path,
+        expected_session_id: Option<&str>,
+    ) -> bool {
+        let working_dir_key = Self::path_lookup_key(working_dir);
+        if working_dir_key.is_empty() {
+            return false;
+        }
+
+        let Some(probe) = Self::read_session_probe(path) else {
+            return false;
+        };
+
+        if !Self::matches_working_dir_by_probe(&probe, &working_dir_key) {
+            return false;
+        }
+
+        if let Some(expected_session_id) = expected_session_id {
+            return Self::extract_session_id(&probe, path).as_deref() == Some(expected_session_id);
+        }
+
+        true
+    }
+
+    /// Read sessionId from probe/path so cache can track continuity across polls.
+    fn read_session_id(path: &Path) -> Option<String> {
+        let Some(probe) = Self::read_session_probe(path) else {
+            return path
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(std::string::ToString::to_string);
+        };
+
+        Self::extract_session_id(&probe, path)
+    }
+
+    fn read_session_id_from_file(path: &Path) -> Option<String> {
+        Self::read_session_id(path)
+    }
+
+    fn extract_session_id(probe: &JsonlProbe, path: &Path) -> Option<String> {
+        probe.session_id.clone().or_else(|| {
+            path.file_stem()
+                .and_then(|stem| stem.to_str())
+                .map(std::string::ToString::to_string)
+        })
+    }
+
+    /// Look up the current session file using Claude's `sessions-index.json`.
+    fn find_jsonl_from_index(dir: &Path, working_dir: &Path) -> Option<PathBuf> {
+        let index_path = dir.join("sessions-index.json");
+        let index_text = fs::read_to_string(index_path).ok()?;
+        let index: SessionsIndex = serde_json::from_str(&index_text).ok()?;
+
+        let working_dir_key = Self::path_lookup_key(working_dir);
+        if working_dir_key.is_empty() {
+            return None;
+        }
+
+        let mut best: Option<(i64, PathBuf)> = None;
+        for entry in index.entries {
+            if !entry
+                .project_path
+                .as_ref()
+                .is_some_and(|project_path| Self::path_lookup_key(project_path) == working_dir_key)
+            {
+                continue;
+            }
+
+            let Some(full_path) = entry.full_path else {
+                continue;
+            };
+            let path = PathBuf::from(full_path);
+            if !path.is_file() {
+                continue;
+            }
+
+            let mtime = entry
+                .file_mtime
+                .or_else(|| {
+                    path.metadata()
+                        .ok()
+                        .and_then(|m| m.modified().ok())
+                        .and_then(|modified| modified.duration_since(UNIX_EPOCH).ok())
+                        .and_then(|elapsed| i64::try_from(elapsed.as_millis()).ok())
+                })
+                .unwrap_or(0);
+
+            if best
+                .as_ref()
+                .map_or(true, |(best_mtime, _)| mtime >= *best_mtime)
+            {
+                best = Some((mtime, path));
+            }
+        }
+
+        let best_path = best.map(|(_, path)| path);
+        if best_path.is_some() {
+            debug!(
+                ?working_dir,
+                ?best_path,
+                "Using sessions-index session mapping"
+            );
+        }
+        best_path
+    }
+
+    /// Find the best session file for a working directory by inspecting each JSONL
+    /// file header instead of index metadata.
+    fn find_jsonl_by_working_dir(dir: &Path, working_dir: &Path) -> Option<PathBuf> {
+        let working_dir_key = Self::path_lookup_key(working_dir);
+        if working_dir_key.is_empty() {
+            return None;
+        }
+
+        let mut best: Option<WorkingDirSessionCandidate> = None;
+
+        let entries = fs::read_dir(dir).ok()?;
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+
+            let Some(mtime) = path.metadata().ok().and_then(|m| m.modified().ok()) else {
+                continue;
+            };
+
+            let Some(probe) = Self::read_session_probe(&path) else {
+                continue;
+            };
+            if !Self::matches_working_dir_by_probe(&probe, &working_dir_key) {
+                continue;
+            }
+
+            let (has_entries, latest_ts) = Self::probe_conversation_tail(&path);
+            let candidate = WorkingDirSessionCandidate {
+                has_entries,
+                latest_ts,
+                mtime,
+                path: path.clone(),
+            };
+
+            if let Some(current) = best.as_ref() {
+                if Self::is_better_session_match(&candidate, current) {
+                    best = Some(candidate);
+                }
+            } else {
+                best = Some(candidate);
+            }
+        }
+
+        best.map(|candidate| candidate.path)
+    }
+
+    fn is_better_session_match(
+        candidate: &WorkingDirSessionCandidate,
+        best: &WorkingDirSessionCandidate,
+    ) -> bool {
+        let candidate_time = candidate.latest_ts.unwrap_or(candidate.mtime);
+        let best_time = best.latest_ts.unwrap_or(best.mtime);
+
+        if candidate_time != best_time {
+            return candidate_time > best_time;
+        }
+
+        if candidate.has_entries != best.has_entries {
+            return candidate.has_entries;
+        }
+
+        candidate.mtime > best.mtime
+    }
+
+    fn matches_working_dir_by_probe(probe: &JsonlProbe, working_dir_key: &str) -> bool {
+        probe
+            .cwd
+            .as_ref()
+            .is_some_and(|cwd| Self::path_lookup_key(cwd) == working_dir_key)
+    }
+
+    fn read_session_probe(path: &Path) -> Option<JsonlProbe> {
+        use std::io::{BufRead, BufReader};
+
+        let file = fs::File::open(path).ok()?;
+        let reader = BufReader::new(file);
+        for line in reader.lines().take(25) {
+            let line = line.ok()?;
+            if let Ok(probe) = serde_json::from_str::<JsonlProbe>(&line) {
+                if probe.cwd.is_some() || probe.session_id.is_some() {
+                    return Some(probe);
+                }
+            }
+        }
+        None
+    }
+
+    fn probe_conversation_tail(path: &Path) -> (bool, Option<SystemTime>) {
+        let entries = Self::read_recent_entries_from_path(path, 20);
+
+        if entries.is_empty() {
+            return (false, None);
+        }
+
+        let latest_timestamp = entries
+            .iter()
+            .rev()
+            .filter_map(|entry| entry.timestamp.as_deref())
+            .find_map(Self::parse_timestamp);
+
+        (true, latest_timestamp)
+    }
+
+    fn parse_timestamp(timestamp: &str) -> Option<SystemTime> {
+        let parsed = DateTime::parse_from_rfc3339(timestamp).ok()?;
+        let utc = parsed.with_timezone(&Utc);
+        let millis = utc.timestamp_millis();
+        if millis < 0 {
+            return None;
+        }
+        Some(UNIX_EPOCH + Duration::from_millis(millis as u64))
+    }
+
+    fn path_lookup_key<P: AsRef<Path>>(path: P) -> String {
+        let path = path.as_ref();
+        let normalized = path
+            .canonicalize()
+            .unwrap_or_else(|_| path.to_path_buf())
+            .to_string_lossy()
+            .to_ascii_lowercase()
+            .replace('\\', "/")
+            .trim_end_matches('/')
+            .trim_end_matches('\\')
+            .to_string();
+        normalized
     }
 
     /// Find the most recently modified .jsonl file in a directory.
@@ -408,12 +807,12 @@ impl ClaudeSessionReader {
     ///
     /// Uses JSONL as the sole source of truth:
     /// 1. Find the last assistant message
-    /// 2. If it has a tool_use with no tool_result → NeedsAttention
+    /// 2. If it has a tool_use with no tool_result --NeedsAttention
     ///    (if it's actually auto-approved, the result appears within ~1s
     ///    and the next poll will update the status)
-    /// 3. If stop_reason is "end_turn" → NeedsAttention
+    /// 3. If stop_reason is "end_turn" --NeedsAttention
     ///    (if the last text ends with `?`, detail is set to "question")
-    /// 4. Otherwise → Unknown (fall through to other detectors)
+    /// 4. Otherwise --Unknown (fall through to other detectors)
     fn determine_status(&self, entries: &[JsonlEntry]) -> ClaudeSessionStatus {
         debug!(
             entry_count = entries.len(),
@@ -452,7 +851,7 @@ impl ClaudeSessionReader {
         }
 
         // Context-aware refinement: if the last 2 entries are both assistant messages
-        // and the most recent has stop_reason + no pending tools → NeedsAttention.
+        // and the most recent has stop_reason + no pending tools --NeedsAttention.
         // This catches edge cases where the main heuristic would return Working.
         if entries.len() >= 2 {
             let last_two: Vec<_> = entries.iter().rev().take(2).collect();
@@ -465,7 +864,7 @@ impl ClaudeSessionReader {
                     let has_tools = msg.content.iter().any(|c| c.content_type == "tool_use");
                     if !has_tools && msg.stop_reason.is_some() {
                         let detail = Self::last_text_ends_with_question(msg);
-                        debug!("JSONL: consecutive assistant messages with stop_reason → NeedsAttention");
+                        debug!("JSONL: consecutive assistant messages with stop_reason --NeedsAttention");
                         return ClaudeSessionStatus::NeedsAttention { detail };
                     }
                 }
@@ -480,10 +879,13 @@ impl ClaudeSessionReader {
         };
 
         // Check for pending tool_use (no corresponding tool_result).
-        // Only report NeedsAttention when stop_reason is "tool_use" — this means
+        // Only report NeedsAttention when stop_reason is "tool_use" --this means
         // the API has finished and the tool is blocked on permission.
         // When stop_reason is None, the model is still streaming or the tool is
-        // auto-approved and executing — report Working.
+        // auto-approved and executing --report Working.
+        // Check for pending tool_use (no corresponding tool_result).
+        // Treat tool_use as active work by default, and only report NeedsAttention
+        // when we can infer an explicit permission-style prompt.
         let is_tool_stop = msg.stop_reason.as_deref() == Some("tool_use");
 
         for content in &msg.content {
@@ -500,22 +902,29 @@ impl ClaudeSessionReader {
                         // Give a brief grace period for auto-approved tools.
                         if let Some(ts) = assistant.timestamp.as_deref() {
                             if is_timestamp_recent(ts, 3) == Some(true) {
-                                debug!(?tool_name, "JSONL: pending tool_use (stop=tool_use) < 3s → Working (grace period)");
+                                debug!(
+                                    ?tool_name,
+                                    "JSONL: pending tool_use (stop=tool_use) < 3s --Working (grace period)"
+                                );
                                 return ClaudeSessionStatus::Working;
                             }
                         }
 
                         debug!(
                             ?tool_name,
-                            "JSONL: pending tool_use (stop=tool_use) ≥ 3s → NeedsAttention"
+                            "JSONL: pending tool_use (stop=tool_use) --3s --NeedsAttention"
                         );
                         return ClaudeSessionStatus::NeedsAttention {
                             detail: Some(tool_name.to_string()),
                         };
                     } else {
-                        // stop_reason is None or something else — tool is still
+                        // stop_reason is None or something else --tool is still
                         // executing or model is still streaming.
-                        debug!(?tool_name, stop_reason=?msg.stop_reason, "JSONL: pending tool_use (not tool_stop) → Working");
+                        debug!(
+                            ?tool_name,
+                            stop_reason=?msg.stop_reason,
+                            "JSONL: pending tool_use (not tool_stop) --Working"
+                        );
                         return ClaudeSessionStatus::Working;
                     }
                 }
@@ -531,7 +940,7 @@ impl ClaudeSessionReader {
         }
 
         // Check if there's a human entry after the last assistant (tool results
-        // sent back → Claude is processing the next turn).
+        // sent back --Claude is processing the next turn).
         let has_human_after_assistant = entries[last_assistant_idx + 1..].iter().any(|e| {
             matches!(e.entry_type.as_str(), "human" | "user")
                 || e.message.as_ref().is_some_and(|m| m.role == "user")
@@ -547,7 +956,7 @@ impl ClaudeSessionReader {
                     None => ClaudeSessionStatus::Unknown,
                 };
             }
-            // No timestamp available — assume working (human just sent input)
+            // No timestamp available --assume working (human just sent input)
             return ClaudeSessionStatus::Working;
         }
 
@@ -661,13 +1070,57 @@ mod tests {
     fn test_reader() -> ClaudeSessionReader {
         ClaudeSessionReader {
             claude_home: PathBuf::from("/nonexistent"),
+            session_file_cache: std::collections::HashMap::new(),
         }
+    }
+
+    #[test]
+    fn test_get_status_if_recent_uses_new_file_age_gate() {
+        let tmp = TempDir::new().unwrap();
+        let tmp_home = tmp.path();
+        let projects_dir = tmp_home.join("projects");
+        std::fs::create_dir_all(&projects_dir).unwrap();
+
+        let working_dir = tmp_home.join("work");
+        std::fs::create_dir_all(&working_dir).unwrap();
+        let session_dir = projects_dir.join("-Users-test-project");
+        std::fs::create_dir_all(&session_dir).unwrap();
+
+        let session_jsonl = session_dir.join("session.jsonl");
+        std::fs::write(
+            &session_jsonl,
+            r#"{"type":"assistant","message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}"#,
+        )
+        .unwrap();
+
+        let mut reader = ClaudeSessionReader {
+            claude_home: tmp_home.to_path_buf(),
+            session_file_cache: std::collections::HashMap::new(),
+        };
+
+        let status_fresh = reader.get_status_if_recent(
+            Path::new("/Users/test/project"),
+            None,
+            std::time::Duration::from_secs(10),
+        );
+        assert_eq!(
+            status_fresh,
+            Some(ClaudeSessionStatus::NeedsAttention { detail: None })
+        );
+
+        std::thread::sleep(std::time::Duration::from_millis(10));
+        let status_stale = reader.get_status_if_recent(
+            Path::new("/Users/test/project"),
+            None,
+            std::time::Duration::from_nanos(1),
+        );
+        assert!(status_stale.is_none());
     }
 
     #[test]
     fn test_end_turn_returns_waiting() {
         let entries = vec![make_assistant_entry(vec![], Some("end_turn"))];
-        let reader = test_reader();
+        let mut reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention { detail: None }
@@ -676,12 +1129,12 @@ mod tests {
 
     #[test]
     fn test_pending_tool_use_with_tool_stop_needs_attention() {
-        // Pending tool_use with stop_reason="tool_use" = NeedsAttention (permission blocked)
+        // Pending tool_use with stop_reason="tool_use" = NeedsAttention (permission blocked).
         let entries = vec![make_assistant_entry(
             vec![make_tool_use("Bash", "tu_1")],
             Some("tool_use"),
         )];
-        let reader = test_reader();
+        let mut reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention {
@@ -697,7 +1150,7 @@ mod tests {
             vec![make_tool_use("Bash", "tu_1")],
             None,
         )];
-        let reader = test_reader();
+        let mut reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::Working
@@ -711,7 +1164,7 @@ mod tests {
             vec![make_tool_use("Read", "tu_1")],
             None,
         )];
-        let reader = test_reader();
+        let mut reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::Working
@@ -724,9 +1177,9 @@ mod tests {
             make_assistant_entry(vec![make_tool_use("Bash", "tu_3")], None),
             make_human_entry(vec![make_tool_result("tu_3")]),
         ];
-        let reader = test_reader();
+        let mut reader = test_reader();
         // The tool_use has a corresponding result, so it's not pending.
-        // Human entry after assistant with no timestamp → Working (assumes processing)
+        // Human entry after assistant with no timestamp --Working (assumes processing)
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::Working
@@ -735,7 +1188,7 @@ mod tests {
 
     #[test]
     fn test_empty_entries_returns_unknown() {
-        let reader = test_reader();
+        let mut reader = test_reader();
         assert_eq!(reader.determine_status(&[]), ClaudeSessionStatus::Unknown);
     }
 
@@ -747,6 +1200,7 @@ mod tests {
 
         let reader = ClaudeSessionReader {
             claude_home: tmp.path().to_path_buf(),
+            session_file_cache: std::collections::HashMap::new(),
         };
 
         // No matching dir
@@ -770,6 +1224,7 @@ mod tests {
 
         let reader = ClaudeSessionReader {
             claude_home: tmp.path().to_path_buf(),
+            session_file_cache: std::collections::HashMap::new(),
         };
 
         let session_dir = projects_dir.join("C--Users-foo-project");
@@ -787,6 +1242,7 @@ mod tests {
 
         let reader = ClaudeSessionReader {
             claude_home: tmp.path().to_path_buf(),
+            session_file_cache: std::collections::HashMap::new(),
         };
 
         let session_dir = projects_dir.join("----C--Users-foo-project");
@@ -814,7 +1270,7 @@ mod tests {
         )
         .unwrap();
 
-        let reader = test_reader();
+        let mut reader = test_reader();
 
         let entries = reader.read_recent_entries(tmp.path(), 10, None);
         assert_eq!(entries.len(), 2);
@@ -839,7 +1295,7 @@ mod tests {
         )
         .unwrap();
 
-        let reader = test_reader();
+        let mut reader = test_reader();
         let entries = reader.read_recent_entries(tmp.path(), 10, None);
 
         assert_eq!(entries.len(), 2);
@@ -872,9 +1328,9 @@ mod tests {
         )
         .unwrap();
 
-        let reader = test_reader();
+        let mut reader = test_reader();
         let entries = reader.read_recent_entries(tmp.path(), 10, None);
-        // Progress entries should be filtered out — only assistant + human remain
+        // Progress entries should be filtered out --only assistant + human remain
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].entry_type, "assistant");
         assert_eq!(entries[1].entry_type, "human");
@@ -916,11 +1372,114 @@ mod tests {
     }
 
     #[test]
+    fn test_find_jsonl_by_working_dir_prefers_working_entries() {
+        let tmp = TempDir::new().unwrap();
+        let session_dir = tmp.path();
+        std::fs::create_dir_all(session_dir).unwrap();
+        let working_dir = Path::new("C:\\Users\\test\\project");
+
+        // Newer mtime but no assistant/user entries (progress-only file).
+        let progress_path = session_dir.join("progress-only.jsonl");
+        std::fs::write(
+            &progress_path,
+            r#"{"type":"progress","sessionId":"session-old","cwd":"C:\\Users\\test\\project","timestamp":"2026-02-14T00:00:00Z","message":{"role":"assistant","content":[{"type":"text","text":"working..."}]}}"#,
+        )
+        .unwrap();
+
+        // Older file with assistant entries for the same working directory.
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let assistant_path = session_dir.join("assistant-working.jsonl");
+        std::fs::write(
+            &assistant_path,
+            r#"{"type":"assistant","sessionId":"session-new","cwd":"C:\\Users\\test\\project","timestamp":"2026-02-14T00:00:01Z","message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}"#,
+        )
+        .unwrap();
+
+        let selected = ClaudeSessionReader::find_jsonl_by_working_dir(session_dir, working_dir);
+        assert_eq!(selected, Some(assistant_path));
+    }
+
+    #[test]
+    fn test_find_jsonl_for_pid_ignores_stale_cached_session_id() {
+        let tmp = TempDir::new().unwrap();
+        let session_dir = tmp.path().join("session-dir");
+        let working_dir = tmp.path().join("project");
+        std::fs::create_dir_all(&session_dir).unwrap();
+        std::fs::create_dir_all(&working_dir).unwrap();
+
+        let working_dir_str = working_dir.to_string_lossy();
+
+        let stale_path = session_dir.join("7e813124-ce33-48f9-9205-c4e876b96085.jsonl");
+        std::fs::write(
+            &stale_path,
+            format!(
+                r#"{{"type":"assistant","sessionId":"7e813124-ce33-48f9-9205-c4e876b96085","cwd":"{}","timestamp":"2026-02-14T00:00:00Z","message":{{"role":"assistant","content":[],"stop_reason":"end_turn"}}}}"#,
+                working_dir_str
+            ),
+        )
+        .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        let fresh_path = session_dir.join("2e2e2ca9-7a65-4618-855e-5b2a3aaf6623.jsonl");
+        std::fs::write(
+            &fresh_path,
+            format!(
+                r#"{{"type":"assistant","sessionId":"2e2e2ca9-7a65-4618-855e-5b2a3aaf6623","cwd":"{}","timestamp":"2026-02-14T00:00:01Z","message":{{"role":"assistant","content":[],"stop_reason":"end_turn"}}}}"#,
+                working_dir_str
+            ),
+        )
+        .unwrap();
+
+        let mut reader = ClaudeSessionReader {
+            claude_home: PathBuf::from("/nonexistent"),
+            session_file_cache: std::collections::HashMap::new(),
+        };
+        reader.session_file_cache.insert(
+            ClaudeSessionReader::path_lookup_key(&working_dir),
+            SessionFileHint {
+                path: stale_path.clone(),
+                session_id: Some("7e813124-ce33-48f9-9205-c4e876b96085".to_string()),
+            },
+        );
+
+        let selected = reader
+            .find_jsonl_for_pid(&session_dir, &working_dir, None)
+            .expect("A jsonl file should be selected");
+        assert_eq!(selected, fresh_path);
+    }
+
+    #[test]
+    fn test_find_jsonl_by_working_dir_ignores_unmatched_cwd() {
+        let tmp = TempDir::new().unwrap();
+        let session_dir = tmp.path();
+        std::fs::create_dir_all(session_dir).unwrap();
+        let working_dir = Path::new("C:\\Users\\test\\project");
+
+        let wrong_path = session_dir.join("wrong-cwd.jsonl");
+        std::fs::write(
+            &wrong_path,
+            r#"{"type":"assistant","sessionId":"session-wrong","cwd":"C:\\Users\\other\\project","timestamp":"2026-02-14T00:00:00Z","message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}"#,
+        )
+        .unwrap();
+
+        let right_path = session_dir.join("right-cwd.jsonl");
+        std::fs::write(
+            &right_path,
+            r#"{"type":"assistant","sessionId":"session-right","cwd":"C:\\Users\\test\\project","timestamp":"2026-02-14T00:00:01Z","message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}"#,
+        )
+        .unwrap();
+
+        let selected = ClaudeSessionReader::find_jsonl_by_working_dir(session_dir, working_dir);
+        assert_eq!(selected, Some(right_path));
+    }
+
+    #[test]
     fn test_null_stop_reason_recent_timestamp_returns_working() {
-        // Assistant with no stop_reason but a recent timestamp → Working (still streaming)
+        // Assistant with no stop_reason but a recent timestamp --Working (still streaming)
         let recent = chrono::Utc::now().to_rfc3339();
         let entries = vec![make_assistant_entry_ts(vec![], None, &recent)];
-        let reader = test_reader();
+        let mut reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::Working
@@ -929,10 +1488,10 @@ mod tests {
 
     #[test]
     fn test_null_stop_reason_old_timestamp_returns_waiting() {
-        // Assistant with no stop_reason and an old timestamp → NeedsAttention (done)
+        // Assistant with no stop_reason and an old timestamp --NeedsAttention (done)
         let old = (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
         let entries = vec![make_assistant_entry_ts(vec![], None, &old)];
-        let reader = test_reader();
+        let mut reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention { detail: None }
@@ -941,13 +1500,13 @@ mod tests {
 
     #[test]
     fn test_human_after_assistant_recent_returns_working() {
-        // Tool result sent back recently → Claude is processing
+        // Tool result sent back recently --Claude is processing
         let recent = chrono::Utc::now().to_rfc3339();
         let entries = vec![
             make_assistant_entry(vec![make_tool_use("Bash", "tu_5")], None),
             make_human_entry_ts(vec![make_tool_result("tu_5")], &recent),
         ];
-        let reader = test_reader();
+        let mut reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::Working
@@ -956,13 +1515,13 @@ mod tests {
 
     #[test]
     fn test_human_after_assistant_old_returns_waiting() {
-        // Tool result sent back long ago → Claude is done
+        // Tool result sent back long ago --Claude is done
         let old = (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
         let entries = vec![
             make_assistant_entry(vec![make_tool_use("Bash", "tu_6")], None),
             make_human_entry_ts(vec![make_tool_result("tu_6")], &old),
         ];
-        let reader = test_reader();
+        let mut reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention { detail: None }
@@ -982,14 +1541,14 @@ mod tests {
 
     #[test]
     fn test_pending_tool_recent_timestamp_returns_working() {
-        // Pending tool_use with recent timestamp → Working (grace period)
+        // Pending tool_use with recent timestamp --Working (grace period)
         let recent = chrono::Utc::now().to_rfc3339();
         let entries = vec![make_assistant_entry_ts(
             vec![make_tool_use("Bash", "tu_gp1")],
             None,
             &recent,
         )];
-        let reader = test_reader();
+        let mut reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::Working
@@ -998,7 +1557,7 @@ mod tests {
 
     #[test]
     fn test_pending_tool_old_timestamp_no_stop_returns_working() {
-        // Pending tool_use with old timestamp but stop_reason=None → Working
+        // Pending tool_use with old timestamp but stop_reason=None --Working
         // (tool is still executing, just taking a while)
         let old = (chrono::Utc::now() - chrono::Duration::seconds(10)).to_rfc3339();
         let entries = vec![make_assistant_entry_ts(
@@ -1006,7 +1565,7 @@ mod tests {
             None,
             &old,
         )];
-        let reader = test_reader();
+        let mut reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::Working
@@ -1015,14 +1574,14 @@ mod tests {
 
     #[test]
     fn test_pending_tool_old_timestamp_with_tool_stop_returns_needs_attention() {
-        // Pending tool_use with old timestamp AND stop_reason="tool_use" → NeedsAttention
+        // Pending tool_use with old timestamp and stop_reason="tool_use" stays NeedsAttention.
         let old = (chrono::Utc::now() - chrono::Duration::seconds(10)).to_rfc3339();
         let entries = vec![make_assistant_entry_ts(
             vec![make_tool_use("Bash", "tu_gp2")],
             Some("tool_use"),
             &old,
         )];
-        let reader = test_reader();
+        let mut reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention {
@@ -1033,12 +1592,12 @@ mod tests {
 
     #[test]
     fn test_consecutive_assistant_with_stop_reason_returns_waiting() {
-        // Two assistant messages, latest has stop_reason and no tools → NeedsAttention
+        // Two assistant messages, latest has stop_reason and no tools --NeedsAttention
         let entries = vec![
             make_assistant_entry(vec![make_tool_use("Read", "tu_ca1")], None),
             make_assistant_entry(vec![], Some("end_turn")),
         ];
-        let reader = test_reader();
+        let mut reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention { detail: None }
@@ -1047,13 +1606,13 @@ mod tests {
 
     #[test]
     fn test_consecutive_assistant_with_tools_does_not_override() {
-        // Two assistant messages, but latest has tool_use → normal logic applies
+        // Two assistant messages, but latest has tool_use --normal logic applies
         let entries = vec![
             make_assistant_entry(vec![], Some("end_turn")),
             make_assistant_entry(vec![make_tool_use("Bash", "tu_ca2")], None),
         ];
-        let reader = test_reader();
-        // Latest assistant has pending tool_use with stop_reason=None → Working
+        let mut reader = test_reader();
+        // Latest assistant has pending tool_use with stop_reason=None --Working
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::Working
@@ -1067,7 +1626,7 @@ mod tests {
             vec![make_text("I found the bug. Would you like me to fix it?")],
             Some("end_turn"),
         )];
-        let reader = test_reader();
+        let mut reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention {
@@ -1082,7 +1641,7 @@ mod tests {
             vec![make_text("Done, all tests pass.")],
             Some("end_turn"),
         )];
-        let reader = test_reader();
+        let mut reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention { detail: None }
@@ -1097,7 +1656,7 @@ mod tests {
             )],
             Some("end_turn"),
         )];
-        let reader = test_reader();
+        let mut reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention {
@@ -1115,7 +1674,7 @@ mod tests {
             )],
             Some("end_turn"),
         )];
-        let reader = test_reader();
+        let mut reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention { detail: None }
@@ -1126,7 +1685,7 @@ mod tests {
     fn test_end_turn_no_text_content_returns_no_detail() {
         // end_turn with no text content blocks at all
         let entries = vec![make_assistant_entry(vec![], Some("end_turn"))];
-        let reader = test_reader();
+        let mut reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention { detail: None }
@@ -1146,8 +1705,8 @@ mod tests {
             ),
             make_human_entry(vec![make_tool_result("tu_q1")]),
         ];
-        let reader = test_reader();
-        // stop_reason="end_turn" with question text → NeedsAttention with detail
+        let mut reader = test_reader();
+        // stop_reason="end_turn" with question text --NeedsAttention with detail
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention {
@@ -1163,7 +1722,7 @@ mod tests {
             vec![make_text("Batch 1 completed. Do you want me to continue?")],
             Some("end_turn"),
         )];
-        let reader = test_reader();
+        let mut reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention {
@@ -1181,7 +1740,7 @@ mod tests {
                 Some("end_turn"),
             ),
         ];
-        let reader = test_reader();
+        let mut reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention {

@@ -6,6 +6,7 @@
 use std::fs;
 use std::io::{Read, Seek, SeekFrom};
 use std::path::Path;
+use std::time::{Duration, SystemTime};
 
 /// Read the last `max_bytes` of a file as a UTF-8 string.
 ///
@@ -45,6 +46,21 @@ pub fn is_timestamp_recent(timestamp: &str, threshold_secs: i64) -> Option<bool>
     let parsed = timestamp.parse::<DateTime<Utc>>().ok()?;
     let elapsed = Utc::now().signed_duration_since(parsed);
     Some(elapsed.num_seconds().abs() <= threshold_secs)
+}
+
+/// Check whether a file's modification time is within `max_age` of now.
+///
+/// Returns `false` if metadata cannot be read.
+pub fn is_file_recent(path: &Path, max_age: Duration) -> bool {
+    let modified = match fs::metadata(path).and_then(|meta| meta.modified()) {
+        Ok(modified) => modified,
+        Err(_) => return false,
+    };
+
+    match SystemTime::now().duration_since(modified) {
+        Ok(elapsed) => elapsed <= max_age,
+        Err(_) => true,
+    }
 }
 
 /// Find the most recently modified file in a directory matching a given extension.
@@ -162,5 +178,24 @@ mod tests {
         fs::write(dir.path().join("file.txt"), "content").unwrap();
         let result = find_most_recent_file(dir.path(), "jsonl");
         assert!(result.is_none());
+    }
+
+    #[test]
+    fn test_is_file_recent_true_for_fresh_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("fresh.txt");
+        fs::write(&path, "fresh").unwrap();
+
+        assert!(is_file_recent(&path, Duration::from_secs(1)));
+    }
+
+    #[test]
+    fn test_is_file_recent_false_for_old_file() {
+        let dir = TempDir::new().unwrap();
+        let path = dir.path().join("old.txt");
+        fs::write(&path, "old").unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        assert!(!is_file_recent(&path, Duration::from_millis(1)));
     }
 }

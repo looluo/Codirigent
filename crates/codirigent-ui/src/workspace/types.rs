@@ -209,6 +209,13 @@ impl PollingState {
     }
 }
 
+#[derive(Debug, Clone)]
+pub(super) struct CachedCliStatus {
+    pub(super) status: SessionStatus,
+    pub(super) tool_name: Option<String>,
+    pub(super) seen_at: Instant,
+}
+
 /// Grouped CLI session reader state for WorkspaceView.
 ///
 /// Contains JSONL session readers for different CLI types and the
@@ -224,7 +231,7 @@ pub(super) struct CliReaders {
     pub detector: codirigent_session::DefaultCliDetector,
     /// Cached JSONL-derived session status, persisted between poll cycles so
     /// the high-frequency InputDetector does not overwrite it.
-    pub cached_status: HashMap<SessionId, (SessionStatus, Option<String>)>,
+    pub cached_status: HashMap<SessionId, CachedCliStatus>,
 }
 
 impl CliReaders {

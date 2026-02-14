@@ -10,21 +10,26 @@
 
 use super::cli_helpers::{clear_command, detect_cli_from_output, format_task_input};
 use super::gpui::WorkspaceView;
+use super::types::CachedCliStatus;
 use codirigent_core::{
     AssignmentAction, CodirigentEvent, EventBus, ProcessMonitor, SessionId, SessionManager,
     SessionStatus, TaskStatus,
 };
 use codirigent_session::cli_detector::CliDetector;
 use codirigent_session::clipboard_service::ClipboardService;
+use codirigent_session::CliSessionStatus;
 use gpui::Context;
 use std::time::{Duration, Instant};
 use tracing::{debug, info, warn};
 
 impl WorkspaceView {
+    const GENERIC_SHELL_JSONL_MAX_AGE: Duration = Duration::from_secs(600);
+    const GENERIC_SHELL_JSONL_CACHE_TTL: Duration = Duration::from_secs(120);
+
     pub(super) fn poll_output(&mut self, cx: &mut Context<Self>) {
         // Send deferred Enter keypresses (text was sent earlier; Enter comes
         // as a separate write so ink treats it as a distinct stdin event).
-        // Phase 1: entries where Enter hasn't been sent yet and 100ms elapsed → send \r.
+        // Phase 1: entries where Enter hasn't been sent yet and 100ms elapsed; send \r.
         let need_enter: Vec<SessionId> = self
             .polling
             .pending_enters
@@ -182,69 +187,203 @@ impl WorkspaceView {
                     let child_pid =
                         self.with_session_manager(|manager| manager.get_child_pid(session_id));
 
-                    let cli_status = match cli_type {
+                    let mut detected_cli_type = cli_type;
+                    let cli_status: Option<CliSessionStatus> = match cli_type {
                         codirigent_core::CliType::ClaudeCode => {
                             self.cli_readers.claude.as_mut().and_then(|r| {
-                                r.get_status(&working_dir, child_pid).to_session_status()
+                                r.get_status_if_recent(
+                                    &working_dir,
+                                    child_pid,
+                                    Self::GENERIC_SHELL_JSONL_MAX_AGE,
+                                )
                             })
                         }
                         codirigent_core::CliType::CodexCli => {
                             self.cli_readers.codex.as_mut().and_then(|r| {
-                                r.get_status(&working_dir, child_pid).to_session_status()
+                                r.get_status_if_recent(
+                                    &working_dir,
+                                    child_pid,
+                                    Self::GENERIC_SHELL_JSONL_MAX_AGE,
+                                )
                             })
                         }
                         codirigent_core::CliType::GeminiCli => {
                             self.cli_readers.gemini.as_mut().and_then(|r| {
-                                r.get_status(&working_dir, child_pid).to_session_status()
+                                r.get_status_if_recent(
+                                    &working_dir,
+                                    child_pid,
+                                    Self::GENERIC_SHELL_JSONL_MAX_AGE,
+                                )
                             })
                         }
                         codirigent_core::CliType::GenericShell => {
-                            // Use process tree to detect CLI type before reading JSONL.
-                            // Prevents stale JSONL from previous sessions causing false promotion.
-                            if let Some(pid) = child_pid {
-                                let detected = self.cli_readers.detector.detect_cli_type(pid);
-                                if detected != codirigent_core::CliType::GenericShell {
-                                    self.clipboard
-                                        .clipboard_service
-                                        .set_session_cli_type(session_id, detected);
-                                    match detected {
-                                        codirigent_core::CliType::ClaudeCode => {
-                                            self.cli_readers.claude.as_mut().and_then(|r| {
-                                                r.get_status(&working_dir, child_pid)
-                                                    .to_session_status()
-                                            })
-                                        }
-                                        codirigent_core::CliType::CodexCli => {
-                                            self.cli_readers.codex.as_mut().and_then(|r| {
-                                                r.get_status(&working_dir, child_pid)
-                                                    .to_session_status()
-                                            })
-                                        }
-                                        codirigent_core::CliType::GeminiCli => {
-                                            self.cli_readers.gemini.as_mut().and_then(|r| {
-                                                r.get_status(&working_dir, child_pid)
-                                                    .to_session_status()
-                                            })
-                                        }
-                                        _ => None,
+                            let mut result = None;
+                            let pid_candidates: Vec<Option<u32>> = if let Some(pid) = child_pid {
+                                vec![Some(pid), None]
+                            } else {
+                                vec![None]
+                            };
+
+                            for pid in pid_candidates {
+                                if result.is_none() {
+                                    if let Some(status) =
+                                        self.cli_readers.claude.as_mut().and_then(|r| {
+                                            r.get_status_if_recent(
+                                                &working_dir,
+                                                pid,
+                                                Self::GENERIC_SHELL_JSONL_MAX_AGE,
+                                            )
+                                        })
+                                    {
+                                        detected_cli_type = codirigent_core::CliType::ClaudeCode;
+                                        result = Some(status);
+                                    } else if let Some(status) =
+                                        self.cli_readers.codex.as_mut().and_then(|r| {
+                                            r.get_status_if_recent(
+                                                &working_dir,
+                                                pid,
+                                                Self::GENERIC_SHELL_JSONL_MAX_AGE,
+                                            )
+                                        })
+                                    {
+                                        detected_cli_type = codirigent_core::CliType::CodexCli;
+                                        result = Some(status);
+                                    } else if let Some(status) =
+                                        self.cli_readers.gemini.as_mut().and_then(|r| {
+                                            r.get_status_if_recent(
+                                                &working_dir,
+                                                pid,
+                                                Self::GENERIC_SHELL_JSONL_MAX_AGE,
+                                            )
+                                        })
+                                    {
+                                        detected_cli_type = codirigent_core::CliType::GeminiCli;
+                                        result = Some(status);
                                     }
                                 } else {
-                                    debug!(?session_id, pid, "Process tree detection returned GenericShell — JSONL reader skipped");
-                                    None
+                                    break;
                                 }
-                            } else {
-                                None
                             }
+
+                            if result.is_none() {
+                                if let Some(pid) = child_pid {
+                                    detected_cli_type =
+                                        self.cli_readers.detector.detect_cli_type(pid);
+                                    if detected_cli_type == codirigent_core::CliType::GenericShell {
+                                        debug!(?session_id, pid, "Process tree detection returned GenericShell; JSONL probe missed fresh match");
+                                    } else {
+                                        debug!(?session_id, ?detected_cli_type, "Detected CLI from process tree after GenericShell probe");
+                                    }
+                                } else {
+                                    debug!(
+                                        ?session_id,
+                                        "Cannot inspect process tree for GenericShell; using PID-less JSONL probe"
+                                    );
+                                }
+                            }
+
+                            // If process-tree detection is still generic, run a final
+                            // directory-wide pass across all readers to catch transient
+                            // PID-matching misses and avoid flicker back to idle.
+                            if result.is_none()
+                                && detected_cli_type == codirigent_core::CliType::GenericShell
+                            {
+                                if let Some(status) =
+                                    self.cli_readers.claude.as_mut().and_then(|r| {
+                                        r.get_status_if_recent(
+                                            &working_dir,
+                                            None,
+                                            Self::GENERIC_SHELL_JSONL_MAX_AGE,
+                                        )
+                                    })
+                                {
+                                    detected_cli_type = codirigent_core::CliType::ClaudeCode;
+                                    result = Some(status);
+                                } else if let Some(status) =
+                                    self.cli_readers.codex.as_mut().and_then(|r| {
+                                        r.get_status_if_recent(
+                                            &working_dir,
+                                            None,
+                                            Self::GENERIC_SHELL_JSONL_MAX_AGE,
+                                        )
+                                    })
+                                {
+                                    detected_cli_type = codirigent_core::CliType::CodexCli;
+                                    result = Some(status);
+                                } else if let Some(status) =
+                                    self.cli_readers.gemini.as_mut().and_then(|r| {
+                                        r.get_status_if_recent(
+                                            &working_dir,
+                                            None,
+                                            Self::GENERIC_SHELL_JSONL_MAX_AGE,
+                                        )
+                                    })
+                                {
+                                    detected_cli_type = codirigent_core::CliType::GeminiCli;
+                                    result = Some(status);
+                                }
+                            }
+
+                            // If process-tree detection identified a CLI, try a final
+                            // directory-wide probe to capture it without PID affinity.
+                            if result.is_none()
+                                && detected_cli_type != codirigent_core::CliType::GenericShell
+                            {
+                                result = match detected_cli_type {
+                                    codirigent_core::CliType::ClaudeCode => {
+                                        self.cli_readers.claude.as_mut().and_then(|r| {
+                                            r.get_status_if_recent(
+                                                &working_dir,
+                                                None,
+                                                Self::GENERIC_SHELL_JSONL_MAX_AGE,
+                                            )
+                                        })
+                                    }
+                                    codirigent_core::CliType::CodexCli => {
+                                        self.cli_readers.codex.as_mut().and_then(|r| {
+                                            r.get_status_if_recent(
+                                                &working_dir,
+                                                None,
+                                                Self::GENERIC_SHELL_JSONL_MAX_AGE,
+                                            )
+                                        })
+                                    }
+                                    codirigent_core::CliType::GeminiCli => {
+                                        self.cli_readers.gemini.as_mut().and_then(|r| {
+                                            r.get_status_if_recent(
+                                                &working_dir,
+                                                None,
+                                                Self::GENERIC_SHELL_JSONL_MAX_AGE,
+                                            )
+                                        })
+                                    }
+                                    _ => None,
+                                };
+                            }
+
+                            if detected_cli_type != codirigent_core::CliType::GenericShell {
+                                self.clipboard
+                                    .clipboard_service
+                                    .set_session_cli_type(session_id, detected_cli_type);
+                            }
+
+                            result
                         }
                     };
 
+                    let cli_status = cli_status.and_then(|status| status.to_session_status());
                     debug!(?session_id, ?cli_status, "JSONL reader result");
 
                     if let Some((new_status, tool_name)) = cli_status.clone() {
                         // Cache the JSONL result so it persists between checks
-                        self.cli_readers
-                            .cached_status
-                            .insert(session_id, (new_status, tool_name.clone()));
+                        self.cli_readers.cached_status.insert(
+                            session_id,
+                            CachedCliStatus {
+                                status: new_status,
+                                tool_name: tool_name.clone(),
+                                seen_at: Instant::now(),
+                            },
+                        );
 
                         if new_status == SessionStatus::NeedsAttention {
                             // Only fire event + notification on transition, not every poll
@@ -257,14 +396,27 @@ impl WorkspaceView {
                         }
                         status = Some(new_status);
                     } else {
-                        // JSONL returned Unknown/None — clear cache so detector takes over
-                        self.cli_readers.cached_status.remove(&session_id);
+                        if let Some((cached_status, _tool_name)) =
+                            self.get_recent_cached_cli_status(session_id)
+                        {
+                            // Keep the previous JSONL status during transient parse/IO misses.
+                            status = Some(cached_status);
+                        } else if matches!(status, Some(SessionStatus::Idle) | None) {
+                            // If the detector says the session is idle, clear stale
+                            // JSONL overlay cache so old waiting flags don't pin.
+                            debug!(
+                                ?session_id,
+                                detected_cli_type = ?detected_cli_type,
+                                "JSONL status probe stale/missing; cache cleared"
+                            );
+                            self.cli_readers.cached_status.remove(&session_id);
+                        }
                     }
                 }
-            } else if let Some((cached_status, ref _tool_name)) =
-                self.cli_readers.cached_status.get(&session_id).cloned()
+            } else if let Some((cached_status, _tool_name)) =
+                self.get_recent_cached_cli_status(session_id)
             {
-                // Non-JSONL cycle: reuse cached JSONL status instead of detector
+                // Non-JSONL cycle: reuse cached JSONL status instead of detector.
                 status = Some(cached_status);
             }
 
@@ -296,9 +448,9 @@ impl WorkspaceView {
 
                         // When task auto-transitions to Review:
                         // 1. Clear current_task so auto-assign can work later
-                        // 2. Send /clear to reset context for next task
+                        // 2. Send /clear to reset context for the next task.
                         if task_transitioned_to_review {
-                            // Clear current_task
+                            // Keep the previous JSONL status during transient parse/IO misses.
                             if let Ok(mgr) = self.session_manager.lock() {
                                 mgr.with_session_state_mut(session_id, |state| {
                                     state.session.current_task = None;
@@ -307,7 +459,7 @@ impl WorkspaceView {
                             if let Some(session) = self.workspace.session_mut(session_id) {
                                 session.current_task = None;
                             }
-                            // Start context clear — reuse compaction infrastructure
+                            // Start context clear and reuse compaction infrastructure
                             let cli_type = self
                                 .clipboard
                                 .clipboard_service
@@ -330,10 +482,9 @@ impl WorkspaceView {
                         }
                     }
                 }
-
-                // NeedsAttention is NOT treated as idle — session is blocked
-                // Skip if we just started compaction — wait for /clear to finish
-                // Skip if a deferred Enter is pending — text hasn't been submitted yet
+                // NeedsAttention is NOT treated as idle because session is blocked
+                // Skip if we just started compaction and wait for /clear to finish
+                // Skip if a deferred Enter is pending because text hasn't been submitted yet
                 if matches!(status, SessionStatus::Idle)
                     && !just_started_compaction
                     && !self.polling.pending_enters.contains_key(&session_id)
@@ -346,7 +497,7 @@ impl WorkspaceView {
                         .unwrap_or(false);
 
                     if is_compacting {
-                        // Compaction just finished — session returned to Idle
+                        // Compaction just finished and session returned to Idle
                         if let Ok(mut svc) = self.persistence.compaction.lock() {
                             svc.end_compaction(session_id);
                         }
@@ -359,13 +510,13 @@ impl WorkspaceView {
                         info!(?session_id, "Compaction completed successfully");
                         // Fall through to try_auto_assign
                     } else {
-                        // Not compacting — check if we should compact before proceeding
+                        // Not compacting; check if we should compact before proceeding
                         let has_task = self
                             .workspace
                             .session(session_id)
                             .map_or(false, |s| s.current_task.is_some());
                         if has_task && self.try_compact(session_id) {
-                            // Compaction started — skip auto-assign this cycle
+                            // Compaction started; skip auto-assign this cycle
                             continue;
                         }
                     }
@@ -495,6 +646,22 @@ impl WorkspaceView {
         }
     }
 
+    fn get_recent_cached_cli_status(
+        &mut self,
+        session_id: SessionId,
+    ) -> Option<(SessionStatus, Option<String>)> {
+        let Some(cached_status) = self.cli_readers.cached_status.get(&session_id) else {
+            return None;
+        };
+
+        if cached_status.seen_at.elapsed() > Self::GENERIC_SHELL_JSONL_CACHE_TTL {
+            self.cli_readers.cached_status.remove(&session_id);
+            return None;
+        }
+
+        Some((cached_status.status, cached_status.tool_name.clone()))
+    }
+
     /// Try to compact a session before verification.
     /// Returns true if compaction was started, false if skipped.
     fn try_compact(&mut self, session_id: SessionId) -> bool {
@@ -561,7 +728,7 @@ impl WorkspaceView {
             return;
         }
 
-        // Never auto-assign to bare shell sessions — CLI must be detected first
+        // Never auto-assign to bare shell sessions before CLI is detected
         let cli_type = self
             .clipboard
             .clipboard_service
@@ -590,7 +757,7 @@ impl WorkspaceView {
                 session_id: target_id,
                 prompt,
             }) => {
-                // AssignNow already has the prompt — directly assign via queue
+                // AssignNow already has the prompt; directly assign via queue
                 {
                     let mut manager = match self.task_manager.lock() {
                         Ok(m) => m,
@@ -640,7 +807,7 @@ impl WorkspaceView {
                 info!(
                     ?task_id,
                     ?target_id,
-                    "Task proposed — awaiting user confirmation"
+                    "Task proposed; awaiting user confirmation"
                 );
             }
             Some(AssignmentAction::NoTask) | None => {}

@@ -9,12 +9,13 @@
 //! The JSON schema contains `sessionId`, `lastUpdated`, and a `messages` array
 //! where each message has a `type` and optional `toolCalls`.
 
-use crate::session_reader_common::is_timestamp_recent;
+use crate::session_reader_common::{is_file_recent, is_timestamp_recent};
 use crate::CliSessionStatus;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
+use std::time::Duration;
 use std::time::SystemTime;
 use tracing::{debug, trace, warn};
 
@@ -110,10 +111,32 @@ impl GeminiSessionReader {
     /// project-specific session file.
     /// `_pid` is accepted for API consistency but not used.
     pub fn get_status(&mut self, working_dir: &Path, _pid: Option<u32>) -> GeminiSessionStatus {
+        self.get_status_if_recent(working_dir, _pid, Duration::MAX)
+            .unwrap_or(GeminiSessionStatus::Unknown)
+    }
+
+    /// Get the status of a Gemini CLI session if its session file is recent enough.
+    ///
+    /// This avoids false positives from stale session files when probing GenericShell.
+    pub fn get_status_if_recent(
+        &mut self,
+        working_dir: &Path,
+        _pid: Option<u32>,
+        max_age: Duration,
+    ) -> Option<GeminiSessionStatus> {
         let Some(session_path) = self.find_session_file(working_dir) else {
             trace!(?working_dir, "No Gemini session file found");
-            return GeminiSessionStatus::Unknown;
+            return None;
         };
+
+        if !is_file_recent(&session_path, max_age) {
+            debug!(
+                ?session_path,
+                ?max_age,
+                "Skip stale Gemini session file while probing GenericShell"
+            );
+            return None;
+        }
 
         // Check mtime to skip re-parsing if unchanged
         let mtime = fs::metadata(&session_path)
@@ -123,7 +146,7 @@ impl GeminiSessionReader {
         if let Some(mtime) = mtime {
             if let Some((cached_mtime, ref cached_status)) = self.session_cache.get(working_dir) {
                 if *cached_mtime == mtime {
-                    return cached_status.clone();
+                    return Some(cached_status.clone());
                 }
             }
         }
@@ -133,7 +156,7 @@ impl GeminiSessionReader {
             Ok(c) => c,
             Err(e) => {
                 trace!(?e, "Failed to read Gemini session file");
-                return GeminiSessionStatus::Unknown;
+                return Some(GeminiSessionStatus::Unknown);
             }
         };
 
@@ -141,7 +164,7 @@ impl GeminiSessionReader {
             Ok(s) => s,
             Err(e) => {
                 trace!(?e, "Failed to parse Gemini session JSON");
-                return GeminiSessionStatus::Unknown;
+                return Some(GeminiSessionStatus::Unknown);
             }
         };
 
@@ -153,7 +176,7 @@ impl GeminiSessionReader {
                 .insert(working_dir.to_path_buf(), (mtime, status.clone()));
         }
 
-        status
+        Some(status)
     }
 
     /// Find the most recent session file for a given working directory.
@@ -597,6 +620,57 @@ mod tests {
 
         // Unparseable should not be treated as stale (is_timestamp_recent returns None)
         assert_ne!(is_timestamp_recent("not-a-date", 30), Some(false));
+    }
+
+    #[test]
+    fn test_get_status_if_recent_applies_age_gate() {
+        let tmp = TempDir::new().unwrap();
+        let gemini_home = tmp.path();
+        let projects_path = gemini_home.join("projects.json");
+        fs::write(
+            &projects_path,
+            r#"[{"path":"/Users/test/project","slug":"test-project"}]"#,
+        )
+        .unwrap();
+
+        let chats_dir = gemini_home.join("tmp").join("test-project").join("chats");
+        std::fs::create_dir_all(&chats_dir).unwrap();
+
+        let now = chrono::Utc::now().to_rfc3339();
+        let session_json = format!(
+            r#"{{
+                "sessionId": "test-uuid",
+                "lastUpdated": "{}",
+                "messages": [
+                    {{"type": "user", "toolCalls": []}}
+                ]
+            }}"#,
+            now
+        );
+        let session_path = chats_dir.join("session-12345-uuid.json");
+        fs::write(&session_path, session_json).unwrap();
+
+        let mut reader = GeminiSessionReader {
+            gemini_home: gemini_home.to_path_buf(),
+            projects_cache: None,
+            projects_mtime: None,
+            session_cache: HashMap::new(),
+        };
+
+        let fresh = reader.get_status_if_recent(
+            Path::new("/Users/test/project"),
+            None,
+            std::time::Duration::from_secs(10),
+        );
+        assert_eq!(fresh, Some(GeminiSessionStatus::Working));
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+        let stale = reader.get_status_if_recent(
+            Path::new("/Users/test/project"),
+            None,
+            std::time::Duration::from_nanos(1),
+        );
+        assert!(stale.is_none());
     }
 
     #[test]
