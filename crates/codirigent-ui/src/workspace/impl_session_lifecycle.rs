@@ -177,6 +177,37 @@ impl WorkspaceView {
 
         info!(count = state.sessions.len(), "Restoring sessions from disk");
 
+        // Auto-expand grid layout if needed to accommodate all sessions
+        let session_count = state.sessions.len();
+        let current_max = self.workspace.layout_profile().max_sessions();
+
+        if session_count > current_max {
+            use crate::layout::LayoutProfile;
+            let new_profile = if session_count <= 4 {
+                LayoutProfile::Grid2x2
+            } else if session_count <= 6 {
+                LayoutProfile::Grid2x3
+            } else if session_count <= 9 {
+                LayoutProfile::Grid3x3
+            } else {
+                // For more than 9 sessions, create a custom grid
+                let cols = 4;
+                let rows = (session_count as u32 + cols - 1) / cols; // Ceiling division
+                LayoutProfile::Custom { rows, cols }
+            };
+
+            info!(
+                "Auto-expanding layout from {} to {} cells to fit {} sessions",
+                current_max,
+                new_profile.max_sessions(),
+                session_count
+            );
+            self.workspace.set_layout(new_profile);
+        }
+
+        // Track used session names to ensure uniqueness during restoration
+        let mut used_names = std::collections::HashSet::new();
+
         for saved in &state.sessions {
             let working_dir = if saved.working_directory.exists() {
                 saved.working_directory.clone()
@@ -197,11 +228,32 @@ impl WorkspaceView {
                 .map(|s| s.general.default_shell)
                 .filter(|s| !s.is_empty());
 
+            // Ensure session name is unique
+            let mut session_name = saved.name.clone();
+            if used_names.contains(&session_name) {
+                // Find next available number suffix
+                let mut counter = 2;
+                loop {
+                    let candidate = format!("{} ({})", saved.name, counter);
+                    if !used_names.contains(&candidate) {
+                        session_name = candidate;
+                        break;
+                    }
+                    counter += 1;
+                }
+                warn!(
+                    original = %saved.name,
+                    renamed = %session_name,
+                    "Renamed duplicate session name during restoration"
+                );
+            }
+            used_names.insert(session_name.clone());
+
             let session_id = self.with_session_manager(|manager| {
-                match manager.create_session(saved.name.clone(), working_dir.clone(), shell) {
+                match manager.create_session(session_name.clone(), working_dir.clone(), shell) {
                     Ok(id) => Some(id),
                     Err(e) => {
-                        warn!(name = %saved.name, "Failed to restore session: {}", e);
+                        warn!(name = %session_name, "Failed to restore session: {}", e);
                         None
                     }
                 }
@@ -242,11 +294,11 @@ impl WorkspaceView {
             let session = self.with_session_manager(|manager| {
                 manager
                     .get_session(session_id)
-                    .unwrap_or_else(|| Session::new(session_id, saved.name.clone(), working_dir))
+                    .unwrap_or_else(|| Session::new(session_id, session_name.clone(), working_dir))
             });
 
             if self.workspace.add_session(session.clone()) {
-                let mut header = TerminalHeader::new(&saved.name, SessionStatus::Idle);
+                let mut header = TerminalHeader::new(&session_name, SessionStatus::Idle);
                 if let Some(ref gi) = session.git_info {
                     header = header.with_git_info(gi.branch.clone(), gi.dirty_count);
                 }

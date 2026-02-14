@@ -63,6 +63,9 @@ struct JsonlContent {
     /// Content type: "text", "tool_use", "tool_result".
     #[serde(rename = "type", default)]
     content_type: String,
+    /// Text content (only for text blocks).
+    #[serde(default)]
+    text: Option<String>,
     /// Tool name (only for tool_use blocks).
     #[serde(default)]
     name: Option<String>,
@@ -227,6 +230,24 @@ impl ClaudeSessionReader {
         best.map(|(p, _)| p)
     }
 
+    /// Check if the last text content block in a message ends with a question mark.
+    /// Returns `Some("question")` if yes, `None` otherwise.
+    fn last_text_ends_with_question(msg: &JsonlMessage) -> Option<String> {
+        let last_text = msg
+            .content
+            .iter()
+            .rev()
+            .find(|c| c.content_type == "text")
+            .and_then(|c| c.text.as_deref())?;
+
+        let last_line = last_text.trim_end().lines().last()?.trim();
+        if last_line.ends_with('?') {
+            Some("question".to_string())
+        } else {
+            None
+        }
+    }
+
     /// Core status determination algorithm.
     ///
     /// Uses JSONL as the sole source of truth:
@@ -235,6 +256,7 @@ impl ClaudeSessionReader {
     ///    (if it's actually auto-approved, the result appears within ~1s
     ///    and the next poll will update the status)
     /// 3. If stop_reason is "end_turn" → NeedsAttention
+    ///    (if the last text ends with `?`, detail is set to "question")
     /// 4. Otherwise → Unknown (fall through to other detectors)
     fn determine_status(&self, entries: &[JsonlEntry]) -> ClaudeSessionStatus {
         debug!(
@@ -286,8 +308,9 @@ impl ClaudeSessionReader {
                 if let Some(msg) = &last_two[0].message {
                     let has_tools = msg.content.iter().any(|c| c.content_type == "tool_use");
                     if !has_tools && msg.stop_reason.is_some() {
+                        let detail = Self::last_text_ends_with_question(msg);
                         debug!("JSONL: consecutive assistant messages with stop_reason → NeedsAttention");
-                        return ClaudeSessionStatus::NeedsAttention { detail: None };
+                        return ClaudeSessionStatus::NeedsAttention { detail };
                     }
                 }
             }
@@ -346,7 +369,8 @@ impl ClaudeSessionReader {
         // Check stop_reason
         if let Some(ref stop_reason) = msg.stop_reason {
             if stop_reason == "end_turn" {
-                return ClaudeSessionStatus::NeedsAttention { detail: None };
+                let detail = Self::last_text_ends_with_question(msg);
+                return ClaudeSessionStatus::NeedsAttention { detail };
             }
         }
 
@@ -419,9 +443,20 @@ mod tests {
         }
     }
 
+    fn make_text(text: &str) -> JsonlContent {
+        JsonlContent {
+            content_type: "text".to_string(),
+            text: Some(text.to_string()),
+            name: None,
+            id: None,
+            tool_use_id: None,
+        }
+    }
+
     fn make_tool_use(name: &str, id: &str) -> JsonlContent {
         JsonlContent {
             content_type: "tool_use".to_string(),
+            text: None,
             name: Some(name.to_string()),
             id: Some(id.to_string()),
             tool_use_id: None,
@@ -431,6 +466,7 @@ mod tests {
     fn make_tool_result(tool_use_id: &str) -> JsonlContent {
         JsonlContent {
             content_type: "tool_result".to_string(),
+            text: None,
             name: None,
             id: None,
             tool_use_id: Some(tool_use_id.to_string()),
@@ -801,6 +837,136 @@ mod tests {
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::Working
+        );
+    }
+
+    // Question detection tests
+    #[test]
+    fn test_end_turn_with_question_returns_needs_attention_with_detail() {
+        let entries = vec![make_assistant_entry(
+            vec![make_text("I found the bug. Would you like me to fix it?")],
+            Some("end_turn"),
+        )];
+        let reader = test_reader();
+        assert_eq!(
+            reader.determine_status(&entries),
+            ClaudeSessionStatus::NeedsAttention {
+                detail: Some("question".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn test_end_turn_without_question_returns_needs_attention_no_detail() {
+        let entries = vec![make_assistant_entry(
+            vec![make_text("Done, all tests pass.")],
+            Some("end_turn"),
+        )];
+        let reader = test_reader();
+        assert_eq!(
+            reader.determine_status(&entries),
+            ClaudeSessionStatus::NeedsAttention { detail: None }
+        );
+    }
+
+    #[test]
+    fn test_end_turn_multiline_question_on_last_line() {
+        let entries = vec![make_assistant_entry(
+            vec![make_text(
+                "I've analyzed the code and found 3 issues.\n\nShould I proceed with the fix?",
+            )],
+            Some("end_turn"),
+        )];
+        let reader = test_reader();
+        assert_eq!(
+            reader.determine_status(&entries),
+            ClaudeSessionStatus::NeedsAttention {
+                detail: Some("question".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn test_end_turn_question_mid_message_not_last_line() {
+        // Question appears in the middle, but last line is a statement
+        let entries = vec![make_assistant_entry(
+            vec![make_text(
+                "Why does this matter? Because it affects performance.\n\nHere's the fix applied.",
+            )],
+            Some("end_turn"),
+        )];
+        let reader = test_reader();
+        assert_eq!(
+            reader.determine_status(&entries),
+            ClaudeSessionStatus::NeedsAttention { detail: None }
+        );
+    }
+
+    #[test]
+    fn test_end_turn_no_text_content_returns_no_detail() {
+        // end_turn with no text content blocks at all
+        let entries = vec![make_assistant_entry(vec![], Some("end_turn"))];
+        let reader = test_reader();
+        assert_eq!(
+            reader.determine_status(&entries),
+            ClaudeSessionStatus::NeedsAttention { detail: None }
+        );
+    }
+
+    #[test]
+    fn test_end_turn_text_after_resolved_tool_use_question() {
+        // Tool_use was already resolved, assistant ends turn with a question
+        let entries = vec![
+            make_assistant_entry(
+                vec![
+                    make_tool_use("Read", "tu_q1"),
+                    make_text("Batch 1 completed. Do you want me to continue?"),
+                ],
+                Some("end_turn"),
+            ),
+            make_human_entry(vec![make_tool_result("tu_q1")]),
+        ];
+        let reader = test_reader();
+        // stop_reason="end_turn" with question text → NeedsAttention with detail
+        assert_eq!(
+            reader.determine_status(&entries),
+            ClaudeSessionStatus::NeedsAttention {
+                detail: Some("question".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn test_end_turn_plain_text_question() {
+        // The realistic case: assistant sends only text ending with a question
+        let entries = vec![make_assistant_entry(
+            vec![make_text("Batch 1 completed. Do you want me to continue?")],
+            Some("end_turn"),
+        )];
+        let reader = test_reader();
+        assert_eq!(
+            reader.determine_status(&entries),
+            ClaudeSessionStatus::NeedsAttention {
+                detail: Some("question".to_string()),
+            }
+        );
+    }
+
+    #[test]
+    fn test_consecutive_assistant_question_detected() {
+        let entries = vec![
+            make_assistant_entry(vec![make_tool_use("Read", "tu_cq1")], None),
+            make_assistant_entry(
+                vec![make_text("Want me to look into this?")],
+                Some("end_turn"),
+            ),
+        ];
+        let reader = test_reader();
+        assert_eq!(
+            reader.determine_status(&entries),
+            ClaudeSessionStatus::NeedsAttention {
+                detail: Some("question".to_string()),
+            }
         );
     }
 }
