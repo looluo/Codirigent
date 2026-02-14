@@ -68,7 +68,6 @@ impl CliSessionStatus {
     pub fn to_session_status(self) -> Option<(SessionStatus, Option<String>)> {
         match self {
             Self::Working => Some((SessionStatus::Working, None)),
-            Self::NeedsAttention { detail: None } => Some((SessionStatus::Idle, None)),
             Self::NeedsAttention { detail } => Some((SessionStatus::NeedsAttention, detail)),
             Self::Unknown => None,
         }
@@ -117,10 +116,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn end_of_turn_maps_to_idle() {
+    fn needs_attention_with_no_detail_maps_to_needs_attention() {
         let status = CliSessionStatus::NeedsAttention { detail: None };
         let result = status.to_session_status();
-        assert_eq!(result, Some((SessionStatus::Idle, None)));
+        assert_eq!(result, Some((SessionStatus::NeedsAttention, None)));
     }
 
     #[test]
