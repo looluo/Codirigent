@@ -131,7 +131,59 @@ pub(super) fn detect_installed_editors() -> Vec<String> {
 /// Detect installed monospace fonts by querying the GPUI text system.
 ///
 /// Enumerates all system fonts and filters for monospace by comparing
-/// the advance width of 'm' vs 'i' — in a monospace font these are equal.
+/// the advance width of 'm' vs 'i' ??in a monospace font these are equal.
+#[cfg(target_os = "windows")]
+pub(super) fn detect_monospace_fonts(text_system: &gpui::TextSystem) -> Vec<String> {
+    let all_names: Vec<String> = text_system
+        .all_font_names()
+        .into_iter()
+        .map(|name| name.to_string())
+        .collect();
+
+    let all_names_lower: HashSet<String> =
+        all_names.iter().map(|name| name.to_lowercase()).collect();
+
+    // Avoid probing missing fonts with resolve_font() on Windows because GPUI
+    // logs each miss at error level.
+    let preferred = [
+        "Cascadia Code",
+        "Consolas",
+        "JetBrains Mono",
+        "Fira Code",
+        "Source Code Pro",
+        "Inconsolata",
+        "Lucida Console",
+        "Courier New",
+    ];
+
+    let mut monospace: Vec<String> = preferred
+        .iter()
+        .filter(|name| all_names_lower.contains(&name.to_lowercase()))
+        .map(|name| (*name).to_string())
+        .collect();
+
+    // Fallback heuristic when none of the preferred faces are available.
+    if monospace.is_empty() {
+        monospace = all_names
+            .iter()
+            .filter(|name| {
+                let lower = name.to_lowercase();
+                lower.contains("mono") || lower.contains("code")
+            })
+            .cloned()
+            .collect();
+    }
+
+    if monospace.is_empty() {
+        monospace.push("Consolas".to_string());
+    }
+
+    monospace.sort();
+    monospace.dedup();
+    monospace
+}
+
+#[cfg(not(target_os = "windows"))]
 pub(super) fn detect_monospace_fonts(text_system: &gpui::TextSystem) -> Vec<String> {
     use gpui::{px, Font, FontFeatures, FontStyle, FontWeight};
 
@@ -169,7 +221,6 @@ pub(super) fn detect_monospace_fonts(text_system: &gpui::TextSystem) -> Vec<Stri
     monospace.dedup();
     monospace
 }
-
 /// Checks if an editor command is a terminal-based editor.
 ///
 /// Extracts the base command name (ignoring path) and checks against
@@ -230,3 +281,4 @@ mod tests {
         assert!(!is_terminal_editor("zed"));
     }
 }
+

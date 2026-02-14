@@ -5,20 +5,15 @@
 
 use crate::components::text_input::{text_input, TextInputStyle};
 use crate::icons;
-use crate::task_board::{
-    AutoAssignMode, TaskAction, TaskItem, TaskItemAction, TaskPriority as UIPriority,
-    TaskStatus as UIStatus,
-};
 use crate::theme::CodirigentTheme;
 use crate::workspace::gpui::WorkspaceView;
 use crate::workspace::render::SessionMenuAction;
-use codirigent_core::{SessionId, TaskPriority as CorePriority, TaskStatus as CoreStatus};
+use codirigent_core::SessionId;
 use gpui::{
     div, prelude::FluentBuilder, px, ClickEvent, Context, FontWeight, InteractiveElement,
     IntoElement, MouseButton, MouseDownEvent, ParentElement, SharedString,
     StatefulInteractiveElement, Styled,
 };
-use tracing::info;
 
 impl WorkspaceView {
     /// Convert core Task to UI TaskItem with status mapping.

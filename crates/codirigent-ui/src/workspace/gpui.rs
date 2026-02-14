@@ -38,10 +38,8 @@ use crate::theme::CodirigentTheme;
 use crate::toolbar::CustomLayoutPicker;
 // Core imports (combined)
 use crate::clipboard_preview::ClipboardPreview;
-use crate::settings::SettingsPage;
-use crate::smart_clipboard::SmartClipboardProvider;
 use codirigent_core::compaction::{CompactionConfig, CompactionService};
-use codirigent_core::config_service::{ConfigService, DefaultConfigService};
+use codirigent_core::config_service::ConfigService;
 use codirigent_core::{
     CodirigentEvent, DefaultEventBus, EventBus, FileStorageService, GridPosition, SessionId,
     SessionManager, SessionStatus, TaskManager, TaskManagerConfig,
@@ -53,8 +51,8 @@ use codirigent_session::DefaultSessionManager;
 use gpui::{
     div, px, App, AppContext, ClickEvent, Context, Entity, FocusHandle, Focusable,
     InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Render,
-    StatefulInteractiveElement, Styled, Window,
-    ElementInputHandler, EntityInputHandler, UTF16Selection, Bounds, Pixels,
+    StatefulInteractiveElement, Styled, Window, Bounds, EntityInputHandler, Pixels,
+    UTF16Selection,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -73,6 +71,8 @@ pub struct WorkspaceView {
     focus_handle: FocusHandle,
     /// IME composition state: range of marked (composing) text.
     pub(super) ime_marked_range: Option<std::ops::Range<usize>>,
+    /// Current IME pre-edit text shown during composition.
+    pub(super) ime_preedit_text: Option<String>,
     /// Event bus for cross-module communication.
     pub(super) event_bus: Arc<DefaultEventBus>,
     /// Session manager for PTY and session lifecycle.
@@ -128,6 +128,19 @@ pub struct WorkspaceView {
 /// Returns `true` if the editor command refers to a terminal-based editor
 /// (one that needs to run inside an existing terminal session).
 impl WorkspaceView {
+    /// Returns true when a computed target size is a transient collapse that
+    /// should be ignored to avoid 1-column/1-row PTY resizes.
+    fn should_skip_collapsed_resize(
+        current_rows: u16,
+        current_cols: u16,
+        target_rows: u16,
+        target_cols: u16,
+    ) -> bool {
+        let target_collapsed = target_rows <= 1 || target_cols <= 1;
+        let current_usable = current_rows > 1 && current_cols > 1;
+        target_collapsed && current_usable
+    }
+
     /// Create a new workspace view.
     ///
     /// # Arguments
@@ -159,6 +172,7 @@ impl WorkspaceView {
             workspace,
             focus_handle: cx.focus_handle(),
             ime_marked_range: None,
+            ime_preedit_text: None,
             event_bus,
             session_manager,
             detector,
@@ -667,7 +681,7 @@ impl WorkspaceView {
     /// Find the best session to assign a task to.
     ///
     /// Only returns idle sessions with a known CLI running (not GenericShell).
-    /// Never assigns to bare shell sessions — the CLI must be detected first.
+    /// Never assigns to bare shell sessions ??the CLI must be detected first.
     /// Find the best assignable session for a given task.
     ///
     /// Filters sessions by:
@@ -823,6 +837,24 @@ impl WorkspaceView {
                     (info.bounds.size.height - CELL_BORDER_WIDTH - HEADER_HEIGHT - padding2)
                         .max(0.0);
 
+                // Convert first so we can guard against transient layout collapses.
+                // During some intermediate layout passes, bounds briefly report near-zero
+                // sizes, which would otherwise force the PTY to 1 column/row and make
+                // output wrap vertically until the next resize event.
+                let (target_rows, target_cols) =
+                    terminal_view.dimensions_from_pixels(available_width, available_height);
+                let current_rows = terminal_view.terminal().rows();
+                let current_cols = terminal_view.terminal().cols();
+
+                if Self::should_skip_collapsed_resize(
+                    current_rows,
+                    current_cols,
+                    target_rows,
+                    target_cols,
+                ) {
+                    continue;
+                }
+
                 // Resize terminal emulator to fit the remaining space
                 terminal_view.resize_to_fit(available_width, available_height);
 
@@ -928,6 +960,25 @@ impl WorkspaceView {
                 }
                 _ => {} // Other Ctrl combos go to PTY (Ctrl+D, Ctrl+L, etc.)
             }
+        }
+
+        // Text input (including IME commits) is delivered through the
+        // EntityInputHandler path via replace_text_in_range(). If we also
+        // send printable keys from keydown, characters are duplicated.
+        // GPUI can report plain Space with an empty key_char, so treat it
+        // as text input as well to avoid inserting two spaces.
+        let key: &str = event.keystroke.key.as_ref();
+        let is_plain_space = key == " " || key.eq_ignore_ascii_case("space");
+        if !event.keystroke.modifiers.control
+            && !event.keystroke.modifiers.alt
+            && (event
+                .keystroke
+                .key_char
+                .as_deref()
+                .is_some_and(|s| !s.is_empty())
+                || is_plain_space)
+        {
+            return;
         }
 
         // Get focused session
@@ -1253,11 +1304,17 @@ impl EntityInputHandler for WorkspaceView {
     fn text_for_range(
         &mut self,
         _range: std::ops::Range<usize>,
-        _adjusted_range: &mut Option<std::ops::Range<usize>>,
+        adjusted_range: &mut Option<std::ops::Range<usize>>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<String> {
-        None
+        if let Some(text) = &self.ime_preedit_text {
+            let len = text.encode_utf16().count();
+            *adjusted_range = Some(0..len);
+            Some(text.clone())
+        } else {
+            None
+        }
     }
 
     fn selected_text_range(
@@ -1266,10 +1323,17 @@ impl EntityInputHandler for WorkspaceView {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<UTF16Selection> {
-        Some(UTF16Selection {
-            range: 0..0,
-            reversed: false,
-        })
+        if let Some(range) = self.ime_marked_range.clone() {
+            Some(UTF16Selection {
+                range,
+                reversed: false,
+            })
+        } else {
+            Some(UTF16Selection {
+                range: 0..0,
+                reversed: false,
+            })
+        }
     }
 
     fn marked_text_range(
@@ -1282,6 +1346,7 @@ impl EntityInputHandler for WorkspaceView {
 
     fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
         self.ime_marked_range = None;
+        self.ime_preedit_text = None;
     }
 
     fn replace_text_in_range(
@@ -1292,7 +1357,14 @@ impl EntityInputHandler for WorkspaceView {
         cx: &mut Context<Self>,
     ) {
         self.ime_marked_range = None;
+        self.ime_preedit_text = None;
         if let Some(session_id) = self.workspace.focused_session_id() {
+            // Typing while scrolled up should jump back to the cursor line,
+            // matching native terminal behavior.
+            if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
+                terminal_view.scroll_to_bottom();
+            }
+
             let text_bytes = text.as_bytes().to_vec();
 
             self.with_session_manager(move |sm| {
@@ -1311,7 +1383,13 @@ impl EntityInputHandler for WorkspaceView {
         _cx: &mut Context<Self>,
     ) {
         let len = text.encode_utf16().count();
-        self.ime_marked_range = Some(0..len);
+        if len == 0 {
+            self.ime_marked_range = None;
+            self.ime_preedit_text = None;
+        } else {
+            self.ime_marked_range = Some(0..len);
+            self.ime_preedit_text = Some(text.to_string());
+        }
     }
 
     fn bounds_for_range(
@@ -1458,7 +1536,7 @@ impl Render for WorkspaceView {
             .flex()
             .flex_col();
 
-        // Build the workspace: title bar → main content → modals → overlays
+        // Build the workspace: title bar ??main content ??modals ??overlays
         container = self.render_main_workspace(container, window, cx, grid_gap);
         container = self.render_active_modals(container, cx);
         container = self.render_overlays(container, cx);
@@ -1549,5 +1627,35 @@ mod tests {
         assert!(!super::is_executable(Path::new(
             "/nonexistent_binary_abc123"
         )));
+    }
+
+    #[test]
+    fn test_skip_collapsed_resize_when_current_is_usable() {
+        assert!(super::WorkspaceView::should_skip_collapsed_resize(
+            40, 120, 40, 1
+        ));
+        assert!(super::WorkspaceView::should_skip_collapsed_resize(
+            40, 120, 1, 120
+        ));
+        assert!(super::WorkspaceView::should_skip_collapsed_resize(
+            40, 120, 1, 1
+        ));
+    }
+
+    #[test]
+    fn test_do_not_skip_collapsed_resize_if_already_collapsed() {
+        assert!(!super::WorkspaceView::should_skip_collapsed_resize(
+            1, 1, 1, 1
+        ));
+        assert!(!super::WorkspaceView::should_skip_collapsed_resize(
+            1, 80, 1, 1
+        ));
+    }
+
+    #[test]
+    fn test_do_not_skip_non_collapsed_resize() {
+        assert!(!super::WorkspaceView::should_skip_collapsed_resize(
+            40, 120, 30, 100
+        ));
     }
 }

@@ -4,20 +4,15 @@
 //! custom layout modal and session action modal.
 
 use super::gpui::WorkspaceView;
-use super::render::SessionMenuAction;
-use super::types::{SessionActionKind, SessionActionModal};
 use crate::components::text_input::{text_input, TextInputStyle};
 use crate::icons;
-use crate::layout::LayoutProfile;
 use crate::toolbar::CustomLayoutMode;
-use codirigent_core::{LayoutNode, SessionId, SlotId, SplitDirection};
+use codirigent_core::{LayoutNode, SlotId, SplitDirection};
 use gpui::{
     div, prelude::FluentBuilder, px, relative, ClickEvent, Context, FontWeight, Image, ImageFormat,
-    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ObjectFit, ParentElement,
+    InteractiveElement, IntoElement, MouseButton, ObjectFit, ParentElement,
     SharedString, StatefulInteractiveElement, Styled, StyledImage,
 };
-use std::cell::Cell;
-use std::rc::Rc;
 use std::sync::Arc;
 
 impl WorkspaceView {
@@ -552,7 +547,6 @@ impl WorkspaceView {
                     preview_bg
                 };
                 let cell_border = if is_selected { primary } else { border_color };
-                let cell_border_width = if is_selected { 2.0 } else { 1.0 };
 
                 let mut cell = div()
                     .id(SharedString::from(format!("preview-slot-{}", slot_id.0)))

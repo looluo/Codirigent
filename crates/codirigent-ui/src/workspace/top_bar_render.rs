@@ -4,12 +4,10 @@
 //! layout controls, and window controls.
 
 use crate::icons;
-use crate::title_bar::TitleBar;
-use crate::toolbar::CustomLayoutMode;
 use crate::workspace::gpui::WorkspaceView;
 use gpui::{
     div, px, ClickEvent, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    SharedString, StatefulInteractiveElement, Styled, Window, WindowControlArea,
+    SharedString, StatefulInteractiveElement, Styled,
 };
 
 impl WorkspaceView {

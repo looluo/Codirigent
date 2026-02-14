@@ -17,25 +17,20 @@ use super::gpui::WorkspaceView;
 // Import from main branch (terminal rendering)
 use crate::terminal_view::CursorShape;
 // Imports from feature branch (UI components)
-use crate::components::text_input::{text_input, TextInputStyle};
 use crate::empty_session::EmptySessionRenderHints;
 use crate::icons;
-use crate::layout::LayoutProfile;
 use crate::terminal_header::TerminalHeaderRenderHints;
 use crate::theme::CodirigentTheme;
 use crate::title_bar::TitleBar;
-use crate::toolbar::CustomLayoutMode;
-use codirigent_core::{LayoutNode, Session, SessionId, SlotId, SplitDirection};
+use codirigent_core::{Session, SessionId};
 use gpui::{
-    div, prelude::FluentBuilder, px, relative, ClickEvent, Context, Entity, FocusHandle,
-    FontWeight, Image, ImageFormat, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ObjectFit, ParentElement, ScrollWheelEvent, SharedString,
-    StatefulInteractiveElement, Styled, StyledImage, Window, WindowControlArea,
+    div, prelude::FluentBuilder, px, ClickEvent, Context, Entity, FocusHandle, FontWeight,
+    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, SharedString,
+    StatefulInteractiveElement, Styled, Window, WindowControlArea,
 };
 use std::borrow::Cow;
 use std::cell::Cell;
 use std::rc::Rc;
-use std::sync::Arc;
 use tracing::info;
 
 impl WorkspaceView {
@@ -50,6 +45,13 @@ impl WorkspaceView {
 
         // Shared cell for canvas origin (updated during prepaint)
         let canvas_origin: Rc<Cell<(f32, f32)>> = Rc::new(Cell::new((0.0, 0.0)));
+
+        // IME pre-edit text should only be shown in the focused terminal pane.
+        let ime_preedit_text = if matches!(ime_context.as_ref(), Some((_, _, true))) {
+            self.ime_preedit_text.clone()
+        } else {
+            None
+        };
 
 
         // Get the terminal view for this session
@@ -210,6 +212,45 @@ impl WorkspaceView {
                     oy,
                     bg_rects,
                     shaped_runs,
+                    {
+                        if let (Some(preedit), Some((cursor, _))) =
+                            (ime_preedit_text.as_ref(), cursor_data.as_ref())
+                        {
+                            if preedit.is_empty() {
+                                None
+                            } else {
+                                let font = gpui::Font {
+                                    family: font_family.clone(),
+                                    features: gpui::FontFeatures::default(),
+                                    fallbacks: None,
+                                    weight: gpui::FontWeight::NORMAL,
+                                    style: gpui::FontStyle::Normal,
+                                };
+                                let preedit_text: gpui::SharedString = preedit.clone().into();
+                                let preedit_run = gpui::TextRun {
+                                    len: preedit_text.len(),
+                                    font,
+                                    color: terminal_fg,
+                                    background_color: None,
+                                    underline: Some(gpui::UnderlineStyle {
+                                        thickness: px(1.0),
+                                        color: Some(terminal_fg),
+                                        wavy: false,
+                                    }),
+                                    strikethrough: None,
+                                };
+                                let shaped = window.text_system().shape_line(
+                                    preedit_text,
+                                    font_size_px,
+                                    &[preedit_run],
+                                    None,
+                                );
+                                Some((cursor.x, cursor.y, shaped))
+                            }
+                        } else {
+                            None
+                        }
+                    },
                     cursor_data,
                     cell_width,
                     cell_height,
@@ -222,13 +263,15 @@ impl WorkspaceView {
                 f32,
                 Vec<(usize, usize, usize, gpui::Hsla)>,
                 Vec<(usize, usize, gpui::ShapedLine)>,
+                Option<(f32, f32, gpui::ShapedLine)>,
                 Option<(crate::terminal_view::CursorRect, gpui::Hsla)>,
                 f32,
                 f32,
             ),
                   window: &mut gpui::Window,
                   cx: &mut gpui::App| {
-                let (ox, oy, bg_rects, shaped_runs, cursor_data, cell_w, cell_h) = prepaint_data;
+                let (ox, oy, bg_rects, shaped_runs, ime_preedit, cursor_data, cell_w, cell_h) =
+                    prepaint_data;
 
                 // Register input handler for IME if context is provided and it's the focused pane
                 if let Some((ref entity, ref focus_handle, is_focused)) = ime_context_for_paint {
@@ -270,7 +313,16 @@ impl WorkspaceView {
                     let _ = shaped_line.paint(text_origin, px(cell_h), window, cx);
                 }
 
-                // 3. Paint cursor
+                // 3. Paint IME pre-edit text at the cursor position.
+                if let Some((preedit_x, preedit_y, preedit_line)) = &ime_preedit {
+                    let preedit_origin = gpui::Point {
+                        x: px(ox + *preedit_x),
+                        y: px(oy + *preedit_y),
+                    };
+                    let _ = preedit_line.paint(preedit_origin, px(cell_h), window, cx);
+                }
+
+                // 4. Paint cursor
                 if let Some((cursor, cursor_color)) = &cursor_data {
                     let cx_pos = ox + cursor.x;
                     let cy_pos = oy + cursor.y;

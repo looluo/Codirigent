@@ -12,6 +12,7 @@
 use crate::session_reader_common::{is_timestamp_recent, read_file_tail};
 use crate::CliSessionStatus;
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::fs;
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
@@ -41,10 +42,35 @@ struct JsonlEntry {
     /// ISO 8601 timestamp of this entry.
     #[serde(default)]
     timestamp: Option<String>,
+    /// Nested payload for newer "progress" envelope format.
+    #[serde(default)]
+    data: Option<JsonlData>,
+}
+
+/// Data payload in newer Claude JSONL "progress" envelope format.
+#[derive(Debug, Deserialize)]
+struct JsonlData {
+    /// Nested message/event payload.
+    #[serde(default)]
+    message: Option<JsonlDataMessage>,
+}
+
+/// Nested message payload in newer Claude JSONL "progress" format.
+#[derive(Debug, Deserialize)]
+struct JsonlDataMessage {
+    /// Entry type: "assistant", "user", etc.
+    #[serde(rename = "type", default)]
+    entry_type: String,
+    /// Nested message object (assistant/user message payload).
+    #[serde(default)]
+    message: Option<JsonlMessage>,
+    /// Optional nested timestamp.
+    #[serde(default)]
+    timestamp: Option<String>,
 }
 
 /// Message payload within a JSONL entry.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct JsonlMessage {
     /// Role of the message sender.
     #[serde(default)]
@@ -58,7 +84,7 @@ struct JsonlMessage {
 }
 
 /// A content block within a message.
-#[derive(Debug, Deserialize)]
+#[derive(Debug, Deserialize, Clone)]
 struct JsonlContent {
     /// Content type: "text", "tool_use", "tool_result".
     #[serde(rename = "type", default)]
@@ -120,13 +146,130 @@ impl ClaudeSessionReader {
             return None;
         }
 
-        // Claude Code uses the working directory path with slashes replaced by dashes
-        // e.g., /Users/foo/project -> -Users-foo-project
-        let dir_str = working_dir.to_string_lossy();
-        let hashed = dir_str.replace('/', "-");
+        let mut candidates = Self::build_project_dir_candidates(working_dir);
+        // Most recent first gives better hit rate when multiple variants exist.
+        candidates.reverse();
 
-        let session_dir = projects_dir.join(&hashed);
-        session_dir.is_dir().then_some(session_dir)
+        // First: fast direct lookup for generated candidates.
+        for key in &candidates {
+            let direct = projects_dir.join(key);
+            if direct.is_dir() {
+                return Some(direct);
+            }
+        }
+
+        // Second: tolerate prefixes like "\\?\" normalized to extra dashes.
+        for key in &candidates {
+            for prefix in ["-", "--", "---", "----"] {
+                let candidate = projects_dir.join(format!("{prefix}{key}"));
+                if candidate.is_dir() {
+                    return Some(candidate);
+                }
+            }
+        }
+
+        // Final fallback: scan and match on normalized suffix, then pick most recent.
+        let wanted: Vec<String> = candidates
+            .iter()
+            .map(|c| c.trim_start_matches('-').to_ascii_lowercase())
+            .collect();
+        let mut best: Option<(PathBuf, SystemTime)> = None;
+
+        for entry in fs::read_dir(&projects_dir)
+            .ok()
+            .into_iter()
+            .flatten()
+            .flatten()
+        {
+            let path = entry.path();
+            if !path.is_dir() {
+                continue;
+            }
+            let name = entry.file_name().to_string_lossy().to_string();
+            let normalized = name.trim_start_matches('-').to_ascii_lowercase();
+            let matched = wanted
+                .iter()
+                .any(|w| normalized == *w || normalized.ends_with(w));
+            if !matched {
+                continue;
+            }
+
+            let mtime = Self::find_most_recent_jsonl(&path)
+                .and_then(|p| p.metadata().ok())
+                .and_then(|m| m.modified().ok())
+                .unwrap_or(SystemTime::UNIX_EPOCH);
+
+            if best.as_ref().map_or(true, |(_, t)| mtime > *t) {
+                best = Some((path, mtime));
+            }
+        }
+
+        best.map(|(path, _)| path)
+    }
+
+    /// Build candidate project directory names used by Claude under ~/.claude/projects.
+    fn build_project_dir_candidates(working_dir: &Path) -> Vec<String> {
+        fn normalize(path: &str) -> String {
+            path.chars()
+                .map(|c| match c {
+                    '/' | '\\' | ':' | '?' => '-',
+                    _ => c,
+                })
+                .collect()
+        }
+
+        fn push_unique(candidates: &mut Vec<String>, seen: &mut HashSet<String>, value: String) {
+            if value.is_empty() {
+                return;
+            }
+            let key = value.to_ascii_lowercase();
+            if seen.insert(key) {
+                candidates.push(value);
+            }
+        }
+
+        let mut out = Vec::new();
+        let mut seen = HashSet::new();
+
+        let raw = working_dir.to_string_lossy().to_string();
+        push_unique(&mut out, &mut seen, normalize(&raw));
+
+        #[cfg(windows)]
+        {
+            if let Some(stripped) = raw.strip_prefix(r"\\?\") {
+                push_unique(&mut out, &mut seen, normalize(stripped));
+            }
+            push_unique(&mut out, &mut seen, normalize(&raw.replace('\\', "/")));
+        }
+
+        if let Ok(canonical) = working_dir.canonicalize() {
+            let canonical = canonical.to_string_lossy().to_string();
+            push_unique(&mut out, &mut seen, normalize(&canonical));
+            #[cfg(windows)]
+            {
+                if let Some(stripped) = canonical.strip_prefix(r"\\?\") {
+                    push_unique(&mut out, &mut seen, normalize(stripped));
+                }
+            }
+        }
+
+        out
+    }
+
+    /// Normalize a raw JSONL entry into assistant/user message form used by status logic.
+    fn normalize_entry(mut entry: JsonlEntry) -> Option<JsonlEntry> {
+        // Newer envelope: {"type":"progress","data":{"message":{"type":"assistant|user","message":{...}}}}
+        if entry.entry_type == "progress" {
+            if let Some(data_msg) = entry.data.take().and_then(|d| d.message) {
+                return Some(JsonlEntry {
+                    entry_type: data_msg.entry_type,
+                    message: data_msg.message,
+                    timestamp: data_msg.timestamp.or(entry.timestamp),
+                    data: None,
+                });
+            }
+        }
+        Some(entry)
     }
 
     /// Read recent entries from the JSONL file for this session.
@@ -158,9 +301,22 @@ impl ClaudeSessionReader {
             }
             match serde_json::from_str::<JsonlEntry>(line) {
                 Ok(entry) => {
-                    if !matches!(entry.entry_type.as_str(), "assistant" | "human") {
+                    let Some(entry) = Self::normalize_entry(entry) else {
+                        continue;
+                    };
+
+                    let entry_type = entry.entry_type.as_str();
+                    let role = entry
+                        .message
+                        .as_ref()
+                        .map(|m| m.role.as_str())
+                        .unwrap_or_default();
+                    let is_assistant_or_user = matches!(entry_type, "assistant" | "human" | "user")
+                        || matches!(role, "assistant" | "user");
+                    if !is_assistant_or_user {
                         continue;
                     }
+
                     entries.push(entry);
                     if entries.len() >= max_entries {
                         break;
@@ -377,7 +533,8 @@ impl ClaudeSessionReader {
         // Check if there's a human entry after the last assistant (tool results
         // sent back → Claude is processing the next turn).
         let has_human_after_assistant = entries[last_assistant_idx + 1..].iter().any(|e| {
-            e.entry_type == "human" || e.message.as_ref().is_some_and(|m| m.role == "user")
+            matches!(e.entry_type.as_str(), "human" | "user")
+                || e.message.as_ref().is_some_and(|m| m.role == "user")
         });
 
         if has_human_after_assistant {
@@ -424,6 +581,7 @@ mod tests {
                 stop_reason: stop_reason.map(|s| s.to_string()),
             }),
             timestamp: None,
+            data: None,
         }
     }
 
@@ -440,6 +598,7 @@ mod tests {
                 stop_reason: stop_reason.map(|s| s.to_string()),
             }),
             timestamp: Some(timestamp.to_string()),
+            data: None,
         }
     }
 
@@ -482,6 +641,7 @@ mod tests {
                 stop_reason: None,
             }),
             timestamp: None,
+            data: None,
         }
     }
 
@@ -494,6 +654,7 @@ mod tests {
                 stop_reason: None,
             }),
             timestamp: Some(timestamp.to_string()),
+            data: None,
         }
     }
 
@@ -602,6 +763,40 @@ mod tests {
     }
 
     #[test]
+    fn test_find_session_dir_windows_style_path() {
+        let tmp = TempDir::new().unwrap();
+        let projects_dir = tmp.path().join("projects");
+        fs::create_dir_all(&projects_dir).unwrap();
+
+        let reader = ClaudeSessionReader {
+            claude_home: tmp.path().to_path_buf(),
+        };
+
+        let session_dir = projects_dir.join("C--Users-foo-project");
+        fs::create_dir_all(&session_dir).unwrap();
+
+        let found = reader.find_session_dir(Path::new(r"C:\Users\foo\project"));
+        assert_eq!(found, Some(session_dir));
+    }
+
+    #[test]
+    fn test_find_session_dir_windows_extended_prefix_variant() {
+        let tmp = TempDir::new().unwrap();
+        let projects_dir = tmp.path().join("projects");
+        fs::create_dir_all(&projects_dir).unwrap();
+
+        let reader = ClaudeSessionReader {
+            claude_home: tmp.path().to_path_buf(),
+        };
+
+        let session_dir = projects_dir.join("----C--Users-foo-project");
+        fs::create_dir_all(&session_dir).unwrap();
+
+        let found = reader.find_session_dir(Path::new(r"C:\Users\foo\project"));
+        assert_eq!(found, Some(session_dir));
+    }
+
+    #[test]
     fn test_read_recent_entries_from_jsonl() {
         let tmp = TempDir::new().unwrap();
         let jsonl_path = tmp.path().join("conversation.jsonl");
@@ -625,6 +820,31 @@ mod tests {
         assert_eq!(entries.len(), 2);
         assert_eq!(entries[0].entry_type, "assistant");
         assert_eq!(entries[1].entry_type, "human");
+    }
+
+    #[test]
+    fn test_read_recent_entries_normalizes_progress_envelope() {
+        let tmp = TempDir::new().unwrap();
+        let jsonl_path = tmp.path().join("conversation.jsonl");
+
+        let mut file = fs::File::create(&jsonl_path).unwrap();
+        writeln!(
+            file,
+            r#"{{"type":"progress","timestamp":"2026-02-14T00:00:00Z","data":{{"message":{{"type":"assistant","timestamp":"2026-02-14T00:00:00Z","message":{{"role":"assistant","content":[{{"type":"tool_use","id":"tu_1","name":"Read"}}],"stop_reason":null}}}}}}}}"#
+        )
+        .unwrap();
+        writeln!(
+            file,
+            r#"{{"type":"progress","timestamp":"2026-02-14T00:00:01Z","data":{{"message":{{"type":"user","message":{{"role":"user","content":[{{"type":"tool_result","tool_use_id":"tu_1"}}]}}}}}}}}"#
+        )
+        .unwrap();
+
+        let reader = test_reader();
+        let entries = reader.read_recent_entries(tmp.path(), 10, None);
+
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].entry_type, "assistant");
+        assert_eq!(entries[1].entry_type, "user");
     }
 
     #[test]

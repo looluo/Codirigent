@@ -6,8 +6,7 @@
 use crate::icons;
 use crate::workspace::gpui::WorkspaceView;
 use gpui::{
-    div, px, ClickEvent, Context, FontWeight, InteractiveElement, IntoElement, MouseButton,
-    MouseDownEvent, ParentElement, SharedString, StatefulInteractiveElement, Styled,
+    div, px, Context, InteractiveElement, IntoElement, MouseButton, ParentElement, Styled,
 };
 
 impl WorkspaceView {

@@ -74,6 +74,7 @@
 
 #![warn(missing_docs)]
 #![warn(clippy::all)]
+#![cfg_attr(debug_assertions, allow(dead_code))]
 
 // Core modules (ready)
 pub mod actions;

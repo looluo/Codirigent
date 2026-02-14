@@ -6,23 +6,18 @@
 //! - Session cells with terminals
 //! - Empty cells and placeholders
 
-use crate::empty_session::EmptySessionRenderHints;
 use crate::icons;
-use crate::layout::LayoutProfile;
 use crate::terminal_header::TerminalHeaderRenderHints;
-use crate::terminal_view::CursorShape;
 use crate::theme::CodirigentTheme;
 use crate::workspace::gpui::WorkspaceView;
 use crate::workspace::types::HEADER_HEIGHT;
-use codirigent_core::{LayoutNode, Session, SessionId, SlotId, SplitDirection};
+use codirigent_core::{LayoutNode, SessionId, SlotId, SplitDirection};
 use gpui::{
-    div, prelude::FluentBuilder, px, relative, ClickEvent, Context, Focusable, FontWeight, Image,
-    ImageFormat, InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent,
-    MouseUpEvent, ObjectFit, ParentElement, ScrollWheelEvent, SharedString,
-    StatefulInteractiveElement, Styled, StyledImage,
+    div, px, relative, ClickEvent, Context, Focusable, FontWeight, InteractiveElement,
+    IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement,
+    ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled,
 };
 use std::rc::Rc;
-use std::sync::Arc;
 use tracing::info;
 
 impl WorkspaceView {
@@ -236,7 +231,6 @@ impl WorkspaceView {
         };
 
         // Build a map of slot -> (session_id, is_focused, session_name, session_status)
-        let cells = self.workspace().cell_info();
         let focused_session = self.workspace().focused_session_id();
         let split_state = self.workspace().layout_state().as_split_tree();
         let slot_sessions: std::collections::HashMap<
