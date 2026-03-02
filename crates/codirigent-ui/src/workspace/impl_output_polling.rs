@@ -587,19 +587,27 @@ impl WorkspaceView {
                     .collect::<Vec<_>>()
             });
 
-            // Update terminal headers with git info
+            // Update terminal headers with git info (only mark dirty on change)
+            let mut git_changed = false;
             for (id, git_info) in git_infos {
                 if let Some((_, header)) =
                     self.terminal_headers.iter_mut().find(|(sid, _)| *sid == id)
                 {
-                    header.git_branch = Some(git_info.branch.clone());
-                    header.git_dirty_count = Some(git_info.dirty_count);
+                    let new_branch = Some(git_info.branch.clone());
+                    let new_dirty = Some(git_info.dirty_count);
+                    if header.git_branch != new_branch || header.git_dirty_count != new_dirty {
+                        header.git_branch = new_branch;
+                        header.git_dirty_count = new_dirty;
+                        git_changed = true;
+                    }
                 }
             }
             // Bulk-sync git_info (and all other fields) from manager
             let manager_sessions = self.with_session_manager(|manager| manager.list_sessions());
             self.workspace.sync_sessions_from_manager(&manager_sessions);
-            any_dirty = true;
+            if git_changed {
+                any_dirty = true;
+            }
         }
 
         // Clipboard preview: show for 4 seconds whenever clipboard content changes and has an image.

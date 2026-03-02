@@ -86,6 +86,8 @@ impl WorkspaceView {
     }
 
     pub(super) fn close_settings(&mut self) {
+        // Cancel any pending debounced save and flush immediately
+        self.settings.save_task = None;
         self.flush_settings();
         if let Some(ref mut page) = self.settings.page {
             page.open_dropdown = None;

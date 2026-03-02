@@ -1064,14 +1064,26 @@ impl WorkspaceView {
 
         // Settings page overlay (replaces all content below title bar)
         if self.settings.open && self.settings.page.is_some() {
+            // Debounced save: schedule a background flush instead of blocking
+            // the render thread with synchronous file I/O.
             let should_flush = self
                 .settings
                 .page
                 .as_ref()
                 .map(|p| p.user_save_pending || p.project_save_pending)
                 .unwrap_or(false);
-            if should_flush {
-                self.flush_settings();
+            if should_flush && self.settings.save_task.is_none() {
+                self.settings.save_task = Some(cx.spawn(
+                    async move |this: gpui::WeakEntity<Self>, cx| {
+                        cx.background_executor()
+                            .timer(std::time::Duration::from_millis(500))
+                            .await;
+                        let _ = this.update(cx, |this, _| {
+                            this.flush_settings();
+                            this.settings.save_task = None;
+                        });
+                    },
+                ));
             }
             container = container.child(self.render_settings_overlay(cx));
             return container;
@@ -1471,8 +1483,12 @@ impl Render for WorkspaceView {
         self.process_top_bar_events();
         self.process_icon_rail_events();
 
-        // Sync UI state before rendering
-        self.sync_ui_state();
+        // Sync UI state (throttled to ~10/sec to avoid locking task_manager
+        // and iterating all tasks on every frame during high-frequency output).
+        if self.polling.last_ui_sync.elapsed() >= Duration::from_millis(100) {
+            self.sync_ui_state();
+            self.polling.last_ui_sync = Instant::now();
+        }
 
         // Update workspace bounds from window size
         // GPUI automatically re-renders when window resizes, so we update bounds here

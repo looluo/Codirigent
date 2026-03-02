@@ -193,6 +193,8 @@ pub(super) struct PollingState {
     pub last_jsonl_check: Instant,
     /// Sessions that need a deferred Enter keypress sent to their PTY.
     pub pending_enters: HashMap<SessionId, (Instant, bool)>,
+    /// Last time sync_ui_state ran (throttled to avoid per-frame overhead).
+    pub last_ui_sync: Instant,
 }
 
 impl PollingState {
@@ -205,6 +207,7 @@ impl PollingState {
             last_git_refresh: Instant::now(),
             last_jsonl_check: Instant::now(),
             pending_enters: HashMap::new(),
+            last_ui_sync: Instant::now() - std::time::Duration::from_millis(200),
         }
     }
 }

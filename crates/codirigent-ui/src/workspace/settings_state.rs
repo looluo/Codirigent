@@ -11,6 +11,8 @@ pub(super) struct SettingsState {
     pub(super) open: bool,
     /// Configuration service for reading/writing settings.
     pub(super) config_service: Option<DefaultConfigService>,
+    /// Debounced save task – prevents synchronous file I/O on every render frame.
+    pub(super) save_task: Option<gpui::Task<()>>,
 }
 
 impl SettingsState {
@@ -19,6 +21,7 @@ impl SettingsState {
             page: None,
             open: false,
             config_service: DefaultConfigService::new().ok(),
+            save_task: None,
         }
     }
 }
