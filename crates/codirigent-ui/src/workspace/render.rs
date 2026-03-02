@@ -79,6 +79,7 @@ impl WorkspaceView {
         let fallback_cell_width = terminal_view.cell_width();
         let fallback_cell_height = terminal_view.cell_height();
         let font_size = terminal_view.font_size();
+        let font_family_str = terminal_view.font_family().to_owned();
         let cursor_rect = terminal_view.cursor_rect();
         let needs_dimension_init = !terminal_view.dimensions_initialized();
 
@@ -108,8 +109,7 @@ impl WorkspaceView {
             (c, color)
         });
 
-        let font_family: gpui::SharedString =
-            crate::terminal_view::default_terminal_font_family().into();
+        let font_family: gpui::SharedString = font_family_str.into();
 
         // Clone Rc for capture into the canvas prepaint closure
         let canvas_origin_for_prepaint = Rc::clone(&canvas_origin);
@@ -137,7 +137,7 @@ impl WorkspaceView {
                 let (cell_width, cell_height) = if needs_dimension_init {
                     crate::terminal_view::compute_cell_dimensions(
                         window.text_system(),
-                        crate::terminal_view::default_terminal_font_family(),
+                        &font_family,
                         font_size,
                     )
                 } else {

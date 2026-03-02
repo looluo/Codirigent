@@ -350,6 +350,8 @@ pub struct CodirigentTheme {
     pub font_size_large: f32,
     /// Terminal font size (separate from UI font size).
     pub terminal_font_size: f32,
+    /// Terminal font family (separate from UI font family).
+    pub terminal_font_family: String,
 
     // === Spacing ===
     /// Base spacing unit in pixels.
@@ -449,6 +451,7 @@ impl CodirigentTheme {
             font_size_small: 11.0,
             font_size_large: 15.0,
             terminal_font_size: 13.0,
+            terminal_font_family: default_terminal_font_family().to_string(),
 
             // === Spacing ===
             spacing_base: 8.0,
@@ -543,6 +546,7 @@ impl CodirigentTheme {
             font_size_small: 11.0,
             font_size_large: 15.0,
             terminal_font_size: 13.0,
+            terminal_font_family: default_terminal_font_family().to_string(),
 
             // === Spacing ===
             spacing_base: 8.0,
@@ -638,6 +642,26 @@ impl CodirigentTheme {
 impl Default for CodirigentTheme {
     fn default() -> Self {
         Self::dark()
+    }
+}
+
+/// Default monospace font family for terminals per platform.
+pub fn default_terminal_font_family() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "Consolas"
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "Menlo"
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        "DejaVu Sans Mono"
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        "monospace"
     }
 }
 

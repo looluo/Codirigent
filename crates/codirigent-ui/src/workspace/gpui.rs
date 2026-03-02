@@ -832,13 +832,26 @@ impl WorkspaceView {
     /// - `size`: The new terminal font size (8-24)
     pub(super) fn apply_terminal_font_size(&mut self, window: &mut Window, size: f32) {
         self.workspace.theme_mut().terminal_font_size = size;
-        let (w, h) = crate::terminal_view::compute_cell_dimensions(
-            window.text_system(),
-            crate::terminal_view::default_terminal_font_family(),
-            size,
-        );
+        let family = self.workspace.theme().terminal_font_family.clone();
+        let (w, h) =
+            crate::terminal_view::compute_cell_dimensions(window.text_system(), &family, size);
         for tv in self.terminals_mut().values_mut() {
             tv.set_font_size(size);
+            tv.set_cell_dimensions(w, h);
+        }
+    }
+
+    /// Apply a new terminal font family and propagate to all terminal views.
+    ///
+    /// Updates the theme's terminal font family and propagates the change to all
+    /// active terminal views, including cell dimension recalculation.
+    pub(super) fn apply_terminal_font_family(&mut self, window: &mut Window, family: String) {
+        self.workspace.theme_mut().terminal_font_family = family.clone();
+        let size = self.workspace.theme().terminal_font_size;
+        let (w, h) =
+            crate::terminal_view::compute_cell_dimensions(window.text_system(), &family, size);
+        for tv in self.terminals_mut().values_mut() {
+            tv.set_font_family(family.clone());
             tv.set_cell_dimensions(w, h);
         }
     }
@@ -1554,7 +1567,7 @@ impl Render for WorkspaceView {
         {
             let (real_w, real_h) = crate::terminal_view::compute_cell_dimensions(
                 window.text_system(),
-                crate::terminal_view::default_terminal_font_family(),
+                &self.workspace.theme().terminal_font_family,
                 self.workspace.theme().terminal_font_size,
             );
             for tv in self.terminals.values_mut() {

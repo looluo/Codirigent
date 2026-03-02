@@ -597,11 +597,12 @@ impl super::gpui::WorkspaceView {
                     &font_options,
                     &font_family,
                     cx,
-                    |this, val, _, _| {
+                    |this, val, window, _| {
                         if let Some(page) = this.settings.page.as_mut() {
-                            page.user_settings.terminal.font_family = val;
+                            page.user_settings.terminal.font_family = val.clone();
                             page.user_save_pending = true;
                         }
+                        this.apply_terminal_font_family(window, val);
                     },
                 ),
             ))

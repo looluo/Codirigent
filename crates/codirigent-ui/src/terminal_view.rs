@@ -220,6 +220,8 @@ pub struct TerminalView {
     cell_height: f32,
     /// Font size in pixels.
     font_size: f32,
+    /// Font family name.
+    font_family: String,
     /// Current text selection.
     selection: Selection,
     /// Cursor shape to render.
@@ -238,6 +240,7 @@ impl TerminalView {
     /// Create a new terminal view.
     pub fn new(terminal: Terminal, theme: CodirigentTheme) -> Self {
         let font_size = theme.terminal_font_size;
+        let font_family = theme.terminal_font_family.clone();
         // Approximate cell dimensions until real font metrics arrive via
         // compute_cell_dimensions() on first render. Using conservative
         // ratios that slightly overestimate so the initial grid doesn't
@@ -259,6 +262,7 @@ impl TerminalView {
             cell_width,
             cell_height,
             font_size,
+            font_family,
             selection: Selection::new(),
             cursor_shape: CursorShape::Block,
             focused: true,
@@ -332,6 +336,17 @@ impl TerminalView {
     /// Set the font size.
     pub fn set_font_size(&mut self, size: f32) {
         self.font_size = size;
+        self.content_dirty = true;
+    }
+
+    /// Get the font family.
+    pub fn font_family(&self) -> &str {
+        &self.font_family
+    }
+
+    /// Set the font family.
+    pub fn set_font_family(&mut self, family: String) {
+        self.font_family = family;
         self.content_dirty = true;
     }
 
@@ -764,23 +779,10 @@ impl TerminalView {
 }
 
 /// Default monospace font family for terminals per platform.
+///
+/// Delegates to [`crate::theme::default_terminal_font_family`].
 pub fn default_terminal_font_family() -> &'static str {
-    #[cfg(target_os = "windows")]
-    {
-        "Consolas"
-    }
-    #[cfg(target_os = "macos")]
-    {
-        "Menlo"
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        "DejaVu Sans Mono"
-    }
-    #[cfg(not(any(windows, unix)))]
-    {
-        "monospace"
-    }
+    crate::theme::default_terminal_font_family()
 }
 
 /// Compute cell dimensions from actual font metrics using the text system.
@@ -792,13 +794,13 @@ pub fn default_terminal_font_family() -> &'static str {
 /// Returns `(cell_width, cell_height)` in pixels.
 pub fn compute_cell_dimensions(
     text_system: &gpui::TextSystem,
-    font_family: &'static str,
+    font_family: &str,
     font_size: f32,
 ) -> (f32, f32) {
     use gpui::{px, Font, FontFeatures, FontStyle, FontWeight};
 
     let font = Font {
-        family: font_family.into(),
+        family: font_family.to_owned().into(),
         features: FontFeatures::default(),
         fallbacks: None,
         weight: FontWeight::NORMAL,
