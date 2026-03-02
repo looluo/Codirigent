@@ -593,20 +593,21 @@ impl WorkspaceView {
                 if let Some((_, header)) =
                     self.terminal_headers.iter_mut().find(|(sid, _)| *sid == id)
                 {
-                    let new_branch = Some(git_info.branch.clone());
-                    let new_dirty = Some(git_info.dirty_count);
-                    if header.git_branch != new_branch || header.git_dirty_count != new_dirty {
-                        header.git_branch = new_branch;
-                        header.git_dirty_count = new_dirty;
+                    if header.git_branch.as_deref() != Some(git_info.branch.as_str())
+                        || header.git_dirty_count != Some(git_info.dirty_count)
+                    {
+                        header.git_branch = Some(git_info.branch.clone());
+                        header.git_dirty_count = Some(git_info.dirty_count);
+                        any_dirty = true;
                         git_changed = true;
                     }
                 }
             }
-            // Bulk-sync git_info (and all other fields) from manager
-            let manager_sessions = self.with_session_manager(|manager| manager.list_sessions());
-            self.workspace.sync_sessions_from_manager(&manager_sessions);
+            // Only bulk-sync from manager when git info actually changed,
+            // to avoid locking + cloning all sessions every 3 seconds.
             if git_changed {
-                any_dirty = true;
+                let manager_sessions = self.with_session_manager(|manager| manager.list_sessions());
+                self.workspace.sync_sessions_from_manager(&manager_sessions);
             }
         }
 
