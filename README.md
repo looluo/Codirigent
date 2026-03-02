@@ -34,7 +34,7 @@ Codirigent is a Rust-based development environment for orchestrating AI coding s
 
 Codirigent is designed for low overhead and responsive interaction. Current optimizations include:
 
-- **Asynchronous Event-Driven Design**: Built on a high-throughput event bus using `tokio` broadcast channels.
+- **Asynchronous Event-Driven Design**: Built on a high-throughput internal event bus for decoupled component communication.
 - **Efficient PTY Handling**: Uses `portable-pty` for low-latency terminal emulation.
 - **Asynchronous I/O**: Leverages `tokio` for concurrent operations.
 - **Memory Safety**: Native Rust execution without garbage collection pauses.
@@ -67,7 +67,7 @@ cargo run --features "gpui-full,terminal"
 The codebase is organized into modular crates:
 
 - `codirigent-core`: Fundamental data structures, configuration, shared traits, and event bus architecture.
-- `codirigent-session`: PTY management, shell detection, session lifecycle, and clipboard service.
+- `codirigent-session`: PTY management, shell detection, and session lifecycle.
 - `codirigent-detector`: Process and input monitoring (Windows/macOS).
 - `codirigent-ui`: GPUI-based interface with terminal rendering and platform-specific clipboard integration.
 - `codirigent-filetree`: File system traversal and tree display logic.
