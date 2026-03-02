@@ -370,20 +370,26 @@ impl TerminalView {
         self.terminal.session_id()
     }
 
-    /// Scroll up by the specified number of lines.
+    /// Scroll up by the specified number of lines (show older content).
+    ///
+    /// Positive `Scroll::Delta` increases `display_offset`, moving the
+    /// viewport up into the scrollback buffer.
     pub fn scroll_up(&mut self, lines: usize) {
         self.content_dirty = true;
         self.terminal
             .term_mut()
-            .scroll_display(Scroll::Delta(-(lines as i32)));
+            .scroll_display(Scroll::Delta(lines as i32));
     }
 
-    /// Scroll down by the specified number of lines.
+    /// Scroll down by the specified number of lines (show newer content).
+    ///
+    /// Negative `Scroll::Delta` decreases `display_offset`, moving the
+    /// viewport down toward the most recent output.
     pub fn scroll_down(&mut self, lines: usize) {
         self.content_dirty = true;
         self.terminal
             .term_mut()
-            .scroll_display(Scroll::Delta(lines as i32));
+            .scroll_display(Scroll::Delta(-(lines as i32)));
     }
 
     /// Scroll to the bottom (most recent output).

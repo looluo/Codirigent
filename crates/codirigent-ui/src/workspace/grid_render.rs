@@ -651,7 +651,7 @@ impl WorkspaceView {
                         if let Some(tv) = this.terminals_mut().get_mut(&session_id) {
                             let cell_h: f32 = tv.cell_height();
                             let delta_y: f32 = event.delta.pixel_delta(px(cell_h)).y.into();
-                            // GPUI on Windows: positive y = finger/wheel up = show older content
+                            // Positive delta_y = scroll up = show older content (scrollback)
                             if delta_y > 0.0 {
                                 let lines = (delta_y / cell_h).ceil().max(1.0) as usize;
                                 tv.scroll_up(lines);
