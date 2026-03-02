@@ -613,7 +613,8 @@ impl WorkspaceView {
 
         // Clipboard preview: show for 4 seconds whenever clipboard content changes and has an image.
         // Uses platform clipboard sequence number (has_changed) to detect new content.
-        if self.polling.idle_poll_count % 60 == 0 {
+        if self.polling.last_clipboard_check.elapsed() >= Duration::from_secs(1) {
+            self.polling.last_clipboard_check = Instant::now();
             let changed = self.clipboard.smart_clipboard.has_changed();
             if changed && self.clipboard.smart_clipboard.has_image() {
                 // Clipboard changed and has an image — show preview
@@ -634,15 +635,15 @@ impl WorkspaceView {
                     }
                 }
             }
+        }
 
-            // Auto-dismiss after 4 seconds
-            if self.clipboard.clipboard_preview.is_visible() {
-                if let Some(shown_at) = self.clipboard.clipboard_preview_shown_at {
-                    if shown_at.elapsed() > std::time::Duration::from_secs(4) {
-                        self.clipboard.clipboard_preview.hide();
-                        self.clipboard.clipboard_preview_shown_at = None;
-                        any_dirty = true;
-                    }
+        // Auto-dismiss clipboard preview after 4 seconds (checked every poll, not just clipboard interval)
+        if self.clipboard.clipboard_preview.is_visible() {
+            if let Some(shown_at) = self.clipboard.clipboard_preview_shown_at {
+                if shown_at.elapsed() > std::time::Duration::from_secs(4) {
+                    self.clipboard.clipboard_preview.hide();
+                    self.clipboard.clipboard_preview_shown_at = None;
+                    any_dirty = true;
                 }
             }
         }

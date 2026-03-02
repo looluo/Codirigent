@@ -581,10 +581,17 @@ impl TerminalView {
     }
 
     /// Resize the terminal to fit within the given pixel dimensions.
-    pub fn resize_to_fit(&mut self, width: f32, height: f32) {
+    ///
+    /// Returns `true` if the terminal was actually resized, `false` if
+    /// dimensions were already at the target size (no-op).
+    pub fn resize_to_fit(&mut self, width: f32, height: f32) -> bool {
         let (rows, cols) = self.dimensions_from_pixels(width, height);
+        if rows == self.terminal.rows() && cols == self.terminal.cols() {
+            return false;
+        }
         self.content_dirty = true;
         self.terminal.resize(rows, cols);
+        true
     }
 
     /// Start a new text selection at the given cell position.

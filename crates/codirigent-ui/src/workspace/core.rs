@@ -500,14 +500,22 @@ impl Workspace {
         self.sidebar_width
     }
 
-    /// Set the sidebar width.
+    /// Set the sidebar width (no-op if unchanged within epsilon).
     pub fn set_sidebar_width(&mut self, width: f32) {
-        self.sidebar_width = width.max(0.0);
+        let clamped = width.max(0.0);
+        if (self.sidebar_width - clamped).abs() < 0.1 {
+            return;
+        }
+        self.sidebar_width = clamped;
     }
 
-    /// Set the right panel width (0.0 when closed).
+    /// Set the right panel width (0.0 when closed, no-op if unchanged within epsilon).
     pub fn set_right_panel_width(&mut self, width: f32) {
-        self.right_panel_width = width.max(0.0);
+        let clamped = width.max(0.0);
+        if (self.right_panel_width - clamped).abs() < 0.1 {
+            return;
+        }
+        self.right_panel_width = clamped;
     }
 
     // --- Theme ---
@@ -529,8 +537,11 @@ impl Workspace {
 
     // --- Bounds ---
 
-    /// Set the workspace bounds (called on window resize).
+    /// Set the workspace bounds (called on window resize, no-op if unchanged).
     pub fn set_bounds(&mut self, bounds: Bounds) {
+        if self.bounds == bounds {
+            return;
+        }
         self.bounds = bounds;
     }
 

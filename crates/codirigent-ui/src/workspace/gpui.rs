@@ -261,8 +261,12 @@ impl WorkspaceView {
                     } else {
                         this.polling.idle_poll_count =
                             this.polling.idle_poll_count.saturating_add(1);
-                        if this.polling.idle_poll_count > 12 {
-                            poll_interval_ms = 16;
+                        if this.polling.idle_poll_count > 100 {
+                            // Deep idle (~5s of no output): 200ms polling
+                            poll_interval_ms = 200;
+                        } else if this.polling.idle_poll_count > 12 {
+                            // Light idle (~50ms of no output): 50ms polling
+                            poll_interval_ms = 50;
                         }
                     }
                 });
@@ -879,9 +883,11 @@ impl WorkspaceView {
     ///
     /// This should be called when the window is resized or the layout changes,
     /// to ensure terminals have the correct character dimensions for their pixel bounds.
-    fn resize_terminals_to_grid(&mut self) {
+    /// Returns `true` if any terminal was actually resized.
+    fn resize_terminals_to_grid(&mut self) -> bool {
         // Layout constants from types.rs: HEADER_HEIGHT, TERMINAL_CONTENT_PADDING, CELL_BORDER_WIDTH
         let cell_info = self.workspace.cell_info();
+        let mut resized_any = false;
 
         for info in cell_info {
             if let Some(terminal_view) = self.terminals.get_mut(&info.session_id) {
@@ -916,26 +922,31 @@ impl WorkspaceView {
                 }
 
                 // Resize terminal emulator to fit the remaining space
-                terminal_view.resize_to_fit(available_width, available_height);
+                let did_resize = terminal_view.resize_to_fit(available_width, available_height);
 
-                // Propagate resize to actual PTY (ConPTY) so the shell
-                // knows the correct terminal dimensions
-                let rows = terminal_view.terminal().rows();
-                let cols = terminal_view.terminal().cols();
-                let last = self.cache.pty_sizes.get(&info.session_id);
-                if last != Some(&(rows, cols)) {
-                    self.with_session_manager(|manager| {
-                        if let Err(e) = manager.resize(info.session_id, rows, cols) {
-                            warn!(
-                                "Failed to resize PTY for session {}: {}",
-                                info.session_id, e
-                            );
-                        }
-                    });
-                    self.cache.pty_sizes.insert(info.session_id, (rows, cols));
+                if did_resize {
+                    resized_any = true;
+
+                    // Propagate resize to actual PTY (ConPTY) so the shell
+                    // knows the correct terminal dimensions
+                    let rows = terminal_view.terminal().rows();
+                    let cols = terminal_view.terminal().cols();
+                    let last = self.cache.pty_sizes.get(&info.session_id);
+                    if last != Some(&(rows, cols)) {
+                        self.with_session_manager(|manager| {
+                            if let Err(e) = manager.resize(info.session_id, rows, cols) {
+                                warn!(
+                                    "Failed to resize PTY for session {}: {}",
+                                    info.session_id, e
+                                );
+                            }
+                        });
+                        self.cache.pty_sizes.insert(info.session_id, (rows, cols));
+                    }
                 }
             }
         }
+        resized_any
     }
 
     /// Handle keyboard input for the focused session.
@@ -1564,12 +1575,26 @@ impl Render for WorkspaceView {
 
         // Sync terminal cell dimensions with actual font metrics so the
         // emulator calculates the correct row/col counts.
+        // Uses a cache to skip font system calls when settings haven't changed.
         {
-            let (real_w, real_h) = crate::terminal_view::compute_cell_dimensions(
-                window.text_system(),
-                &self.workspace.theme().terminal_font_family,
-                self.workspace.theme().terminal_font_size,
-            );
+            let font_family = &self.workspace.theme().terminal_font_family;
+            let font_size = self.workspace.theme().terminal_font_size;
+            let (real_w, real_h) = match &self.cache.cached_cell_dims {
+                Some((cached_family, cached_size, w, h))
+                    if cached_family == font_family && (*cached_size - font_size).abs() < 0.01 =>
+                {
+                    (*w, *h)
+                }
+                _ => {
+                    let (w, h) = crate::terminal_view::compute_cell_dimensions(
+                        window.text_system(),
+                        font_family,
+                        font_size,
+                    );
+                    self.cache.cached_cell_dims = Some((font_family.clone(), font_size, w, h));
+                    (w, h)
+                }
+            };
             for tv in self.terminals.values_mut() {
                 if !tv.dimensions_initialized() {
                     tv.set_cell_dimensions(real_w, real_h);
@@ -1591,10 +1616,12 @@ impl Render for WorkspaceView {
                     .timer(Duration::from_millis(100))
                     .await;
                 let _ = this.update(cx, |this, cx| {
-                    this.resize_terminals_to_grid();
+                    let resized = this.resize_terminals_to_grid();
                     this.polling.last_resize_time = Instant::now();
                     this.polling.pending_resize = false;
-                    cx.notify();
+                    if resized {
+                        cx.notify();
+                    }
                 });
             })
             .detach();

@@ -195,6 +195,8 @@ pub(super) struct PollingState {
     pub pending_enters: HashMap<SessionId, (Instant, bool)>,
     /// Last time sync_ui_state ran (throttled to avoid per-frame overhead).
     pub last_ui_sync: Instant,
+    /// Last time clipboard was checked for changes (time-based, ~1/second).
+    pub last_clipboard_check: Instant,
 }
 
 impl PollingState {
@@ -208,6 +210,7 @@ impl PollingState {
             last_jsonl_check: Instant::now(),
             pending_enters: HashMap::new(),
             last_ui_sync: Instant::now() - std::time::Duration::from_millis(200),
+            last_clipboard_check: Instant::now(),
         }
     }
 }
@@ -267,6 +270,9 @@ pub(super) struct CacheState {
     pub compaction_start_times: HashMap<SessionId, Instant>,
     /// Tracks which session groups are expanded in the drawer's Sessions panel.
     pub drawer_group_expanded: HashMap<String, bool>,
+    /// Cached cell dimensions: (font_family, font_size, cell_width, cell_height).
+    /// Avoids repeated font system calls when settings haven't changed.
+    pub cached_cell_dims: Option<(String, f32, f32, f32)>,
 }
 
 impl CacheState {
@@ -279,6 +285,7 @@ impl CacheState {
             manually_assigned_sessions: HashSet::new(),
             compaction_start_times: HashMap::new(),
             drawer_group_expanded: HashMap::new(),
+            cached_cell_dims: None,
         }
     }
 }
