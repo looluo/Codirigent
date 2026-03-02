@@ -396,7 +396,7 @@ impl ClaudeSessionReader {
 
     /// Read recent entries from a specific Claude JSONL file.
     fn read_recent_entries_from_path(jsonl_path: &Path, max_entries: usize) -> Vec<JsonlEntry> {
-        let Some(tail) = read_file_tail(&jsonl_path, 524_288) else {
+        let Some(tail) = read_file_tail(jsonl_path, 524_288) else {
             return Vec::new();
         };
 
@@ -470,7 +470,8 @@ impl ClaudeSessionReader {
                 &cached.path,
                 working_dir,
                 cached.session_id.as_deref(),
-            ) {
+            ) && !Self::has_newer_jsonl(dir, &cached.path)
+            {
                 debug!(
                     ?working_dir_key,
                     ?cached.path,
@@ -762,6 +763,38 @@ impl ClaudeSessionReader {
             .trim_end_matches('\\')
             .to_string();
         normalized
+    }
+
+    /// Check if any `.jsonl` file in `dir` has a newer mtime than `reference`.
+    ///
+    /// Used to invalidate the session file cache when a newer session file
+    /// appears (e.g. the user started a new Claude Code session in the same
+    /// working directory).
+    fn has_newer_jsonl(dir: &Path, reference: &Path) -> bool {
+        let ref_mtime = match reference.metadata().ok().and_then(|m| m.modified().ok()) {
+            Some(t) => t,
+            None => return true,
+        };
+
+        let Ok(entries) = fs::read_dir(dir) else {
+            return false;
+        };
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.as_path() == reference {
+                continue;
+            }
+            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                continue;
+            }
+            if let Some(mtime) = path.metadata().ok().and_then(|m| m.modified().ok()) {
+                if mtime > ref_mtime {
+                    return true;
+                }
+            }
+        }
+        false
     }
 
     /// Find the most recently modified .jsonl file in a directory.
@@ -1120,7 +1153,7 @@ mod tests {
     #[test]
     fn test_end_turn_returns_waiting() {
         let entries = vec![make_assistant_entry(vec![], Some("end_turn"))];
-        let mut reader = test_reader();
+        let reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention { detail: None }
@@ -1134,7 +1167,7 @@ mod tests {
             vec![make_tool_use("Bash", "tu_1")],
             Some("tool_use"),
         )];
-        let mut reader = test_reader();
+        let reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention {
@@ -1150,7 +1183,7 @@ mod tests {
             vec![make_tool_use("Bash", "tu_1")],
             None,
         )];
-        let mut reader = test_reader();
+        let reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::Working
@@ -1164,7 +1197,7 @@ mod tests {
             vec![make_tool_use("Read", "tu_1")],
             None,
         )];
-        let mut reader = test_reader();
+        let reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::Working
@@ -1177,7 +1210,7 @@ mod tests {
             make_assistant_entry(vec![make_tool_use("Bash", "tu_3")], None),
             make_human_entry(vec![make_tool_result("tu_3")]),
         ];
-        let mut reader = test_reader();
+        let reader = test_reader();
         // The tool_use has a corresponding result, so it's not pending.
         // Human entry after assistant with no timestamp --Working (assumes processing)
         assert_eq!(
@@ -1188,7 +1221,7 @@ mod tests {
 
     #[test]
     fn test_empty_entries_returns_unknown() {
-        let mut reader = test_reader();
+        let reader = test_reader();
         assert_eq!(reader.determine_status(&[]), ClaudeSessionStatus::Unknown);
     }
 
@@ -1479,7 +1512,7 @@ mod tests {
         // Assistant with no stop_reason but a recent timestamp --Working (still streaming)
         let recent = chrono::Utc::now().to_rfc3339();
         let entries = vec![make_assistant_entry_ts(vec![], None, &recent)];
-        let mut reader = test_reader();
+        let reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::Working
@@ -1491,7 +1524,7 @@ mod tests {
         // Assistant with no stop_reason and an old timestamp --NeedsAttention (done)
         let old = (chrono::Utc::now() - chrono::Duration::seconds(30)).to_rfc3339();
         let entries = vec![make_assistant_entry_ts(vec![], None, &old)];
-        let mut reader = test_reader();
+        let reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention { detail: None }
@@ -1506,7 +1539,7 @@ mod tests {
             make_assistant_entry(vec![make_tool_use("Bash", "tu_5")], None),
             make_human_entry_ts(vec![make_tool_result("tu_5")], &recent),
         ];
-        let mut reader = test_reader();
+        let reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::Working
@@ -1521,7 +1554,7 @@ mod tests {
             make_assistant_entry(vec![make_tool_use("Bash", "tu_6")], None),
             make_human_entry_ts(vec![make_tool_result("tu_6")], &old),
         ];
-        let mut reader = test_reader();
+        let reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention { detail: None }
@@ -1548,7 +1581,7 @@ mod tests {
             None,
             &recent,
         )];
-        let mut reader = test_reader();
+        let reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::Working
@@ -1565,7 +1598,7 @@ mod tests {
             None,
             &old,
         )];
-        let mut reader = test_reader();
+        let reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::Working
@@ -1581,7 +1614,7 @@ mod tests {
             Some("tool_use"),
             &old,
         )];
-        let mut reader = test_reader();
+        let reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention {
@@ -1597,7 +1630,7 @@ mod tests {
             make_assistant_entry(vec![make_tool_use("Read", "tu_ca1")], None),
             make_assistant_entry(vec![], Some("end_turn")),
         ];
-        let mut reader = test_reader();
+        let reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention { detail: None }
@@ -1611,7 +1644,7 @@ mod tests {
             make_assistant_entry(vec![], Some("end_turn")),
             make_assistant_entry(vec![make_tool_use("Bash", "tu_ca2")], None),
         ];
-        let mut reader = test_reader();
+        let reader = test_reader();
         // Latest assistant has pending tool_use with stop_reason=None --Working
         assert_eq!(
             reader.determine_status(&entries),
@@ -1626,7 +1659,7 @@ mod tests {
             vec![make_text("I found the bug. Would you like me to fix it?")],
             Some("end_turn"),
         )];
-        let mut reader = test_reader();
+        let reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention {
@@ -1641,7 +1674,7 @@ mod tests {
             vec![make_text("Done, all tests pass.")],
             Some("end_turn"),
         )];
-        let mut reader = test_reader();
+        let reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention { detail: None }
@@ -1656,7 +1689,7 @@ mod tests {
             )],
             Some("end_turn"),
         )];
-        let mut reader = test_reader();
+        let reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention {
@@ -1674,7 +1707,7 @@ mod tests {
             )],
             Some("end_turn"),
         )];
-        let mut reader = test_reader();
+        let reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention { detail: None }
@@ -1685,7 +1718,7 @@ mod tests {
     fn test_end_turn_no_text_content_returns_no_detail() {
         // end_turn with no text content blocks at all
         let entries = vec![make_assistant_entry(vec![], Some("end_turn"))];
-        let mut reader = test_reader();
+        let reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention { detail: None }
@@ -1705,7 +1738,7 @@ mod tests {
             ),
             make_human_entry(vec![make_tool_result("tu_q1")]),
         ];
-        let mut reader = test_reader();
+        let reader = test_reader();
         // stop_reason="end_turn" with question text --NeedsAttention with detail
         assert_eq!(
             reader.determine_status(&entries),
@@ -1722,7 +1755,7 @@ mod tests {
             vec![make_text("Batch 1 completed. Do you want me to continue?")],
             Some("end_turn"),
         )];
-        let mut reader = test_reader();
+        let reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention {
@@ -1740,7 +1773,7 @@ mod tests {
                 Some("end_turn"),
             ),
         ];
-        let mut reader = test_reader();
+        let reader = test_reader();
         assert_eq!(
             reader.determine_status(&entries),
             ClaudeSessionStatus::NeedsAttention {
