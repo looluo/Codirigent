@@ -114,7 +114,7 @@ impl WorkspaceView {
             tab_row = tab_row.child(tab_pill);
         }
 
-        // "+" button to open the custom layout picker
+        // Custom layout picker button (LayoutGrid icon + "Custom" label)
         tab_row = tab_row.child(
             div()
                 .id("top-bar-tab-custom")
@@ -134,7 +134,12 @@ impl WorkspaceView {
                     this.process_top_bar_events();
                     cx.notify();
                 }))
-                .child("+"),
+                .child(
+                    div()
+                        .font_family(icons::LUCIDE_FONT_FAMILY)
+                        .child(icons::layout_grid()),
+                )
+                .child("Custom"),
         );
 
         bar = bar.child(tab_row);
