@@ -90,13 +90,16 @@ pub(super) fn detect_installed_editors() -> Vec<String> {
         .iter()
         .chain(KNOWN_TERMINAL_EDITORS.iter())
     {
-        let on_path = std::process::Command::new(check_cmd)
-            .arg(editor)
+        let mut cmd = std::process::Command::new(check_cmd);
+        cmd.arg(editor)
             .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null())
-            .status()
-            .map(|s| s.success())
-            .unwrap_or(false);
+            .stderr(std::process::Stdio::null());
+        #[cfg(windows)]
+        {
+            use std::os::windows::process::CommandExt;
+            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+        }
+        let on_path = cmd.status().map(|s| s.success()).unwrap_or(false);
         if on_path {
             found.insert(*editor);
         }

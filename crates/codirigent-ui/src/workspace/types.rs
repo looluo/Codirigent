@@ -255,6 +255,10 @@ impl CliReaders {
 pub(super) struct CacheState {
     /// Cached monospace fonts detected from the system (populated lazily).
     pub monospace_fonts: Option<Vec<String>>,
+    /// Cached installed editors detected from the system (populated in background on init).
+    pub detected_editors: Option<Vec<String>>,
+    /// Cached available shells detected from the system (populated in background on init).
+    pub detected_shells: Option<Vec<String>>,
     /// Last PTY-resized dimensions per session, used to skip redundant resize calls.
     pub pty_sizes: HashMap<SessionId, (u16, u16)>,
     /// Sessions that have received at least one manual task assignment.
@@ -269,6 +273,8 @@ impl CacheState {
     pub fn new() -> Self {
         Self {
             monospace_fonts: None,
+            detected_editors: None,
+            detected_shells: None,
             pty_sizes: HashMap::new(),
             manually_assigned_sessions: HashSet::new(),
             compaction_start_times: HashMap::new(),

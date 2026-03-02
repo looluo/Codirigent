@@ -52,7 +52,13 @@ impl WorkspaceView {
             user_settings.appearance.grid_gap = theme.grid_gap as u32;
             user_settings.terminal.font_size = theme.terminal_font_size as u32;
 
-            let mut detected = detect_installed_editors();
+            // Use pre-cached results from background detection (started at init).
+            // Falls back to synchronous detection if background task hasn't finished yet.
+            let mut detected = self
+                .cache
+                .detected_editors
+                .clone()
+                .unwrap_or_else(detect_installed_editors);
             let current = &user_settings.general.editor_command;
             if !detected.iter().any(|e| e == current) {
                 detected.insert(0, current.clone());
@@ -61,7 +67,11 @@ impl WorkspaceView {
                 detected.push("code".to_string());
             }
 
-            let mut detected_shells = codirigent_session::detect_available_shells();
+            let mut detected_shells = self
+                .cache
+                .detected_shells
+                .clone()
+                .unwrap_or_else(codirigent_session::detect_available_shells);
             let current_shell = &user_settings.general.default_shell;
             if !current_shell.is_empty() && !detected_shells.iter().any(|s| s == current_shell) {
                 detected_shells.insert(0, current_shell.clone());

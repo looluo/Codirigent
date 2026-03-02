@@ -108,16 +108,25 @@ pub(crate) fn detect_shell_command() -> ShellCommand {
 /// Probe for available Windows shells in preference order.
 #[cfg(windows)]
 fn detect_windows_shell() -> ShellCommand {
+    use std::os::windows::process::CommandExt;
     use std::process::Command;
 
+    const CREATE_NO_WINDOW: u32 = 0x08000000;
+
     // Try PowerShell 7 first
-    if Command::new("pwsh.exe").arg("--version").output().is_ok() {
+    if Command::new("pwsh.exe")
+        .arg("--version")
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .is_ok()
+    {
         return setup_powershell_command("pwsh.exe");
     }
     // Try Windows PowerShell
     if Command::new("powershell.exe")
         .arg("-Command")
         .arg("exit")
+        .creation_flags(CREATE_NO_WINDOW)
         .output()
         .is_ok()
     {
@@ -164,13 +173,23 @@ pub fn detect_available_shells() -> Vec<String> {
 
     #[cfg(windows)]
     {
+        use std::os::windows::process::CommandExt;
         use std::process::Command;
-        if Command::new("pwsh.exe").arg("--version").output().is_ok() {
+
+        const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+        if Command::new("pwsh.exe")
+            .arg("--version")
+            .creation_flags(CREATE_NO_WINDOW)
+            .output()
+            .is_ok()
+        {
             shells.push("pwsh".to_string());
         }
         if Command::new("powershell.exe")
             .arg("-Command")
             .arg("exit")
+            .creation_flags(CREATE_NO_WINDOW)
             .output()
             .is_ok()
         {

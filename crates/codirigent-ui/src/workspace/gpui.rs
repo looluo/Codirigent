@@ -222,6 +222,9 @@ impl WorkspaceView {
             cache: CacheState::new(),
         };
 
+        // Pre-detect editors and shells in the background so settings open instantly
+        Self::start_detection_background(cx);
+
         // Restore sessions from previous run
         view.restore_sessions_from_disk(cx);
 
@@ -286,6 +289,30 @@ impl WorkspaceView {
             if result.is_err() {
                 break;
             }
+        })
+        .detach();
+    }
+
+    /// Pre-detect installed editors and available shells on a background thread.
+    ///
+    /// These detections spawn multiple subprocesses (`where`, `pwsh.exe`, etc.)
+    /// and would block the UI thread for hundreds of milliseconds if done synchronously.
+    /// By running them here at startup, the results are cached and ready by the time
+    /// the user opens settings.
+    fn start_detection_background(cx: &mut Context<Self>) {
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+            let (editors, shells) = cx
+                .background_executor()
+                .spawn(async {
+                    let editors = super::editor_detection::detect_installed_editors();
+                    let shells = codirigent_session::detect_available_shells();
+                    (editors, shells)
+                })
+                .await;
+            let _ = this.update(cx, |this, _cx| {
+                this.cache.detected_editors = Some(editors);
+                this.cache.detected_shells = Some(shells);
+            });
         })
         .detach();
     }
