@@ -1073,8 +1073,8 @@ impl WorkspaceView {
                 .map(|p| p.user_save_pending || p.project_save_pending)
                 .unwrap_or(false);
             if should_flush && self.settings.save_task.is_none() {
-                self.settings.save_task = Some(cx.spawn(
-                    async move |this: gpui::WeakEntity<Self>, cx| {
+                self.settings.save_task =
+                    Some(cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
                         cx.background_executor()
                             .timer(std::time::Duration::from_millis(500))
                             .await;
@@ -1082,8 +1082,7 @@ impl WorkspaceView {
                             this.flush_settings();
                             this.settings.save_task = None;
                         });
-                    },
-                ));
+                    }));
             }
             container = container.child(self.render_settings_overlay(cx));
             return container;
