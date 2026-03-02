@@ -288,6 +288,7 @@ impl super::gpui::WorkspaceView {
             // Click-away backdrop (closes dropdown when clicking outside)
             let backdrop = div()
                 .id(SharedString::from(format!("{}-backdrop", dd_id)))
+                .occlude()
                 .absolute()
                 .top(px(0.0))
                 .left(px(0.0))
