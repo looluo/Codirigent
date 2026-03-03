@@ -11,7 +11,6 @@
 
 use crate::session_reader_common::{is_file_recent, is_timestamp_recent, read_file_tail};
 use crate::CliSessionStatus;
-use chrono::{DateTime, Utc};
 use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
@@ -46,14 +45,6 @@ struct SessionFileHint {
     session_id: Option<String>,
     /// When this cache entry was last validated (to skip re-reading file headers).
     validated_at: Instant,
-}
-
-#[derive(Debug, Clone)]
-struct WorkingDirSessionCandidate {
-    has_entries: bool,
-    latest_ts: Option<SystemTime>,
-    mtime: SystemTime,
-    path: PathBuf,
 }
 
 /// Parsed entry from a Claude Code JSONL conversation log.
@@ -551,11 +542,10 @@ impl ClaudeSessionReader {
             return Some(index_path);
         }
 
-        if let Some(session_file) = Self::find_jsonl_by_working_dir(dir, working_dir) {
-            self.cache_session_file(working_dir, &session_file);
-            return Some(session_file);
-        }
-
+        // Try the most-recently-modified file first — it's almost always the
+        // active session and only requires mtime comparisons (no file reading).
+        // This avoids the expensive find_jsonl_by_working_dir which reads
+        // headers of every JSONL file in directories with 100+ files.
         if let Some(session_file) = Self::find_most_recent_jsonl(dir) {
             self.cache_session_file(working_dir, &session_file);
             return Some(session_file);
@@ -675,72 +665,6 @@ impl ClaudeSessionReader {
         best_path
     }
 
-    /// Find the best session file for a working directory by inspecting each JSONL
-    /// file header instead of index metadata.
-    fn find_jsonl_by_working_dir(dir: &Path, working_dir: &Path) -> Option<PathBuf> {
-        let working_dir_key = Self::path_lookup_key(working_dir);
-        if working_dir_key.is_empty() {
-            return None;
-        }
-
-        let mut best: Option<WorkingDirSessionCandidate> = None;
-
-        let entries = fs::read_dir(dir).ok()?;
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                continue;
-            }
-
-            let Some(mtime) = path.metadata().ok().and_then(|m| m.modified().ok()) else {
-                continue;
-            };
-
-            let Some(probe) = Self::read_session_probe(&path) else {
-                continue;
-            };
-            if !Self::matches_working_dir_by_probe(&probe, &working_dir_key) {
-                continue;
-            }
-
-            let (has_entries, latest_ts) = Self::probe_conversation_tail(&path);
-            let candidate = WorkingDirSessionCandidate {
-                has_entries,
-                latest_ts,
-                mtime,
-                path: path.clone(),
-            };
-
-            if let Some(current) = best.as_ref() {
-                if Self::is_better_session_match(&candidate, current) {
-                    best = Some(candidate);
-                }
-            } else {
-                best = Some(candidate);
-            }
-        }
-
-        best.map(|candidate| candidate.path)
-    }
-
-    fn is_better_session_match(
-        candidate: &WorkingDirSessionCandidate,
-        best: &WorkingDirSessionCandidate,
-    ) -> bool {
-        let candidate_time = candidate.latest_ts.unwrap_or(candidate.mtime);
-        let best_time = best.latest_ts.unwrap_or(best.mtime);
-
-        if candidate_time != best_time {
-            return candidate_time > best_time;
-        }
-
-        if candidate.has_entries != best.has_entries {
-            return candidate.has_entries;
-        }
-
-        candidate.mtime > best.mtime
-    }
-
     fn matches_working_dir_by_probe(probe: &JsonlProbe, working_dir_key: &str) -> bool {
         probe
             .cwd
@@ -762,32 +686,6 @@ impl ClaudeSessionReader {
             }
         }
         None
-    }
-
-    fn probe_conversation_tail(path: &Path) -> (bool, Option<SystemTime>) {
-        let entries = Self::read_recent_entries_from_path(path, 20);
-
-        if entries.is_empty() {
-            return (false, None);
-        }
-
-        let latest_timestamp = entries
-            .iter()
-            .rev()
-            .filter_map(|entry| entry.timestamp.as_deref())
-            .find_map(Self::parse_timestamp);
-
-        (true, latest_timestamp)
-    }
-
-    fn parse_timestamp(timestamp: &str) -> Option<SystemTime> {
-        let parsed = DateTime::parse_from_rfc3339(timestamp).ok()?;
-        let utc = parsed.with_timezone(&Utc);
-        let millis = utc.timestamp_millis();
-        if millis < 0 {
-            return None;
-        }
-        Some(UNIX_EPOCH + Duration::from_millis(millis as u64))
     }
 
     fn path_lookup_key<P: AsRef<Path>>(path: P) -> String {
@@ -1439,34 +1337,6 @@ mod tests {
     }
 
     #[test]
-    fn test_find_jsonl_by_working_dir_prefers_working_entries() {
-        let tmp = TempDir::new().unwrap();
-        let session_dir = tmp.path();
-        std::fs::create_dir_all(session_dir).unwrap();
-        let working_dir = Path::new("C:\\Users\\test\\project");
-
-        // Newer mtime but no assistant/user entries (progress-only file).
-        let progress_path = session_dir.join("progress-only.jsonl");
-        std::fs::write(
-            &progress_path,
-            r#"{"type":"progress","sessionId":"session-old","cwd":"C:\\Users\\test\\project","timestamp":"2026-02-14T00:00:00Z","message":{"role":"assistant","content":[{"type":"text","text":"working..."}]}}"#,
-        )
-        .unwrap();
-
-        // Older file with assistant entries for the same working directory.
-        std::thread::sleep(std::time::Duration::from_millis(20));
-        let assistant_path = session_dir.join("assistant-working.jsonl");
-        std::fs::write(
-            &assistant_path,
-            r#"{"type":"assistant","sessionId":"session-new","cwd":"C:\\Users\\test\\project","timestamp":"2026-02-14T00:00:01Z","message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}"#,
-        )
-        .unwrap();
-
-        let selected = ClaudeSessionReader::find_jsonl_by_working_dir(session_dir, working_dir);
-        assert_eq!(selected, Some(assistant_path));
-    }
-
-    #[test]
     fn test_find_jsonl_for_pid_ignores_stale_cached_session_id() {
         let tmp = TempDir::new().unwrap();
         let session_dir = tmp.path().join("session-dir");
@@ -1516,31 +1386,6 @@ mod tests {
             .find_jsonl_for_pid(&session_dir, &working_dir, None)
             .expect("A jsonl file should be selected");
         assert_eq!(selected, fresh_path);
-    }
-
-    #[test]
-    fn test_find_jsonl_by_working_dir_ignores_unmatched_cwd() {
-        let tmp = TempDir::new().unwrap();
-        let session_dir = tmp.path();
-        std::fs::create_dir_all(session_dir).unwrap();
-        let working_dir = Path::new("C:\\Users\\test\\project");
-
-        let wrong_path = session_dir.join("wrong-cwd.jsonl");
-        std::fs::write(
-            &wrong_path,
-            r#"{"type":"assistant","sessionId":"session-wrong","cwd":"C:\\Users\\other\\project","timestamp":"2026-02-14T00:00:00Z","message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}"#,
-        )
-        .unwrap();
-
-        let right_path = session_dir.join("right-cwd.jsonl");
-        std::fs::write(
-            &right_path,
-            r#"{"type":"assistant","sessionId":"session-right","cwd":"C:\\Users\\test\\project","timestamp":"2026-02-14T00:00:01Z","message":{"role":"assistant","content":[],"stop_reason":"end_turn"}}"#,
-        )
-        .unwrap();
-
-        let selected = ClaudeSessionReader::find_jsonl_by_working_dir(session_dir, working_dir);
-        assert_eq!(selected, Some(right_path));
     }
 
     #[test]
