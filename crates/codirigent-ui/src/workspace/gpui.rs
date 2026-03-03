@@ -102,7 +102,7 @@ pub struct WorkspaceView {
     /// Empty session cells pool.
     pub(super) empty_cells: EmptySessionPool,
     /// Terminal headers by session ID.
-    pub(super) terminal_headers: Vec<(SessionId, TerminalHeader)>,
+    pub(super) terminal_headers: HashMap<SessionId, TerminalHeader>,
     /// Project and file tree state (file_tree, file_tree_model, project_root, worktree_panel, worktree_manager, current_branch).
     pub(super) project: super::project_state::ProjectState,
     /// Clipboard state (smart_clipboard, clipboard_service, clipboard_preview, clipboard_preview_shown_at).
@@ -188,7 +188,7 @@ impl WorkspaceView {
             drawer: crate::drawer::Drawer::new(),
             task_board: TaskBoardPanel::new(),
             empty_cells: EmptySessionPool::new(),
-            terminal_headers: Vec::new(),
+            terminal_headers: HashMap::new(),
             project: super::project_state::ProjectState {
                 file_tree,
                 file_tree_model,
@@ -479,11 +479,7 @@ impl WorkspaceView {
         let sessions = self.workspace.sessions();
         let focused_id = self.workspace.focused_session_id();
         for session in sessions {
-            if let Some((_, header)) = self
-                .terminal_headers
-                .iter_mut()
-                .find(|(id, _)| *id == session.id)
-            {
+            if let Some(header) = self.terminal_headers.get_mut(&session.id) {
                 header.session_name = session.name.clone();
                 header.status = session.status;
                 header.context_usage = session.context_usage;
@@ -580,18 +576,12 @@ impl WorkspaceView {
 
     /// Get a terminal header for a session.
     pub fn get_terminal_header(&self, id: SessionId) -> Option<&TerminalHeader> {
-        self.terminal_headers
-            .iter()
-            .find(|(sid, _)| *sid == id)
-            .map(|(_, h)| h)
+        self.terminal_headers.get(&id)
     }
 
     /// Get a mutable terminal header for a session.
     pub fn get_terminal_header_mut(&mut self, id: SessionId) -> Option<&mut TerminalHeader> {
-        self.terminal_headers
-            .iter_mut()
-            .find(|(sid, _)| *sid == id)
-            .map(|(_, h)| h)
+        self.terminal_headers.get_mut(&id)
     }
 
     /// Update a session's terminal header.
@@ -601,7 +591,7 @@ impl WorkspaceView {
         status: SessionStatus,
         context_usage: Option<f32>,
     ) {
-        if let Some((_, header)) = self.terminal_headers.iter_mut().find(|(sid, _)| *sid == id) {
+        if let Some(header) = self.terminal_headers.get_mut(&id) {
             header.status = status;
             header.context_usage = context_usage;
         }

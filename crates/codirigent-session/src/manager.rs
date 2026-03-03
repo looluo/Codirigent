@@ -237,10 +237,32 @@ impl DefaultSessionManager {
         true
     }
 
+    /// Invalidate the git cache for a specific session's repo root.
+    ///
+    /// Call this before `refresh_git_status()` when the working directory
+    /// changes (e.g. OSC 7) so the next refresh picks up fresh data
+    /// instead of hitting the 15-second cache.
+    pub fn invalidate_git_cache(&self, id: SessionId) {
+        let repo_root = {
+            let sessions = self.lock_sessions();
+            sessions
+                .get(&id)
+                .and_then(|s| s.session.git_info.as_ref())
+                .map(|gi| gi.repo_root.clone())
+        };
+        if let Some(root) = repo_root {
+            self.git_status
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .invalidate(&root);
+        }
+    }
+
     /// Refresh git status for a session.
     ///
     /// Detects or refreshes git repository information for the session's
-    /// working directory. Uses cached results within the 3-second TTL.
+    /// working directory. Uses cached results within a 15-second TTL so
+    /// the 3-second polling loop hits cache most of the time.
     ///
     /// Returns the updated git info, or None if the session doesn't exist
     /// or isn't in a git repository.
@@ -254,7 +276,7 @@ impl DefaultSessionManager {
             .git_status
             .lock()
             .unwrap_or_else(|p| p.into_inner())
-            .detect_cached(&working_dir, Duration::from_secs(3));
+            .detect_cached(&working_dir, Duration::from_secs(15));
 
         // Update session
         let mut sessions = self.lock_sessions();

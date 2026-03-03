@@ -146,7 +146,7 @@ impl WorkspaceView {
                 .unwrap_or("unknown");
             header = header.with_project_name(dir_name);
 
-            self.terminal_headers.push((session_id, header));
+            self.terminal_headers.insert(session_id, header);
 
             // Auto-select the newly created session for natural UX
             self.select_session(session_id);
@@ -308,7 +308,7 @@ impl WorkspaceView {
                 if let Some(ref color) = saved.color {
                     header.session_color = crate::sidebar::Color::from_hex(color);
                 }
-                self.terminal_headers.push((session_id, header));
+                self.terminal_headers.insert(session_id, header);
             }
         }
 
@@ -348,7 +348,7 @@ impl WorkspaceView {
             self.cli_readers.cached_status.remove(&id);
 
             // Remove the terminal header for this session (from feature branch)
-            self.terminal_headers.retain(|(sid, _)| *sid != id);
+            self.terminal_headers.remove(&id);
 
             // Remove from workspace UI
             self.workspace.remove_session(id);
@@ -384,7 +384,7 @@ impl WorkspaceView {
         self.cli_readers.cached_status.remove(&id);
 
         // Remove the terminal header for this session
-        self.terminal_headers.retain(|(sid, _)| *sid != id);
+        self.terminal_headers.remove(&id);
 
         // Remove from workspace
         self.workspace.remove_session(id);

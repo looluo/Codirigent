@@ -80,12 +80,12 @@ impl WorkspaceView {
             }
         }
 
-        // Decide once whether to run JSONL checks this cycle (throttled to ~1/second)
+        // Decide once whether to run JSONL checks this cycle (throttled to ~1/3 seconds)
         let has_any_reader = self.cli_readers.claude.is_some()
             || self.cli_readers.codex.is_some()
             || self.cli_readers.gemini.is_some();
         let check_jsonl =
-            has_any_reader && self.polling.last_jsonl_check.elapsed() >= Duration::from_secs(1);
+            has_any_reader && self.polling.last_jsonl_check.elapsed() >= Duration::from_secs(3);
         if check_jsonl {
             self.polling.last_jsonl_check = Instant::now();
         }
@@ -132,16 +132,16 @@ impl WorkspaceView {
                         manager.update_working_directory(session_id, new_cwd)
                     });
                     if changed {
+                        // Invalidate stale git cache so refresh picks up the new repo
+                        self.with_session_manager(|manager| {
+                            manager.invalidate_git_cache(session_id);
+                        });
                         // Force immediate git refresh (updates the manager's copy)
                         let git_info = self
                             .with_session_manager(|manager| manager.refresh_git_status(session_id));
 
                         // Update terminal header (UI-only state, not part of Session)
-                        if let Some((_, header)) = self
-                            .terminal_headers
-                            .iter_mut()
-                            .find(|(sid, _)| *sid == session_id)
-                        {
+                        if let Some(header) = self.terminal_headers.get_mut(&session_id) {
                             if let Some(ref info) = git_info {
                                 header.git_branch = Some(info.branch.clone());
                                 header.git_dirty_count = Some(info.dirty_count);
@@ -151,16 +151,22 @@ impl WorkspaceView {
                             }
                         }
 
-                        // Sync workspace cache so file tree sees the new CWD
-                        let manager_sessions =
-                            self.with_session_manager(|manager| manager.list_sessions());
-                        self.workspace.sync_sessions_from_manager(&manager_sessions);
-
-                        // Update file tree panel if this is the focused session
-                        if self.workspace.focused_session_id() == Some(session_id) {
-                            if let Some(session) = self.workspace.session(session_id) {
-                                self.set_project_root(session.working_directory.clone());
+                        // Sync workspace cache so file tree sees the new CWD.
+                        // Update only the changed session instead of cloning all.
+                        if let Some(ws_session) = self.workspace.session_mut(session_id) {
+                            let mgr_session = self
+                                .with_session_manager(|manager| manager.get_session(session_id));
+                            if let Some(mgr) = mgr_session {
+                                ws_session.working_directory = mgr.working_directory;
+                                ws_session.git_info = mgr.git_info;
                             }
+                        }
+
+                        // Update file tree panel if this is the focused session.
+                        // Uses sync_file_tree_to_focused_session which guards against
+                        // same-root refreshes (avoids redundant file tree rebuilds).
+                        if self.workspace.focused_session_id() == Some(session_id) {
+                            self.sync_file_tree_to_focused_session();
                         }
                     }
                 }
@@ -444,10 +450,8 @@ impl WorkspaceView {
 
             // Update terminal headers with git info (only mark dirty on change)
             let mut git_changed = false;
-            for (id, git_info) in git_infos {
-                if let Some((_, header)) =
-                    self.terminal_headers.iter_mut().find(|(sid, _)| *sid == id)
-                {
+            for (id, git_info) in &git_infos {
+                if let Some(header) = self.terminal_headers.get_mut(id) {
                     if header.git_branch.as_deref() != Some(git_info.branch.as_str())
                         || header.git_dirty_count != Some(git_info.dirty_count)
                     {
@@ -458,11 +462,15 @@ impl WorkspaceView {
                     }
                 }
             }
-            // Only bulk-sync from manager when git info actually changed,
-            // to avoid locking + cloning all sessions every 3 seconds.
+            // When git info changed, update workspace sessions directly from
+            // the already-collected git_infos instead of cloning all sessions
+            // from the manager (avoids lock + full clone every 3 seconds).
             if git_changed {
-                let manager_sessions = self.with_session_manager(|manager| manager.list_sessions());
-                self.workspace.sync_sessions_from_manager(&manager_sessions);
+                for (id, git_info) in &git_infos {
+                    if let Some(session) = self.workspace.session_mut(*id) {
+                        session.git_info = Some(git_info.clone());
+                    }
+                }
             }
         }
 

@@ -35,6 +35,10 @@ pub struct ClaudeSessionReader {
     /// Avoids re-reading and re-parsing 512KB of JSONL data every second
     /// when the file hasn't been modified.
     status_cache: HashMap<PathBuf, (SystemTime, ClaudeSessionStatus)>,
+    /// Cached canonicalized path lookup keys.
+    /// `canonicalize()` is a filesystem syscall (expensive on Windows);
+    /// caching avoids repeated calls for the same paths.
+    canonicalize_cache: HashMap<PathBuf, String>,
 }
 
 #[derive(Debug, Clone)]
@@ -164,6 +168,7 @@ impl ClaudeSessionReader {
             claude_home,
             session_file_cache: HashMap::new(),
             status_cache: HashMap::new(),
+            canonicalize_cache: HashMap::new(),
         })
     }
 
@@ -245,13 +250,14 @@ impl ClaudeSessionReader {
     }
 
     fn clear_cached_session_file_for_working_dir(&mut self, working_dir: &Path) {
-        self.session_file_cache
-            .remove(&Self::path_lookup_key(working_dir));
+        let key = self.path_lookup_key_cached(working_dir);
+        self.session_file_cache.remove(&key);
     }
 
     fn cache_session_file(&mut self, working_dir: &Path, jsonl_path: &Path) {
+        let key = self.path_lookup_key_cached(working_dir);
         self.session_file_cache.insert(
-            Self::path_lookup_key(working_dir),
+            key,
             SessionFileHint {
                 path: jsonl_path.to_path_buf(),
                 session_id: Self::read_session_id_from_file(jsonl_path),
@@ -482,7 +488,7 @@ impl ClaudeSessionReader {
         working_dir: &Path,
         pid: Option<u32>,
     ) -> Option<PathBuf> {
-        let working_dir_key = Self::path_lookup_key(working_dir);
+        let working_dir_key = self.path_lookup_key_cached(working_dir);
 
         if let Some(cached) = self.session_file_cache.get(&working_dir_key).cloned() {
             // Skip expensive file-header re-read and directory scan if validated recently
@@ -490,7 +496,7 @@ impl ClaudeSessionReader {
             let still_valid = recently_validated
                 || (self.is_working_dir_session_match(
                     &cached.path,
-                    working_dir,
+                    &working_dir_key,
                     cached.session_id.as_deref(),
                 ) && !Self::has_newer_jsonl(dir, &cached.path));
 
@@ -556,13 +562,13 @@ impl ClaudeSessionReader {
 
     /// Validate a candidate session file for the provided working directory.
     /// If an expected session_id is provided, require that id to match.
+    /// Accepts a precomputed `working_dir_key` to avoid redundant `canonicalize()` calls.
     fn is_working_dir_session_match(
         &self,
         path: &Path,
-        working_dir: &Path,
+        working_dir_key: &str,
         expected_session_id: Option<&str>,
     ) -> bool {
-        let working_dir_key = Self::path_lookup_key(working_dir);
         if working_dir_key.is_empty() {
             return false;
         }
@@ -571,7 +577,7 @@ impl ClaudeSessionReader {
             return false;
         };
 
-        if !Self::matches_working_dir_by_probe(&probe, &working_dir_key) {
+        if !Self::matches_working_dir_by_probe(&probe, working_dir_key) {
             return false;
         }
 
@@ -700,6 +706,18 @@ impl ClaudeSessionReader {
             .trim_end_matches('\\')
             .to_string();
         normalized
+    }
+
+    /// Cached version of `path_lookup_key` that avoids repeated `canonicalize()`
+    /// filesystem syscalls for the same paths (especially expensive on Windows).
+    fn path_lookup_key_cached(&mut self, path: &Path) -> String {
+        if let Some(cached) = self.canonicalize_cache.get(path) {
+            return cached.clone();
+        }
+        let key = Self::path_lookup_key(path);
+        self.canonicalize_cache
+            .insert(path.to_path_buf(), key.clone());
+        key
     }
 
     /// Check if a new session file has appeared in `dir` since `reference` was cached.
@@ -1032,6 +1050,7 @@ mod tests {
             claude_home: PathBuf::from("/nonexistent"),
             session_file_cache: std::collections::HashMap::new(),
             status_cache: std::collections::HashMap::new(),
+            canonicalize_cache: std::collections::HashMap::new(),
         }
     }
 
@@ -1058,6 +1077,7 @@ mod tests {
             claude_home: tmp_home.to_path_buf(),
             session_file_cache: std::collections::HashMap::new(),
             status_cache: std::collections::HashMap::new(),
+            canonicalize_cache: std::collections::HashMap::new(),
         };
 
         let status_fresh = reader.get_status_if_recent(
@@ -1164,6 +1184,7 @@ mod tests {
             claude_home: tmp.path().to_path_buf(),
             session_file_cache: std::collections::HashMap::new(),
             status_cache: std::collections::HashMap::new(),
+            canonicalize_cache: std::collections::HashMap::new(),
         };
 
         // No matching dir
@@ -1189,6 +1210,7 @@ mod tests {
             claude_home: tmp.path().to_path_buf(),
             session_file_cache: std::collections::HashMap::new(),
             status_cache: std::collections::HashMap::new(),
+            canonicalize_cache: std::collections::HashMap::new(),
         };
 
         let session_dir = projects_dir.join("C--Users-foo-project");
@@ -1208,6 +1230,7 @@ mod tests {
             claude_home: tmp.path().to_path_buf(),
             session_file_cache: std::collections::HashMap::new(),
             status_cache: std::collections::HashMap::new(),
+            canonicalize_cache: std::collections::HashMap::new(),
         };
 
         let session_dir = projects_dir.join("----C--Users-foo-project");
@@ -1372,6 +1395,7 @@ mod tests {
             claude_home: PathBuf::from("/nonexistent"),
             session_file_cache: std::collections::HashMap::new(),
             status_cache: std::collections::HashMap::new(),
+            canonicalize_cache: std::collections::HashMap::new(),
         };
         reader.session_file_cache.insert(
             ClaudeSessionReader::path_lookup_key(&working_dir),
