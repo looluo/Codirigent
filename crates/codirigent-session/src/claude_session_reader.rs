@@ -32,6 +32,10 @@ pub struct ClaudeSessionReader {
     /// identified session file avoids re-anchoring to stale history files between
     /// status polls.
     session_file_cache: HashMap<String, SessionFileHint>,
+    /// Cached parsed status per JSONL file path, keyed by (path, mtime).
+    /// Avoids re-reading and re-parsing 512KB of JSONL data every second
+    /// when the file hasn't been modified.
+    status_cache: HashMap<PathBuf, (SystemTime, ClaudeSessionStatus)>,
 }
 
 #[derive(Debug, Clone)]
@@ -168,6 +172,7 @@ impl ClaudeSessionReader {
         Some(Self {
             claude_home,
             session_file_cache: HashMap::new(),
+            status_cache: HashMap::new(),
         })
     }
 
@@ -214,16 +219,38 @@ impl ClaudeSessionReader {
 
         self.cache_session_file(working_dir, &jsonl_path);
 
+        // Check if we already have a cached status for this file at the same mtime.
+        // Avoids re-reading 512KB and re-parsing JSON every second when the file
+        // hasn't been modified (i.e., Claude Code isn't actively writing).
+        let current_mtime = jsonl_path.metadata().ok().and_then(|m| m.modified().ok());
+        if let Some(mtime) = current_mtime {
+            if let Some((cached_mtime, cached_status)) = self.status_cache.get(&jsonl_path) {
+                if *cached_mtime == mtime {
+                    return Some(cached_status.clone());
+                }
+            }
+        }
+
         let entries = Self::read_recent_entries_from_path(&jsonl_path, 20);
         if entries.is_empty() {
             debug!(
                 ?jsonl_path,
                 "JSONL: no entries parsed from Claude session file"
             );
-            return Some(ClaudeSessionStatus::Unknown);
+            let status = ClaudeSessionStatus::Unknown;
+            if let Some(mtime) = current_mtime {
+                self.status_cache
+                    .insert(jsonl_path, (mtime, status.clone()));
+            }
+            return Some(status);
         }
 
-        Some(self.determine_status(&entries))
+        let status = self.determine_status(&entries);
+        if let Some(mtime) = current_mtime {
+            self.status_cache
+                .insert(jsonl_path, (mtime, status.clone()));
+        }
+        Some(status)
     }
 
     fn clear_cached_session_file_for_working_dir(&mut self, working_dir: &Path) {
@@ -1106,6 +1133,7 @@ mod tests {
         ClaudeSessionReader {
             claude_home: PathBuf::from("/nonexistent"),
             session_file_cache: std::collections::HashMap::new(),
+            status_cache: std::collections::HashMap::new(),
         }
     }
 
@@ -1131,6 +1159,7 @@ mod tests {
         let mut reader = ClaudeSessionReader {
             claude_home: tmp_home.to_path_buf(),
             session_file_cache: std::collections::HashMap::new(),
+            status_cache: std::collections::HashMap::new(),
         };
 
         let status_fresh = reader.get_status_if_recent(
@@ -1236,6 +1265,7 @@ mod tests {
         let reader = ClaudeSessionReader {
             claude_home: tmp.path().to_path_buf(),
             session_file_cache: std::collections::HashMap::new(),
+            status_cache: std::collections::HashMap::new(),
         };
 
         // No matching dir
@@ -1260,6 +1290,7 @@ mod tests {
         let reader = ClaudeSessionReader {
             claude_home: tmp.path().to_path_buf(),
             session_file_cache: std::collections::HashMap::new(),
+            status_cache: std::collections::HashMap::new(),
         };
 
         let session_dir = projects_dir.join("C--Users-foo-project");
@@ -1278,6 +1309,7 @@ mod tests {
         let reader = ClaudeSessionReader {
             claude_home: tmp.path().to_path_buf(),
             session_file_cache: std::collections::HashMap::new(),
+            status_cache: std::collections::HashMap::new(),
         };
 
         let session_dir = projects_dir.join("----C--Users-foo-project");
@@ -1469,6 +1501,7 @@ mod tests {
         let mut reader = ClaudeSessionReader {
             claude_home: PathBuf::from("/nonexistent"),
             session_file_cache: std::collections::HashMap::new(),
+            status_cache: std::collections::HashMap::new(),
         };
         reader.session_file_cache.insert(
             ClaudeSessionReader::path_lookup_key(&working_dir),

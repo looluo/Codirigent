@@ -93,7 +93,7 @@ impl TopBar {
             profile_manager: manager,
             tabs,
             broadcast_enabled: false,
-            right_panel_open: true,
+            right_panel_open: false,
             token_count: "0 tokens".to_string(),
             pending_events: Vec::new(),
         }
@@ -266,7 +266,7 @@ mod tests {
         assert_eq!(bar.active_layout(), LayoutProfile::default());
         assert_eq!(bar.tabs().len(), 3);
         assert!(!bar.is_broadcast_enabled());
-        assert!(bar.is_right_panel_open());
+        assert!(!bar.is_right_panel_open());
     }
 
     #[test]
@@ -303,11 +303,11 @@ mod tests {
     #[test]
     fn toggle_right_panel() {
         let mut bar = TopBar::new();
-        assert!(bar.is_right_panel_open());
-        bar.toggle_right_panel();
         assert!(!bar.is_right_panel_open());
         bar.toggle_right_panel();
         assert!(bar.is_right_panel_open());
+        bar.toggle_right_panel();
+        assert!(!bar.is_right_panel_open());
     }
 
     #[test]
