@@ -270,9 +270,9 @@ pub(super) struct CacheState {
     pub compaction_start_times: HashMap<SessionId, Instant>,
     /// Tracks which session groups are expanded in the drawer's Sessions panel.
     pub drawer_group_expanded: HashMap<String, bool>,
-    /// Cached cell dimensions: (font_family, font_size, cell_width, cell_height).
+    /// Cached result of font metric computation, keyed by font settings.
     /// Avoids repeated font system calls when settings haven't changed.
-    pub cached_cell_dims: Option<(String, f32, f32, f32)>,
+    pub cached_cell_dims: Option<CachedCellDims>,
 }
 
 impl CacheState {
@@ -288,4 +288,13 @@ impl CacheState {
             cached_cell_dims: None,
         }
     }
+}
+
+/// Cached result of font metric computation, keyed by font settings.
+#[derive(Debug, Clone)]
+pub(super) struct CachedCellDims {
+    pub font_family: String,
+    pub font_size: f32,
+    pub cell_width: f32,
+    pub cell_height: f32,
 }

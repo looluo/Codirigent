@@ -16,9 +16,7 @@ use serde::Deserialize;
 use std::collections::{HashMap, HashSet};
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
-use std::time::SystemTime;
-use std::time::UNIX_EPOCH;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::{debug, trace};
 
 /// Status derived from Claude Code's JSONL logs.
@@ -42,6 +40,8 @@ struct SessionFileHint {
     path: PathBuf,
     /// Optional session identifier parsed from the file.
     session_id: Option<String>,
+    /// When this cache entry was last validated (to skip re-reading file headers).
+    validated_at: Instant,
 }
 
 #[derive(Debug, Clone)]
@@ -237,6 +237,7 @@ impl ClaudeSessionReader {
             SessionFileHint {
                 path: jsonl_path.to_path_buf(),
                 session_id: Self::read_session_id_from_file(jsonl_path),
+                validated_at: Instant::now(),
             },
         );
     }
@@ -466,15 +467,26 @@ impl ClaudeSessionReader {
         let working_dir_key = Self::path_lookup_key(working_dir);
 
         if let Some(cached) = self.session_file_cache.get(&working_dir_key).cloned() {
-            if self.is_working_dir_session_match(
-                &cached.path,
-                working_dir,
-                cached.session_id.as_deref(),
-            ) && !Self::has_newer_jsonl(dir, &cached.path)
-            {
+            // Skip expensive file-header re-read and directory scan if validated recently
+            let recently_validated = cached.validated_at.elapsed() < Duration::from_secs(5);
+            let still_valid = recently_validated
+                || (self.is_working_dir_session_match(
+                    &cached.path,
+                    working_dir,
+                    cached.session_id.as_deref(),
+                ) && !Self::has_newer_jsonl(dir, &cached.path));
+
+            if still_valid {
+                if !recently_validated {
+                    // Refresh the validated_at timestamp
+                    if let Some(entry) = self.session_file_cache.get_mut(&working_dir_key) {
+                        entry.validated_at = Instant::now();
+                    }
+                }
                 debug!(
                     ?working_dir_key,
                     ?cached.path,
+                    recently_validated,
                     "Using cached Claude session file by working directory"
                 );
                 return Some(cached.path);
@@ -765,36 +777,26 @@ impl ClaudeSessionReader {
         normalized
     }
 
-    /// Check if any `.jsonl` file in `dir` has a newer mtime than `reference`.
+    /// Check if a new session file has appeared in `dir` since `reference` was cached.
     ///
-    /// Used to invalidate the session file cache when a newer session file
-    /// appears (e.g. the user started a new Claude Code session in the same
-    /// working directory).
+    /// Uses the directory's own mtime as a cheap signal: when a new file is
+    /// created the OS updates the directory mtime, so a single metadata() call
+    /// on the directory replaces scanning hundreds of individual files.
     fn has_newer_jsonl(dir: &Path, reference: &Path) -> bool {
         let ref_mtime = match reference.metadata().ok().and_then(|m| m.modified().ok()) {
             Some(t) => t,
             None => return true,
         };
 
-        let Ok(entries) = fs::read_dir(dir) else {
-            return false;
+        // Directory mtime updates when files are created/deleted/renamed.
+        // If the directory hasn't changed since the reference file was written,
+        // no new session file could have appeared.
+        let dir_mtime = match dir.metadata().ok().and_then(|m| m.modified().ok()) {
+            Some(t) => t,
+            None => return false,
         };
 
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.as_path() == reference {
-                continue;
-            }
-            if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
-                continue;
-            }
-            if let Some(mtime) = path.metadata().ok().and_then(|m| m.modified().ok()) {
-                if mtime > ref_mtime {
-                    return true;
-                }
-            }
-        }
-        false
+        dir_mtime > ref_mtime
     }
 
     /// Find the most recently modified .jsonl file in a directory.
@@ -1473,6 +1475,7 @@ mod tests {
             SessionFileHint {
                 path: stale_path.clone(),
                 session_id: Some("7e813124-ce33-48f9-9205-c4e876b96085".to_string()),
+                validated_at: Instant::now() - Duration::from_secs(10),
             },
         );
 

@@ -245,7 +245,8 @@ impl WorkspaceView {
     /// Start adaptive output polling background task.
     ///
     /// Uses 4ms interval when output is being received (low latency for typing),
-    /// increases to 16ms after 12 idle polls (~50ms of no output).
+    /// 50ms after 12 idle polls (~50ms of no output), and 200ms after 100 idle
+    /// polls (~5s of no output).
     fn start_output_polling(cx: &mut Context<Self>) {
         cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
             let mut poll_interval_ms: u64 = 4;
@@ -1580,10 +1581,11 @@ impl Render for WorkspaceView {
             let font_family = &self.workspace.theme().terminal_font_family;
             let font_size = self.workspace.theme().terminal_font_size;
             let (real_w, real_h) = match &self.cache.cached_cell_dims {
-                Some((cached_family, cached_size, w, h))
-                    if cached_family == font_family && (*cached_size - font_size).abs() < 0.01 =>
+                Some(cached)
+                    if cached.font_family == *font_family
+                        && (cached.font_size - font_size).abs() < 0.01 =>
                 {
-                    (*w, *h)
+                    (cached.cell_width, cached.cell_height)
                 }
                 _ => {
                     let (w, h) = crate::terminal_view::compute_cell_dimensions(
@@ -1591,7 +1593,12 @@ impl Render for WorkspaceView {
                         font_family,
                         font_size,
                     );
-                    self.cache.cached_cell_dims = Some((font_family.clone(), font_size, w, h));
+                    self.cache.cached_cell_dims = Some(super::types::CachedCellDims {
+                        font_family: font_family.clone(),
+                        font_size,
+                        cell_width: w,
+                        cell_height: h,
+                    });
                     (w, h)
                 }
             };
