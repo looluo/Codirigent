@@ -198,7 +198,7 @@ impl ClaudeSessionReader {
         // directory scanning entirely and go straight to status reading.
         let working_dir_key = self.path_lookup_key_cached(working_dir);
         if let Some(cached) = self.session_file_cache.get(&working_dir_key) {
-            if cached.validated_at.elapsed() < Duration::from_secs(5) {
+            if cached.validated_at.elapsed() < Duration::from_secs(10) {
                 let jsonl_path = cached.path.clone();
                 return self.read_status_from_path(jsonl_path, working_dir, max_age);
             }
@@ -501,15 +501,13 @@ impl ClaudeSessionReader {
     ///
     /// Resolution strategy:
     /// 1. Return cached session file if it still matches.
-    /// 2. PID-based file-handle match if possible.
-    /// 3. Project `sessions-index.json` mapping.
-    /// 4. Working-directory scan.
-    /// 5. Most-recently-modified `.jsonl` fallback.
+    /// 2. Project `sessions-index.json` mapping.
+    /// 3. Most-recently-modified `.jsonl` fallback.
     fn find_jsonl_for_pid(
         &mut self,
         dir: &Path,
         working_dir: &Path,
-        pid: Option<u32>,
+        _pid: Option<u32>,
     ) -> Option<PathBuf> {
         let working_dir_key = self.path_lookup_key_cached(working_dir);
 
@@ -541,31 +539,11 @@ impl ClaudeSessionReader {
             self.session_file_cache.remove(&working_dir_key);
         }
 
-        if let Some(pid) = pid {
-            let candidates: Vec<PathBuf> = fs::read_dir(dir)
-                .ok()
-                .into_iter()
-                .flatten()
-                .flatten()
-                .filter(|entry| entry.path().extension().and_then(|x| x.to_str()) == Some("jsonl"))
-                .map(|entry| entry.path())
-                .collect();
-
-            if !candidates.is_empty() {
-                if let Some(match_path) =
-                    codirigent_detector::find_file_opened_by_pid(&candidates, pid)
-                {
-                    debug!(pid, ?match_path, "PID-based JSONL match found");
-                    self.cache_session_file(working_dir, &match_path);
-                    return Some(match_path);
-                }
-                debug!(
-                    pid,
-                    "No PID-based JSONL match, falling back to directory scan"
-                );
-            }
-        }
-
+        // Skip PID-based file-handle matching (find_file_opened_by_pid) on the
+        // hot path. On Windows it uses the Restart Manager API which costs ~4
+        // kernel syscalls per candidate file — with 200 session files that's 800
+        // syscalls blocking the UI thread for seconds. The sessions-index.json
+        // and most-recent-file fallbacks handle the common cases without blocking.
         if let Some(index_path) = Self::find_jsonl_from_index(dir, working_dir) {
             self.cache_session_file(working_dir, &index_path);
             return Some(index_path);
