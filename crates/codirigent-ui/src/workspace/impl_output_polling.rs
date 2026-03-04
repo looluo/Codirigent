@@ -15,12 +15,11 @@ use codirigent_core::{
     AssignmentAction, CodirigentEvent, EventBus, ProcessMonitor, SessionId, SessionManager,
     SessionStatus, TaskStatus,
 };
-use codirigent_session::cli_detector::CliDetector;
-use codirigent_session::clipboard_service::ClipboardService;
+use codirigent_session::clipboard_service::{ClipboardService, DefaultClipboardService};
 use codirigent_session::CliSessionStatus;
 use gpui::Context;
 use std::time::{Duration, Instant};
-use tracing::{debug, info, warn};
+use tracing::{info, warn};
 
 impl WorkspaceView {
     const GENERIC_SHELL_JSONL_MAX_AGE: Duration = Duration::from_secs(600);

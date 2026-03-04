@@ -383,7 +383,9 @@ impl WorkspaceView {
             svc.end_compaction(id);
         }
         self.cache.compaction_start_times.remove(&id);
-        self.cli_readers.cached_status.remove(&id);
+        if let Ok(mut readers) = self.cli_readers.lock() {
+            readers.cached_status.remove(&id);
+        }
 
         // Remove the terminal header for this session
         self.terminal_headers.remove(&id);
