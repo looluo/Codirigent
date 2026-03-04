@@ -156,10 +156,6 @@ impl PtyHandle {
             cmd.env(key, value);
         }
 
-        // Unset CLAUDECODE so Claude Code can launch inside Codirigent PTY sessions.
-        // Without this, Claude Code detects a nested session and refuses to start.
-        cmd.env_remove("CLAUDECODE");
-
         // Shell integration: OSC 7 (CWD tracking) + OSC 133 (shell state markers).
         #[cfg(unix)]
         {
