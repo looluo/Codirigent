@@ -153,10 +153,11 @@ impl WorkspaceView {
 
                         // Sync workspace cache so file tree sees the new CWD.
                         // Update only the changed session instead of cloning all.
-                        if let Some(ws_session) = self.workspace.session_mut(session_id) {
-                            let mgr_session = self
-                                .with_session_manager(|manager| manager.get_session(session_id));
-                            if let Some(mgr) = mgr_session {
+                        // Fetch from manager first to avoid overlapping borrows.
+                        let mgr_session =
+                            self.with_session_manager(|manager| manager.get_session(session_id));
+                        if let Some(mgr) = mgr_session {
+                            if let Some(ws_session) = self.workspace.session_mut(session_id) {
                                 ws_session.working_directory = mgr.working_directory;
                                 ws_session.git_info = mgr.git_info;
                             }
