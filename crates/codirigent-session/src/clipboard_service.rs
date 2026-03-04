@@ -203,96 +203,43 @@ impl DefaultClipboardService {
     }
 }
 
-/// Convert raw Windows DIB (BITMAPINFOHEADER + pixel data) to RGBA pixel buffer.
+/// Construct a complete BMP file from raw CF_DIB clipboard data.
 ///
-/// DIB from CF_DIB clipboard format has this layout:
-/// - BITMAPINFOHEADER (40+ bytes): header with dimensions, bit depth, compression
-/// - Optional color table (for <= 8 bpp, or BI_BITFIELDS masks)
-/// - Pixel data (bottom-up by default, or top-down if height is negative)
-///
-/// This function handles 32-bit (BGRA/BGRX) and 24-bit (BGR) bitmaps,
-/// which are the most common formats from Windows screenshots.
-fn dib_to_rgba(dib: &[u8], width: u32, height: u32) -> Result<Vec<u8>> {
+/// CF_DIB contains a DIB (Device Independent Bitmap) starting with a
+/// BITMAPINFOHEADER variant (BITMAPINFOHEADER 40 bytes, BITMAPV4HEADER 108 bytes,
+/// or BITMAPV5HEADER 124 bytes used by Windows 11 Snipping Tool) followed by
+/// optional color masks/table and pixel data. A BMP file adds a 14-byte
+/// BITMAPFILEHEADER with the pixel data offset, which lets the image crate handle
+/// all header variants correctly.
+fn dib_to_bmp(dib: &[u8]) -> Result<Vec<u8>> {
     if dib.len() < 40 {
         anyhow::bail!("DIB data too small: {} bytes", dib.len());
     }
 
-    // Parse BITMAPINFOHEADER fields
-    let header_size = u32::from_le_bytes([dib[0], dib[1], dib[2], dib[3]]);
-    let bi_width = i32::from_le_bytes([dib[4], dib[5], dib[6], dib[7]]);
-    let bi_height = i32::from_le_bytes([dib[8], dib[9], dib[10], dib[11]]);
-    let bi_bit_count = u16::from_le_bytes([dib[14], dib[15]]);
+    let bi_size = u32::from_le_bytes([dib[0], dib[1], dib[2], dib[3]]) as usize;
     let bi_compression = u32::from_le_bytes([dib[16], dib[17], dib[18], dib[19]]);
 
-    let w = bi_width.unsigned_abs() as usize;
-    let h = bi_height.unsigned_abs() as usize;
-    let bottom_up = bi_height > 0; // Positive height = bottom-up rows
-
-    // Use the passed-in width/height as fallback (they should match)
-    let w = if w > 0 { w } else { width as usize };
-    let h = if h > 0 { h } else { height as usize };
-
-    // Calculate pixel data offset: header + optional color masks/table
-    let pixel_offset = match (bi_bit_count, bi_compression) {
-        (32, 3) => header_size as usize + 12, // BI_BITFIELDS: 3 x u32 color masks
-        (16, 3) => header_size as usize + 12, // BI_BITFIELDS for 16bpp
-        _ => header_size as usize,            // No extra data for 24/32 bpp BI_RGB
+    // Pixel data offset within the DIB (from start of DIB, not including file header).
+    // BITMAPINFOHEADER (40) with BI_BITFIELDS appends 3 x DWORD color masks.
+    // BITMAPV4HEADER (108) and BITMAPV5HEADER (124) embed the masks in the header.
+    const BI_BITFIELDS: u32 = 3;
+    let pixel_offset_in_dib = if bi_compression == BI_BITFIELDS && bi_size <= 40 {
+        bi_size + 12 // BITMAPINFOHEADER + 3 DWORD color masks
+    } else {
+        bi_size // V4/V5 headers include masks; BI_RGB needs no extra bytes
     };
 
-    if pixel_offset >= dib.len() {
-        anyhow::bail!(
-            "DIB pixel offset {} exceeds data length {}",
-            pixel_offset,
-            dib.len()
-        );
-    }
+    let file_size = (14 + dib.len()) as u32;
+    let bf_off_bits = (14 + pixel_offset_in_dib) as u32;
 
-    let pixel_data = &dib[pixel_offset..];
-    let bytes_per_pixel = (bi_bit_count as usize) / 8;
-    // BMP rows are padded to 4-byte boundaries
-    let row_stride = (w * bytes_per_pixel).div_ceil(4) * 4;
+    let mut bmp = Vec::with_capacity(file_size as usize);
+    bmp.extend_from_slice(b"BM");
+    bmp.extend_from_slice(&file_size.to_le_bytes());
+    bmp.extend_from_slice(&[0u8; 4]); // reserved
+    bmp.extend_from_slice(&bf_off_bits.to_le_bytes());
+    bmp.extend_from_slice(dib);
 
-    let mut rgba = vec![255u8; w * h * 4]; // Pre-fill alpha to 255
-
-    for y in 0..h {
-        let src_y = if bottom_up { h - 1 - y } else { y };
-        let row_start = src_y * row_stride;
-
-        if row_start + w * bytes_per_pixel > pixel_data.len() {
-            break; // Truncated data — render what we can
-        }
-
-        for x in 0..w {
-            let src_offset = row_start + x * bytes_per_pixel;
-            let dst_offset = (y * w + x) * 4;
-
-            match bi_bit_count {
-                32 => {
-                    // BGRA or BGRX → RGBA
-                    rgba[dst_offset] = pixel_data[src_offset + 2]; // R
-                    rgba[dst_offset + 1] = pixel_data[src_offset + 1]; // G
-                    rgba[dst_offset + 2] = pixel_data[src_offset]; // B
-                    rgba[dst_offset + 3] = pixel_data[src_offset + 3]; // A (or X=0)
-                                                                       // Many screenshots have A=0 (BGRX). Force opaque.
-                    if rgba[dst_offset + 3] == 0 {
-                        rgba[dst_offset + 3] = 255;
-                    }
-                }
-                24 => {
-                    // BGR → RGBA
-                    rgba[dst_offset] = pixel_data[src_offset + 2]; // R
-                    rgba[dst_offset + 1] = pixel_data[src_offset + 1]; // G
-                    rgba[dst_offset + 2] = pixel_data[src_offset]; // B
-                    rgba[dst_offset + 3] = 255; // A
-                }
-                _ => {
-                    anyhow::bail!("Unsupported DIB bit depth: {}", bi_bit_count);
-                }
-            }
-        }
-    }
-
-    Ok(rgba)
+    Ok(bmp)
 }
 
 impl ClipboardService for DefaultClipboardService {
@@ -312,26 +259,27 @@ impl ClipboardService for DefaultClipboardService {
             ImageFormat::Dib => {
                 // Windows clipboard may return either:
                 // a) Full BMP file (starts with "BM" magic) — from clipboard-win
-                // b) Raw DIB data (BITMAPINFOHEADER + pixels, no file header)
+                // b) Raw DIB data (any BITMAPINFOHEADER variant, no file header)
+                //
+                // For raw DIB we construct a proper BMP file and let the image crate
+                // handle all header variants (BITMAPINFOHEADER, BITMAPV4HEADER,
+                // BITMAPV5HEADER) correctly. This is more robust than manual pixel
+                // extraction, which breaks for BITMAPV5HEADER (Windows 11 Snipping Tool).
                 let is_full_bmp =
                     image.bytes.len() >= 2 && image.bytes[0] == b'B' && image.bytes[1] == b'M';
 
-                if is_full_bmp {
-                    let decoded =
-                        image::load_from_memory_with_format(&image.bytes, image::ImageFormat::Bmp)
-                            .context("Failed to decode BMP clipboard image")?;
-                    decoded
-                        .save_with_format(&path, image::ImageFormat::Png)
-                        .context("Failed to encode BMP as PNG")?;
+                let bmp_bytes = if is_full_bmp {
+                    image.bytes.clone()
                 } else {
-                    let rgba = dib_to_rgba(&image.bytes, image.width, image.height)
-                        .context("Failed to convert raw DIB to RGBA")?;
-                    let rgba_image = image::RgbaImage::from_raw(image.width, image.height, rgba)
-                        .context("Failed to create RGBA image from DIB")?;
-                    rgba_image
-                        .save_with_format(&path, image::ImageFormat::Png)
-                        .context("Failed to encode DIB as PNG")?;
-                }
+                    dib_to_bmp(&image.bytes).context("Failed to construct BMP from DIB")?
+                };
+
+                let decoded =
+                    image::load_from_memory_with_format(&bmp_bytes, image::ImageFormat::Bmp)
+                        .context("Failed to decode DIB clipboard image as BMP")?;
+                decoded
+                    .save_with_format(&path, image::ImageFormat::Png)
+                    .context("Failed to encode DIB as PNG")?;
             }
             ImageFormat::Tiff | ImageFormat::Jpeg => {
                 // Decode from source format and re-encode as PNG
