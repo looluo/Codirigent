@@ -193,6 +193,18 @@ impl ClaudeSessionReader {
         pid: Option<u32>,
         max_age: Duration,
     ) -> Option<ClaudeSessionStatus> {
+        // Fast path: if we have a recently-validated cached JSONL file for this
+        // working directory, skip the expensive find_session_dir() + find_jsonl_for_pid()
+        // directory scanning entirely and go straight to status reading.
+        let working_dir_key = self.path_lookup_key_cached(working_dir);
+        if let Some(cached) = self.session_file_cache.get(&working_dir_key) {
+            if cached.validated_at.elapsed() < Duration::from_secs(5) {
+                let jsonl_path = cached.path.clone();
+                return self.read_status_from_path(jsonl_path, working_dir, max_age);
+            }
+        }
+
+        // Slow path: full directory scan + file matching (repopulates cache)
         let Some(session_dir) = self.find_session_dir(working_dir) else {
             debug!(?working_dir, "No Claude session dir found");
             return None;
@@ -203,6 +215,19 @@ impl ClaudeSessionReader {
             return None;
         };
 
+        self.cache_session_file(working_dir, &jsonl_path);
+        self.read_status_from_path(jsonl_path, working_dir, max_age)
+    }
+
+    /// Read and determine status from a resolved JSONL file path.
+    ///
+    /// Shared by both the fast path (cached file) and slow path (freshly resolved).
+    fn read_status_from_path(
+        &mut self,
+        jsonl_path: PathBuf,
+        working_dir: &Path,
+        max_age: Duration,
+    ) -> Option<ClaudeSessionStatus> {
         if !is_file_recent(&jsonl_path, max_age) {
             self.clear_cached_session_file_for_working_dir(working_dir);
             debug!(
@@ -212,8 +237,6 @@ impl ClaudeSessionReader {
             );
             return None;
         }
-
-        self.cache_session_file(working_dir, &jsonl_path);
 
         // Check if we already have a cached status for this file at the same mtime.
         // Avoids re-reading 512KB and re-parsing JSON every second when the file
