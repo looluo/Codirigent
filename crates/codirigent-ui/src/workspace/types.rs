@@ -197,6 +197,14 @@ pub(super) struct PollingState {
     pub last_ui_sync: Instant,
     /// Last time clipboard was checked for changes (time-based, ~1/second).
     pub last_clipboard_check: Instant,
+    /// Whether a background git refresh is currently in-flight.
+    pub git_refresh_in_flight: bool,
+    /// Whether a background JSONL status check is currently in-flight.
+    pub jsonl_check_in_flight: bool,
+    /// Whether a background file tree rebuild is currently in-flight.
+    pub file_tree_rebuild_in_flight: bool,
+    /// Whether a background clipboard image save is currently in-flight.
+    pub clipboard_load_in_flight: bool,
 }
 
 impl PollingState {
@@ -211,6 +219,10 @@ impl PollingState {
             pending_enters: HashMap::new(),
             last_ui_sync: Instant::now() - std::time::Duration::from_millis(200),
             last_clipboard_check: Instant::now(),
+            git_refresh_in_flight: false,
+            jsonl_check_in_flight: false,
+            file_tree_rebuild_in_flight: false,
+            clipboard_load_in_flight: false,
         }
     }
 }

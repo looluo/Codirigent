@@ -80,14 +80,153 @@ impl WorkspaceView {
             }
         }
 
-        // Decide once whether to run JSONL checks this cycle (throttled to ~1/3 seconds)
-        let has_any_reader = self.cli_readers.claude.is_some()
-            || self.cli_readers.codex.is_some()
-            || self.cli_readers.gemini.is_some();
-        let check_jsonl =
-            has_any_reader && self.polling.last_jsonl_check.elapsed() >= Duration::from_secs(3);
-        if check_jsonl {
+        // Spawn background JSONL check if due (throttled to ~3 seconds, non-overlapping)
+        let has_any_reader = self
+            .cli_readers
+            .lock()
+            .map(|r| r.claude.is_some() || r.codex.is_some() || r.gemini.is_some())
+            .unwrap_or(false);
+        if has_any_reader
+            && self.polling.last_jsonl_check.elapsed() >= Duration::from_secs(3)
+            && !self.polling.jsonl_check_in_flight
+        {
             self.polling.last_jsonl_check = Instant::now();
+            self.polling.jsonl_check_in_flight = true;
+
+            // Collect inputs for background JSONL check
+            let jsonl_inputs: Vec<(
+                SessionId,
+                std::path::PathBuf,
+                Option<u32>,
+                codirigent_core::CliType,
+                SessionStatus, // current status for transition detection
+            )> = self
+                .workspace
+                .sessions()
+                .iter()
+                .map(|s| {
+                    let cli_type = self.clipboard.clipboard_service.get_session_cli_type(s.id);
+                    let child_pid =
+                        self.with_session_manager(|manager| manager.get_child_pid(s.id));
+                    (
+                        s.id,
+                        s.working_directory.clone(),
+                        child_pid,
+                        cli_type,
+                        s.status,
+                    )
+                })
+                .collect();
+
+            let cli_readers = self.cli_readers.clone();
+            let event_bus = self.event_bus.clone();
+            let max_age = Self::GENERIC_SHELL_JSONL_MAX_AGE;
+
+            cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+                // Background: perform JSONL reads (the expensive I/O)
+                let results = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let mut out: Vec<(SessionId, Option<(SessionStatus, Option<String>)>)> =
+                            Vec::new();
+                        if let Ok(mut readers) = cli_readers.lock() {
+                            for (session_id, working_dir, child_pid, cli_type, _current_status) in
+                                &jsonl_inputs
+                            {
+                                let cli_status: Option<CliSessionStatus> = match cli_type {
+                                    codirigent_core::CliType::ClaudeCode => {
+                                        readers.claude.as_mut().and_then(|r| {
+                                            r.get_status_if_recent(working_dir, *child_pid, max_age)
+                                        })
+                                    }
+                                    codirigent_core::CliType::CodexCli => {
+                                        readers.codex.as_mut().and_then(|r| {
+                                            r.get_status_if_recent(working_dir, *child_pid, max_age)
+                                        })
+                                    }
+                                    codirigent_core::CliType::GeminiCli => {
+                                        readers.gemini.as_mut().and_then(|r| {
+                                            r.get_status_if_recent(working_dir, *child_pid, max_age)
+                                        })
+                                    }
+                                    codirigent_core::CliType::GenericShell => None,
+                                };
+                                let resolved = cli_status.and_then(|s| s.to_session_status());
+                                out.push((*session_id, resolved));
+                            }
+                        }
+                        (out, jsonl_inputs)
+                    })
+                    .await;
+
+                // Marshal results back to UI thread
+                let _ = this.update(cx, |this, cx| {
+                    this.polling.jsonl_check_in_flight = false;
+                    let mut changed = false;
+                    let (results, inputs) = results;
+                    for (session_id, cli_status) in &results {
+                        if let Some((new_status, tool_name)) = cli_status {
+                            // Cache the JSONL result
+                            if let Ok(mut readers) = this.cli_readers.lock() {
+                                readers.cached_status.insert(
+                                    *session_id,
+                                    CachedCliStatus {
+                                        status: *new_status,
+                                        tool_name: tool_name.clone(),
+                                        seen_at: Instant::now(),
+                                    },
+                                );
+                            }
+                            // Fire AttentionRequired on transition
+                            if *new_status == SessionStatus::NeedsAttention {
+                                let current_status = inputs
+                                    .iter()
+                                    .find(|(id, ..)| id == session_id)
+                                    .map(|(_, _, _, _, s)| *s);
+                                if current_status != Some(SessionStatus::NeedsAttention) {
+                                    event_bus.publish(CodirigentEvent::AttentionRequired {
+                                        session_id: *session_id,
+                                        detail: tool_name.clone(),
+                                    });
+                                }
+                            }
+                            changed = true;
+                        } else {
+                            // No JSONL result — check if detector says idle and clear stale cache
+                            let detector_idle = this.with_detector(|detector| {
+                                matches!(
+                                    detector.get_status(*session_id),
+                                    Some(SessionStatus::Idle) | None
+                                )
+                            });
+                            if detector_idle {
+                                // Check if cache entry is actually stale before removing
+                                let is_stale = this
+                                    .cli_readers
+                                    .lock()
+                                    .ok()
+                                    .and_then(|r| {
+                                        r.cached_status.get(session_id).map(|c| {
+                                            c.seen_at.elapsed()
+                                                > Self::GENERIC_SHELL_JSONL_CACHE_TTL
+                                        })
+                                    })
+                                    .unwrap_or(false);
+                                if is_stale {
+                                    if let Ok(mut readers) = this.cli_readers.lock() {
+                                        readers.cached_status.remove(session_id);
+                                    }
+                                    changed = true;
+                                }
+                            }
+                        }
+                    }
+                    if changed {
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
         }
 
         for session_id in session_ids {
@@ -167,7 +306,7 @@ impl WorkspaceView {
                         // Uses sync_file_tree_to_focused_session which guards against
                         // same-root refreshes (avoids redundant file tree rebuilds).
                         if self.workspace.focused_session_id() == Some(session_id) {
-                            self.sync_file_tree_to_focused_session();
+                            self.sync_file_tree_to_focused_session(cx);
                         }
                     }
                 }
@@ -181,104 +320,9 @@ impl WorkspaceView {
                 )
             });
 
-            // Overlay CLI-specific session status (throttled to ~1/second)
-            if check_jsonl {
-                if let Some(session) = self.workspace.session(session_id) {
-                    let working_dir = session.working_directory.clone();
-                    let cli_type = self
-                        .clipboard
-                        .clipboard_service
-                        .get_session_cli_type(session_id);
-
-                    // Get child PID for PID-based JSONL matching
-                    let child_pid =
-                        self.with_session_manager(|manager| manager.get_child_pid(session_id));
-
-                    let mut detected_cli_type = cli_type;
-                    let cli_status: Option<CliSessionStatus> = match cli_type {
-                        codirigent_core::CliType::ClaudeCode => {
-                            self.cli_readers.claude.as_mut().and_then(|r| {
-                                r.get_status_if_recent(
-                                    &working_dir,
-                                    child_pid,
-                                    Self::GENERIC_SHELL_JSONL_MAX_AGE,
-                                )
-                            })
-                        }
-                        codirigent_core::CliType::CodexCli => {
-                            self.cli_readers.codex.as_mut().and_then(|r| {
-                                r.get_status_if_recent(
-                                    &working_dir,
-                                    child_pid,
-                                    Self::GENERIC_SHELL_JSONL_MAX_AGE,
-                                )
-                            })
-                        }
-                        codirigent_core::CliType::GeminiCli => {
-                            self.cli_readers.gemini.as_mut().and_then(|r| {
-                                r.get_status_if_recent(
-                                    &working_dir,
-                                    child_pid,
-                                    Self::GENERIC_SHELL_JSONL_MAX_AGE,
-                                )
-                            })
-                        }
-                        codirigent_core::CliType::GenericShell => {
-                            // No JSONL probing for plain shells. CLI detection
-                            // happens via output banner matching (detect_cli_from_output)
-                            // which sets cli_type when the user actually launches a CLI.
-                            // This avoids scanning directories with 100s of JSONL files
-                            // every second for sessions that are just shells.
-                            None
-                        }
-                    };
-
-                    let cli_status = cli_status.and_then(|status| status.to_session_status());
-                    debug!(?session_id, ?cli_status, "JSONL reader result");
-
-                    if let Some((new_status, tool_name)) = cli_status.clone() {
-                        // Cache the JSONL result so it persists between checks
-                        self.cli_readers.cached_status.insert(
-                            session_id,
-                            CachedCliStatus {
-                                status: new_status,
-                                tool_name: tool_name.clone(),
-                                seen_at: Instant::now(),
-                            },
-                        );
-
-                        if new_status == SessionStatus::NeedsAttention {
-                            // Only fire event + notification on transition, not every poll
-                            if session.status != SessionStatus::NeedsAttention {
-                                self.event_bus.publish(CodirigentEvent::AttentionRequired {
-                                    session_id,
-                                    detail: tool_name.clone(),
-                                });
-                            }
-                        }
-                        status = Some(new_status);
-                    } else {
-                        if let Some((cached_status, _tool_name)) =
-                            self.get_recent_cached_cli_status(session_id)
-                        {
-                            // Keep the previous JSONL status during transient parse/IO misses.
-                            status = Some(cached_status);
-                        } else if matches!(status, Some(SessionStatus::Idle) | None) {
-                            // If the detector says the session is idle, clear stale
-                            // JSONL overlay cache so old waiting flags don't pin.
-                            debug!(
-                                ?session_id,
-                                detected_cli_type = ?detected_cli_type,
-                                "JSONL status probe stale/missing; cache cleared"
-                            );
-                            self.cli_readers.cached_status.remove(&session_id);
-                        }
-                    }
-                }
-            } else if let Some((cached_status, _tool_name)) =
-                self.get_recent_cached_cli_status(session_id)
+            // Overlay cached JSONL status (background task updates the cache)
+            if let Some((cached_status, _tool_name)) = self.get_recent_cached_cli_status(session_id)
             {
-                // Non-JSONL cycle: reuse cached JSONL status instead of detector.
                 status = Some(cached_status);
             }
 
@@ -435,67 +479,101 @@ impl WorkspaceView {
             manager.assignment_mut().clear_expired(300);
         }
 
-        // Refresh git status every 3 seconds
-        if self.polling.last_git_refresh.elapsed() >= Duration::from_secs(3) {
+        // Refresh git status every 3 seconds (on background thread)
+        if self.polling.last_git_refresh.elapsed() >= Duration::from_secs(3)
+            && !self.polling.git_refresh_in_flight
+        {
             self.polling.last_git_refresh = Instant::now();
+            self.polling.git_refresh_in_flight = true;
             let session_ids: Vec<SessionId> =
                 self.workspace.sessions().iter().map(|s| s.id).collect();
+            let session_manager = self.session_manager.clone();
 
-            // Collect git info from manager
-            let git_infos = self.with_session_manager(|manager| {
-                session_ids
-                    .iter()
-                    .filter_map(|id| manager.refresh_git_status(*id).map(|info| (*id, info)))
-                    .collect::<Vec<_>>()
-            });
+            cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+                let git_infos = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let mgr = session_manager.lock().expect("session manager poisoned");
+                        session_ids
+                            .iter()
+                            .filter_map(|id| mgr.refresh_git_status(*id).map(|info| (*id, info)))
+                            .collect::<Vec<_>>()
+                    })
+                    .await;
 
-            // Update terminal headers with git info (only mark dirty on change)
-            let mut git_changed = false;
-            for (id, git_info) in &git_infos {
-                if let Some(header) = self.terminal_headers.get_mut(id) {
-                    if header.git_branch.as_deref() != Some(git_info.branch.as_str())
-                        || header.git_dirty_count != Some(git_info.dirty_count)
-                    {
-                        header.git_branch = Some(git_info.branch.clone());
-                        header.git_dirty_count = Some(git_info.dirty_count);
-                        any_dirty = true;
-                        git_changed = true;
+                let _ = this.update(cx, |this, cx| {
+                    this.polling.git_refresh_in_flight = false;
+                    let mut git_changed = false;
+                    for (id, git_info) in &git_infos {
+                        if let Some(header) = this.terminal_headers.get_mut(id) {
+                            if header.git_branch.as_deref() != Some(git_info.branch.as_str())
+                                || header.git_dirty_count != Some(git_info.dirty_count)
+                            {
+                                header.git_branch = Some(git_info.branch.clone());
+                                header.git_dirty_count = Some(git_info.dirty_count);
+                                git_changed = true;
+                            }
+                        }
                     }
-                }
-            }
-            // When git info changed, update workspace sessions directly from
-            // the already-collected git_infos instead of cloning all sessions
-            // from the manager (avoids lock + full clone every 3 seconds).
-            if git_changed {
-                for (id, git_info) in &git_infos {
-                    if let Some(session) = self.workspace.session_mut(*id) {
-                        session.git_info = Some(git_info.clone());
+                    if git_changed {
+                        for (id, git_info) in &git_infos {
+                            if let Some(session) = this.workspace.session_mut(*id) {
+                                session.git_info = Some(git_info.clone());
+                            }
+                        }
+                        cx.notify();
                     }
-                }
-            }
+                });
+            })
+            .detach();
         }
 
         // Clipboard preview: show for 4 seconds whenever clipboard content changes and has an image.
         // Uses platform clipboard sequence number (has_changed) to detect new content.
-        if self.polling.last_clipboard_check.elapsed() >= Duration::from_secs(1) {
+        // Clipboard read stays on UI thread (Windows requirement); image save + thumbnail
+        // generation run on a background thread to avoid blocking rendering.
+        if self.polling.last_clipboard_check.elapsed() >= Duration::from_secs(1)
+            && !self.polling.clipboard_load_in_flight
+        {
             self.polling.last_clipboard_check = Instant::now();
             let changed = self.clipboard.smart_clipboard.has_changed();
             if changed && self.clipboard.smart_clipboard.has_image() {
-                // Clipboard changed and has an image — show preview
+                // Read clipboard on UI thread (platform requirement on Windows)
                 if let Ok(content) = self.clipboard.smart_clipboard.read_content() {
-                    if let codirigent_core::ClipboardContent::Image(ref image_data) = content {
-                        let path = self
-                            .clipboard
-                            .clipboard_service
-                            .save_image(image_data)
-                            .unwrap_or_default();
-                        let file_size = image_data.bytes.len() as u64;
-                        let preview = crate::clipboard_preview::ClipboardPreview::create_preview(
-                            image_data, path, file_size,
-                        );
-                        self.clipboard.clipboard_preview.show(preview);
-                        self.clipboard.clipboard_preview_shown_at = Some(std::time::Instant::now());
-                        any_dirty = true;
+                    if let codirigent_core::ClipboardContent::Image(image_data) = content {
+                        self.polling.clipboard_load_in_flight = true;
+                        let temp_dir = self.clipboard.clipboard_service.temp_dir().to_path_buf();
+
+                        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+                            // Background: save image to disk + generate thumbnail
+                            let result =
+                                cx.background_executor()
+                                    .spawn(async move {
+                                        // Ensure temp dir exists
+                                        let _ = std::fs::create_dir_all(&temp_dir);
+                                        // Build a temporary service just for saving
+                                        let svc = DefaultClipboardService::new(
+                                            temp_dir.parent().unwrap_or(&temp_dir).to_path_buf(),
+                                        );
+                                        let path = svc.save_image(&image_data).unwrap_or_default();
+                                        let file_size = image_data.bytes.len() as u64;
+                                        let preview =
+                                        crate::clipboard_preview::ClipboardPreview::create_preview(
+                                            &image_data, path, file_size,
+                                        );
+                                        preview
+                                    })
+                                    .await;
+
+                            let _ = this.update(cx, |this, cx| {
+                                this.polling.clipboard_load_in_flight = false;
+                                this.clipboard.clipboard_preview.show(result);
+                                this.clipboard.clipboard_preview_shown_at =
+                                    Some(std::time::Instant::now());
+                                cx.notify();
+                            });
+                        })
+                        .detach();
                     }
                 }
             }
@@ -524,12 +602,11 @@ impl WorkspaceView {
         &mut self,
         session_id: SessionId,
     ) -> Option<(SessionStatus, Option<String>)> {
-        let Some(cached_status) = self.cli_readers.cached_status.get(&session_id) else {
-            return None;
-        };
+        let mut readers = self.cli_readers.lock().ok()?;
+        let cached_status = readers.cached_status.get(&session_id)?;
 
         if cached_status.seen_at.elapsed() > Self::GENERIC_SHELL_JSONL_CACHE_TTL {
-            self.cli_readers.cached_status.remove(&session_id);
+            readers.cached_status.remove(&session_id);
             return None;
         }
 

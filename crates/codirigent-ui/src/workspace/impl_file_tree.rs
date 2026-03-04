@@ -63,33 +63,53 @@ impl WorkspaceView {
     }
 
     /// Set the current project root and update dependent UI.
-    pub(super) fn set_project_root(&mut self, path: PathBuf) {
+    ///
+    /// Sets the root immediately (cheap) and spawns the expensive directory
+    /// walk on a background thread to avoid blocking the UI.
+    pub(super) fn set_project_root(&mut self, path: PathBuf, cx: &mut gpui::Context<Self>) {
         self.project.project_root = Some(path.clone());
         self.project.file_tree.set_root(path.clone());
 
-        match FileTree::new(path.clone()) {
-            Ok(tree) => {
-                self.project.file_tree_model = Some(tree);
-            }
-            Err(e) => {
-                warn!("Failed to initialize file tree for {:?}: {}", path, e);
-                self.project.file_tree_model = None;
-            }
-        }
-
-        self.refresh_file_tree_panel();
-
+        // Worktree manager init is cheap (just reads .git), do it synchronously
         self.project.worktree_manager = codirigent_session::WorktreeManager::new(&path)
             .ok()
             .map(|manager| Arc::new(Mutex::new(manager)));
         self.refresh_worktree_panel();
+
+        // Spawn the expensive FileTree::new (recursive dir walk) on background
+        if !self.polling.file_tree_rebuild_in_flight {
+            self.polling.file_tree_rebuild_in_flight = true;
+            let bg_path = path;
+            cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+                let tree_result = cx
+                    .background_executor()
+                    .spawn(async move { FileTree::new(bg_path.clone()) })
+                    .await;
+
+                let _ = this.update(cx, |this, cx| {
+                    this.polling.file_tree_rebuild_in_flight = false;
+                    match tree_result {
+                        Ok(tree) => {
+                            this.project.file_tree_model = Some(tree);
+                        }
+                        Err(e) => {
+                            warn!("Failed to initialize file tree: {}", e);
+                            this.project.file_tree_model = None;
+                        }
+                    }
+                    this.refresh_file_tree_panel();
+                    cx.notify();
+                });
+            })
+            .detach();
+        }
     }
 
     /// Sync the file tree panel to show the focused session's working directory.
     ///
     /// Called when focus switches between sessions so the file tree always
     /// reflects the active session's CWD.
-    pub(super) fn sync_file_tree_to_focused_session(&mut self) {
+    pub(super) fn sync_file_tree_to_focused_session(&mut self, cx: &mut gpui::Context<Self>) {
         let cwd = self
             .workspace
             .focused_session()
@@ -97,7 +117,7 @@ impl WorkspaceView {
         if let Some(cwd) = cwd {
             // Only update if the directory actually differs from the current root
             if self.project.project_root.as_ref() != Some(&cwd) {
-                self.set_project_root(cwd);
+                self.set_project_root(cwd, cx);
             }
         }
     }

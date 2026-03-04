@@ -149,7 +149,7 @@ impl WorkspaceView {
             self.terminal_headers.insert(session_id, header);
 
             // Auto-select the newly created session for natural UX
-            self.select_session(session_id);
+            self.select_session_with_cx(session_id, cx);
 
             if let Some(slot) = target_slot {
                 info!(%name, ?slot, "Created new session in slot with PTY");
@@ -314,7 +314,7 @@ impl WorkspaceView {
 
         // Select the first restored session
         if let Some(first_id) = self.workspace.sessions().first().map(|s| s.id) {
-            self.select_session(first_id);
+            self.select_session_with_cx(first_id, cx);
         }
 
         info!("Session restoration complete");
@@ -345,7 +345,9 @@ impl WorkspaceView {
                 svc.end_compaction(id);
             }
             self.cache.compaction_start_times.remove(&id);
-            self.cli_readers.cached_status.remove(&id);
+            if let Ok(mut readers) = self.cli_readers.lock() {
+                readers.cached_status.remove(&id);
+            }
 
             // Remove the terminal header for this session (from feature branch)
             self.terminal_headers.remove(&id);

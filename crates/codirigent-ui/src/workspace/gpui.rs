@@ -119,8 +119,8 @@ pub struct WorkspaceView {
     pub(super) selection: SelectionState,
     /// Adaptive polling and timing state (output polling, resize throttle, git refresh).
     pub(super) polling: PollingState,
-    /// CLI session readers and process-tree detector.
-    pub(super) cli_readers: CliReaders,
+    /// CLI session readers and process-tree detector (shared with background tasks).
+    pub(super) cli_readers: Arc<Mutex<CliReaders>>,
     /// Cached detection results and memoized state.
     pub(super) cache: CacheState,
 }
@@ -218,7 +218,7 @@ impl WorkspaceView {
             modals: ModalState::new(),
             selection: SelectionState::new(),
             polling: PollingState::new(),
-            cli_readers: CliReaders::new(),
+            cli_readers: Arc::new(Mutex::new(CliReaders::new())),
             cache: CacheState::new(),
         };
 
@@ -465,7 +465,7 @@ impl WorkspaceView {
                 self.event_bus
                     .publish(CodirigentEvent::SessionFocused { id });
             }
-            self.sync_file_tree_to_focused_session();
+            self.sync_file_tree_to_focused_session(cx);
             cx.notify();
         }
     }
@@ -672,11 +672,18 @@ impl WorkspaceView {
     }
 
     /// Select a session (updates drawer context and grid focus).
+    pub(super) fn select_session_with_cx(&mut self, session_id: SessionId, cx: &mut Context<Self>) {
+        self.selection.selected_session_id = Some(session_id);
+        self.drawer.set_selected_session(Some(session_id));
+        self.workspace.focus_session(session_id);
+        self.sync_file_tree_to_focused_session(cx);
+    }
+
+    /// Select a session without GPUI context (skips background file tree rebuild).
     pub(super) fn select_session(&mut self, session_id: SessionId) {
         self.selection.selected_session_id = Some(session_id);
         self.drawer.set_selected_session(Some(session_id));
         self.workspace.focus_session(session_id);
-        self.sync_file_tree_to_focused_session();
     }
 
     /// Process icon rail events (drawer toggling, settings).

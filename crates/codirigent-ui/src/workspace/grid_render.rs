@@ -617,7 +617,7 @@ impl WorkspaceView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, _, _, cx| {
-                    this.select_session(session_id);
+                    this.select_session_with_cx(session_id, cx);
                     cx.notify();
                 }),
             );
