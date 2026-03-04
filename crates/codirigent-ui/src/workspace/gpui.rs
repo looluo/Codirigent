@@ -1295,8 +1295,7 @@ impl WorkspaceView {
                             .flex()
                             .flex_col()
                             .gap_3()
-                            .min_w(px(320.0))
-                            .max_w(px(400.0))
+                            .w(px(380.0))
                             .child(
                                 div()
                                     .text_base()
