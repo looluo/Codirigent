@@ -22,6 +22,23 @@ const DEFAULT_PTY_ROWS: u16 = 24;
 /// Default terminal width in columns.
 const DEFAULT_PTY_COLS: u16 = 80;
 
+/// Canonicalize a path and strip the `\\?\` extended-length prefix on Windows.
+///
+/// `std::fs::canonicalize` on Windows returns UNC paths like `\\?\C:\Users\...`
+/// which cause PowerShell to display `Microsoft.PowerShell.Core\FileSystem::\\?\C:\...`
+/// in its prompt instead of the normal `C:\Users\...` form.
+fn normalize_path(path: &std::path::Path) -> PathBuf {
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    #[cfg(windows)]
+    {
+        let s = canonical.to_string_lossy();
+        if let Some(stripped) = s.strip_prefix(r"\\?\") {
+            return PathBuf::from(stripped);
+        }
+    }
+    canonical
+}
+
 /// Default implementation of [`SessionManager`].
 ///
 /// Manages terminal sessions including PTY spawning, I/O handling,
@@ -190,9 +207,9 @@ impl DefaultSessionManager {
     ///
     /// Returns `true` if the directory actually changed.
     pub fn update_working_directory(&self, id: SessionId, new_dir: PathBuf) -> bool {
-        // Canonicalize the new path so forward/backslash differences on Windows
-        // don't cause spurious "changed" detections.
-        let new_dir = std::fs::canonicalize(&new_dir).unwrap_or(new_dir);
+        // Normalize the new path: canonicalize + strip \\?\ prefix on Windows
+        // so PowerShell shows normal C:\... paths instead of UNC paths in its prompt.
+        let new_dir = normalize_path(&new_dir);
 
         let old_dir = {
             let mut sessions = self.lock_sessions();
@@ -201,9 +218,8 @@ impl DefaultSessionManager {
                 None => return false,
             };
 
-            // Also canonicalize the stored path for comparison
-            let current = std::fs::canonicalize(&state.session.working_directory)
-                .unwrap_or_else(|_| state.session.working_directory.clone());
+            // Normalize stored path for comparison (same stripping as new_dir above)
+            let current = normalize_path(&state.session.working_directory);
             if current == new_dir {
                 return false;
             }
@@ -307,6 +323,10 @@ impl SessionManager for DefaultSessionManager {
         shell: Option<String>,
     ) -> Result<SessionId> {
         let id = self.next_session_id();
+
+        // Normalize before validation and PTY spawn so PowerShell sees a clean
+        // C:\... path rather than the \\?\ extended-length form.
+        let working_dir = normalize_path(&working_dir);
         info!(%id, %name, ?working_dir, ?shell, "Creating session");
 
         // Validate working directory exists and is a directory
