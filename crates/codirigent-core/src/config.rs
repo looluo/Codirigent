@@ -411,6 +411,9 @@ impl Default for AppearanceSettings {
 /// Notification settings.
 ///
 /// Controls when and how notifications are displayed.
+/// Per-type toggles let users disable specific notification categories.
+/// The cooldown prevents notification spam by suppressing repeated
+/// notifications for the same session within a time window.
 ///
 /// # Example
 ///
@@ -420,13 +423,42 @@ impl Default for AppearanceSettings {
 /// let settings = NotificationSettings::default();
 /// assert!(settings.desktop);
 /// assert!(!settings.sound);
+/// assert!(settings.input_required);
+/// assert_eq!(settings.cooldown_seconds, 30);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct NotificationSettings {
-    /// Enable desktop notifications.
+    /// Master toggle — disables all desktop notifications when false.
     pub desktop: bool,
-    /// Enable sound notifications.
+    /// Enable sound with notifications.
     pub sound: bool,
+    /// Enable "input required" notifications.
+    #[serde(default = "default_true")]
+    pub input_required: bool,
+    /// Enable "task completed" notifications.
+    #[serde(default = "default_true")]
+    pub task_completed: bool,
+    /// Enable "task failed" notifications.
+    #[serde(default = "default_true")]
+    pub task_failed: bool,
+    /// Enable "permission prompt" notifications.
+    #[serde(default = "default_true")]
+    pub permission_prompt: bool,
+    /// Enable "error" notifications.
+    #[serde(default = "default_true")]
+    pub error: bool,
+    /// Cooldown in seconds between notifications for the same session.
+    /// 0 = no cooldown. Default: 30.
+    #[serde(default = "default_cooldown")]
+    pub cooldown_seconds: u64,
+}
+
+fn default_true() -> bool {
+    true
+}
+
+fn default_cooldown() -> u64 {
+    30
 }
 
 impl Default for NotificationSettings {
@@ -434,6 +466,12 @@ impl Default for NotificationSettings {
         Self {
             desktop: true,
             sound: false,
+            input_required: true,
+            task_completed: true,
+            task_failed: true,
+            permission_prompt: true,
+            error: true,
+            cooldown_seconds: 30,
         }
     }
 }
@@ -816,11 +854,61 @@ mod tests {
         let settings = NotificationSettings {
             desktop: false,
             sound: true,
+            ..Default::default()
         };
         let json = serde_json::to_string(&settings).unwrap();
         let parsed: NotificationSettings = serde_json::from_str(&json).unwrap();
         assert!(!parsed.desktop);
         assert!(parsed.sound);
+    }
+
+    #[test]
+    fn test_notification_settings_new_fields_default() {
+        let settings = NotificationSettings::default();
+        assert!(settings.desktop);
+        assert!(!settings.sound);
+        assert!(settings.input_required);
+        assert!(settings.task_completed);
+        assert!(settings.task_failed);
+        assert!(settings.permission_prompt);
+        assert!(settings.error);
+        assert_eq!(settings.cooldown_seconds, 30);
+    }
+
+    #[test]
+    fn test_notification_settings_new_fields_serialization() {
+        let settings = NotificationSettings {
+            desktop: true,
+            sound: false,
+            input_required: false,
+            task_completed: true,
+            task_failed: false,
+            permission_prompt: true,
+            error: false,
+            cooldown_seconds: 60,
+        };
+        let json = serde_json::to_string(&settings).expect("serialize");
+        let parsed: NotificationSettings = serde_json::from_str(&json).expect("deserialize");
+        assert!(!parsed.input_required);
+        assert!(parsed.task_completed);
+        assert!(!parsed.task_failed);
+        assert!(parsed.permission_prompt);
+        assert!(!parsed.error);
+        assert_eq!(parsed.cooldown_seconds, 60);
+    }
+
+    #[test]
+    fn test_notification_settings_backward_compatible_deserialization() {
+        let json = r#"{"desktop": true, "sound": false}"#;
+        let parsed: NotificationSettings = serde_json::from_str(json).expect("deserialize");
+        assert!(parsed.desktop);
+        assert!(!parsed.sound);
+        assert!(parsed.input_required);
+        assert!(parsed.task_completed);
+        assert!(parsed.task_failed);
+        assert!(parsed.permission_prompt);
+        assert!(parsed.error);
+        assert_eq!(parsed.cooldown_seconds, 30);
     }
 
     // ModuleSettings tests

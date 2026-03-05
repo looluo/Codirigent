@@ -90,6 +90,7 @@ pub mod platform;
 pub use detector::{DetectorConfig, InputDetector};
 pub use notification::{
     notify_error, notify_input_required, notify_task_completed, send_notification,
+    NotificationManager, NotificationType,
 };
 pub use patterns::{DEFAULT_PATTERNS, DEFAULT_RECENT_LINES_TO_CHECK};
 pub use platform::{NativeMonitor, PlatformMonitor, ProcessInfo, ProcessState};
