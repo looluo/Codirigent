@@ -299,6 +299,12 @@
       display: grid; grid-template-columns: 1fr 1fr; gap: 80px; align-items: start;
     }
     .perf-text p { margin-top: 12px; font-size: 1rem; }
+    .perf-rust-badge {
+      display: inline-flex; align-items: center; gap: 8px;
+      margin-bottom: 16px;
+      font-family: var(--font-mono); font-size: 0.8rem;
+      color: #CE422B; font-weight: 500;
+    }
     .perf-bars { display: flex; flex-direction: column; gap: 24px; }
     .perf-row {}
     .perf-row-top {
@@ -662,6 +668,13 @@
         <div class="perf-layout">
           <div class="perf-text reveal">
             <div class="section-label">Performance</div>
+            <div class="perf-rust-badge">
+              <!-- Official Rust gear logo -->
+              <svg width="32" height="32" viewBox="0 0 144 144" fill="#CE422B" xmlns="http://www.w3.org/2000/svg" aria-label="Rust">
+                <path d="M71.9 10.37a5.2 5.2 0 0 0-1.97 10.09l.35.14L69 23.5H61.3a1.6 1.6 0 0 0-1.6 1.6v3.2h-2.4a1.6 1.6 0 0 0-1.6 1.6v12.8a1.6 1.6 0 0 0 1.6 1.6h2.4v3.2a1.6 1.6 0 0 0 1.6 1.6h21.5a1.6 1.6 0 0 0 1.6-1.6v-3.2h2.4a1.6 1.6 0 0 0 1.6-1.6V29.9a1.6 1.6 0 0 0-1.6-1.6H84v-3.2a1.6 1.6 0 0 0-1.6-1.6H74.7l-1.32-2.99.35-.14a5.2 5.2 0 0 0-1.84-10.04zM72 24.6a47.4 47.4 0 1 1 0 94.8 47.4 47.4 0 0 1 0-94.8zm34.1 17.7L95.5 53.9a4 4 0 0 0 1.5 5.5l10.3 5.3-4 8-10.5-5.4a4 4 0 0 0-5.4 1.5l-5.9 10.3H70.5L64.6 69a4 4 0 0 0-5.4-1.5l-10.5 5.4-4-8L55 59.4a4 4 0 0 0 1.5-5.5L45.9 42.3a39.4 39.4 0 0 1 60.2 0zM51.6 89l6.1-10.7 10.5 5.4a4 4 0 0 0 5.4-1.5l5.9-10.2h11l5.9 10.2a4 4 0 0 0 5.4 1.5l10.5-5.4 6.1 10.7a39.3 39.3 0 0 1-66.8 0z"/>
+              </svg>
+              <span>Rust</span>
+            </div>
             <h2>Native Rust.<br>No Electron.</h2>
             <p>Built in Rust with GPUI rendering — the same GPU-accelerated framework behind Zed. A fraction of the memory and startup time of Electron-based editors.</p>
           </div>
