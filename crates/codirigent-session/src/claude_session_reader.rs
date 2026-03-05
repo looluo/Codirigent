@@ -25,11 +25,11 @@ pub type ClaudeSessionStatus = CliSessionStatus;
 pub struct ClaudeSessionReader {
     /// Path to ~/.claude
     claude_home: PathBuf,
-    /// Cached session file selection per working directory.
+    /// Cached session file selection per (working_directory, pid).
     ///
-    /// Claude can reuse a project directory across many sessions. Keeping the last
-    /// identified session file avoids re-anchoring to stale history files between
-    /// status polls.
+    /// Claude can reuse a project directory across many sessions. Including the
+    /// PID in the key ensures that two Claude sessions in the same directory
+    /// resolve to different JSONL files.
     session_file_cache: HashMap<String, SessionFileHint>,
     /// Cached parsed status per JSONL file path, keyed by (path, mtime).
     /// Avoids re-reading and re-parsing 512KB of JSONL data every second
@@ -179,7 +179,7 @@ impl ClaudeSessionReader {
     /// `pid` is the Claude Code child PID, used to find the correct JSONL file
     /// via `lsof` when multiple sessions share the same project directory.
     pub fn get_status(&mut self, working_dir: &Path, pid: Option<u32>) -> ClaudeSessionStatus {
-        self.get_status_if_recent(working_dir, pid, Duration::MAX)
+        self.get_status_if_recent(working_dir, pid, Duration::MAX, None)
             .unwrap_or(ClaudeSessionStatus::Unknown)
     }
 
@@ -192,15 +192,15 @@ impl ClaudeSessionReader {
         working_dir: &Path,
         pid: Option<u32>,
         max_age: Duration,
+        session_created_at: Option<i64>,
     ) -> Option<ClaudeSessionStatus> {
         // Fast path: if we have a recently-validated cached JSONL file for this
-        // working directory, skip the expensive find_session_dir() + find_jsonl_for_pid()
-        // directory scanning entirely and go straight to status reading.
-        let working_dir_key = self.path_lookup_key_cached(working_dir);
-        if let Some(cached) = self.session_file_cache.get(&working_dir_key) {
+        // (working_dir, pid) pair, skip the expensive directory scanning.
+        let cache_key = self.cache_key(working_dir, pid);
+        if let Some(cached) = self.session_file_cache.get(&cache_key) {
             if cached.validated_at.elapsed() < Duration::from_secs(10) {
                 let jsonl_path = cached.path.clone();
-                return self.read_status_from_path(jsonl_path, working_dir, max_age);
+                return self.read_status_from_path(jsonl_path, working_dir, pid, max_age);
             }
         }
 
@@ -210,13 +210,15 @@ impl ClaudeSessionReader {
             return None;
         };
 
-        let Some(jsonl_path) = self.find_jsonl_for_pid(&session_dir, working_dir, pid) else {
+        let Some(jsonl_path) =
+            self.find_jsonl_for_pid(&session_dir, working_dir, pid, session_created_at)
+        else {
             debug!(?session_dir, ?pid, "No Claude JSONL file found");
             return None;
         };
 
-        self.cache_session_file(working_dir, &jsonl_path);
-        self.read_status_from_path(jsonl_path, working_dir, max_age)
+        self.cache_session_file(working_dir, pid, &jsonl_path);
+        self.read_status_from_path(jsonl_path, working_dir, pid, max_age)
     }
 
     /// Read and determine status from a resolved JSONL file path.
@@ -226,10 +228,11 @@ impl ClaudeSessionReader {
         &mut self,
         jsonl_path: PathBuf,
         working_dir: &Path,
+        pid: Option<u32>,
         max_age: Duration,
     ) -> Option<ClaudeSessionStatus> {
         if !is_file_recent(&jsonl_path, max_age) {
-            self.clear_cached_session_file_for_working_dir(working_dir);
+            self.clear_cached_session_file(working_dir, pid);
             debug!(
                 ?jsonl_path,
                 ?max_age,
@@ -265,6 +268,39 @@ impl ClaudeSessionReader {
         }
 
         let status = self.determine_status(&entries);
+
+        // Mtime override: only for pending tool_use (auto-approved tools executing).
+        // When stop_reason="tool_use" and the 3s grace period expired, determine_status
+        // returns NeedsAttention with the tool name as detail. If the file was written
+        // within 8s, the tool is likely still executing → override to Working.
+        // Do NOT override: end_turn (detail=None), questions (detail="question"),
+        // or tools that genuinely wait for user interaction.
+        let status = match &status {
+            ClaudeSessionStatus::NeedsAttention {
+                detail: Some(tool_name),
+            } if !Self::is_user_interactive_tool(tool_name) => {
+                if let Some(mtime) = current_mtime {
+                    let recently_written = SystemTime::now()
+                        .duration_since(mtime)
+                        .map_or(false, |elapsed| elapsed < Duration::from_secs(8));
+                    if recently_written {
+                        debug!(
+                            ?jsonl_path,
+                            ?tool_name,
+                            "Overriding tool NeedsAttention → Working (mtime within 8s)"
+                        );
+                        ClaudeSessionStatus::Working
+                    } else {
+                        status
+                    }
+                } else {
+                    status
+                }
+            }
+            _ => status,
+        };
+
+        // Cache with the real mtime (not overridden) so cache invalidates on next file write.
         if let Some(mtime) = current_mtime {
             self.status_cache
                 .insert(jsonl_path, (mtime, status.clone()));
@@ -272,13 +308,23 @@ impl ClaudeSessionReader {
         Some(status)
     }
 
-    fn clear_cached_session_file_for_working_dir(&mut self, working_dir: &Path) {
-        let key = self.path_lookup_key_cached(working_dir);
+    /// Build a cache key that includes the PID to distinguish multiple sessions
+    /// in the same working directory.
+    fn cache_key(&mut self, working_dir: &Path, pid: Option<u32>) -> String {
+        let dir_key = self.path_lookup_key_cached(working_dir);
+        match pid {
+            Some(pid) => format!("{dir_key}:{pid}"),
+            None => dir_key,
+        }
+    }
+
+    fn clear_cached_session_file(&mut self, working_dir: &Path, pid: Option<u32>) {
+        let key = self.cache_key(working_dir, pid);
         self.session_file_cache.remove(&key);
     }
 
-    fn cache_session_file(&mut self, working_dir: &Path, jsonl_path: &Path) {
-        let key = self.path_lookup_key_cached(working_dir);
+    fn cache_session_file(&mut self, working_dir: &Path, pid: Option<u32>, jsonl_path: &Path) {
+        let key = self.cache_key(working_dir, pid);
         self.session_file_cache.insert(
             key,
             SessionFileHint {
@@ -287,6 +333,20 @@ impl ClaudeSessionReader {
                 validated_at: Instant::now(),
             },
         );
+    }
+
+    /// Collect JSONL file paths already assigned to other sessions in the same
+    /// working directory. Used to avoid two sessions resolving to the same file.
+    fn files_assigned_to_other_sessions(
+        &self,
+        working_dir_key: &str,
+        own_key: &str,
+    ) -> HashSet<PathBuf> {
+        self.session_file_cache
+            .iter()
+            .filter(|(k, _)| *k != own_key && k.starts_with(working_dir_key))
+            .map(|(_, hint)| hint.path.clone())
+            .collect()
     }
 
     /// Find the Claude Code session directory for a given working directory.
@@ -299,9 +359,9 @@ impl ClaudeSessionReader {
             return None;
         }
 
-        let mut candidates = Self::build_project_dir_candidates(working_dir);
-        // Most recent first gives better hit rate when multiple variants exist.
-        candidates.reverse();
+        // Candidates are generated raw-path-first (what Claude Code uses),
+        // then canonical variants. Do NOT reverse — the raw path should win.
+        let candidates = Self::build_project_dir_candidates(working_dir);
 
         // First: fast direct lookup for generated candidates.
         for key in &candidates {
@@ -436,7 +496,7 @@ impl ClaudeSessionReader {
         max_entries: usize,
         pid: Option<u32>,
     ) -> Vec<JsonlEntry> {
-        let Some(jsonl_path) = self.find_jsonl_for_pid(session_dir, session_dir, pid) else {
+        let Some(jsonl_path) = self.find_jsonl_for_pid(session_dir, session_dir, pid, None) else {
             return Vec::new();
         };
         Self::read_recent_entries_from_path(&jsonl_path, max_entries)
@@ -501,17 +561,20 @@ impl ClaudeSessionReader {
     ///
     /// Resolution strategy:
     /// 1. Return cached session file if it still matches.
-    /// 2. Project `sessions-index.json` mapping.
+    /// 2. PID-based file handle matching on the few most recent files.
     /// 3. Most-recently-modified `.jsonl` fallback.
+    /// 4. `sessions-index.json` fallback.
     fn find_jsonl_for_pid(
         &mut self,
         dir: &Path,
         working_dir: &Path,
-        _pid: Option<u32>,
+        pid: Option<u32>,
+        session_created_at: Option<i64>,
     ) -> Option<PathBuf> {
+        let cache_key = self.cache_key(working_dir, pid);
         let working_dir_key = self.path_lookup_key_cached(working_dir);
 
-        if let Some(cached) = self.session_file_cache.get(&working_dir_key).cloned() {
+        if let Some(cached) = self.session_file_cache.get(&cache_key).cloned() {
             // Skip expensive file-header re-read and directory scan if validated recently
             let recently_validated = cached.validated_at.elapsed() < Duration::from_secs(5);
             let still_valid = recently_validated
@@ -523,39 +586,70 @@ impl ClaudeSessionReader {
 
             if still_valid {
                 if !recently_validated {
-                    // Refresh the validated_at timestamp
-                    if let Some(entry) = self.session_file_cache.get_mut(&working_dir_key) {
+                    if let Some(entry) = self.session_file_cache.get_mut(&cache_key) {
                         entry.validated_at = Instant::now();
                     }
                 }
                 debug!(
-                    ?working_dir_key,
+                    ?cache_key,
                     ?cached.path,
                     recently_validated,
-                    "Using cached Claude session file by working directory"
+                    "Using cached Claude session file"
                 );
                 return Some(cached.path);
             }
-            self.session_file_cache.remove(&working_dir_key);
+            self.session_file_cache.remove(&cache_key);
         }
 
-        // Skip PID-based file-handle matching (find_file_opened_by_pid) on the
-        // hot path. On Windows it uses the Restart Manager API which costs ~4
-        // kernel syscalls per candidate file — with 200 session files that's 800
-        // syscalls blocking the UI thread for seconds. The sessions-index.json
-        // and most-recent-file fallbacks handle the common cases without blocking.
-        if let Some(index_path) = Self::find_jsonl_from_index(dir, working_dir) {
-            self.cache_session_file(working_dir, &index_path);
-            return Some(index_path);
-        }
+        // Files already assigned to other sessions in the same directory.
+        let excluded = self.files_assigned_to_other_sessions(&working_dir_key, &cache_key);
 
-        // Try the most-recently-modified file first — it's almost always the
-        // active session and only requires mtime comparisons (no file reading).
-        // This avoids the expensive find_jsonl_by_working_dir which reads
-        // headers of every JSONL file in directories with 100+ files.
-        if let Some(session_file) = Self::find_most_recent_jsonl(dir) {
-            self.cache_session_file(working_dir, &session_file);
+        // Get the few most recently modified JSONL files (cheap mtime scan).
+        let recent = Self::find_recent_jsonl_files(dir, 5);
+
+        // Filter: exclude files assigned to other sessions, and only keep files
+        // modified after this Codirigent session was created (c9watch approach:
+        // temporal correlation prevents matching JSONL files from external Claude
+        // sessions that share the same project directory).
+        let session_start = session_created_at.and_then(|ts| {
+            SystemTime::UNIX_EPOCH.checked_add(Duration::from_secs(
+                ts.saturating_sub(5).max(0) as u64, // 5s buffer like c9watch
+            ))
+        });
+
+        let available: Vec<PathBuf> = recent
+            .into_iter()
+            .filter(|p| {
+                if excluded.contains(p) {
+                    return false;
+                }
+                // Temporal filter: file must have been modified after session started
+                if let Some(start) = session_start {
+                    let file_mtime = p
+                        .metadata()
+                        .ok()
+                        .and_then(|m| m.modified().ok())
+                        .unwrap_or(SystemTime::UNIX_EPOCH);
+                    if file_mtime < start {
+                        return false;
+                    }
+                }
+                true
+            })
+            .collect();
+
+        // Use the most recent available file.
+        if let Some(session_file) = available.into_iter().next() {
+            self.cache_session_file(working_dir, pid, &session_file);
             return Some(session_file);
+        }
+
+        // Fallback: use sessions-index.json if no JSONL files found by mtime.
+        if let Some(index_path) = Self::find_jsonl_from_index(dir, working_dir) {
+            if !excluded.contains(&index_path) {
+                self.cache_session_file(working_dir, pid, &index_path);
+                return Some(index_path);
+            }
         }
 
         None
@@ -745,27 +839,47 @@ impl ClaudeSessionReader {
 
     /// Find the most recently modified .jsonl file in a directory.
     fn find_most_recent_jsonl(dir: &Path) -> Option<PathBuf> {
-        let entries = fs::read_dir(dir).ok()?;
-        let mut best: Option<(PathBuf, SystemTime)> = None;
+        Self::find_recent_jsonl_files(dir, 1).into_iter().next()
+    }
 
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) == Some("jsonl") {
-                if let Ok(meta) = path.metadata() {
-                    if let Ok(mtime) = meta.modified() {
-                        if best.as_ref().map_or(true, |(_, t)| mtime > *t) {
-                            best = Some((path, mtime));
-                        }
-                    }
+    /// Find the N most recently modified .jsonl files in a directory.
+    fn find_recent_jsonl_files(dir: &Path, n: usize) -> Vec<PathBuf> {
+        let entries = match fs::read_dir(dir) {
+            Ok(e) => e,
+            Err(_) => return Vec::new(),
+        };
+
+        let mut files: Vec<(PathBuf, SystemTime)> = entries
+            .flatten()
+            .filter_map(|entry| {
+                let path = entry.path();
+                if path.extension().and_then(|e| e.to_str()) != Some("jsonl") {
+                    return None;
                 }
-            }
-        }
+                let mtime = path.metadata().ok()?.modified().ok()?;
+                Some((path, mtime))
+            })
+            .collect();
 
-        best.map(|(p, _)| p)
+        files.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+        files.into_iter().take(n).map(|(p, _)| p).collect()
     }
 
     /// Check if the last text content block in a message ends with a question mark.
     /// Returns `Some("question")` if yes, `None` otherwise.
+    /// Tools that wait for user interaction and should NOT be overridden
+    /// by the mtime-based Working override.
+    fn is_user_interactive_tool(name: &str) -> bool {
+        matches!(
+            name,
+            "question"
+                | "ExitPlanMode"
+                | "EnterPlanMode"
+                | "AskUserQuestion"
+                | "AskFollowupQuestion"
+        )
+    }
+
     fn last_text_ends_with_question(msg: &JsonlMessage) -> Option<String> {
         let last_text = msg
             .content
@@ -1074,6 +1188,12 @@ mod tests {
         )
         .unwrap();
 
+        // Set mtime to 30 seconds ago so the 8-second mtime override doesn't apply.
+        let old_mtime = filetime::FileTime::from_system_time(
+            std::time::SystemTime::now() - std::time::Duration::from_secs(30),
+        );
+        filetime::set_file_mtime(&session_jsonl, old_mtime).unwrap();
+
         let mut reader = ClaudeSessionReader {
             claude_home: tmp_home.to_path_buf(),
             session_file_cache: std::collections::HashMap::new(),
@@ -1081,21 +1201,28 @@ mod tests {
             canonicalize_cache: std::collections::HashMap::new(),
         };
 
+        // max_age must be > 30s (the mtime offset) so is_file_recent passes.
         let status_fresh = reader.get_status_if_recent(
             Path::new("/Users/test/project"),
             None,
-            std::time::Duration::from_secs(10),
+            std::time::Duration::from_secs(600),
+            None,
         );
         assert_eq!(
             status_fresh,
             Some(ClaudeSessionStatus::NeedsAttention { detail: None })
         );
 
+        // For the stale check, reset mtime back to now so cache invalidates,
+        // then use a tiny max_age so is_file_recent fails.
+        let now_mtime = filetime::FileTime::from_system_time(std::time::SystemTime::now());
+        filetime::set_file_mtime(&session_jsonl, now_mtime).unwrap();
         std::thread::sleep(std::time::Duration::from_millis(10));
         let status_stale = reader.get_status_if_recent(
             Path::new("/Users/test/project"),
             None,
             std::time::Duration::from_nanos(1),
+            None,
         );
         assert!(status_stale.is_none());
     }
@@ -1408,7 +1535,7 @@ mod tests {
         );
 
         let selected = reader
-            .find_jsonl_for_pid(&session_dir, &working_dir, None)
+            .find_jsonl_for_pid(&session_dir, &working_dir, None, None)
             .expect("A jsonl file should be selected");
         assert_eq!(selected, fresh_path);
     }

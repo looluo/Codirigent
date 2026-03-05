@@ -232,6 +232,8 @@ pub(super) struct CachedCliStatus {
     pub(super) status: SessionStatus,
     pub(super) tool_name: Option<String>,
     pub(super) seen_at: Instant,
+    /// When the status last changed (for stale NeedsAttention detection).
+    pub(super) status_since: Instant,
 }
 
 /// Grouped CLI session reader state for WorkspaceView.

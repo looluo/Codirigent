@@ -15,6 +15,8 @@ use codirigent_core::{
     AssignmentAction, CodirigentEvent, EventBus, ProcessMonitor, SessionId, SessionManager,
     SessionStatus, TaskStatus,
 };
+use codirigent_detector::notification::send_notification;
+use codirigent_session::cli_detector::CliDetector;
 use codirigent_session::clipboard_service::{ClipboardService, DefaultClipboardService};
 use codirigent_session::CliSessionStatus;
 use gpui::Context;
@@ -99,6 +101,7 @@ impl WorkspaceView {
                 Option<u32>,
                 codirigent_core::CliType,
                 SessionStatus, // current status for transition detection
+                i64,           // session created_at (unix timestamp for JSONL file filtering)
             )> = self
                 .workspace
                 .sessions()
@@ -113,6 +116,7 @@ impl WorkspaceView {
                         child_pid,
                         cli_type,
                         s.status,
+                        s.created_at.timestamp(),
                     )
                 })
                 .collect();
@@ -128,14 +132,58 @@ impl WorkspaceView {
                     .spawn(async move {
                         let mut out: Vec<(SessionId, Option<(SessionStatus, Option<String>)>)> =
                             Vec::new();
+                        let mut detected_types: Vec<(SessionId, codirigent_core::CliType)> =
+                            Vec::new();
                         if let Ok(mut readers) = cli_readers.lock() {
-                            for (session_id, working_dir, child_pid, cli_type, _current_status) in
-                                &jsonl_inputs
+                            for (
+                                session_id,
+                                working_dir,
+                                child_pid,
+                                cli_type,
+                                _current_status,
+                                created_at,
+                            ) in &jsonl_inputs
                             {
-                                let cli_status: Option<CliSessionStatus> = match cli_type {
+                                // For GenericShell sessions, try process-tree detection.
+                                // The detector walks the PTY's child processes looking
+                                // for known CLI binaries (claude, gemini, codex).
+                                // For GenericShell sessions, try process-tree detection.
+                                // The detector walks the PTY's child processes looking
+                                // for known CLI binaries (claude, gemini, codex).
+                                // Note: don't use process-tree to REVERT ClaudeCode → GenericShell
+                                // because detection is unreliable (returns GenericShell even when
+                                // Claude is running). Banner detection handles initial detection.
+                                let effective_type =
+                                    if *cli_type == codirigent_core::CliType::GenericShell {
+                                        if let Some(pid) = child_pid {
+                                            let detected = readers.detector.detect_cli_type(*pid);
+                                            if detected != codirigent_core::CliType::GenericShell {
+                                                info!(
+                                                    ?session_id,
+                                                    ?detected,
+                                                    "Process-tree detected CLI type"
+                                                );
+                                                detected_types.push((*session_id, detected));
+                                                detected
+                                            } else {
+                                                *cli_type
+                                            }
+                                        } else {
+                                            *cli_type
+                                        }
+                                    } else {
+                                        *cli_type
+                                    };
+
+                                let cli_status: Option<CliSessionStatus> = match effective_type {
                                     codirigent_core::CliType::ClaudeCode => {
                                         readers.claude.as_mut().and_then(|r| {
-                                            r.get_status_if_recent(working_dir, *child_pid, max_age)
+                                            r.get_status_if_recent(
+                                                working_dir,
+                                                *child_pid,
+                                                max_age,
+                                                Some(*created_at),
+                                            )
                                         })
                                     }
                                     codirigent_core::CliType::CodexCli => {
@@ -154,7 +202,7 @@ impl WorkspaceView {
                                 out.push((*session_id, resolved));
                             }
                         }
-                        (out, jsonl_inputs)
+                        (out, jsonl_inputs, detected_types)
                     })
                     .await;
 
@@ -162,17 +210,37 @@ impl WorkspaceView {
                 let _ = this.update(cx, |this, cx| {
                     this.polling.jsonl_check_in_flight = false;
                     let mut changed = false;
-                    let (results, inputs) = results;
+                    let (results, inputs, detected_types) = results;
+
+                    // Apply process-tree CLI type detections on UI thread
+                    for (session_id, detected_type) in &detected_types {
+                        this.clipboard
+                            .clipboard_service
+                            .set_session_cli_type(*session_id, *detected_type);
+                        info!(
+                            ?session_id,
+                            ?detected_type,
+                            "Applied process-tree CLI type detection"
+                        );
+                    }
                     for (session_id, cli_status) in &results {
                         if let Some((new_status, tool_name)) = cli_status {
                             // Cache the JSONL result
                             if let Ok(mut readers) = this.cli_readers.lock() {
+                                // Preserve status_since if status hasn't changed
+                                let status_since = readers
+                                    .cached_status
+                                    .get(session_id)
+                                    .filter(|c| c.status == *new_status)
+                                    .map(|c| c.status_since)
+                                    .unwrap_or_else(Instant::now);
                                 readers.cached_status.insert(
                                     *session_id,
                                     CachedCliStatus {
                                         status: *new_status,
                                         tool_name: tool_name.clone(),
                                         seen_at: Instant::now(),
+                                        status_since,
                                     },
                                 );
                             }
@@ -181,12 +249,30 @@ impl WorkspaceView {
                                 let current_status = inputs
                                     .iter()
                                     .find(|(id, ..)| id == session_id)
-                                    .map(|(_, _, _, _, s)| *s);
+                                    .map(|(_, _, _, _, s, _)| *s);
                                 if current_status != Some(SessionStatus::NeedsAttention) {
                                     event_bus.publish(CodirigentEvent::AttentionRequired {
                                         session_id: *session_id,
                                         detail: tool_name.clone(),
                                     });
+                                    // Send Windows toast notification
+                                    let session_name = inputs
+                                        .iter()
+                                        .find(|(id, ..)| id == session_id)
+                                        .map(|(id, ..)| format!("Session {}", id.0));
+                                    let name = session_name.as_deref().unwrap_or("Session");
+                                    let body = match tool_name.as_deref() {
+                                        Some("question") => {
+                                            format!("{name} has a question")
+                                        }
+                                        Some(tool) => {
+                                            format!("{name} needs attention: {tool}")
+                                        }
+                                        None => {
+                                            format!("{name} is waiting for input")
+                                        }
+                                    };
+                                    send_notification("Codirigent", &body);
                                 }
                             }
                             changed = true;
@@ -319,10 +405,30 @@ impl WorkspaceView {
                 )
             });
 
-            // Overlay cached JSONL status (background task updates the cache)
+            // Overlay cached JSONL status (background task updates the cache).
+            // But don't overlay stale NeedsAttention when the detector says Idle —
+            // this means Claude exited and the shell prompt is showing.
             if let Some((cached_status, _tool_name)) = self.get_recent_cached_cli_status(session_id)
             {
-                status = Some(cached_status);
+                let is_stale_attention = cached_status == SessionStatus::NeedsAttention
+                    && matches!(status, Some(SessionStatus::Idle))
+                    && self.is_cli_status_stale(session_id, Duration::from_secs(30));
+                if is_stale_attention {
+                    // Claude likely exited — clear JSONL cache AND revert CLI type
+                    // so the JSONL reader stops being consulted on subsequent polls.
+                    if let Ok(mut readers) = self.cli_readers.lock() {
+                        readers.cached_status.remove(&session_id);
+                    }
+                    self.clipboard
+                        .clipboard_service
+                        .set_session_cli_type(session_id, codirigent_core::CliType::GenericShell);
+                    info!(
+                        ?session_id,
+                        "Cleared stale NeedsAttention, reverted to GenericShell"
+                    );
+                } else {
+                    status = Some(cached_status);
+                }
             }
 
             if let Some(status) = status {
@@ -595,6 +701,15 @@ impl WorkspaceView {
         if any_dirty {
             cx.notify();
         }
+    }
+
+    /// Check if the cached JSONL status hasn't changed for longer than `threshold`.
+    fn is_cli_status_stale(&self, session_id: SessionId, threshold: Duration) -> bool {
+        self.cli_readers
+            .lock()
+            .ok()
+            .and_then(|r| r.cached_status.get(&session_id).map(|c| c.status_since))
+            .map_or(false, |since| since.elapsed() > threshold)
     }
 
     fn get_recent_cached_cli_status(

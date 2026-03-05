@@ -5,6 +5,9 @@
 
 use codirigent_core::CliType;
 
+/// Box-drawing banner pattern: "╭─ claude code" (18 bytes UTF-8).
+const CLAUDE_BOX_BANNER: &[u8] = "\u{256d}\u{2500} claude code".as_bytes();
+
 /// Detect CLI type from terminal output by scanning for CLI-specific banners.
 ///
 /// Scans the first 2KB of output for CLI identification strings:
@@ -24,8 +27,8 @@ pub fn detect_cli_from_output(data: &[u8]) -> Option<CliType> {
     if lower.windows(10).any(|w| w == b"claude cod")
         || lower.windows(7).any(|w| w == b"claude>")
         || lower
-            .windows(15)
-            .any(|w| w == "\u{256d}\u{2500} claude code".as_bytes())
+            .windows(CLAUDE_BOX_BANNER.len())
+            .any(|w| w == CLAUDE_BOX_BANNER)
     {
         return Some(CliType::ClaudeCode);
     }
@@ -62,6 +65,12 @@ mod tests {
     fn test_detect_codex() {
         let output = b"codex ready\n";
         assert_eq!(detect_cli_from_output(output), Some(CliType::CodexCli));
+    }
+
+    #[test]
+    fn test_detect_claude_box_drawing_banner() {
+        let output = "\u{256d}\u{2500} claude code v1.2.3\n".as_bytes();
+        assert_eq!(detect_cli_from_output(output), Some(CliType::ClaudeCode));
     }
 
     #[test]
