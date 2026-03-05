@@ -67,7 +67,7 @@ impl WorkspaceView {
         // This is critical: PowerShell blocks on DSR (\x1b[6n]) until it gets a response.
         for sid in &session_ids {
             if let Some(rx) = self.pty_write_receivers.get_mut(sid) {
-                let mut buf = Vec::new();
+                let mut buf = Vec::with_capacity(64);
                 while let Ok(bytes) = rx.try_recv() {
                     buf.extend_from_slice(&bytes);
                 }

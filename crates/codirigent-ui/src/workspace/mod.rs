@@ -72,6 +72,12 @@ mod impl_ui_operations;
 pub(crate) mod render;
 
 #[cfg(feature = "gpui-full")]
+mod terminal_render;
+
+#[cfg(feature = "gpui-full")]
+mod drawer_render;
+
+#[cfg(feature = "gpui-full")]
 mod icon_utils;
 
 #[cfg(feature = "gpui-full")]

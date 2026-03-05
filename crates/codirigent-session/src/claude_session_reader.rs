@@ -282,7 +282,7 @@ impl ClaudeSessionReader {
                 if let Some(mtime) = current_mtime {
                     let recently_written = SystemTime::now()
                         .duration_since(mtime)
-                        .map_or(false, |elapsed| elapsed < Duration::from_secs(8));
+                        .is_ok_and(|elapsed| elapsed < Duration::from_secs(8));
                     if recently_written {
                         debug!(
                             ?jsonl_path,

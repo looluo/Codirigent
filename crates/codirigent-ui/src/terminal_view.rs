@@ -83,6 +83,10 @@ pub struct CachedTerminalContent {
     pub background_rects: Vec<(usize, usize, usize, Rgba)>,
     /// Text runs batched by style for efficient painting.
     pub text_runs: Vec<TextRunSegment>,
+    /// Pre-converted background rects with GPUI Hsla colors (avoids per-frame conversion).
+    pub bg_rects_hsla: Vec<(usize, usize, usize, gpui::Hsla)>,
+    /// Pre-converted text runs with GPUI Hsla foreground colors (avoids per-frame conversion).
+    pub text_runs_hsla: Vec<(TextRunSegment, gpui::Hsla)>,
     /// Terminal rows at time of caching.
     pub rows: usize,
     /// Terminal columns at time of caching.
@@ -234,6 +238,10 @@ pub struct TerminalView {
     content_dirty: bool,
     /// Whether cell dimensions have been initialized from font metrics.
     dimensions_initialized: bool,
+    /// Cached GPUI Hsla for terminal background (avoids per-frame conversion).
+    cached_terminal_bg: gpui::Hsla,
+    /// Cached GPUI Hsla for terminal foreground (avoids per-frame conversion).
+    cached_terminal_fg: gpui::Hsla,
 }
 
 impl TerminalView {
@@ -256,6 +264,9 @@ impl TerminalView {
             cell_height,
         ));
 
+        let cached_terminal_bg: gpui::Hsla = theme.terminal_background.into();
+        let cached_terminal_fg: gpui::Hsla = theme.terminal_foreground.into();
+
         Self {
             terminal,
             theme,
@@ -269,6 +280,8 @@ impl TerminalView {
             cached_content: None,
             content_dirty: true,
             dimensions_initialized: false,
+            cached_terminal_bg,
+            cached_terminal_fg,
         }
     }
 
@@ -292,6 +305,8 @@ impl TerminalView {
 
     /// Set the theme.
     pub fn set_theme(&mut self, theme: CodirigentTheme) {
+        self.cached_terminal_bg = theme.terminal_background.into();
+        self.cached_terminal_fg = theme.terminal_foreground.into();
         self.theme = theme;
         self.content_dirty = true;
     }
@@ -342,6 +357,16 @@ impl TerminalView {
     /// Get the font family.
     pub fn font_family(&self) -> &str {
         &self.font_family
+    }
+
+    /// Get cached terminal background color as GPUI Hsla.
+    pub fn terminal_bg_hsla(&self) -> gpui::Hsla {
+        self.cached_terminal_bg
+    }
+
+    /// Get cached terminal foreground color as GPUI Hsla.
+    pub fn terminal_fg_hsla(&self) -> gpui::Hsla {
+        self.cached_terminal_fg
     }
 
     /// Set the font family.
@@ -757,9 +782,24 @@ impl TerminalView {
             }
         }
 
+        // Pre-convert to GPUI Hsla colors so render.rs doesn't pay conversion cost per frame
+        let bg_rects_hsla: Vec<(usize, usize, usize, gpui::Hsla)> = background_rects
+            .iter()
+            .map(|(row, start, end, color)| (*row, *start, *end, (*color).into()))
+            .collect();
+        let text_runs_hsla: Vec<(TextRunSegment, gpui::Hsla)> = text_runs
+            .iter()
+            .map(|run| {
+                let fg: gpui::Hsla = run.foreground.into();
+                (run.clone(), fg)
+            })
+            .collect();
+
         CachedTerminalContent {
             background_rects,
             text_runs,
+            bg_rects_hsla,
+            text_runs_hsla,
             rows,
             cols,
         }

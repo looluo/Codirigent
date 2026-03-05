@@ -1,0 +1,1378 @@
+use crate::types::*;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::time::Duration;
+
+// SessionId tests
+#[test]
+fn test_session_id_display() {
+    let id = SessionId(42);
+    assert_eq!(format!("{}", id), "session-42");
+}
+
+#[test]
+fn test_session_id_equality() {
+    assert_eq!(SessionId(1), SessionId(1));
+    assert_ne!(SessionId(1), SessionId(2));
+}
+
+#[test]
+fn test_session_id_hash() {
+    use std::collections::HashSet;
+    let mut set = HashSet::new();
+    set.insert(SessionId(1));
+    assert!(set.contains(&SessionId(1)));
+    assert!(!set.contains(&SessionId(2)));
+}
+
+#[test]
+fn test_session_id_serialization() {
+    let id = SessionId(42);
+    let json = serde_json::to_string(&id).unwrap();
+    let parsed: SessionId = serde_json::from_str(&json).unwrap();
+    assert_eq!(id, parsed);
+}
+
+#[test]
+fn test_session_id_clone() {
+    let id = SessionId(42);
+    let cloned = id;
+    assert_eq!(id, cloned);
+}
+
+// TaskId tests
+#[test]
+fn test_task_id_display() {
+    let id = TaskId::from("task-001");
+    assert_eq!(format!("{}", id), "task-001");
+}
+
+#[test]
+fn test_task_id_equality() {
+    let id1 = TaskId::from("task-001");
+    let id2 = TaskId::from("task-001");
+    let id3 = TaskId::from("task-002");
+    assert_eq!(id1, id2);
+    assert_ne!(id1, id3);
+}
+
+#[test]
+fn test_task_id_hash() {
+    use std::collections::HashSet;
+    let mut set = HashSet::new();
+    set.insert(TaskId::from("task-001"));
+    assert!(set.contains(&TaskId::from("task-001")));
+    assert!(!set.contains(&TaskId::from("task-002")));
+}
+
+#[test]
+fn test_task_id_serialization() {
+    let id = TaskId::from("task-001");
+    let json = serde_json::to_string(&id).unwrap();
+    let parsed: TaskId = serde_json::from_str(&json).unwrap();
+    assert_eq!(id, parsed);
+}
+
+#[test]
+fn test_task_id_cheap_clone() {
+    use std::sync::Arc;
+    let id1 = TaskId(Arc::from("task-001"));
+    let id2 = id1.clone();
+    // Arc clones should point to same allocation
+    assert!(Arc::ptr_eq(&id1.0, &id2.0));
+}
+
+#[test]
+fn test_task_id_from_string() {
+    let id = TaskId::from("task-001");
+    assert_eq!(id.to_string(), "task-001");
+}
+
+#[test]
+fn test_task_id_from_str_slice() {
+    let s = "task-002";
+    let id = TaskId::from(s);
+    assert_eq!(id.to_string(), "task-002");
+}
+
+// SessionStatus tests
+#[test]
+fn test_session_status_default() {
+    assert_eq!(SessionStatus::default(), SessionStatus::Idle);
+}
+
+#[test]
+fn test_session_status_serialization() {
+    let status = SessionStatus::NeedsAttention;
+    let json = serde_json::to_string(&status).unwrap();
+    assert_eq!(json, "\"NeedsAttention\"");
+
+    let parsed: SessionStatus = serde_json::from_str(&json).unwrap();
+    assert_eq!(status, parsed);
+}
+
+#[test]
+fn test_session_status_all_variants() {
+    let variants = [
+        SessionStatus::Idle,
+        SessionStatus::Working,
+        SessionStatus::NeedsAttention,
+        SessionStatus::Error,
+    ];
+    for variant in variants {
+        let json = serde_json::to_string(&variant).unwrap();
+        let parsed: SessionStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(variant, parsed);
+    }
+}
+
+// TaskPriority tests
+#[test]
+fn test_task_priority_default() {
+    assert_eq!(TaskPriority::default(), TaskPriority::Medium);
+}
+
+#[test]
+fn test_task_priority_serialization() {
+    let priority = TaskPriority::Critical;
+    let json = serde_json::to_string(&priority).unwrap();
+    assert_eq!(json, "\"Critical\"");
+
+    let parsed: TaskPriority = serde_json::from_str(&json).unwrap();
+    assert_eq!(priority, parsed);
+}
+
+#[test]
+fn test_task_priority_all_variants() {
+    let variants = [
+        TaskPriority::Critical,
+        TaskPriority::High,
+        TaskPriority::Medium,
+        TaskPriority::Low,
+    ];
+    for variant in variants {
+        let json = serde_json::to_string(&variant).unwrap();
+        let parsed: TaskPriority = serde_json::from_str(&json).unwrap();
+        assert_eq!(variant, parsed);
+    }
+}
+
+// TaskStatus tests
+#[test]
+fn test_task_status_default() {
+    assert_eq!(TaskStatus::default(), TaskStatus::Queued);
+}
+
+#[test]
+fn test_task_status_serialization() {
+    let status = TaskStatus::Verifying;
+    let json = serde_json::to_string(&status).unwrap();
+    assert_eq!(json, "\"Verifying\"");
+
+    let parsed: TaskStatus = serde_json::from_str(&json).unwrap();
+    assert_eq!(status, parsed);
+}
+
+#[test]
+fn test_task_status_all_variants() {
+    let variants = [
+        TaskStatus::Queued,
+        TaskStatus::Assigned,
+        TaskStatus::Working,
+        TaskStatus::Verifying,
+        TaskStatus::Review,
+        TaskStatus::Done,
+        TaskStatus::Blocked,
+    ];
+    for variant in variants {
+        let json = serde_json::to_string(&variant).unwrap();
+        let parsed: TaskStatus = serde_json::from_str(&json).unwrap();
+        assert_eq!(variant, parsed);
+    }
+}
+
+// VerificationConfig tests
+#[test]
+fn test_verification_config_default() {
+    let config = VerificationConfig::default();
+    assert!(config.command.is_empty());
+    assert!(config.requires_human_review);
+    assert_eq!(config.timeout, Duration::from_secs(300));
+    assert!(config.working_dir.is_none());
+    assert!(config.success_patterns.is_empty());
+    assert!(config.failure_patterns.is_empty());
+}
+
+#[test]
+fn test_verification_config_serialization() {
+    let config = VerificationConfig {
+        command: "npm test".to_string(),
+        working_dir: None,
+        timeout: Duration::from_secs(60),
+        requires_human_review: false,
+        success_patterns: vec!["PASS".to_string()],
+        failure_patterns: vec!["FAIL".to_string()],
+    };
+    let json = serde_json::to_string(&config).unwrap();
+    let parsed: VerificationConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed.command, "npm test");
+    assert_eq!(parsed.timeout, Duration::from_secs(60));
+    assert!(!parsed.requires_human_review);
+    assert_eq!(parsed.success_patterns, vec!["PASS".to_string()]);
+    assert_eq!(parsed.failure_patterns, vec!["FAIL".to_string()]);
+}
+
+#[test]
+fn test_verification_config_with_working_dir() {
+    let config = VerificationConfig {
+        command: "cargo test".to_string(),
+        working_dir: Some(PathBuf::from("/project")),
+        timeout: Duration::from_secs(120),
+        requires_human_review: true,
+        success_patterns: Vec::new(),
+        failure_patterns: Vec::new(),
+    };
+    let json = serde_json::to_string(&config).unwrap();
+    let parsed: VerificationConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed.working_dir, Some(PathBuf::from("/project")));
+}
+
+#[test]
+fn test_verification_config_humantime_serialization() {
+    let config = VerificationConfig {
+        command: "test".to_string(),
+        working_dir: None,
+        timeout: Duration::from_secs(300),
+        requires_human_review: true,
+        success_patterns: Vec::new(),
+        failure_patterns: Vec::new(),
+    };
+    let json = serde_json::to_string(&config).unwrap();
+    // humantime-serde serializes Duration as human-readable strings like "5m"
+    assert!(json.contains("5m") || json.contains("300"));
+}
+
+// RetryConfig tests
+#[test]
+fn test_retry_config_default() {
+    let config = RetryConfig::default();
+    assert_eq!(config.max_retries, 3);
+    assert_eq!(config.retry_count, 0);
+    assert_eq!(config.retry_delay, Duration::from_secs(0));
+}
+
+#[test]
+fn test_retry_config_serialization() {
+    let config = RetryConfig {
+        max_retries: 5,
+        retry_count: 2,
+        retry_delay: Duration::from_secs(30),
+    };
+    let json = serde_json::to_string(&config).unwrap();
+    let parsed: RetryConfig = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed.max_retries, 5);
+    assert_eq!(parsed.retry_count, 2);
+    assert_eq!(parsed.retry_delay, Duration::from_secs(30));
+}
+
+#[test]
+fn test_retry_config_equality() {
+    let config1 = RetryConfig::default();
+    let config2 = RetryConfig::default();
+    let config3 = RetryConfig {
+        max_retries: 5,
+        ..Default::default()
+    };
+    assert_eq!(config1, config2);
+    assert_ne!(config1, config3);
+}
+
+// QueueState tests
+#[test]
+fn test_queue_state_default() {
+    let state = QueueState::default();
+    assert!(state.order.is_empty());
+    assert!(state.blocked.is_empty());
+    assert!(state.updated_at.is_none());
+}
+
+#[test]
+fn test_queue_state_serialization() {
+    let state = QueueState {
+        order: vec![TaskId::from("task-001"), TaskId::from("task-002")],
+        blocked: {
+            let mut m = HashMap::new();
+            m.insert(TaskId::from("task-003"), vec![TaskId::from("task-001")]);
+            m
+        },
+        updated_at: Some(chrono::Utc::now()),
+    };
+
+    let json = serde_json::to_string_pretty(&state).unwrap();
+    let parsed: QueueState = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed.order.len(), 2);
+    assert!(parsed.blocked.contains_key(&TaskId::from("task-003")));
+    assert!(parsed.updated_at.is_some());
+}
+
+#[test]
+fn test_queue_state_equality() {
+    let state1 = QueueState::default();
+    let state2 = QueueState::default();
+    let mut state3 = QueueState::default();
+    state3.order.push(TaskId::from("task-001"));
+    assert_eq!(state1, state2);
+    assert_ne!(state1, state3);
+}
+
+// VerificationResult tests
+#[test]
+fn test_verification_result_success() {
+    let result = VerificationResult {
+        success: true,
+        exit_code: Some(0),
+        stdout: "All tests passed".to_string(),
+        stderr: "".to_string(),
+        test_results: None,
+        duration: Duration::from_secs(5),
+        run_at: chrono::Utc::now(),
+    };
+    assert!(result.success);
+    assert_eq!(result.exit_code, Some(0));
+}
+
+#[test]
+fn test_verification_result_failure() {
+    let result = VerificationResult {
+        success: false,
+        exit_code: Some(1),
+        stdout: "21 passed, 2 failed".to_string(),
+        stderr: "".to_string(),
+        test_results: Some(TestResults {
+            total: 23,
+            passed: 21,
+            failed: 2,
+            skipped: 0,
+            failures: vec![TestFailure {
+                name: "auth.test > should reject".to_string(),
+                message: "Expected 401, got 200".to_string(),
+                stack_trace: None,
+            }],
+        }),
+        duration: Duration::from_secs(15),
+        run_at: chrono::Utc::now(),
+    };
+
+    assert!(!result.success);
+    let test_results = result.test_results.unwrap();
+    assert_eq!(test_results.failed, 2);
+    assert_eq!(test_results.failures.len(), 1);
+}
+
+#[test]
+fn test_verification_result_serialization() {
+    let result = VerificationResult {
+        success: false,
+        exit_code: Some(1),
+        stdout: "21 passed, 2 failed".to_string(),
+        stderr: "warning".to_string(),
+        test_results: Some(TestResults {
+            total: 23,
+            passed: 21,
+            failed: 2,
+            skipped: 0,
+            failures: vec![TestFailure {
+                name: "auth.test > should reject".to_string(),
+                message: "Expected 401, got 200".to_string(),
+                stack_trace: Some("at line 42".to_string()),
+            }],
+        }),
+        duration: Duration::from_secs(15),
+        run_at: chrono::Utc::now(),
+    };
+
+    let json = serde_json::to_string(&result).unwrap();
+    let parsed: VerificationResult = serde_json::from_str(&json).unwrap();
+    assert!(!parsed.success);
+    assert_eq!(parsed.test_results.unwrap().failed, 2);
+}
+
+// TestResults tests
+#[test]
+fn test_test_results_creation() {
+    let results = TestResults {
+        total: 10,
+        passed: 8,
+        failed: 1,
+        skipped: 1,
+        failures: vec![],
+    };
+    assert_eq!(
+        results.total,
+        results.passed + results.failed + results.skipped
+    );
+}
+
+#[test]
+fn test_test_results_serialization() {
+    let results = TestResults {
+        total: 10,
+        passed: 10,
+        failed: 0,
+        skipped: 0,
+        failures: vec![],
+    };
+    let json = serde_json::to_string(&results).unwrap();
+    let parsed: TestResults = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed.total, 10);
+    assert_eq!(parsed.passed, 10);
+}
+
+// TestFailure tests
+#[test]
+fn test_test_failure_creation() {
+    let failure = TestFailure {
+        name: "test_login".to_string(),
+        message: "assertion failed".to_string(),
+        stack_trace: Some("at main.rs:42".to_string()),
+    };
+    assert_eq!(failure.name, "test_login");
+    assert!(failure.stack_trace.is_some());
+}
+
+#[test]
+fn test_test_failure_serialization() {
+    let failure = TestFailure {
+        name: "test_login".to_string(),
+        message: "assertion failed".to_string(),
+        stack_trace: None,
+    };
+    let json = serde_json::to_string(&failure).unwrap();
+    let parsed: TestFailure = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed.name, "test_login");
+    assert!(parsed.stack_trace.is_none());
+}
+
+// GridPosition tests
+#[test]
+fn test_grid_position_creation() {
+    let pos = GridPosition { row: 1, col: 2 };
+    assert_eq!(pos.row, 1);
+    assert_eq!(pos.col, 2);
+}
+
+#[test]
+fn test_grid_position_equality() {
+    let pos1 = GridPosition { row: 0, col: 0 };
+    let pos2 = GridPosition { row: 0, col: 0 };
+    let pos3 = GridPosition { row: 1, col: 0 };
+    assert_eq!(pos1, pos2);
+    assert_ne!(pos1, pos3);
+}
+
+#[test]
+fn test_grid_position_serialization() {
+    let pos = GridPosition { row: 1, col: 2 };
+    let json = serde_json::to_string(&pos).unwrap();
+    let parsed: GridPosition = serde_json::from_str(&json).unwrap();
+    assert_eq!(pos, parsed);
+}
+
+// LayoutMode tests
+#[test]
+fn test_layout_mode_default() {
+    let layout = LayoutMode::default();
+    assert!(matches!(layout, LayoutMode::Grid { rows: 2, cols: 2 }));
+}
+
+#[test]
+fn test_layout_mode_grid_serialization() {
+    let layout = LayoutMode::Grid { rows: 3, cols: 3 };
+    let json = serde_json::to_string(&layout).unwrap();
+    let parsed: LayoutMode = serde_json::from_str(&json).unwrap();
+    assert_eq!(layout, parsed);
+}
+
+#[test]
+fn test_layout_mode_single() {
+    let layout = LayoutMode::Single;
+    let json = serde_json::to_string(&layout).unwrap();
+    let parsed: LayoutMode = serde_json::from_str(&json).unwrap();
+    assert_eq!(layout, parsed);
+}
+
+#[test]
+fn test_layout_mode_custom() {
+    let positions = vec![
+        (SessionId(1), GridPosition { row: 0, col: 0 }),
+        (SessionId(2), GridPosition { row: 0, col: 1 }),
+    ];
+    let layout = LayoutMode::Custom {
+        positions: positions.clone(),
+    };
+    let json = serde_json::to_string(&layout).unwrap();
+    let parsed: LayoutMode = serde_json::from_str(&json).unwrap();
+    assert_eq!(layout, parsed);
+}
+
+// Session tests
+#[test]
+fn test_session_new() {
+    let session = Session::new(
+        SessionId(1),
+        "Test Session".to_string(),
+        PathBuf::from("/tmp"),
+    );
+    assert_eq!(session.id, SessionId(1));
+    assert_eq!(session.name, "Test Session");
+    assert_eq!(session.status, SessionStatus::Idle);
+    assert_eq!(session.working_directory, PathBuf::from("/tmp"));
+    assert!(session.current_task.is_none());
+    assert!(session.context_usage.is_none());
+    assert!(session.group.is_none());
+    assert!(session.color.is_none());
+}
+
+#[test]
+fn test_session_serialization() {
+    let session = Session::new(SessionId(1), "Test".to_string(), PathBuf::from("/tmp"));
+    let json = serde_json::to_string_pretty(&session).unwrap();
+    let parsed: Session = serde_json::from_str(&json).unwrap();
+    assert_eq!(session.id, parsed.id);
+    assert_eq!(session.name, parsed.name);
+    assert_eq!(session.status, parsed.status);
+}
+
+#[test]
+fn test_session_with_all_fields() {
+    let mut session = Session::new(
+        SessionId(1),
+        "Full Session".to_string(),
+        PathBuf::from("/home/user"),
+    );
+    session.status = SessionStatus::Working;
+    session.current_task = Some(TaskId::from("task-001"));
+    session.context_usage = Some(0.75);
+    session.group = Some("backend".to_string());
+    session.color = Some("#FF5733".to_string());
+
+    let json = serde_json::to_string(&session).unwrap();
+    let parsed: Session = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(parsed.status, SessionStatus::Working);
+    assert_eq!(parsed.current_task, Some(TaskId::from("task-001")));
+    assert_eq!(parsed.context_usage, Some(0.75));
+    assert_eq!(parsed.group, Some("backend".to_string()));
+    assert_eq!(parsed.color, Some("#FF5733".to_string()));
+}
+
+// Task tests
+#[test]
+fn test_task_new() {
+    let task = Task::new(
+        TaskId::from("task-001"),
+        "Test Task".to_string(),
+        "A test task description".to_string(),
+    );
+    assert_eq!(task.id, TaskId::from("task-001"));
+    assert_eq!(task.title, "Test Task");
+    assert_eq!(task.description, "A test task description");
+    assert_eq!(task.priority, TaskPriority::Medium);
+    assert_eq!(task.status, TaskStatus::Queued);
+    assert!(task.dependencies.is_empty());
+    assert!(task.tags.is_empty());
+    assert!(task.assigned_session.is_none());
+    assert!(task.verification.is_none());
+    assert!(task.can_retry());
+    assert!(task.estimated_minutes.is_none());
+    assert!(task.error_message.is_none());
+    assert!(task.project_dir.is_none());
+    assert!(task.plan_file.is_none());
+}
+
+#[test]
+fn test_task_serialization() {
+    let task = Task::new(
+        TaskId::from("task-001"),
+        "Test".to_string(),
+        "Description".to_string(),
+    );
+    let json = serde_json::to_string_pretty(&task).unwrap();
+    let parsed: Task = serde_json::from_str(&json).unwrap();
+    assert_eq!(task.id, parsed.id);
+    assert_eq!(task.title, parsed.title);
+}
+
+#[test]
+fn test_task_with_all_fields() {
+    let mut task = Task::new(
+        TaskId::from("task-001"),
+        "Full Task".to_string(),
+        "Full description".to_string(),
+    );
+    task.priority = TaskPriority::High;
+    task.status = TaskStatus::Working;
+    task.dependencies = vec![TaskId::from("task-000")];
+    task.tags = vec!["backend".to_string(), "urgent".to_string()];
+    task.assigned_session = Some(SessionId(1));
+    task.assigned_at = Some(chrono::Utc::now());
+    task.started_at = Some(chrono::Utc::now());
+    task.estimated_minutes = Some(30);
+    task.error_message = Some("Test error".to_string());
+
+    let json = serde_json::to_string(&task).unwrap();
+    let parsed: Task = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(parsed.priority, TaskPriority::High);
+    assert_eq!(parsed.status, TaskStatus::Working);
+    assert_eq!(parsed.dependencies.len(), 1);
+    assert_eq!(parsed.tags.len(), 2);
+    assert_eq!(parsed.assigned_session, Some(SessionId(1)));
+    assert_eq!(parsed.estimated_minutes, Some(30));
+    assert_eq!(parsed.error_message, Some("Test error".to_string()));
+}
+
+#[test]
+fn test_task_with_verification() {
+    let mut task = Task::new(
+        TaskId::from("task-002"),
+        "Verified Task".to_string(),
+        "Run with tests".to_string(),
+    );
+    task.verification = Some(VerificationConfig {
+        command: "cargo test".to_string(),
+        ..Default::default()
+    });
+    assert!(task.verification.is_some());
+
+    let json = serde_json::to_string(&task).unwrap();
+    let parsed: Task = serde_json::from_str(&json).unwrap();
+    assert!(parsed.verification.is_some());
+    assert_eq!(parsed.verification.unwrap().command, "cargo test");
+}
+
+#[test]
+fn test_task_retry_logic() {
+    let mut task = Task::new(
+        TaskId::from("task-003"),
+        "Retry Task".to_string(),
+        "May fail".to_string(),
+    );
+    assert!(task.can_retry());
+    assert_eq!(task.retry.retry_count, 0);
+
+    task.increment_retry();
+    assert_eq!(task.retry.retry_count, 1);
+    assert!(task.can_retry());
+
+    task.increment_retry();
+    task.increment_retry();
+    assert_eq!(task.retry.retry_count, 3);
+    assert!(!task.can_retry());
+}
+
+#[test]
+fn test_task_project_dir_and_plan_file() {
+    let mut task = Task::new(
+        TaskId::from("task-001"),
+        "Project Task".to_string(),
+        "Description".to_string(),
+    );
+    task.project_dir = Some(PathBuf::from("/home/user/project"));
+    task.plan_file = Some("plans/phase-1.md".to_string());
+
+    let json = serde_json::to_string(&task).unwrap();
+    let parsed: Task = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(
+        parsed.project_dir,
+        Some(PathBuf::from("/home/user/project"))
+    );
+    assert_eq!(parsed.plan_file, Some("plans/phase-1.md".to_string()));
+}
+
+#[test]
+fn test_task_backwards_compat_without_project_fields() {
+    // Simulate old JSON without project_dir and plan_file fields
+    let json = r#"{
+            "id": "task-old",
+            "title": "Old Task",
+            "description": "No project fields",
+            "priority": "Medium",
+            "status": "Queued",
+            "dependencies": [],
+            "tags": [],
+            "estimated_minutes": null,
+            "assigned_session": null,
+            "assigned_at": null,
+            "verification": null,
+            "retry": {"max_retries": 3, "retry_count": 0, "retry_delay": "0s"},
+            "created_at": "2025-01-01T00:00:00Z",
+            "started_at": null,
+            "completed_at": null,
+            "error_message": null
+        }"#;
+
+    let parsed: Task = serde_json::from_str(json).unwrap();
+    assert!(parsed.project_dir.is_none());
+    assert!(parsed.plan_file.is_none());
+}
+
+#[test]
+fn test_task_project_dir_skip_serializing_if_none() {
+    let task = Task::new(
+        TaskId::from("task-001"),
+        "Task".to_string(),
+        "Desc".to_string(),
+    );
+    let json = serde_json::to_string(&task).unwrap();
+    assert!(!json.contains("project_dir"));
+    assert!(!json.contains("plan_file"));
+}
+
+#[test]
+fn test_task_dependencies_satisfied_empty() {
+    let task = Task::new(
+        TaskId::from("task-001"),
+        "No deps".to_string(),
+        "".to_string(),
+    );
+    assert!(task.dependencies_satisfied(&[]));
+    assert!(task.dependencies_satisfied(&[TaskId::from("task-other")]));
+}
+
+#[test]
+fn test_task_dependencies_satisfied_with_deps() {
+    let mut task = Task::new(
+        TaskId::from("task-002"),
+        "Has deps".to_string(),
+        "".to_string(),
+    );
+    task.dependencies = vec![TaskId::from("task-001"), TaskId::from("task-000")];
+
+    // Not satisfied
+    assert!(!task.dependencies_satisfied(&[]));
+    assert!(!task.dependencies_satisfied(&[TaskId::from("task-001")]));
+
+    // Satisfied
+    assert!(task.dependencies_satisfied(&[TaskId::from("task-001"), TaskId::from("task-000"),]));
+
+    // Satisfied with extra tasks
+    assert!(task.dependencies_satisfied(&[
+        TaskId::from("task-001"),
+        TaskId::from("task-000"),
+        TaskId::from("task-extra"),
+    ]));
+}
+
+// AppState tests
+#[test]
+fn test_app_state_default() {
+    let state = AppState::default();
+    assert!(state.sessions.is_empty());
+    assert!(matches!(
+        state.layout,
+        LayoutMode::Grid { rows: 2, cols: 2 }
+    ));
+    assert!(state.updated_at.is_none());
+}
+
+#[test]
+fn test_app_state_serialization() {
+    let mut state = AppState::default();
+    state.sessions.push(Session::new(
+        SessionId(1),
+        "Test".to_string(),
+        PathBuf::from("/tmp"),
+    ));
+    state.updated_at = Some(chrono::Utc::now());
+
+    let json = serde_json::to_string_pretty(&state).unwrap();
+    let parsed: AppState = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(state.sessions.len(), parsed.sessions.len());
+    assert_eq!(parsed.sessions[0].id, SessionId(1));
+}
+
+#[test]
+fn test_app_state_with_multiple_sessions() {
+    let mut state = AppState::default();
+    state.sessions.push(Session::new(
+        SessionId(1),
+        "Session 1".to_string(),
+        PathBuf::from("/tmp/1"),
+    ));
+    state.sessions.push(Session::new(
+        SessionId(2),
+        "Session 2".to_string(),
+        PathBuf::from("/tmp/2"),
+    ));
+    state.layout = LayoutMode::Grid { rows: 1, cols: 2 };
+
+    let json = serde_json::to_string(&state).unwrap();
+    let parsed: AppState = serde_json::from_str(&json).unwrap();
+
+    assert_eq!(parsed.sessions.len(), 2);
+    assert!(matches!(
+        parsed.layout,
+        LayoutMode::Grid { rows: 1, cols: 2 }
+    ));
+}
+
+// GitRepoInfo tests
+#[test]
+fn test_git_repo_info_creation() {
+    let info = GitRepoInfo {
+        repo_root: PathBuf::from("/home/user/project"),
+        branch: "main".to_string(),
+        dirty_count: 3,
+        has_staged: true,
+        head_sha: Some("abc12345".to_string()),
+        unstaged_files: vec![],
+        staged_files: vec![],
+    };
+    assert_eq!(info.branch, "main");
+    assert_eq!(info.dirty_count, 3);
+    assert!(info.has_staged);
+    assert_eq!(info.head_sha, Some("abc12345".to_string()));
+}
+
+#[test]
+fn test_git_repo_info_serialization() {
+    let info = GitRepoInfo {
+        repo_root: PathBuf::from("/repo"),
+        branch: "feature/test".to_string(),
+        dirty_count: 0,
+        has_staged: false,
+        head_sha: None,
+        unstaged_files: vec![],
+        staged_files: vec![],
+    };
+    let json = serde_json::to_string(&info).unwrap();
+    let parsed: GitRepoInfo = serde_json::from_str(&json).unwrap();
+    assert_eq!(info, parsed);
+}
+
+#[test]
+fn test_git_repo_info_equality() {
+    let info1 = GitRepoInfo {
+        repo_root: PathBuf::from("/repo"),
+        branch: "main".to_string(),
+        dirty_count: 0,
+        has_staged: false,
+        head_sha: None,
+        unstaged_files: vec![],
+        staged_files: vec![],
+    };
+    let info2 = info1.clone();
+    assert_eq!(info1, info2);
+
+    let info3 = GitRepoInfo {
+        repo_root: PathBuf::from("/repo"),
+        branch: "develop".to_string(),
+        dirty_count: 0,
+        has_staged: false,
+        head_sha: None,
+        unstaged_files: vec![],
+        staged_files: vec![],
+    };
+    assert_ne!(info1, info3);
+}
+
+#[test]
+fn test_session_with_git_info() {
+    let mut session = Session::new(
+        SessionId(1),
+        "Git Session".to_string(),
+        PathBuf::from("/project"),
+    );
+    assert!(session.git_info.is_none());
+
+    session.git_info = Some(GitRepoInfo {
+        repo_root: PathBuf::from("/project"),
+        branch: "main".to_string(),
+        dirty_count: 2,
+        has_staged: true,
+        head_sha: Some("deadbeef".to_string()),
+        unstaged_files: vec![],
+        staged_files: vec![],
+    });
+
+    let json = serde_json::to_string(&session).unwrap();
+    let parsed: Session = serde_json::from_str(&json).unwrap();
+    assert!(parsed.git_info.is_some());
+    let gi = parsed.git_info.unwrap();
+    assert_eq!(gi.branch, "main");
+    assert_eq!(gi.dirty_count, 2);
+}
+
+// Worktree tests
+#[test]
+fn test_worktree_new() {
+    let wt = Worktree::new(
+        PathBuf::from("/repo/worktrees/feature"),
+        "feature-branch".to_string(),
+        false,
+    );
+    assert_eq!(wt.path, PathBuf::from("/repo/worktrees/feature"));
+    assert_eq!(wt.branch, "feature-branch");
+    assert!(!wt.is_main);
+    assert!(wt.head_sha.is_none());
+    assert!(wt.bound_session.is_none());
+}
+
+#[test]
+fn test_worktree_main() {
+    let wt = Worktree::new(PathBuf::from("/repo"), "main".to_string(), true);
+    assert!(wt.is_main);
+    assert_eq!(wt.branch, "main");
+}
+
+#[test]
+fn test_worktree_with_head_sha() {
+    let wt = Worktree::new(PathBuf::from("/repo"), "main".to_string(), true)
+        .with_head_sha("abc12345".to_string());
+    assert_eq!(wt.head_sha, Some("abc12345".to_string()));
+}
+
+#[test]
+fn test_worktree_serialization() {
+    let wt = Worktree::new(PathBuf::from("/repo"), "main".to_string(), true)
+        .with_head_sha("abc12345".to_string());
+    let json = serde_json::to_string(&wt).unwrap();
+    let parsed: Worktree = serde_json::from_str(&json).unwrap();
+    assert_eq!(wt.branch, parsed.branch);
+    assert_eq!(wt.head_sha, parsed.head_sha);
+    assert_eq!(wt.is_main, parsed.is_main);
+}
+
+#[test]
+fn test_worktree_equality() {
+    let wt1 = Worktree::new(PathBuf::from("/repo"), "main".to_string(), true);
+    let wt2 = Worktree::new(PathBuf::from("/repo"), "main".to_string(), true);
+    // Note: created_at will differ, but we compare specific fields
+    assert_eq!(wt1.branch, wt2.branch);
+    assert_eq!(wt1.path, wt2.path);
+    assert_eq!(wt1.is_main, wt2.is_main);
+}
+
+#[test]
+fn test_worktree_with_bound_session() {
+    let mut wt = Worktree::new(PathBuf::from("/repo"), "feature".to_string(), false);
+    wt.bound_session = Some(SessionId(42));
+    assert_eq!(wt.bound_session, Some(SessionId(42)));
+
+    let json = serde_json::to_string(&wt).unwrap();
+    let parsed: Worktree = serde_json::from_str(&json).unwrap();
+    assert_eq!(parsed.bound_session, Some(SessionId(42)));
+}
+
+#[test]
+fn test_worktree_clone() {
+    let wt = Worktree::new(PathBuf::from("/repo"), "main".to_string(), true);
+    let cloned = wt.clone();
+    assert_eq!(wt.branch, cloned.branch);
+    assert_eq!(wt.path, cloned.path);
+}
+
+#[test]
+fn test_worktree_debug() {
+    let wt = Worktree::new(PathBuf::from("/repo"), "main".to_string(), true);
+    let debug_str = format!("{:?}", wt);
+    assert!(debug_str.contains("Worktree"));
+    assert!(debug_str.contains("main"));
+}
+
+// WorktreeCreateOptions tests
+#[test]
+fn test_worktree_create_options_new() {
+    let opts = WorktreeCreateOptions::new("feature".to_string());
+    assert_eq!(opts.branch, "feature");
+    assert!(opts.base_branch.is_none());
+    assert!(opts.path.is_none());
+}
+
+#[test]
+fn test_worktree_create_options_with_base_branch() {
+    let opts =
+        WorktreeCreateOptions::new("feature".to_string()).with_base_branch("main".to_string());
+    assert_eq!(opts.branch, "feature");
+    assert_eq!(opts.base_branch, Some("main".to_string()));
+}
+
+#[test]
+fn test_worktree_create_options_with_path() {
+    let opts =
+        WorktreeCreateOptions::new("feature".to_string()).with_path(PathBuf::from("/custom/path"));
+    assert_eq!(opts.path, Some(PathBuf::from("/custom/path")));
+}
+
+#[test]
+fn test_worktree_create_options_all_fields() {
+    let opts = WorktreeCreateOptions::new("feature".to_string())
+        .with_base_branch("develop".to_string())
+        .with_path(PathBuf::from("/worktrees/feature"));
+    assert_eq!(opts.branch, "feature");
+    assert_eq!(opts.base_branch, Some("develop".to_string()));
+    assert_eq!(opts.path, Some(PathBuf::from("/worktrees/feature")));
+}
+
+#[test]
+fn test_worktree_create_options_clone() {
+    let opts =
+        WorktreeCreateOptions::new("feature".to_string()).with_base_branch("main".to_string());
+    let cloned = opts.clone();
+    assert_eq!(opts.branch, cloned.branch);
+    assert_eq!(opts.base_branch, cloned.base_branch);
+}
+
+#[test]
+fn test_worktree_create_options_debug() {
+    let opts = WorktreeCreateOptions::new("feature".to_string());
+    let debug_str = format!("{:?}", opts);
+    assert!(debug_str.contains("WorktreeCreateOptions"));
+    assert!(debug_str.contains("feature"));
+}
+
+// ContextThresholdState tests
+#[test]
+fn test_context_threshold_state_default() {
+    assert_eq!(
+        ContextThresholdState::default(),
+        ContextThresholdState::Normal
+    );
+}
+
+#[test]
+fn test_context_threshold_state_equality() {
+    assert_eq!(ContextThresholdState::Normal, ContextThresholdState::Normal);
+    assert_ne!(
+        ContextThresholdState::Normal,
+        ContextThresholdState::Warning
+    );
+    assert_ne!(
+        ContextThresholdState::Warning,
+        ContextThresholdState::Critical
+    );
+}
+
+#[test]
+fn test_context_threshold_state_serialization() {
+    let states = [
+        ContextThresholdState::Normal,
+        ContextThresholdState::Warning,
+        ContextThresholdState::Critical,
+    ];
+    for state in states {
+        let json = serde_json::to_string(&state).unwrap();
+        let parsed: ContextThresholdState = serde_json::from_str(&json).unwrap();
+        assert_eq!(state, parsed);
+    }
+}
+
+#[test]
+fn test_context_threshold_state_clone_copy() {
+    let state = ContextThresholdState::Warning;
+    let cloned = state;
+    assert_eq!(state, cloned);
+}
+
+#[test]
+fn test_context_threshold_state_debug() {
+    let state = ContextThresholdState::Critical;
+    let debug_str = format!("{:?}", state);
+    assert!(debug_str.contains("Critical"));
+}
+
+// SlotId tests
+#[test]
+fn test_slot_id_display() {
+    let id = SlotId(42);
+    assert_eq!(format!("{}", id), "slot-42");
+}
+
+#[test]
+fn test_slot_id_equality() {
+    assert_eq!(SlotId(1), SlotId(1));
+    assert_ne!(SlotId(1), SlotId(2));
+}
+
+#[test]
+fn test_slot_id_hash() {
+    use std::collections::HashSet;
+    let mut set = HashSet::new();
+    set.insert(SlotId(1));
+    assert!(set.contains(&SlotId(1)));
+    assert!(!set.contains(&SlotId(2)));
+}
+
+#[test]
+fn test_slot_id_serialization() {
+    let id = SlotId(42);
+    let json = serde_json::to_string(&id).unwrap();
+    let parsed: SlotId = serde_json::from_str(&json).unwrap();
+    assert_eq!(id, parsed);
+}
+
+// SplitDirection tests
+#[test]
+fn test_split_direction_serialization() {
+    let directions = [SplitDirection::Horizontal, SplitDirection::Vertical];
+    for dir in directions {
+        let json = serde_json::to_string(&dir).unwrap();
+        let parsed: SplitDirection = serde_json::from_str(&json).unwrap();
+        assert_eq!(dir, parsed);
+    }
+}
+
+// LayoutNode tests
+#[test]
+fn test_layout_node_leaf() {
+    let node = LayoutNode::Leaf { slot: SlotId(0) };
+    assert_eq!(node.leaf_count(), 1);
+    assert_eq!(node.slots_in_order(), vec![SlotId(0)]);
+}
+
+#[test]
+fn test_layout_node_split() {
+    let node = LayoutNode::Split {
+        direction: SplitDirection::Horizontal,
+        ratio: 0.5,
+        first: Box::new(LayoutNode::Leaf { slot: SlotId(0) }),
+        second: Box::new(LayoutNode::Leaf { slot: SlotId(1) }),
+    };
+    assert_eq!(node.leaf_count(), 2);
+    assert_eq!(node.slots_in_order(), vec![SlotId(0), SlotId(1)]);
+}
+
+#[test]
+fn test_layout_node_from_grid_1x1() {
+    let node = LayoutNode::from_grid(1, 1);
+    assert_eq!(node.leaf_count(), 1);
+    assert!(matches!(node, LayoutNode::Leaf { slot: SlotId(0) }));
+}
+
+#[test]
+fn test_layout_node_from_grid_2x2() {
+    let node = LayoutNode::from_grid(2, 2);
+    assert_eq!(node.leaf_count(), 4);
+    let slots = node.slots_in_order();
+    assert_eq!(slots, vec![SlotId(0), SlotId(1), SlotId(2), SlotId(3)]);
+}
+
+#[test]
+fn test_layout_node_from_grid_1x4() {
+    let node = LayoutNode::from_grid(1, 4);
+    assert_eq!(node.leaf_count(), 4);
+    let slots = node.slots_in_order();
+    assert_eq!(slots, vec![SlotId(0), SlotId(1), SlotId(2), SlotId(3)]);
+}
+
+#[test]
+fn test_layout_node_from_grid_4x1() {
+    let node = LayoutNode::from_grid(4, 1);
+    assert_eq!(node.leaf_count(), 4);
+    let slots = node.slots_in_order();
+    assert_eq!(slots, vec![SlotId(0), SlotId(1), SlotId(2), SlotId(3)]);
+}
+
+#[test]
+fn test_layout_node_from_grid_2x3() {
+    let node = LayoutNode::from_grid(2, 3);
+    assert_eq!(node.leaf_count(), 6);
+    let slots = node.slots_in_order();
+    assert_eq!(
+        slots,
+        vec![
+            SlotId(0),
+            SlotId(1),
+            SlotId(2),
+            SlotId(3),
+            SlotId(4),
+            SlotId(5)
+        ]
+    );
+}
+
+#[test]
+fn test_layout_node_split_slot() {
+    let node = LayoutNode::Leaf { slot: SlotId(0) };
+    let new_tree = node
+        .split_slot(SlotId(0), SplitDirection::Horizontal, 0.5, SlotId(1))
+        .unwrap();
+    assert_eq!(new_tree.leaf_count(), 2);
+    assert_eq!(new_tree.slots_in_order(), vec![SlotId(0), SlotId(1)]);
+}
+
+#[test]
+fn test_layout_node_split_slot_nested() {
+    let tree = LayoutNode::from_grid(2, 2);
+    // Split slot 2 vertically
+    let new_tree = tree
+        .split_slot(SlotId(2), SplitDirection::Vertical, 0.5, SlotId(4))
+        .unwrap();
+    assert_eq!(new_tree.leaf_count(), 5);
+    assert!(new_tree.contains_slot(SlotId(4)));
+}
+
+#[test]
+fn test_layout_node_split_slot_not_found() {
+    let node = LayoutNode::Leaf { slot: SlotId(0) };
+    let result = node.split_slot(SlotId(99), SplitDirection::Horizontal, 0.5, SlotId(1));
+    assert!(result.is_none());
+}
+
+#[test]
+fn test_layout_node_close_slot() {
+    let tree = LayoutNode::Split {
+        direction: SplitDirection::Horizontal,
+        ratio: 0.5,
+        first: Box::new(LayoutNode::Leaf { slot: SlotId(0) }),
+        second: Box::new(LayoutNode::Leaf { slot: SlotId(1) }),
+    };
+    let after = tree.close_slot(SlotId(0)).unwrap();
+    assert!(matches!(after, LayoutNode::Leaf { slot: SlotId(1) }));
+}
+
+#[test]
+fn test_layout_node_close_slot_promotes_sibling() {
+    let tree = LayoutNode::Split {
+        direction: SplitDirection::Horizontal,
+        ratio: 0.5,
+        first: Box::new(LayoutNode::Leaf { slot: SlotId(0) }),
+        second: Box::new(LayoutNode::Leaf { slot: SlotId(1) }),
+    };
+    let after = tree.close_slot(SlotId(1)).unwrap();
+    assert!(matches!(after, LayoutNode::Leaf { slot: SlotId(0) }));
+}
+
+#[test]
+fn test_layout_node_close_root_leaf_returns_none() {
+    let node = LayoutNode::Leaf { slot: SlotId(0) };
+    assert!(node.close_slot(SlotId(0)).is_none());
+}
+
+#[test]
+fn test_layout_node_close_slot_not_found() {
+    let tree = LayoutNode::Split {
+        direction: SplitDirection::Horizontal,
+        ratio: 0.5,
+        first: Box::new(LayoutNode::Leaf { slot: SlotId(0) }),
+        second: Box::new(LayoutNode::Leaf { slot: SlotId(1) }),
+    };
+    assert!(tree.close_slot(SlotId(99)).is_none());
+}
+
+#[test]
+fn test_layout_node_close_slot_nested() {
+    // Build a tree: V(H(0,1), 2)
+    let tree = LayoutNode::Split {
+        direction: SplitDirection::Vertical,
+        ratio: 0.5,
+        first: Box::new(LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf { slot: SlotId(0) }),
+            second: Box::new(LayoutNode::Leaf { slot: SlotId(1) }),
+        }),
+        second: Box::new(LayoutNode::Leaf { slot: SlotId(2) }),
+    };
+    // Close slot 0, should promote slot 1
+    let after = tree.close_slot(SlotId(0)).unwrap();
+    assert_eq!(after.leaf_count(), 2);
+    assert_eq!(after.slots_in_order(), vec![SlotId(1), SlotId(2)]);
+}
+
+#[test]
+fn test_layout_node_set_ratio_for_slot() {
+    let tree = LayoutNode::Split {
+        direction: SplitDirection::Horizontal,
+        ratio: 0.5,
+        first: Box::new(LayoutNode::Leaf { slot: SlotId(0) }),
+        second: Box::new(LayoutNode::Leaf { slot: SlotId(1) }),
+    };
+    let new_tree = tree.set_ratio_for_slot(SlotId(0), 0.3).unwrap();
+    match &new_tree {
+        LayoutNode::Split { ratio, .. } => {
+            assert!((ratio - 0.3).abs() < 0.001);
+        }
+        _ => panic!("Expected split"),
+    }
+}
+
+#[test]
+fn test_layout_node_set_ratio_clamps() {
+    let tree = LayoutNode::Split {
+        direction: SplitDirection::Horizontal,
+        ratio: 0.5,
+        first: Box::new(LayoutNode::Leaf { slot: SlotId(0) }),
+        second: Box::new(LayoutNode::Leaf { slot: SlotId(1) }),
+    };
+    // Ratio should be clamped to 0.1..0.9
+    let new_tree = tree.set_ratio_for_slot(SlotId(0), 0.0).unwrap();
+    match &new_tree {
+        LayoutNode::Split { ratio, .. } => {
+            assert!((ratio - 0.1).abs() < 0.001);
+        }
+        _ => panic!("Expected split"),
+    }
+    let new_tree = tree.set_ratio_for_slot(SlotId(0), 1.0).unwrap();
+    match &new_tree {
+        LayoutNode::Split { ratio, .. } => {
+            assert!((ratio - 0.9).abs() < 0.001);
+        }
+        _ => panic!("Expected split"),
+    }
+}
+
+#[test]
+fn test_layout_node_contains_slot() {
+    let tree = LayoutNode::from_grid(2, 2);
+    assert!(tree.contains_slot(SlotId(0)));
+    assert!(tree.contains_slot(SlotId(3)));
+    assert!(!tree.contains_slot(SlotId(4)));
+}
+
+#[test]
+fn test_layout_node_serialization() {
+    let tree = LayoutNode::from_grid(2, 2);
+    let json = serde_json::to_string(&tree).unwrap();
+    let parsed: LayoutNode = serde_json::from_str(&json).unwrap();
+    assert_eq!(tree, parsed);
+}
+
+#[test]
+fn test_layout_mode_split_tree_serialization() {
+    let tree = LayoutNode::from_grid(2, 2);
+    let mode = LayoutMode::SplitTree { root: tree.clone() };
+    let json = serde_json::to_string(&mode).unwrap();
+    let parsed: LayoutMode = serde_json::from_str(&json).unwrap();
+    assert_eq!(mode, parsed);
+}
+
+#[test]
+fn test_layout_mode_backward_compat_grid() {
+    // Old JSON for Grid should still deserialize
+    let json = r#"{"Grid":{"rows":2,"cols":2}}"#;
+    let parsed: LayoutMode = serde_json::from_str(json).unwrap();
+    assert!(matches!(parsed, LayoutMode::Grid { rows: 2, cols: 2 }));
+}
+
+#[test]
+fn test_layout_mode_backward_compat_single() {
+    let json = r#""Single""#;
+    let parsed: LayoutMode = serde_json::from_str(json).unwrap();
+    assert!(matches!(parsed, LayoutMode::Single));
+}
+
+#[test]
+fn test_layout_node_from_grid_3x3() {
+    let node = LayoutNode::from_grid(3, 3);
+    assert_eq!(node.leaf_count(), 9);
+    let slots = node.slots_in_order();
+    assert_eq!(slots.len(), 9);
+    // Slots should be numbered 0-8
+    for (i, slot) in slots.iter().enumerate().take(9) {
+        assert_eq!(*slot, SlotId(i as u32));
+    }
+}

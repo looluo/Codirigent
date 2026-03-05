@@ -1,173 +1,17 @@
-//! Task queue management and scheduling.
+//! Task queue struct and core operations.
 //!
-//! This module provides the [`TaskQueue`] system for managing task ordering,
-//! priority-based scheduling, and dependency tracking. It supports multiple
-//! scheduling modes and integrates with the event bus for state change notifications.
-//!
-//! ## Scheduling Modes
-//!
-//! - [`SchedulerMode::Fifo`]: First-in, first-out ordering
-//! - [`SchedulerMode::Priority`]: Order by priority level (Critical > High > Medium > Low)
-//! - [`SchedulerMode::Dependency`]: Consider only dependency ordering
-//! - [`SchedulerMode::Smart`]: Combine priority, age, and tag matching (default)
-//!
-//! ## Example
-//!
-//! ```
-//! use codirigent_core::{
-//!     TaskQueue, SchedulerConfig, SchedulerMode,
-//!     Task, TaskId, DefaultEventBus,
-//! };
-//! use codirigent_core::traits::EventBus;
-//! use std::sync::Arc;
-//!
-//! // Create a task queue with default configuration
-//! let event_bus = Arc::new(DefaultEventBus::new(16));
-//! let mut queue = TaskQueue::new(SchedulerConfig::default(), event_bus);
-//!
-//! // Add a task
-//! let task = Task::new(
-//!     TaskId::from("task-001"),
-//!     "Implement feature".to_string(),
-//!     "Add new feature X".to_string(),
-//! );
-//! queue.enqueue(task).unwrap();
-//!
-//! // Get the next task to work on
-//! if let Some(next) = queue.next_task(&[]) {
-//!     println!("Next task: {}", next.title);
-//! }
-//! ```
+//! Contains the [`TaskQueue`] struct and its methods for enqueueing,
+//! dequeueing, assigning, completing, and requeuing tasks.
 
 use crate::events::CodirigentEvent;
 use crate::traits::EventBus;
 use crate::types::*;
 use anyhow::{anyhow, Result};
-use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use std::path::Path;
 use std::sync::Arc;
 
-/// Check if a session's working_directory is within a task's project_dir.
-///
-/// Uses canonicalized prefix matching: the session directory must be equal to
-/// or a subdirectory of the project directory.
-///
-/// # Arguments
-///
-/// * `session_dir` - The session's working directory
-/// * `project_dir` - The task's required project directory
-///
-/// # Returns
-///
-/// `true` if the session directory is within the project directory.
-pub fn session_matches_project(session_dir: &Path, project_dir: &Path) -> bool {
-    let canon_session =
-        std::fs::canonicalize(session_dir).unwrap_or_else(|_| session_dir.to_path_buf());
-    let canon_project =
-        std::fs::canonicalize(project_dir).unwrap_or_else(|_| project_dir.to_path_buf());
-    canon_session.starts_with(&canon_project)
-}
-
-/// Scheduling mode for task assignment.
-///
-/// Determines how tasks are ordered and selected for assignment to sessions.
-///
-/// # Example
-///
-/// ```
-/// use codirigent_core::SchedulerMode;
-///
-/// let mode = SchedulerMode::default();
-/// assert_eq!(mode, SchedulerMode::Smart);
-///
-/// let mode = SchedulerMode::Priority;
-/// assert_eq!(mode, SchedulerMode::Priority);
-/// ```
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum SchedulerMode {
-    /// First-in, first-out ordering.
-    ///
-    /// Tasks are processed in the order they were added to the queue.
-    Fifo,
-
-    /// Order by priority level.
-    ///
-    /// Higher priority tasks are selected first (Critical > High > Medium > Low).
-    Priority,
-
-    /// Consider dependencies only.
-    ///
-    /// Tasks with fewer unmet dependencies are prioritized.
-    Dependency,
-
-    /// Combine priority, age, and dependencies (default).
-    ///
-    /// Uses a weighted scoring system considering priority level,
-    /// time spent waiting in queue, and tag matching with sessions.
-    #[default]
-    Smart,
-}
-
-/// Configuration for the task scheduler.
-///
-/// Controls how tasks are ordered, when they are auto-assigned,
-/// and the weighting factors for smart scheduling.
-///
-/// # Example
-///
-/// ```
-/// use codirigent_core::{SchedulerConfig, SchedulerMode};
-///
-/// let config = SchedulerConfig::default();
-/// assert_eq!(config.mode, SchedulerMode::Smart);
-/// assert!(config.auto_assign);
-/// assert_eq!(config.idle_threshold_seconds, 5);
-///
-/// // Custom configuration
-/// let config = SchedulerConfig {
-///     mode: SchedulerMode::Priority,
-///     auto_assign: false,
-///     ..Default::default()
-/// };
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SchedulerConfig {
-    /// Scheduling mode determining task ordering.
-    pub mode: SchedulerMode,
-
-    /// Whether to auto-assign tasks when sessions become idle.
-    pub auto_assign: bool,
-
-    /// Whether to confirm before auto-assigning.
-    pub confirm_before_assign: bool,
-
-    /// Seconds of idle time before considering a session available.
-    pub idle_threshold_seconds: u32,
-
-    /// Weight for priority in smart mode (0.0-1.0).
-    pub priority_weight: f32,
-
-    /// Weight for waiting time in smart mode (0.0-1.0).
-    pub age_weight: f32,
-
-    /// Weight for tag matching in smart mode (0.0-1.0).
-    pub tag_match_weight: f32,
-}
-
-impl Default for SchedulerConfig {
-    fn default() -> Self {
-        Self {
-            mode: SchedulerMode::default(),
-            auto_assign: true,
-            confirm_before_assign: false,
-            idle_threshold_seconds: 5,
-            priority_weight: 0.5,
-            age_weight: 0.3,
-            tag_match_weight: 0.2,
-        }
-    }
-}
+use super::config::{SchedulerConfig, SchedulerMode};
+use super::selection::priority_to_value;
 
 /// Task queue manager handles task ordering and scheduling.
 ///
@@ -301,6 +145,16 @@ impl TaskQueue {
     /// ```
     pub fn get_state(&self) -> &QueueState {
         &self.state
+    }
+
+    /// Get internal state reference (used by selection module).
+    pub(crate) fn state(&self) -> &QueueState {
+        &self.state
+    }
+
+    /// Get internal tasks map reference (used by selection module).
+    pub(crate) fn tasks(&self) -> &HashMap<TaskId, Task> {
+        &self.tasks
     }
 
     /// Get the scheduler configuration.
@@ -457,117 +311,6 @@ impl TaskQueue {
 
         // Remove and return task
         self.tasks.remove(id)
-    }
-
-    /// Get the next task to assign based on scheduling mode.
-    ///
-    /// Returns the highest-priority unblocked task that is still in
-    /// the `Queued` status and has all dependencies satisfied.
-    ///
-    /// # Arguments
-    ///
-    /// * `completed_tasks` - List of task IDs that have been completed
-    ///
-    /// # Returns
-    ///
-    /// The next task to assign, or `None` if no tasks are available.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use codirigent_core::{TaskQueue, SchedulerConfig, Task, TaskId, DefaultEventBus};
-    /// use std::sync::Arc;
-    ///
-    /// let event_bus = Arc::new(DefaultEventBus::new(16));
-    /// let mut queue = TaskQueue::new(SchedulerConfig::default(), event_bus);
-    ///
-    /// let task = Task::new(TaskId::from("test"), "Test".to_string(), "".to_string());
-    /// queue.enqueue(task).unwrap();
-    ///
-    /// let next = queue.next_task(&[]);
-    /// assert!(next.is_some());
-    /// assert_eq!(next.unwrap().id, TaskId::from("test"));
-    /// ```
-    pub fn next_task(&self, completed_tasks: &[TaskId]) -> Option<&Task> {
-        self.state
-            .order
-            .iter()
-            .filter_map(|id| self.tasks.get(id))
-            .filter(|task| {
-                task.status == TaskStatus::Queued
-                    && !self.is_blocked(&task.id)
-                    && task.dependencies_satisfied(completed_tasks)
-            })
-            .max_by(|a, b| {
-                let score_a = self.calculate_score(a, completed_tasks);
-                let score_b = self.calculate_score(b, completed_tasks);
-                score_a
-                    .partial_cmp(&score_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
-    }
-
-    /// Get the next task for a specific session (considers tag matching).
-    ///
-    /// Similar to `next_task`, but also considers tag matching between
-    /// the session's group and task tags for better assignment.
-    ///
-    /// # Arguments
-    ///
-    /// * `session` - The session to find a task for
-    /// * `completed_tasks` - List of task IDs that have been completed
-    ///
-    /// # Returns
-    ///
-    /// The best matching task for the session, or `None` if no tasks are available.
-    ///
-    /// # Example
-    ///
-    /// ```
-    /// use codirigent_core::{
-    ///     TaskQueue, SchedulerConfig, Task, TaskId, Session, SessionId,
-    ///     DefaultEventBus,
-    /// };
-    /// use std::sync::Arc;
-    /// use std::path::PathBuf;
-    ///
-    /// let event_bus = Arc::new(DefaultEventBus::new(16));
-    /// let mut queue = TaskQueue::new(SchedulerConfig::default(), event_bus);
-    ///
-    /// let mut task = Task::new(TaskId::from("backend"), "Backend".to_string(), "".to_string());
-    /// task.tags = vec!["backend".to_string()];
-    /// queue.enqueue(task).unwrap();
-    ///
-    /// let mut session = Session::new(SessionId(1), "Backend Session".to_string(), PathBuf::from("/tmp"));
-    /// session.group = Some("backend".to_string());
-    ///
-    /// let next = queue.next_task_for_session(&session, &[]);
-    /// assert!(next.is_some());
-    /// ```
-    pub fn next_task_for_session(
-        &self,
-        session: &Session,
-        completed_tasks: &[TaskId],
-    ) -> Option<&Task> {
-        self.state
-            .order
-            .iter()
-            .filter_map(|id| self.tasks.get(id))
-            .filter(|task| {
-                task.status == TaskStatus::Queued
-                    && !self.is_blocked(&task.id)
-                    && task.dependencies_satisfied(completed_tasks)
-                    && task.project_dir.as_ref().map_or(true, |pd| {
-                        session_matches_project(&session.working_directory, pd)
-                    })
-            })
-            .max_by(|a, b| {
-                let score_a = self.calculate_score_for_session(a, session, completed_tasks);
-                let score_b = self.calculate_score_for_session(b, session, completed_tasks);
-                score_a
-                    .partial_cmp(&score_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
     }
 
     /// Mark a task as assigned to a session.
@@ -900,7 +643,7 @@ impl TaskQueue {
     }
 
     /// Insert a task into the queue order based on priority.
-    fn insert_by_priority(&mut self, id: &TaskId) {
+    pub(crate) fn insert_by_priority(&mut self, id: &TaskId) {
         let task = match self.tasks.get(id) {
             Some(t) => t,
             None => return,
@@ -932,7 +675,7 @@ impl TaskQueue {
     }
 
     /// Update blocked status for a specific task.
-    fn update_blocked_for_task(&mut self, id: &TaskId) {
+    pub(crate) fn update_blocked_for_task(&mut self, id: &TaskId) {
         let task = match self.tasks.get(id) {
             Some(t) => t,
             None => return,
@@ -967,59 +710,6 @@ impl TaskQueue {
 
         // Remove entries with no blockers
         self.state.blocked.retain(|_, v| !v.is_empty());
-    }
-
-    /// Calculate priority score for a task.
-    fn calculate_score(&self, task: &Task, _completed_tasks: &[TaskId]) -> f32 {
-        match self.config.mode {
-            SchedulerMode::Fifo => {
-                // Earlier position = higher score
-                let pos = self.state.order.iter().position(|id| id == &task.id);
-                pos.map(|p| 1.0 / (p as f32 + 1.0)).unwrap_or(0.0)
-            }
-            SchedulerMode::Priority => priority_to_value(&task.priority) as f32,
-            SchedulerMode::Dependency => {
-                // Fewer dependencies = higher score
-                1.0 / (task.dependencies.len() as f32 + 1.0)
-            }
-            SchedulerMode::Smart => {
-                let priority_score = priority_to_value(&task.priority) as f32 / 4.0;
-                let age_score = self.calculate_age_score(task);
-                self.config.priority_weight * priority_score + self.config.age_weight * age_score
-            }
-        }
-    }
-
-    /// Calculate score for a task considering session tag matching.
-    fn calculate_score_for_session(
-        &self,
-        task: &Task,
-        session: &Session,
-        completed_tasks: &[TaskId],
-    ) -> f32 {
-        let base_score = self.calculate_score(task, completed_tasks);
-
-        // Add tag matching bonus
-        let tag_score = if let Some(ref group) = session.group {
-            if task.tags.iter().any(|t| t == group) {
-                1.0
-            } else {
-                0.0
-            }
-        } else {
-            0.0
-        };
-
-        base_score + self.config.tag_match_weight * tag_score
-    }
-
-    /// Calculate age score based on how long the task has been waiting.
-    fn calculate_age_score(&self, task: &Task) -> f32 {
-        let age = chrono::Utc::now()
-            .signed_duration_since(task.created_at)
-            .num_minutes();
-        // Normalize: 1 hour waiting = 1.0 score
-        (age as f32 / 60.0).min(1.0)
     }
 }
 
@@ -1084,140 +774,15 @@ impl TaskQueueService for TaskQueue {
     }
 }
 
-/// Convert task priority to numeric value for comparison.
-fn priority_to_value(priority: &TaskPriority) -> u8 {
-    match priority {
-        TaskPriority::Critical => 4,
-        TaskPriority::High => 3,
-        TaskPriority::Medium => 2,
-        TaskPriority::Low => 1,
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::event_bus::DefaultEventBus;
-    use std::path::PathBuf;
+    use crate::scheduler::config::SchedulerConfig;
 
     fn create_queue() -> TaskQueue {
         let event_bus = Arc::new(DefaultEventBus::new(16));
         TaskQueue::new(SchedulerConfig::default(), event_bus)
-    }
-
-    fn create_queue_with_mode(mode: SchedulerMode) -> TaskQueue {
-        let event_bus = Arc::new(DefaultEventBus::new(16));
-        let config = SchedulerConfig {
-            mode,
-            ..Default::default()
-        };
-        TaskQueue::new(config, event_bus)
-    }
-
-    // ========== SchedulerMode Tests ==========
-
-    #[test]
-    fn test_scheduler_mode_default() {
-        assert_eq!(SchedulerMode::default(), SchedulerMode::Smart);
-    }
-
-    #[test]
-    fn test_scheduler_mode_equality() {
-        assert_eq!(SchedulerMode::Fifo, SchedulerMode::Fifo);
-        assert_eq!(SchedulerMode::Priority, SchedulerMode::Priority);
-        assert_eq!(SchedulerMode::Dependency, SchedulerMode::Dependency);
-        assert_eq!(SchedulerMode::Smart, SchedulerMode::Smart);
-        assert_ne!(SchedulerMode::Fifo, SchedulerMode::Priority);
-    }
-
-    #[test]
-    fn test_scheduler_mode_serialization() {
-        let modes = [
-            SchedulerMode::Fifo,
-            SchedulerMode::Priority,
-            SchedulerMode::Dependency,
-            SchedulerMode::Smart,
-        ];
-
-        for mode in modes {
-            let json = serde_json::to_string(&mode).unwrap();
-            let parsed: SchedulerMode = serde_json::from_str(&json).unwrap();
-            assert_eq!(mode, parsed);
-        }
-    }
-
-    #[test]
-    fn test_scheduler_mode_debug() {
-        let mode = SchedulerMode::Smart;
-        let debug_str = format!("{:?}", mode);
-        assert!(debug_str.contains("Smart"));
-    }
-
-    #[test]
-    fn test_scheduler_mode_clone() {
-        let mode = SchedulerMode::Priority;
-        let cloned = mode;
-        assert_eq!(mode, cloned);
-    }
-
-    // ========== SchedulerConfig Tests ==========
-
-    #[test]
-    fn test_scheduler_config_default() {
-        let config = SchedulerConfig::default();
-        assert_eq!(config.mode, SchedulerMode::Smart);
-        assert!(config.auto_assign);
-        assert!(!config.confirm_before_assign);
-        assert_eq!(config.idle_threshold_seconds, 5);
-        assert!((config.priority_weight - 0.5).abs() < f32::EPSILON);
-        assert!((config.age_weight - 0.3).abs() < f32::EPSILON);
-        assert!((config.tag_match_weight - 0.2).abs() < f32::EPSILON);
-    }
-
-    #[test]
-    fn test_scheduler_config_serialization() {
-        let config = SchedulerConfig {
-            mode: SchedulerMode::Priority,
-            auto_assign: false,
-            confirm_before_assign: true,
-            idle_threshold_seconds: 10,
-            priority_weight: 0.7,
-            age_weight: 0.2,
-            tag_match_weight: 0.1,
-        };
-        let json = serde_json::to_string(&config).unwrap();
-        let parsed: SchedulerConfig = serde_json::from_str(&json).unwrap();
-        assert_eq!(parsed.mode, SchedulerMode::Priority);
-        assert!(!parsed.auto_assign);
-        assert!(parsed.confirm_before_assign);
-        assert_eq!(parsed.idle_threshold_seconds, 10);
-    }
-
-    #[test]
-    fn test_scheduler_config_equality() {
-        let config1 = SchedulerConfig::default();
-        let config2 = SchedulerConfig::default();
-        let config3 = SchedulerConfig {
-            mode: SchedulerMode::Fifo,
-            ..Default::default()
-        };
-        assert_eq!(config1, config2);
-        assert_ne!(config1, config3);
-    }
-
-    #[test]
-    fn test_scheduler_config_clone() {
-        let config = SchedulerConfig::default();
-        let cloned = config.clone();
-        assert_eq!(config, cloned);
-    }
-
-    #[test]
-    fn test_scheduler_config_debug() {
-        let config = SchedulerConfig::default();
-        let debug_str = format!("{:?}", config);
-        assert!(debug_str.contains("SchedulerConfig"));
-        assert!(debug_str.contains("auto_assign"));
     }
 
     // ========== TaskQueue Basic Tests ==========
@@ -1350,155 +915,6 @@ mod tests {
         // Dequeue task-002 should remove it from blocked
         queue.dequeue(&TaskId::from("task-002"));
         assert!(!queue.is_blocked(&TaskId::from("task-002")));
-    }
-
-    // ========== Next Task Tests ==========
-
-    #[test]
-    fn test_next_task_empty_queue() {
-        let queue = create_queue();
-        assert!(queue.next_task(&[]).is_none());
-    }
-
-    #[test]
-    fn test_next_task_single() {
-        let mut queue = create_queue();
-        let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
-        queue.enqueue(task).unwrap();
-
-        let next = queue.next_task(&[]);
-        assert!(next.is_some());
-        assert_eq!(next.unwrap().id, TaskId::from("task-001"));
-    }
-
-    #[test]
-    fn test_next_task_priority_order() {
-        let mut queue = create_queue();
-
-        let mut low_task = Task::new(TaskId::from("low"), "Low".to_string(), "".to_string());
-        low_task.priority = TaskPriority::Low;
-
-        let mut high_task = Task::new(TaskId::from("high"), "High".to_string(), "".to_string());
-        high_task.priority = TaskPriority::High;
-
-        queue.enqueue(low_task).unwrap();
-        queue.enqueue(high_task).unwrap();
-
-        let next = queue.next_task(&[]);
-        assert_eq!(next.unwrap().id, TaskId::from("high"));
-    }
-
-    #[test]
-    fn test_next_task_critical_priority() {
-        let mut queue = create_queue();
-
-        let mut high_task = Task::new(TaskId::from("high"), "High".to_string(), "".to_string());
-        high_task.priority = TaskPriority::High;
-
-        let mut critical_task = Task::new(
-            TaskId::from("critical"),
-            "Critical".to_string(),
-            "".to_string(),
-        );
-        critical_task.priority = TaskPriority::Critical;
-
-        queue.enqueue(high_task).unwrap();
-        queue.enqueue(critical_task).unwrap();
-
-        let next = queue.next_task(&[]);
-        assert_eq!(next.unwrap().id, TaskId::from("critical"));
-    }
-
-    #[test]
-    fn test_next_task_respects_dependencies() {
-        let mut queue = create_queue();
-
-        let task1 = Task::new(TaskId::from("task-1"), "First".to_string(), "".to_string());
-
-        let mut task2 = Task::new(TaskId::from("task-2"), "Second".to_string(), "".to_string());
-        task2.dependencies = vec![TaskId::from("task-1")];
-
-        queue.enqueue(task1).unwrap();
-        queue.enqueue(task2).unwrap();
-
-        // task-2 should be blocked, so next should return task-1
-        let next = queue.next_task(&[]);
-        assert_eq!(next.unwrap().id, TaskId::from("task-1"));
-
-        // Assign and complete task-1
-        queue
-            .assign_task(&TaskId::from("task-1"), SessionId(1))
-            .unwrap();
-        queue.complete_task(&TaskId::from("task-1"), true).unwrap();
-
-        // After task-1 completes, task-2 is unblocked
-        let next = queue.next_task(&[TaskId::from("task-1")]);
-        assert_eq!(next.unwrap().id, TaskId::from("task-2"));
-    }
-
-    #[test]
-    fn test_next_task_skips_assigned() {
-        let mut queue = create_queue();
-
-        let task1 = Task::new(TaskId::from("task-1"), "First".to_string(), "".to_string());
-        let task2 = Task::new(TaskId::from("task-2"), "Second".to_string(), "".to_string());
-
-        queue.enqueue(task1).unwrap();
-        queue.enqueue(task2).unwrap();
-
-        // Assign first task
-        queue
-            .assign_task(&TaskId::from("task-1"), SessionId(1))
-            .unwrap();
-
-        // Next should return second task
-        let next = queue.next_task(&[]);
-        assert_eq!(next.unwrap().id, TaskId::from("task-2"));
-    }
-
-    // ========== Next Task for Session Tests ==========
-
-    #[test]
-    fn test_next_task_for_session_tag_matching() {
-        let mut queue = create_queue();
-
-        let mut backend_task = Task::new(
-            TaskId::from("backend"),
-            "Backend Task".to_string(),
-            "".to_string(),
-        );
-        backend_task.tags = vec!["backend".to_string()];
-
-        let mut frontend_task = Task::new(
-            TaskId::from("frontend"),
-            "Frontend Task".to_string(),
-            "".to_string(),
-        );
-        frontend_task.tags = vec!["frontend".to_string()];
-
-        queue.enqueue(backend_task).unwrap();
-        queue.enqueue(frontend_task).unwrap();
-
-        // Session with backend group should prefer backend task
-        let mut session = Session::new(SessionId(1), "Backend".to_string(), PathBuf::from("/tmp"));
-        session.group = Some("backend".to_string());
-
-        let next = queue.next_task_for_session(&session, &[]);
-        assert_eq!(next.unwrap().id, TaskId::from("backend"));
-    }
-
-    #[test]
-    fn test_next_task_for_session_no_group() {
-        let mut queue = create_queue();
-
-        let task = Task::new(TaskId::from("task-1"), "Task".to_string(), "".to_string());
-        queue.enqueue(task).unwrap();
-
-        // Session without group
-        let session = Session::new(SessionId(1), "Session".to_string(), PathBuf::from("/tmp"));
-
-        let next = queue.next_task_for_session(&session, &[]);
-        assert!(next.is_some());
     }
 
     // ========== Assign Task Tests ==========
@@ -1721,62 +1137,59 @@ mod tests {
         assert_eq!(blocked[0].id, TaskId::from("task-2"));
     }
 
-    // ========== FIFO Mode Tests ==========
+    // ========== All Tasks Tests ==========
 
     #[test]
-    fn test_fifo_mode_ordering() {
-        let mut queue = create_queue_with_mode(SchedulerMode::Fifo);
+    fn test_all_tasks() {
+        let mut queue = create_queue();
 
-        let mut high_task = Task::new(TaskId::from("high"), "High".to_string(), "".to_string());
-        high_task.priority = TaskPriority::High;
+        let task1 = Task::new(TaskId::from("task-1"), "First".to_string(), "".to_string());
+        let task2 = Task::new(TaskId::from("task-2"), "Second".to_string(), "".to_string());
 
-        let low_task = Task::new(TaskId::from("low"), "Low".to_string(), "".to_string());
-
-        // Add low first, then high
-        queue.enqueue(low_task).unwrap();
-        queue.enqueue(high_task).unwrap();
-
-        // In FIFO mode, low should come first (despite lower priority)
-        let next = queue.next_task(&[]);
-        assert_eq!(next.unwrap().id, TaskId::from("low"));
-    }
-
-    // ========== Dependency Mode Tests ==========
-
-    #[test]
-    fn test_dependency_mode_ordering() {
-        let mut queue = create_queue_with_mode(SchedulerMode::Dependency);
-
-        let task1 = Task::new(
-            TaskId::from("no-deps"),
-            "No deps".to_string(),
-            "".to_string(),
-        );
-
-        let mut task2 = Task::new(
-            TaskId::from("has-deps"),
-            "Has deps".to_string(),
-            "".to_string(),
-        );
-        task2.dependencies = vec![TaskId::from("external-1"), TaskId::from("external-2")];
-
-        queue.enqueue(task2).unwrap();
         queue.enqueue(task1).unwrap();
+        queue.enqueue(task2).unwrap();
 
-        // Task with no deps should score higher in dependency mode
-        // (because the dependencies are external and don't block)
-        let next = queue.next_task(&[]);
-        assert!(next.is_some());
+        let all = queue.all_tasks();
+        assert_eq!(all.len(), 2);
+        assert!(all.contains_key(&TaskId::from("task-1")));
+        assert!(all.contains_key(&TaskId::from("task-2")));
     }
 
-    // ========== Priority to Value Tests ==========
+    // ========== Edge Cases Tests ==========
 
     #[test]
-    fn test_priority_to_value() {
-        assert_eq!(priority_to_value(&TaskPriority::Critical), 4);
-        assert_eq!(priority_to_value(&TaskPriority::High), 3);
-        assert_eq!(priority_to_value(&TaskPriority::Medium), 2);
-        assert_eq!(priority_to_value(&TaskPriority::Low), 1);
+    fn test_multiple_dependencies() {
+        let mut queue = create_queue();
+
+        let task1 = Task::new(TaskId::from("task-1"), "First".to_string(), "".to_string());
+        let task2 = Task::new(TaskId::from("task-2"), "Second".to_string(), "".to_string());
+        let mut task3 = Task::new(TaskId::from("task-3"), "Third".to_string(), "".to_string());
+        task3.dependencies = vec![TaskId::from("task-1"), TaskId::from("task-2")];
+
+        queue.enqueue(task1).unwrap();
+        queue.enqueue(task2).unwrap();
+        queue.enqueue(task3).unwrap();
+
+        // task-3 should be blocked
+        assert!(queue.is_blocked(&TaskId::from("task-3")));
+
+        // Complete task-1
+        queue
+            .assign_task(&TaskId::from("task-1"), SessionId(1))
+            .unwrap();
+        queue.complete_task(&TaskId::from("task-1"), true).unwrap();
+
+        // task-3 should still be blocked (waiting for task-2)
+        assert!(queue.is_blocked(&TaskId::from("task-3")));
+
+        // Complete task-2
+        queue
+            .assign_task(&TaskId::from("task-2"), SessionId(1))
+            .unwrap();
+        queue.complete_task(&TaskId::from("task-2"), true).unwrap();
+
+        // task-3 should no longer be blocked
+        assert!(!queue.is_blocked(&TaskId::from("task-3")));
     }
 
     // ========== TaskQueueService Trait Tests ==========
@@ -1840,193 +1253,5 @@ mod tests {
 
         let task = queue.get_task(&TaskId::from("task-001")).unwrap();
         assert_eq!(task.status, TaskStatus::Queued);
-    }
-
-    // ========== All Tasks Tests ==========
-
-    #[test]
-    fn test_all_tasks() {
-        let mut queue = create_queue();
-
-        let task1 = Task::new(TaskId::from("task-1"), "First".to_string(), "".to_string());
-        let task2 = Task::new(TaskId::from("task-2"), "Second".to_string(), "".to_string());
-
-        queue.enqueue(task1).unwrap();
-        queue.enqueue(task2).unwrap();
-
-        let all = queue.all_tasks();
-        assert_eq!(all.len(), 2);
-        assert!(all.contains_key(&TaskId::from("task-1")));
-        assert!(all.contains_key(&TaskId::from("task-2")));
-    }
-
-    // ========== Edge Cases Tests ==========
-
-    #[test]
-    fn test_multiple_dependencies() {
-        let mut queue = create_queue();
-
-        let task1 = Task::new(TaskId::from("task-1"), "First".to_string(), "".to_string());
-        let task2 = Task::new(TaskId::from("task-2"), "Second".to_string(), "".to_string());
-        let mut task3 = Task::new(TaskId::from("task-3"), "Third".to_string(), "".to_string());
-        task3.dependencies = vec![TaskId::from("task-1"), TaskId::from("task-2")];
-
-        queue.enqueue(task1).unwrap();
-        queue.enqueue(task2).unwrap();
-        queue.enqueue(task3).unwrap();
-
-        // task-3 should be blocked
-        assert!(queue.is_blocked(&TaskId::from("task-3")));
-
-        // Complete task-1
-        queue
-            .assign_task(&TaskId::from("task-1"), SessionId(1))
-            .unwrap();
-        queue.complete_task(&TaskId::from("task-1"), true).unwrap();
-
-        // task-3 should still be blocked (waiting for task-2)
-        assert!(queue.is_blocked(&TaskId::from("task-3")));
-
-        // Complete task-2
-        queue
-            .assign_task(&TaskId::from("task-2"), SessionId(1))
-            .unwrap();
-        queue.complete_task(&TaskId::from("task-2"), true).unwrap();
-
-        // task-3 should no longer be blocked
-        assert!(!queue.is_blocked(&TaskId::from("task-3")));
-    }
-
-    #[test]
-    fn test_external_dependency_not_blocking() {
-        let mut queue = create_queue();
-
-        let mut task = Task::new(TaskId::from("task-1"), "Task".to_string(), "".to_string());
-        // External dependency (not in queue)
-        task.dependencies = vec![TaskId::from("external")];
-
-        queue.enqueue(task).unwrap();
-
-        // Should not be blocked since dependency doesn't exist in queue
-        assert!(!queue.is_blocked(&TaskId::from("task-1")));
-
-        // But should not be selectable without completed_tasks
-        let next = queue.next_task(&[]);
-        assert!(next.is_none());
-
-        // With external dependency marked complete
-        let next = queue.next_task(&[TaskId::from("external")]);
-        assert!(next.is_some());
-    }
-
-    // ========== Project Dir Filter Tests ==========
-
-    #[test]
-    fn test_session_matches_project_helper() {
-        // Exact match (non-existent paths, falls back to raw comparison)
-        assert!(session_matches_project(
-            std::path::Path::new("/project"),
-            std::path::Path::new("/project"),
-        ));
-
-        // Subdirectory
-        assert!(session_matches_project(
-            std::path::Path::new("/project/src"),
-            std::path::Path::new("/project"),
-        ));
-
-        // No match
-        assert!(!session_matches_project(
-            std::path::Path::new("/project-b"),
-            std::path::Path::new("/project-a"),
-        ));
-    }
-
-    #[test]
-    fn test_next_task_for_session_project_dir_filter() {
-        let mut queue = create_queue();
-
-        let mut task_a = Task::new(TaskId::from("task-a"), "Task A".to_string(), "".to_string());
-        task_a.project_dir = Some(PathBuf::from("/project-a"));
-
-        let mut task_b = Task::new(TaskId::from("task-b"), "Task B".to_string(), "".to_string());
-        task_b.project_dir = Some(PathBuf::from("/project-b"));
-
-        queue.enqueue(task_a).unwrap();
-        queue.enqueue(task_b).unwrap();
-
-        // Session in /project-a should only get task-a
-        let session_a = Session::new(
-            SessionId(1),
-            "Session A".to_string(),
-            PathBuf::from("/project-a"),
-        );
-        let next = queue.next_task_for_session(&session_a, &[]);
-        assert_eq!(next.unwrap().id, TaskId::from("task-a"));
-
-        // Session in /project-b should only get task-b
-        let session_b = Session::new(
-            SessionId(2),
-            "Session B".to_string(),
-            PathBuf::from("/project-b"),
-        );
-        let next = queue.next_task_for_session(&session_b, &[]);
-        assert_eq!(next.unwrap().id, TaskId::from("task-b"));
-    }
-
-    #[test]
-    fn test_next_task_for_session_subdirectory_match() {
-        let mut queue = create_queue();
-
-        let mut task = Task::new(TaskId::from("task-1"), "Task".to_string(), "".to_string());
-        task.project_dir = Some(PathBuf::from("/project"));
-
-        queue.enqueue(task).unwrap();
-
-        // Session in subdirectory of /project should match
-        let session = Session::new(
-            SessionId(1),
-            "Session".to_string(),
-            PathBuf::from("/project/src"),
-        );
-        let next = queue.next_task_for_session(&session, &[]);
-        assert!(next.is_some());
-    }
-
-    #[test]
-    fn test_next_task_for_session_no_project_dir_matches_any() {
-        let mut queue = create_queue();
-
-        let task = Task::new(TaskId::from("task-1"), "Task".to_string(), "".to_string());
-        // project_dir is None - should match any session
-
-        queue.enqueue(task).unwrap();
-
-        let session = Session::new(
-            SessionId(1),
-            "Session".to_string(),
-            PathBuf::from("/any/directory"),
-        );
-        let next = queue.next_task_for_session(&session, &[]);
-        assert!(next.is_some());
-    }
-
-    #[test]
-    fn test_next_task_for_session_project_dir_no_match_skips() {
-        let mut queue = create_queue();
-
-        let mut task = Task::new(TaskId::from("task-1"), "Task".to_string(), "".to_string());
-        task.project_dir = Some(PathBuf::from("/project-a"));
-
-        queue.enqueue(task).unwrap();
-
-        // Session in completely different directory should get nothing
-        let session = Session::new(
-            SessionId(1),
-            "Session".to_string(),
-            PathBuf::from("/project-b"),
-        );
-        let next = queue.next_task_for_session(&session, &[]);
-        assert!(next.is_none());
     }
 }
