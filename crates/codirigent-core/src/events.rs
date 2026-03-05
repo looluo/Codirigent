@@ -361,45 +361,6 @@ pub enum CodirigentEvent {
         iteration: u32,
     },
 
-    // === Broadcast Events ===
-    /// Broadcast message was sent.
-    BroadcastSent {
-        /// Broadcast ID.
-        id: crate::broadcast::BroadcastId,
-        /// Number of target sessions.
-        target_count: usize,
-        /// Message priority.
-        priority: crate::broadcast::BroadcastPriority,
-    },
-
-    /// Broadcast was delivered to a session.
-    BroadcastDelivered {
-        /// Broadcast ID.
-        id: crate::broadcast::BroadcastId,
-        /// Session that received the message.
-        session_id: SessionId,
-    },
-
-    /// Broadcast delivery failed for a session.
-    BroadcastDeliveryFailed {
-        /// Broadcast ID.
-        id: crate::broadcast::BroadcastId,
-        /// Session that failed to receive.
-        session_id: SessionId,
-        /// Error message.
-        error: String,
-    },
-
-    /// All broadcast deliveries completed.
-    BroadcastComplete {
-        /// Broadcast ID.
-        id: crate::broadcast::BroadcastId,
-        /// Number of successful deliveries.
-        success_count: usize,
-        /// Number of failed deliveries.
-        failure_count: usize,
-    },
-
     // === Advanced Session Events ===
     /// Context handoff was initiated between sessions.
     HandoffInitiated {
@@ -1276,25 +1237,6 @@ mod tests {
                 session_id: SessionId(1),
                 iteration: 7,
             },
-            CodirigentEvent::BroadcastSent {
-                id: crate::broadcast::BroadcastId(1),
-                target_count: 3,
-                priority: crate::broadcast::BroadcastPriority::Normal,
-            },
-            CodirigentEvent::BroadcastDelivered {
-                id: crate::broadcast::BroadcastId(1),
-                session_id: SessionId(1),
-            },
-            CodirigentEvent::BroadcastDeliveryFailed {
-                id: crate::broadcast::BroadcastId(1),
-                session_id: SessionId(2),
-                error: "Connection timeout".to_string(),
-            },
-            CodirigentEvent::BroadcastComplete {
-                id: crate::broadcast::BroadcastId(1),
-                success_count: 2,
-                failure_count: 1,
-            },
             // Working directory events
             CodirigentEvent::WorkingDirectoryChanged {
                 id: SessionId(1),
@@ -1335,79 +1277,6 @@ mod tests {
         for event in events {
             let _ = event.clone();
         }
-    }
-
-    #[test]
-    fn test_broadcast_sent_event() {
-        let event = CodirigentEvent::BroadcastSent {
-            id: crate::broadcast::BroadcastId(1),
-            target_count: 5,
-            priority: crate::broadcast::BroadcastPriority::High,
-        };
-        let CodirigentEvent::BroadcastSent {
-            id,
-            target_count,
-            priority,
-        } = event
-        else {
-            panic!("Expected BroadcastSent, got {event:?}");
-        };
-        assert_eq!(id, crate::broadcast::BroadcastId(1));
-        assert_eq!(target_count, 5);
-        assert_eq!(priority, crate::broadcast::BroadcastPriority::High);
-    }
-
-    #[test]
-    fn test_broadcast_delivered_event() {
-        let event = CodirigentEvent::BroadcastDelivered {
-            id: crate::broadcast::BroadcastId(1),
-            session_id: SessionId(42),
-        };
-        let CodirigentEvent::BroadcastDelivered { id, session_id } = event else {
-            panic!("Expected BroadcastDelivered, got {event:?}");
-        };
-        assert_eq!(id, crate::broadcast::BroadcastId(1));
-        assert_eq!(session_id, SessionId(42));
-    }
-
-    #[test]
-    fn test_broadcast_delivery_failed_event() {
-        let event = CodirigentEvent::BroadcastDeliveryFailed {
-            id: crate::broadcast::BroadcastId(1),
-            session_id: SessionId(2),
-            error: "Session offline".to_string(),
-        };
-        let CodirigentEvent::BroadcastDeliveryFailed {
-            id,
-            session_id,
-            error,
-        } = event
-        else {
-            panic!("Expected BroadcastDeliveryFailed, got {event:?}");
-        };
-        assert_eq!(id, crate::broadcast::BroadcastId(1));
-        assert_eq!(session_id, SessionId(2));
-        assert_eq!(error, "Session offline");
-    }
-
-    #[test]
-    fn test_broadcast_complete_event() {
-        let event = CodirigentEvent::BroadcastComplete {
-            id: crate::broadcast::BroadcastId(1),
-            success_count: 8,
-            failure_count: 2,
-        };
-        let CodirigentEvent::BroadcastComplete {
-            id,
-            success_count,
-            failure_count,
-        } = event
-        else {
-            panic!("Expected BroadcastComplete, got {event:?}");
-        };
-        assert_eq!(id, crate::broadcast::BroadcastId(1));
-        assert_eq!(success_count, 8);
-        assert_eq!(failure_count, 2);
     }
 
     // === Advanced Session Event Tests ===

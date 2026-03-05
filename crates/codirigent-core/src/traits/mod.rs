@@ -10,7 +10,6 @@
 //! - [`SessionManager`]: Session lifecycle management
 //! - [`ProcessMonitor`]: Process state monitoring
 //! - [`StorageService`]: File-based persistence
-//! - [`BroadcastService`]: Broadcast messaging to multiple sessions
 //!
 //! ## Skill Traits
 //!

@@ -15,7 +15,6 @@
 //! - [`session`] - Internal session state combining metadata with runtime handles
 //! - [`manager`] - Session manager implementing the `SessionManager` trait
 //! - [`skill_manager`] - Skill discovery and management from filesystem
-//! - [`broadcast_service`] - Broadcast messaging to multiple sessions
 //!
 //! # Example
 //!
@@ -74,7 +73,6 @@ impl CliSessionStatus {
     }
 }
 
-pub mod broadcast_service;
 pub mod claude_session_reader;
 pub mod cli_detector;
 pub mod cli_output_detection;
@@ -93,7 +91,6 @@ pub mod shell_detection;
 pub mod skill_manager;
 pub mod worktree;
 
-pub use broadcast_service::DefaultBroadcastService;
 pub use claude_session_reader::{ClaudeSessionReader, ClaudeSessionStatus};
 pub use cli_detector::{CliDetector, DefaultCliDetector};
 pub use cli_output_detection::detect_cli_from_output;

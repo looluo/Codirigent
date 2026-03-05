@@ -24,7 +24,6 @@
 //! - [`ralph`] - Ralph Loop for autonomous task execution
 //! - [`task_manager`] - Unified task management coordinator
 //! - [`session_advanced`] - Advanced session features (templates, handoff, groups, overnight mode)
-//! - [`broadcast`] - Broadcast messaging to multiple sessions
 //! - [`compaction`] - Auto-compaction before verification
 //! - [`pipeline`] - Verification pipeline types and traits
 //! - [`error`] - Error types
@@ -80,7 +79,6 @@
 
 pub mod assignment;
 pub mod auto_save;
-pub mod broadcast;
 pub mod change_summary;
 pub mod clipboard_types;
 pub mod compaction;
@@ -159,13 +157,6 @@ pub use ralph::{IterationResult, RalphLoopConfig, RalphLoopState, RalphLoopStatu
 pub use task_manager::{
     TaskCompletionResult, TaskManagementService, TaskManager, TaskManagerConfig,
 };
-
-// Re-export broadcast types
-pub use broadcast::{
-    BroadcastHistoryEntry, BroadcastId, BroadcastMessage, BroadcastPriority, BroadcastVariables,
-    DeliveryStatus,
-};
-pub use traits::BroadcastService;
 
 // Re-export advanced session types
 pub use session_advanced::{
