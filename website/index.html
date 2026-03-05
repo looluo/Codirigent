@@ -109,6 +109,11 @@
       color: var(--text-secondary);
       max-width: 480px; margin: 0 auto 32px;
     }
+    .hero-stack {
+      margin-top: 20px;
+      font-family: var(--font-mono); font-size: 0.72rem;
+      color: var(--text-secondary); letter-spacing: 0.02em;
+    }
     .hero-actions {
       display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;
       margin-bottom: 64px;
@@ -433,6 +438,7 @@
             Download for macOS
           </a>
         </div>
+        <p class="hero-stack hero-in hero-in-4">Built in Rust &middot; Powered by GPUI &middot; No Electron</p>
       </div>
       <div class="terminal-wrap hero-in hero-in-5">
         <div class="terminal">
@@ -552,8 +558,8 @@
         <div class="perf-layout">
           <div class="perf-text reveal">
             <div class="section-label">Performance</div>
-            <h2>Lightweight by design</h2>
-            <p>Native Rust binary with GPUI rendering. No Electron, no web views.</p>
+            <h2>Native Rust.<br>No Electron.</h2>
+            <p>Built in Rust with GPUI rendering — the same GPU-accelerated framework behind Zed. A fraction of the memory and startup time of Electron-based editors.</p>
           </div>
           <div class="perf-bars reveal r-d1">
             <div class="perf-row">
