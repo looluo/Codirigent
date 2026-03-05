@@ -887,8 +887,8 @@ mod tests {
             error: false,
             cooldown_seconds: 60,
         };
-        let json = serde_json::to_string(&settings).unwrap();
-        let parsed: NotificationSettings = serde_json::from_str(&json).unwrap();
+        let json = serde_json::to_string(&settings).expect("serialize");
+        let parsed: NotificationSettings = serde_json::from_str(&json).expect("deserialize");
         assert!(!parsed.input_required);
         assert!(parsed.task_completed);
         assert!(!parsed.task_failed);
@@ -900,7 +900,7 @@ mod tests {
     #[test]
     fn test_notification_settings_backward_compatible_deserialization() {
         let json = r#"{"desktop": true, "sound": false}"#;
-        let parsed: NotificationSettings = serde_json::from_str(json).unwrap();
+        let parsed: NotificationSettings = serde_json::from_str(json).expect("deserialize");
         assert!(parsed.desktop);
         assert!(!parsed.sound);
         assert!(parsed.input_required);
