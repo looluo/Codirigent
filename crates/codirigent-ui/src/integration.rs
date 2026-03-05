@@ -32,14 +32,13 @@
 //! ```
 
 use anyhow::{anyhow, Context, Result};
+use codirigent_core::config::NotificationSettings;
 use codirigent_core::{
     AppState, CodirigentEvent, CompactionConfig, CompactionService, DefaultEventBus, EventBus,
     FileStorageService, ProcessMonitor, Session, SessionId, SessionManager, SessionStatus,
     StorageService, TaskManager, TaskManagerConfig,
 };
-use codirigent_detector::{
-    notify_input_required, send_notification, DetectorConfig, InputDetector,
-};
+use codirigent_detector::{DetectorConfig, InputDetector, NotificationManager, NotificationType};
 use codirigent_session::DefaultSessionManager;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -62,6 +61,8 @@ pub struct IntegrationConfig {
     pub detector_config: DetectorConfig,
     /// Configuration for auto-compaction before verification.
     pub compaction: CompactionConfig,
+    /// Notification settings for filtering and cooldown.
+    pub notification_settings: NotificationSettings,
 }
 
 impl Default for IntegrationConfig {
@@ -71,6 +72,7 @@ impl Default for IntegrationConfig {
             auto_start_event_loop: true,
             detector_config: DetectorConfig::default(),
             compaction: CompactionConfig::default(),
+            notification_settings: NotificationSettings::default(),
         }
     }
 }
@@ -196,7 +198,8 @@ impl CodirigentIntegration {
         let storage = self.storage.clone();
         let task_manager = self.task_manager.clone();
         let auto_save = self.config.auto_save_enabled;
-        let notifications_enabled = self.config.detector_config.notifications_enabled;
+        let mut notification_manager =
+            NotificationManager::new(self.config.notification_settings.clone());
 
         thread::spawn(move || {
             let rt = match tokio::runtime::Runtime::new() {
@@ -219,7 +222,7 @@ impl CodirigentIntegration {
                                 &storage,
                                 &task_manager,
                                 auto_save,
-                                notifications_enabled,
+                                &mut notification_manager,
                             );
                         }
                         Err(broadcast::error::RecvError::Closed) => {
@@ -243,7 +246,7 @@ impl CodirigentIntegration {
         storage: &Arc<FileStorageService>,
         task_manager: &Arc<Mutex<TaskManager>>,
         auto_save: bool,
-        notifications_enabled: bool,
+        notification_manager: &mut NotificationManager,
     ) {
         debug!(?event, "Handling event");
 
@@ -295,20 +298,26 @@ impl CodirigentIntegration {
             }
             CodirigentEvent::AttentionRequired { session_id, detail } => {
                 info!(%session_id, ?detail, "Attention required");
-                if notifications_enabled {
-                    let session_name = session_manager
-                        .lock()
-                        .ok()
-                        .and_then(|mgr| mgr.get_session(*session_id))
-                        .map(|s| s.name.clone())
-                        .unwrap_or_else(|| format!("Session {}", session_id.0));
-                    if let Some(tool) = detail {
-                        let body =
-                            format!("Session '{}' needs permission for {}", session_name, tool);
-                        send_notification("Codirigent", &body);
-                    } else {
-                        notify_input_required(*session_id, &session_name);
-                    }
+                let session_name = session_manager
+                    .lock()
+                    .ok()
+                    .and_then(|mgr| mgr.get_session(*session_id))
+                    .map(|s| s.name.clone())
+                    .unwrap_or_else(|| format!("Session {}", session_id.0));
+                if let Some(tool) = detail {
+                    notification_manager.notify(
+                        NotificationType::PermissionPrompt,
+                        *session_id,
+                        &session_name,
+                        Some(tool.as_str()),
+                    );
+                } else {
+                    notification_manager.notify(
+                        NotificationType::InputRequired,
+                        *session_id,
+                        &session_name,
+                        None,
+                    );
                 }
             }
             CodirigentEvent::InputProvided { session_id } => {
@@ -1207,7 +1216,7 @@ mod tests {
                 event_bus.clone(),
             ))),
             false,
-            false,
+            &mut NotificationManager::new(NotificationSettings::default()),
         );
         // Should not panic
     }
@@ -1230,7 +1239,7 @@ mod tests {
                 event_bus.clone(),
             ))),
             false,
-            false,
+            &mut NotificationManager::new(NotificationSettings::default()),
         );
         // Should not panic
     }
@@ -1257,7 +1266,7 @@ mod tests {
                 event_bus.clone(),
             ))),
             false,
-            false,
+            &mut NotificationManager::new(NotificationSettings::default()),
         );
         // Should not panic
     }
@@ -1283,7 +1292,7 @@ mod tests {
                 event_bus.clone(),
             ))),
             false,
-            false,
+            &mut NotificationManager::new(NotificationSettings::default()),
         );
         // Should not panic
     }
@@ -1308,7 +1317,7 @@ mod tests {
                 event_bus.clone(),
             ))),
             false,
-            false,
+            &mut NotificationManager::new(NotificationSettings::default()),
         );
         // Should not panic
     }
@@ -1335,7 +1344,7 @@ mod tests {
                 event_bus.clone(),
             ))),
             false,
-            false,
+            &mut NotificationManager::new(NotificationSettings::default()),
         );
         // Should not panic
     }
@@ -1362,7 +1371,7 @@ mod tests {
                 event_bus.clone(),
             ))),
             false,
-            false,
+            &mut NotificationManager::new(NotificationSettings::default()),
         );
         // Should not panic
     }
@@ -1403,7 +1412,7 @@ mod tests {
             &integration.storage,
             &integration.task_manager,
             false,
-            false,
+            &mut NotificationManager::new(NotificationSettings::default()),
         );
     }
 
@@ -1422,7 +1431,7 @@ mod tests {
             &integration.storage,
             &integration.task_manager,
             false,
-            false,
+            &mut NotificationManager::new(NotificationSettings::default()),
         );
     }
 
@@ -1529,13 +1538,14 @@ mod tests {
             session_id: SessionId(1),
             focus: Some("test".to_string()),
         };
+        let mut notif_mgr = NotificationManager::new(NotificationSettings::default());
         CodirigentIntegration::handle_event(
             &event,
             &integration.session_manager,
             &integration.storage,
             &integration.task_manager,
             false,
-            false,
+            &mut notif_mgr,
         );
 
         // CompactionCompleted event should not panic
@@ -1549,7 +1559,7 @@ mod tests {
             &integration.storage,
             &integration.task_manager,
             false,
-            false,
+            &mut notif_mgr,
         );
     }
 
