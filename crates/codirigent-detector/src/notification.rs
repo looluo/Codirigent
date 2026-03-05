@@ -21,8 +21,123 @@
 //! notify_input_required(SessionId(1), "Claude Code Session");
 //! ```
 
+use codirigent_core::config::NotificationSettings;
 use codirigent_core::SessionId;
+use std::collections::HashMap;
+use std::time::Instant;
 use tracing::{debug, info, warn};
+
+/// Types of notifications that can be sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum NotificationType {
+    /// Session is waiting for user input.
+    InputRequired,
+    /// A task completed successfully.
+    TaskCompleted,
+    /// A task failed.
+    TaskFailed,
+    /// Session needs permission for a tool.
+    PermissionPrompt,
+    /// Session encountered an error.
+    Error,
+}
+
+/// Manages notification dispatch with per-type filtering and per-session cooldown.
+///
+/// All notification calls should go through this manager instead of calling
+/// the free functions directly. The manager checks:
+/// 1. Master toggle (`desktop`) — if false, all notifications are suppressed
+/// 2. Per-type toggle — each notification type can be individually disabled
+/// 3. Per-session cooldown — suppresses repeated notifications within a time window
+pub struct NotificationManager {
+    settings: NotificationSettings,
+    last_sent: HashMap<SessionId, Instant>,
+}
+
+impl NotificationManager {
+    /// Create a new manager with the given settings.
+    pub fn new(settings: NotificationSettings) -> Self {
+        Self {
+            settings,
+            last_sent: HashMap::new(),
+        }
+    }
+
+    /// Update settings at runtime (e.g., user changed config).
+    pub fn update_settings(&mut self, settings: NotificationSettings) {
+        self.settings = settings;
+    }
+
+    /// Send a notification if permitted by settings and cooldown.
+    ///
+    /// Returns `true` if the notification was sent, `false` if suppressed.
+    pub fn notify(
+        &mut self,
+        kind: NotificationType,
+        session_id: SessionId,
+        session_name: &str,
+        detail: Option<&str>,
+    ) -> bool {
+        if !self.settings.desktop {
+            debug!("Notification suppressed: desktop notifications disabled");
+            return false;
+        }
+
+        if !self.is_type_enabled(&kind) {
+            debug!(?kind, "Notification suppressed: type disabled");
+            return false;
+        }
+
+        if !self.cooldown_elapsed(session_id) {
+            debug!(%session_id, "Notification suppressed: cooldown active");
+            return false;
+        }
+
+        match kind {
+            NotificationType::InputRequired => {
+                notify_input_required(session_id, session_name);
+            }
+            NotificationType::TaskCompleted => {
+                notify_task_completed(session_id, session_name, true);
+            }
+            NotificationType::TaskFailed => {
+                notify_task_completed(session_id, session_name, false);
+            }
+            NotificationType::PermissionPrompt => {
+                let tool = detail.unwrap_or("unknown");
+                let body = format!("Session '{}' needs permission for {}", session_name, tool);
+                send_notification("Codirigent", &body);
+            }
+            NotificationType::Error => {
+                let error_msg = detail.unwrap_or("Unknown error");
+                notify_error(session_id, session_name, error_msg);
+            }
+        }
+
+        self.last_sent.insert(session_id, Instant::now());
+        true
+    }
+
+    fn is_type_enabled(&self, kind: &NotificationType) -> bool {
+        match kind {
+            NotificationType::InputRequired => self.settings.input_required,
+            NotificationType::TaskCompleted => self.settings.task_completed,
+            NotificationType::TaskFailed => self.settings.task_failed,
+            NotificationType::PermissionPrompt => self.settings.permission_prompt,
+            NotificationType::Error => self.settings.error,
+        }
+    }
+
+    fn cooldown_elapsed(&self, session_id: SessionId) -> bool {
+        if self.settings.cooldown_seconds == 0 {
+            return true;
+        }
+        match self.last_sent.get(&session_id) {
+            Some(last) => last.elapsed().as_secs() >= self.settings.cooldown_seconds,
+            None => true,
+        }
+    }
+}
 
 /// Default notification title for input required alerts.
 pub const DEFAULT_TITLE: &str = "Codirigent - Input Required";
@@ -442,5 +557,172 @@ mod tests {
             // Windows toast API is supported via winrt_notification
             assert!(notifications_supported());
         }
+    }
+
+    // NotificationManager tests
+
+    #[test]
+    fn test_notification_manager_sends_when_enabled() {
+        let settings = NotificationSettings::default();
+        let mut manager = NotificationManager::new(settings);
+        let sent = manager.notify(
+            NotificationType::InputRequired,
+            SessionId(1),
+            "Test Session",
+            None,
+        );
+        assert!(sent);
+    }
+
+    #[test]
+    fn test_notification_manager_master_toggle_off() {
+        let settings = NotificationSettings {
+            desktop: false,
+            ..Default::default()
+        };
+        let mut manager = NotificationManager::new(settings);
+        let sent = manager.notify(
+            NotificationType::InputRequired,
+            SessionId(1),
+            "Test Session",
+            None,
+        );
+        assert!(!sent);
+    }
+
+    #[test]
+    fn test_notification_manager_per_type_toggle_off() {
+        let settings = NotificationSettings {
+            input_required: false,
+            ..Default::default()
+        };
+        let mut manager = NotificationManager::new(settings);
+        let sent = manager.notify(NotificationType::InputRequired, SessionId(1), "Test", None);
+        assert!(!sent);
+
+        let mut manager2 = NotificationManager::new(NotificationSettings {
+            input_required: false,
+            cooldown_seconds: 0,
+            ..Default::default()
+        });
+        let sent = manager2.notify(NotificationType::TaskCompleted, SessionId(1), "Test", None);
+        assert!(sent);
+    }
+
+    #[test]
+    fn test_notification_manager_cooldown_suppresses() {
+        let settings = NotificationSettings {
+            cooldown_seconds: 60,
+            ..Default::default()
+        };
+        let mut manager = NotificationManager::new(settings);
+
+        let sent1 = manager.notify(NotificationType::InputRequired, SessionId(1), "Test", None);
+        assert!(sent1);
+
+        let sent2 = manager.notify(NotificationType::TaskCompleted, SessionId(1), "Test", None);
+        assert!(!sent2);
+    }
+
+    #[test]
+    fn test_notification_manager_cooldown_per_session() {
+        let settings = NotificationSettings {
+            cooldown_seconds: 60,
+            ..Default::default()
+        };
+        let mut manager = NotificationManager::new(settings);
+
+        let sent1 = manager.notify(
+            NotificationType::InputRequired,
+            SessionId(1),
+            "Session A",
+            None,
+        );
+        assert!(sent1);
+
+        let sent2 = manager.notify(
+            NotificationType::InputRequired,
+            SessionId(2),
+            "Session B",
+            None,
+        );
+        assert!(sent2);
+    }
+
+    #[test]
+    fn test_notification_manager_zero_cooldown() {
+        let settings = NotificationSettings {
+            cooldown_seconds: 0,
+            ..Default::default()
+        };
+        let mut manager = NotificationManager::new(settings);
+
+        let sent1 = manager.notify(NotificationType::InputRequired, SessionId(1), "Test", None);
+        assert!(sent1);
+
+        let sent2 = manager.notify(NotificationType::InputRequired, SessionId(1), "Test", None);
+        assert!(sent2);
+    }
+
+    #[test]
+    fn test_notification_manager_update_settings() {
+        let settings = NotificationSettings::default();
+        let mut manager = NotificationManager::new(settings);
+
+        let sent = manager.notify(NotificationType::InputRequired, SessionId(1), "Test", None);
+        assert!(sent);
+
+        manager.update_settings(NotificationSettings {
+            desktop: false,
+            ..Default::default()
+        });
+
+        let sent = manager.notify(NotificationType::InputRequired, SessionId(2), "Test", None);
+        assert!(!sent);
+    }
+
+    #[test]
+    fn test_notification_manager_permission_prompt() {
+        let settings = NotificationSettings {
+            cooldown_seconds: 0,
+            ..Default::default()
+        };
+        let mut manager = NotificationManager::new(settings);
+        let sent = manager.notify(
+            NotificationType::PermissionPrompt,
+            SessionId(1),
+            "Test",
+            Some("bash"),
+        );
+        assert!(sent);
+    }
+
+    #[test]
+    fn test_notification_manager_task_failed_toggle() {
+        let settings = NotificationSettings {
+            task_failed: false,
+            cooldown_seconds: 0,
+            ..Default::default()
+        };
+        let mut manager = NotificationManager::new(settings);
+        let sent = manager.notify(NotificationType::TaskFailed, SessionId(1), "Test", None);
+        assert!(!sent);
+    }
+
+    #[test]
+    fn test_notification_manager_error_toggle() {
+        let settings = NotificationSettings {
+            error: false,
+            cooldown_seconds: 0,
+            ..Default::default()
+        };
+        let mut manager = NotificationManager::new(settings);
+        let sent = manager.notify(
+            NotificationType::Error,
+            SessionId(1),
+            "Test",
+            Some("Build failed"),
+        );
+        assert!(!sent);
     }
 }
