@@ -497,8 +497,8 @@ impl TerminalView {
             }
 
             // Resolve colors
-            let mut foreground = convert_color(cell.fg, &self.theme, true);
-            let mut background = convert_color(cell.bg, &self.theme, false);
+            let mut foreground = convert_color(cell.fg, &self.theme);
+            let mut background = convert_color(cell.bg, &self.theme);
 
             // Handle inverse/reverse video
             if cell.flags.contains(CellFlags::INVERSE) {

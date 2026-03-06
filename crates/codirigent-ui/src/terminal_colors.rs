@@ -12,7 +12,7 @@ use alacritty_terminal::vte::ansi::{Color as TermColor, NamedColor};
 /// - Named colors (16 ANSI colors)
 /// - Indexed colors (256-color palette)
 /// - Spec colors (24-bit RGB)
-pub fn convert_color(color: TermColor, theme: &CodirigentTheme, _is_foreground: bool) -> Rgba {
+pub fn convert_color(color: TermColor, theme: &CodirigentTheme) -> Rgba {
     match color {
         TermColor::Named(named) => named_color_to_rgba(named, theme),
         TermColor::Spec(rgb) => Rgba::rgb(rgb.r, rgb.g, rgb.b),
@@ -109,7 +109,7 @@ mod tests {
     #[test]
     fn test_convert_named_color() {
         let theme = CodirigentTheme::dark();
-        let color = convert_color(TermColor::Named(NamedColor::Red), &theme, true);
+        let color = convert_color(TermColor::Named(NamedColor::Red), &theme);
         assert_eq!(color, theme.ansi.colors[1]);
     }
 
@@ -121,7 +121,7 @@ mod tests {
             g: 64,
             b: 32,
         };
-        let color = convert_color(TermColor::Spec(rgb), &theme, true);
+        let color = convert_color(TermColor::Spec(rgb), &theme);
         assert_eq!(color.r, 128);
         assert_eq!(color.g, 64);
         assert_eq!(color.b, 32);
@@ -130,7 +130,7 @@ mod tests {
     #[test]
     fn test_convert_indexed_color() {
         let theme = CodirigentTheme::dark();
-        let color = convert_color(TermColor::Indexed(1), &theme, true);
+        let color = convert_color(TermColor::Indexed(1), &theme);
         assert_eq!(color, theme.ansi.colors[1]);
     }
 }
