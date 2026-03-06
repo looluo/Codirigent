@@ -292,8 +292,9 @@ impl ConfigService for DefaultConfigService {
     }
 
     fn watch_config(&self, _project_dir: &Path) -> Result<mpsc::Receiver<ConfigChange>> {
-        // Hot-reload placeholder using tokio mpsc channel
-        // In the future, this will use the notify crate to watch for file changes
+        // TODO: implement file-watching with the `notify` crate.
+        // The sender is intentionally dropped so the receiver immediately
+        // returns `None` on recv, making callers treat this as "no changes".
         let (_tx, rx) = mpsc::channel(16);
         Ok(rx)
     }

@@ -377,10 +377,13 @@ impl Checkpoint {
         }
     }
 
-    /// Generate a unique checkpoint ID based on timestamp.
+    /// Generate a unique checkpoint ID based on timestamp with nanosecond resolution.
+    ///
+    /// Uses microsecond precision to reduce the collision window to <1µs,
+    /// making accidental duplicates extremely unlikely in normal use.
     fn generate_id() -> String {
         let now = chrono::Utc::now();
-        format!("checkpoint-{}", now.format("%Y%m%d-%H%M%S-%3f"))
+        format!("checkpoint-{}", now.format("%Y%m%d-%H%M%S-%6f"))
     }
 }
 

@@ -11,7 +11,7 @@ use super::status::SessionStatus;
 ///
 /// This is the persistent representation of a session,
 /// stored in state.json and used throughout the application.
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct Session {
     /// Unique session identifier.
     pub id: SessionId,

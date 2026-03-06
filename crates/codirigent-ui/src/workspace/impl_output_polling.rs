@@ -30,6 +30,12 @@ type JsonlStatusResult = Option<(SessionStatus, Option<String>)>;
 impl WorkspaceView {
     const GENERIC_SHELL_JSONL_MAX_AGE: Duration = Duration::from_secs(600);
     const GENERIC_SHELL_JSONL_CACHE_TTL: Duration = Duration::from_secs(120);
+    /// Interval between background JSONL checks and git refreshes (seconds).
+    const BACKGROUND_REFRESH_INTERVAL: Duration = Duration::from_secs(3);
+    /// How often to log session status in the idle polling loop (every N ticks).
+    const STATUS_LOG_INTERVAL: u32 = 120;
+    /// Delay before sending a deferred Enter keypress after a task prompt (ms).
+    const PENDING_ENTER_DELAY: Duration = Duration::from_millis(100);
 
     pub(super) fn poll_output(&mut self, cx: &mut Context<Self>) {
         self.process_deferred_enters();
@@ -182,7 +188,7 @@ impl WorkspaceView {
         }
 
         if let Some(status) = status {
-            if self.polling.idle_poll_count % 120 == 0 {
+            if self.polling.idle_poll_count % Self::STATUS_LOG_INTERVAL == 0 {
                 info!(?session_id, ?status, ?idle_time, "Session status poll");
             }
             let old_status = self.workspace.session(session_id).map(|s| s.status);
@@ -299,7 +305,7 @@ impl WorkspaceView {
             .map(|r| r.claude.is_some() || r.codex.is_some() || r.gemini.is_some())
             .unwrap_or(false);
         if !has_any_reader
-            || self.polling.last_jsonl_check.elapsed() < Duration::from_secs(3)
+            || self.polling.last_jsonl_check.elapsed() < Self::BACKGROUND_REFRESH_INTERVAL
             || self.polling.jsonl_check_in_flight
         {
             return;
@@ -534,7 +540,7 @@ impl WorkspaceView {
             .polling
             .pending_enters
             .iter()
-            .filter(|(_, (when, sent))| !sent && when.elapsed() >= Duration::from_millis(100))
+            .filter(|(_, (when, sent))| !sent && when.elapsed() >= Self::PENDING_ENTER_DELAY)
             .map(|(id, _)| *id)
             .collect();
         for session_id in need_enter {
@@ -633,7 +639,7 @@ impl WorkspaceView {
     /// Spawn a background git-status refresh for all sessions if the last
     /// refresh was more than 3 seconds ago and no refresh is in-flight.
     fn schedule_background_git_refresh(&mut self, cx: &mut Context<Self>) {
-        if self.polling.last_git_refresh.elapsed() < Duration::from_secs(3)
+        if self.polling.last_git_refresh.elapsed() < Self::BACKGROUND_REFRESH_INTERVAL
             || self.polling.git_refresh_in_flight
         {
             return;
