@@ -334,6 +334,7 @@ impl super::gpui::WorkspaceView {
         let shell = page.user_settings.general.default_shell.clone();
         let working_dir = page.user_settings.general.default_working_dir.clone();
         let show_splash = page.user_settings.general.show_splash;
+        let notif = page.user_settings.notifications.clone();
         let theme = self.workspace.theme();
 
         // Show actual CWD when no custom path is configured
@@ -436,6 +437,171 @@ impl super::gpui::WorkspaceView {
                         }),
                     )
                     .child(setting_toggle(show_splash, theme)),
+            ))
+            .child(settings_section_header("Notifications", theme, false))
+            .child(setting_row(
+                "Desktop notifications",
+                "Send OS notifications when agents need attention",
+                theme,
+                div()
+                    .id("toggle-notif-desktop")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            if let Some(page) = this.settings.page.as_mut() {
+                                page.user_settings.notifications.desktop =
+                                    !page.user_settings.notifications.desktop;
+                                page.user_save_pending = true;
+                            }
+                            cx.notify();
+                        }),
+                    )
+                    .child(setting_toggle(notif.desktop, theme)),
+            ))
+            .child(setting_row(
+                "Sound",
+                "Play a sound with each notification",
+                theme,
+                div()
+                    .id("toggle-notif-sound")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            if let Some(page) = this.settings.page.as_mut() {
+                                page.user_settings.notifications.sound =
+                                    !page.user_settings.notifications.sound;
+                                page.user_save_pending = true;
+                            }
+                            cx.notify();
+                        }),
+                    )
+                    .child(setting_toggle(notif.sound, theme)),
+            ))
+            .child(settings_section_header("Notification types", theme, false))
+            .child(setting_row(
+                "Input required",
+                "Notify when an agent is waiting for your input",
+                theme,
+                div()
+                    .id("toggle-notif-input-required")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            if let Some(page) = this.settings.page.as_mut() {
+                                page.user_settings.notifications.input_required =
+                                    !page.user_settings.notifications.input_required;
+                                page.user_save_pending = true;
+                            }
+                            cx.notify();
+                        }),
+                    )
+                    .child(setting_toggle(notif.input_required, theme)),
+            ))
+            .child(setting_row(
+                "Task completed",
+                "Notify when a task finishes successfully",
+                theme,
+                div()
+                    .id("toggle-notif-task-completed")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            if let Some(page) = this.settings.page.as_mut() {
+                                page.user_settings.notifications.task_completed =
+                                    !page.user_settings.notifications.task_completed;
+                                page.user_save_pending = true;
+                            }
+                            cx.notify();
+                        }),
+                    )
+                    .child(setting_toggle(notif.task_completed, theme)),
+            ))
+            .child(setting_row(
+                "Task failed",
+                "Notify when a task fails or errors out",
+                theme,
+                div()
+                    .id("toggle-notif-task-failed")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            if let Some(page) = this.settings.page.as_mut() {
+                                page.user_settings.notifications.task_failed =
+                                    !page.user_settings.notifications.task_failed;
+                                page.user_save_pending = true;
+                            }
+                            cx.notify();
+                        }),
+                    )
+                    .child(setting_toggle(notif.task_failed, theme)),
+            ))
+            .child(setting_row(
+                "Permission prompt",
+                "Notify when an agent requests a permission",
+                theme,
+                div()
+                    .id("toggle-notif-permission")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            if let Some(page) = this.settings.page.as_mut() {
+                                page.user_settings.notifications.permission_prompt =
+                                    !page.user_settings.notifications.permission_prompt;
+                                page.user_save_pending = true;
+                            }
+                            cx.notify();
+                        }),
+                    )
+                    .child(setting_toggle(notif.permission_prompt, theme)),
+            ))
+            .child(setting_row(
+                "Error",
+                "Notify on unexpected errors",
+                theme,
+                div()
+                    .id("toggle-notif-error")
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|this, _, _, cx| {
+                            if let Some(page) = this.settings.page.as_mut() {
+                                page.user_settings.notifications.error =
+                                    !page.user_settings.notifications.error;
+                                page.user_save_pending = true;
+                            }
+                            cx.notify();
+                        }),
+                    )
+                    .child(setting_toggle(notif.error, theme)),
+            ))
+            .child(settings_section_header("Cooldown", theme, false))
+            .child(setting_row(
+                "Cooldown per session",
+                "Suppress repeated notifications for the same session (0 = no cooldown, max 300s)",
+                theme,
+                self.number_stepper(
+                    "num-notif-cooldown",
+                    &format!("{}s", notif.cooldown_seconds),
+                    cx,
+                    |this, _, cx| {
+                        if let Some(page) = this.settings.page.as_mut() {
+                            page.user_settings.notifications.cooldown_seconds = page
+                                .user_settings
+                                .notifications
+                                .cooldown_seconds
+                                .saturating_sub(5);
+                            page.user_save_pending = true;
+                        }
+                        cx.notify();
+                    },
+                    |this, _, cx| {
+                        if let Some(page) = this.settings.page.as_mut() {
+                            page.user_settings.notifications.cooldown_seconds =
+                                (page.user_settings.notifications.cooldown_seconds + 5).min(300);
+                            page.user_save_pending = true;
+                        }
+                        cx.notify();
+                    },
+                ),
             ))
             .into_any_element()
     }
