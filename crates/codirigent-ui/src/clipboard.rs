@@ -15,13 +15,19 @@ use alacritty_terminal::term::Term;
 /// # Arguments
 ///
 /// * `term` - The terminal instance to copy from
-/// * `start` - Start position as (row, col)
-/// * `end` - End position as (row, col)
+/// * `start` - Start position as (viewport_row, col)
+/// * `end` - End position as (viewport_row, col)
+/// * `display_offset` - Current scroll offset (lines scrolled back from bottom)
 ///
 /// # Returns
 ///
 /// The selected text as a string, with trailing whitespace trimmed from lines.
-pub fn copy_selection<T>(term: &Term<T>, start: (usize, usize), end: (usize, usize)) -> String {
+pub fn copy_selection<T>(
+    term: &Term<T>,
+    start: (usize, usize),
+    end: (usize, usize),
+    display_offset: usize,
+) -> String {
     let mut text = String::new();
 
     // Normalize selection (ensure start <= end)
@@ -42,7 +48,7 @@ pub fn copy_selection<T>(term: &Term<T>, start: (usize, usize), end: (usize, usi
             break;
         }
 
-        let line = &grid[Line(row as i32)];
+        let line = &grid[Line(row as i32 - display_offset as i32)];
         let col_start = if row == start_row { start_col } else { 0 };
         let col_end = if row == end_row {
             end_col.min(total_cols.saturating_sub(1))

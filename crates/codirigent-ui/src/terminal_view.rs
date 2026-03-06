@@ -520,7 +520,9 @@ impl TerminalView {
     /// terminal grid between the normalized selection start and end.
     pub fn get_selected_text(&self) -> Option<String> {
         let (start, end) = self.selection.normalized()?;
-        let text = crate::clipboard::copy_selection(self.terminal.term(), start, end);
+        let display_offset = self.terminal.term().renderable_content().display_offset as usize;
+        let text =
+            crate::clipboard::copy_selection(self.terminal.term(), start, end, display_offset);
         if text.is_empty() {
             None
         } else {
