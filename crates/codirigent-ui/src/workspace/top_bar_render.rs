@@ -11,7 +11,7 @@ use gpui::{
 };
 
 impl WorkspaceView {
-    /// token counter, right-panel toggle, and window controls.
+    /// Render the top bar with session tabs, token counter, right-panel toggle, and window controls.
     pub(super) fn render_top_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.workspace().theme();
         let bg: gpui::Hsla = theme.header_background.into();
