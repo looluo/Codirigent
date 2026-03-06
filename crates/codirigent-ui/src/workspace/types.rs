@@ -27,6 +27,44 @@ pub(super) const CELL_BORDER_WIDTH: f32 = 2.0;
 /// Height of dropdown trigger buttons in pixels.
 pub(super) const DROPDOWN_TRIGGER_HEIGHT: f32 = 28.0;
 
+/// Height of session and group rows in the Sessions drawer panel.
+pub(super) const SESSION_ROW_HEIGHT: f32 = 28.0;
+
+/// Height of input fields and modal rows (larger than session rows).
+pub(super) const MODAL_FIELD_HEIGHT: f32 = 36.0;
+
+/// Git change status colors used in the Worktrees panel.
+///
+/// These are git-convention colors (green=staged, orange=modified, red=deleted,
+/// blue=renamed/moved) and intentionally live outside the general app theme.
+pub(super) mod git_colors {
+    use gpui::Hsla;
+    pub const STAGED: Hsla = Hsla {
+        h: 0.35,
+        s: 0.6,
+        l: 0.5,
+        a: 1.0,
+    };
+    pub const MODIFIED: Hsla = Hsla {
+        h: 0.1,
+        s: 0.8,
+        l: 0.6,
+        a: 1.0,
+    };
+    pub const DELETED: Hsla = Hsla {
+        h: 0.0,
+        s: 0.7,
+        l: 0.55,
+        a: 1.0,
+    };
+    pub const RENAMED: Hsla = Hsla {
+        h: 0.58,
+        s: 0.5,
+        l: 0.6,
+        a: 1.0,
+    };
+}
+
 /// Default rem size in pixels (base for font scaling).
 /// Scaled proportionally: `REM_BASE * (font_size_base / 13.0)`.
 pub(super) const REM_BASE: f32 = 16.0;
