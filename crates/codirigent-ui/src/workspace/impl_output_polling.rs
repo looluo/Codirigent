@@ -23,8 +23,6 @@ use codirigent_session::detect_cli_from_output;
 use codirigent_session::CliSessionStatus;
 use gpui::Context;
 use serde::Deserialize;
-use std::collections::HashMap;
-use std::path::PathBuf;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
@@ -381,7 +379,7 @@ impl WorkspaceView {
                             child_pid,
                             cli_type,
                             _current_status,
-                            created_at,
+                            _created_at,
                         ) in &jsonl_inputs
                         {
                             // For GenericShell sessions, try process-tree detection.
@@ -414,14 +412,9 @@ impl WorkspaceView {
 
                             let cli_status: Option<CliSessionStatus> = match effective_type {
                                 codirigent_core::CliType::ClaudeCode => {
-                                    readers.claude.as_mut().and_then(|r| {
-                                        r.get_status_if_recent(
-                                            working_dir,
-                                            *child_pid,
-                                            max_age,
-                                            Some(*created_at),
-                                        )
-                                    })
+                                    // Claude Code status is handled by hook signal files
+                                    // (check_hook_signals) — no JSONL reader needed here.
+                                    None
                                 }
                                 codirigent_core::CliType::CodexCli => {
                                     readers.codex.as_mut().and_then(|r| {
@@ -478,6 +471,7 @@ impl WorkspaceView {
                                     tool_name: tool_name.clone(),
                                     seen_at: Instant::now(),
                                     status_since,
+                                    ttl: Self::GENERIC_SHELL_JSONL_CACHE_TTL,
                                 },
                             );
                         }
@@ -528,9 +522,7 @@ impl WorkspaceView {
                                 let is_stale = readers
                                     .cached_status
                                     .get(session_id)
-                                    .map(|c| {
-                                        c.seen_at.elapsed() > Self::GENERIC_SHELL_JSONL_CACHE_TTL
-                                    })
+                                    .map(|c| c.seen_at.elapsed() > c.ttl)
                                     .unwrap_or(false);
                                 if is_stale {
                                     readers.cached_status.remove(session_id);

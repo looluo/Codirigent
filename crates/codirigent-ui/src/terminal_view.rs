@@ -580,11 +580,33 @@ impl TerminalView {
             let row = viewport_line as usize;
             let col = point.column.0;
 
-            // Skip empty default-background cells.
             let c = cell.c;
-            if (c == ' ' && cell.bg == TermColor::Named(NamedColor::Background))
-                || cell.flags.contains(CellFlags::WIDE_CHAR_SPACER)
-            {
+
+            // Wide char spacers occupy the second column of a double-width character.
+            // Skip text contribution but still emit a background rect if non-default,
+            // so the coloured background spans both columns of the wide char.
+            if cell.flags.contains(CellFlags::WIDE_CHAR_SPACER) {
+                let bg = convert_color(cell.bg, &self.theme);
+                if bg != self.theme.terminal_background {
+                    let merged = background_rects.last_mut().and_then(
+                        |last: &mut (usize, usize, usize, Rgba)| {
+                            if last.0 == row && last.2 == col && last.3 == bg {
+                                last.2 = col + 1;
+                                Some(())
+                            } else {
+                                None
+                            }
+                        },
+                    );
+                    if merged.is_none() {
+                        background_rects.push((row, col, col + 1, bg));
+                    }
+                }
+                continue;
+            }
+
+            // Skip empty default-background cells.
+            if c == ' ' && cell.bg == TermColor::Named(NamedColor::Background) {
                 continue;
             }
 
@@ -1133,5 +1155,29 @@ mod tests {
                 rows
             );
         }
+    }
+
+    #[test]
+    fn test_cached_content_wide_char_background_rect() {
+        let mut view = create_test_view();
+        // '中' (U+4E2D) is a CJK character that occupies 2 columns.
+        // \x1b[41m sets red background; \x1b[0m resets.
+        view.terminal_mut()
+            .process_output("\x1b[41m中\x1b[0m".as_bytes());
+        let content = view.cached_content();
+        // The background rect must span both columns of the wide char (start=0, end=2).
+        let has_two_col_rect = content
+            .bg_rects_hsla
+            .iter()
+            .any(|(_, start, end, _)| *end - *start >= 2);
+        assert!(
+            has_two_col_rect,
+            "Expected a 2-column-wide background rect for wide char '中', got: {:?}",
+            content
+                .bg_rects_hsla
+                .iter()
+                .map(|(r, s, e, _)| (r, s, e))
+                .collect::<Vec<_>>()
+        );
     }
 }
