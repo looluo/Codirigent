@@ -87,6 +87,23 @@ $RECYCLE.BIN/
 # .codirigent/sessions/
 
 # -----------------------------------------------------------------------------
+# Installer / Build Artifacts
+# -----------------------------------------------------------------------------
+
+# MSI build output
+dist/
+
+# WiX toolchain (downloaded locally, not committed)
+tools/
+
+# WiX intermediate and output files
+wix/*.rtf
+wix/*.wixobj
+
+# Scripts used only for local release builds
+scripts/gen-license-rtf.ps1
+
+# -----------------------------------------------------------------------------
 # Miscellaneous
 # -----------------------------------------------------------------------------
 
