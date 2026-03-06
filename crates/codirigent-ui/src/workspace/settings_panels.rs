@@ -14,7 +14,7 @@ use crate::terminal_view::CursorShape;
 use super::types::DROPDOWN_TRIGGER_HEIGHT;
 
 /// Displayed in dropdowns when no specific value is configured (auto-selected).
-const AUTO_DETECT_LABEL: &str = AUTO_DETECT_LABEL;
+const AUTO_DETECT_LABEL: &str = "(Auto-detect)";
 
 impl super::gpui::WorkspaceView {
     /// Render the full settings overlay (sidebar + content area).
