@@ -44,6 +44,76 @@ struct HookSignal {
     ts: u64,
 }
 
+#[derive(Debug)]
+struct HookSignalUpdate {
+    session_id: SessionId,
+    cli_session_id: String,
+    status: String,
+    cli_type: Option<String>,
+}
+
+fn read_recent_hook_signal_updates() -> Vec<HookSignalUpdate> {
+    let signals_dir = match hook_signals_dir() {
+        Some(d) => d,
+        None => return Vec::new(),
+    };
+
+    let entries = match std::fs::read_dir(&signals_dir) {
+        Ok(e) => e,
+        Err(_) => return Vec::new(),
+    };
+
+    let now_ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+
+    let mut updates = Vec::new();
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.extension().and_then(|e| e.to_str()) != Some("json") {
+            continue;
+        }
+
+        let cli_session_id = match path.file_stem().and_then(|s| s.to_str()) {
+            Some(s) => s.to_owned(),
+            None => continue,
+        };
+
+        let content = match std::fs::read_to_string(&path) {
+            Ok(c) => c,
+            Err(_) => continue,
+        };
+
+        let signal: HookSignal = match serde_json::from_str(&content) {
+            Ok(s) => s,
+            Err(_) => continue,
+        };
+
+        if now_ts.saturating_sub(signal.ts) > 600 {
+            continue;
+        }
+
+        let session_id = match signal
+            .codirigent_session_id
+            .as_deref()
+            .and_then(|id| id.parse::<u64>().ok())
+        {
+            Some(id) => SessionId(id),
+            None => continue,
+        };
+
+        updates.push(HookSignalUpdate {
+            session_id,
+            cli_session_id,
+            status: signal.status,
+            cli_type: signal.cli_type,
+        });
+    }
+
+    updates
+}
+
 impl WorkspaceView {
     const GENERIC_SHELL_JSONL_MAX_AGE: Duration = Duration::from_secs(600);
     /// TTL for Codex/Gemini cached JSONL status. Shorter than hook signals because
@@ -59,21 +129,31 @@ impl WorkspaceView {
     /// in check_hook_signals so a long-running task never loses its "working" status
     /// just because no hook fired recently.
     const HOOK_SIGNAL_CACHE_TTL: Duration = Duration::from_secs(600);
+    /// Maximum output bytes to process from a session in one poll tick.
+    const MAX_OUTPUT_BYTES_PER_POLL: usize = 256 * 1024;
+    /// Maximum PTY chunks to process from a session in one poll tick.
+    const MAX_OUTPUT_CHUNKS_PER_POLL: usize = 64;
 
     pub(super) fn poll_output(&mut self, cx: &mut Context<Self>) {
         self.process_deferred_enters();
         self.drain_vte_responses();
-        if self.polling.last_hook_signal_check.elapsed() >= Duration::from_secs(1) {
-            self.polling.last_hook_signal_check = Instant::now();
-            self.check_hook_signals();
-        }
+        self.spawn_background_hook_signal_check(cx);
         self.spawn_background_jsonl_check(cx);
 
-        let session_ids: Vec<codirigent_core::SessionId> = self.terminals.keys().copied().collect();
+        let mut session_ids: Vec<codirigent_core::SessionId> =
+            self.terminals.keys().copied().collect();
+        if let Some(focused_id) = self.workspace.focused_session_id() {
+            if let Some(index) = session_ids.iter().position(|id| *id == focused_id) {
+                session_ids.swap(0, index);
+            }
+        }
         let mut any_dirty = false;
+        let mut had_output_activity = false;
 
         for session_id in session_ids {
-            any_dirty |= self.poll_session_output(session_id, cx);
+            let session_dirty = self.poll_session_output(session_id, cx);
+            any_dirty |= session_dirty;
+            had_output_activity |= session_dirty;
         }
 
         self.cleanup_compaction_timeouts();
@@ -82,7 +162,7 @@ impl WorkspaceView {
         any_dirty |= self.update_clipboard_preview(cx);
 
         // Track output activity for adaptive polling
-        self.polling.last_poll_had_output = any_dirty;
+        self.polling.last_poll_had_output = had_output_activity;
 
         if any_dirty {
             cx.notify();
@@ -99,9 +179,16 @@ impl WorkspaceView {
     ) -> bool {
         let mut any_dirty = false;
         // Try to drain output from the session manager
-        let output = self.with_session_manager(|manager| manager.try_drain_output(session_id));
+        let output = self.with_session_manager(|manager| {
+            manager.try_drain_output_bounded(
+                session_id,
+                Self::MAX_OUTPUT_CHUNKS_PER_POLL,
+                Self::MAX_OUTPUT_BYTES_PER_POLL,
+            )
+        });
 
-        if let Some(data) = output {
+        if let Some(drained) = output {
+            let data = drained.data;
             // Feed output to terminal emulator
             if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
                 terminal_view.terminal_mut().process_output(&data);
@@ -446,6 +533,12 @@ impl WorkspaceView {
                 this.polling.jsonl_check_in_flight = false;
                 let mut changed = false;
                 let (results, inputs, detected_types) = results;
+                let input_statuses: std::collections::HashMap<SessionId, SessionStatus> = inputs
+                    .iter()
+                    .map(|(id, _, _, _, status, _)| (*id, *status))
+                    .collect();
+                let cache_update_time = Instant::now();
+                let mut cached_status = this.cli_readers.lock().ok();
 
                 // Apply process-tree CLI type detections on UI thread
                 for (session_id, detected_type) in &detected_types {
@@ -461,20 +554,20 @@ impl WorkspaceView {
                 for (session_id, cli_status) in &results {
                     if let Some((new_status, tool_name)) = cli_status {
                         // Cache the JSONL result
-                        if let Ok(mut readers) = this.cli_readers.lock() {
+                        if let Some(readers) = cached_status.as_mut() {
                             // Preserve status_since if status hasn't changed
                             let status_since = readers
                                 .cached_status
                                 .get(session_id)
                                 .filter(|c| c.status == *new_status)
                                 .map(|c| c.status_since)
-                                .unwrap_or_else(Instant::now);
+                                .unwrap_or(cache_update_time);
                             readers.cached_status.insert(
                                 *session_id,
                                 CachedCliStatus {
                                     status: *new_status,
                                     tool_name: tool_name.clone(),
-                                    seen_at: Instant::now(),
+                                    seen_at: cache_update_time,
                                     status_since,
                                     ttl: Self::GENERIC_SHELL_JSONL_CACHE_TTL,
                                 },
@@ -482,10 +575,7 @@ impl WorkspaceView {
                         }
                         // Fire AttentionRequired on transition
                         if *new_status == SessionStatus::NeedsAttention {
-                            let current_status = inputs
-                                .iter()
-                                .find(|(id, ..)| id == session_id)
-                                .map(|(_, _, _, _, s, _)| *s);
+                            let current_status = input_statuses.get(session_id).copied();
                             if current_status != Some(SessionStatus::NeedsAttention) {
                                 event_bus.publish(CodirigentEvent::AttentionRequired {
                                     session_id: *session_id,
@@ -522,9 +612,7 @@ impl WorkspaceView {
                             )
                         });
                         if detector_idle {
-                            // Check and remove stale cache entry atomically (single lock)
-                            // to avoid a TOCTOU race with the background JSONL refresh.
-                            if let Ok(mut readers) = this.cli_readers.lock() {
+                            if let Some(readers) = cached_status.as_mut() {
                                 let is_stale = readers
                                     .cached_status
                                     .get(session_id)
@@ -804,6 +892,170 @@ impl WorkspaceView {
         Some((cached_status.status, cached_status.tool_name.clone()))
     }
 
+    /// Read hook signal files on a background thread and apply them on the UI thread.
+    fn spawn_background_hook_signal_check(&mut self, cx: &mut Context<Self>) {
+        if self.polling.last_hook_signal_check.elapsed() < Duration::from_secs(1)
+            || self.polling.hook_signal_check_in_flight
+        {
+            return;
+        }
+
+        self.polling.last_hook_signal_check = Instant::now();
+        self.polling.hook_signal_check_in_flight = true;
+
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+            let updates = cx
+                .background_executor()
+                .spawn(async move { read_recent_hook_signal_updates() })
+                .await;
+
+            let _ = this.update(cx, |this, _cx| {
+                this.polling.hook_signal_check_in_flight = false;
+                for update in updates {
+                    this.apply_hook_signal_update(update);
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn apply_hook_signal_update(&mut self, update: HookSignalUpdate) {
+        let HookSignalUpdate {
+            session_id,
+            cli_session_id,
+            status,
+            cli_type,
+        } = update;
+
+        let mut id_changed = false;
+        let cli_type_name = cli_type.as_deref().unwrap_or(CLI_TYPE_CLAUDE);
+        match cli_type_name {
+            CLI_TYPE_CLAUDE => {
+                id_changed = self
+                    .session_manager
+                    .lock()
+                    .ok()
+                    .and_then(|mgr| {
+                        mgr.with_session_state_mut(session_id, |state| {
+                            let changed =
+                                state.session.claude_session_id.as_deref() != Some(&cli_session_id);
+                            state.session.claude_session_id = Some(cli_session_id.clone());
+                            changed
+                        })
+                    })
+                    .unwrap_or(false);
+            }
+            CLI_TYPE_GEMINI => {
+                id_changed = self
+                    .session_manager
+                    .lock()
+                    .ok()
+                    .and_then(|mgr| {
+                        mgr.with_session_state_mut(session_id, |state| {
+                            let changed =
+                                state.session.gemini_session_id.as_deref() != Some(&cli_session_id);
+                            state.session.gemini_session_id = Some(cli_session_id.clone());
+                            changed
+                        })
+                    })
+                    .unwrap_or(false);
+            }
+            CLI_TYPE_CODEX => {
+                id_changed = self
+                    .session_manager
+                    .lock()
+                    .ok()
+                    .and_then(|mgr| {
+                        mgr.with_session_state_mut(session_id, |state| {
+                            let changed =
+                                state.session.codex_session_id.as_deref() != Some(&cli_session_id);
+                            state.session.codex_session_id = Some(cli_session_id.clone());
+                            changed
+                        })
+                    })
+                    .unwrap_or(false);
+            }
+            _ => {}
+        }
+
+        if id_changed {
+            self.save_state_to_disk();
+        }
+
+        let focused_id = self.workspace.focused_session_id();
+        let new_status = match status.as_str() {
+            "working" => SessionStatus::Working,
+            "needs_attention" => SessionStatus::NeedsAttention,
+            "response_ready" => {
+                if Some(session_id) == focused_id {
+                    SessionStatus::Idle
+                } else {
+                    SessionStatus::ResponseReady
+                }
+            }
+            _ => SessionStatus::Idle,
+        };
+
+        if let Ok(mut readers) = self.cli_readers.lock() {
+            let status_since = readers
+                .cached_status
+                .get(&session_id)
+                .filter(|c| c.status == new_status)
+                .map(|c| c.status_since)
+                .unwrap_or_else(Instant::now);
+            readers.cached_status.insert(
+                session_id,
+                CachedCliStatus {
+                    status: new_status,
+                    tool_name: cli_type.clone(),
+                    seen_at: Instant::now(),
+                    status_since,
+                    ttl: Self::HOOK_SIGNAL_CACHE_TTL,
+                },
+            );
+        }
+
+        let prev_status = self
+            .workspace
+            .session(session_id)
+            .map(|s| s.status)
+            .unwrap_or(SessionStatus::Idle);
+
+        if new_status == SessionStatus::NeedsAttention
+            && prev_status != SessionStatus::NeedsAttention
+        {
+            self.event_bus.publish(CodirigentEvent::AttentionRequired {
+                session_id,
+                detail: None,
+            });
+            let name = self
+                .workspace
+                .session(session_id)
+                .map(|s| s.name.clone())
+                .unwrap_or_else(|| format!("Session {}", session_id.0));
+            self.notification_manager.notify(
+                NotificationType::InputRequired,
+                session_id,
+                &name,
+                None,
+            );
+        }
+
+        if new_status == SessionStatus::ResponseReady && prev_status == SessionStatus::Working {
+            let name = self
+                .workspace
+                .session(session_id)
+                .map(|s| s.name.clone())
+                .unwrap_or_else(|| format!("Session {}", session_id.0));
+            self.notification_manager.notify(
+                NotificationType::ResponseReady,
+                session_id,
+                &name,
+                None,
+            );
+        }
+    }
+
     /// Check Claude Code hook signal files and update session status.
     ///
     /// Signal files are written by `codirigent-hook` for Claude and Codex sessions.
@@ -815,6 +1067,7 @@ impl WorkspaceView {
     /// which is injected via the `CODIRIGENT_SESSION_ID` environment variable
     /// when Codirigent spawns the Claude Code process. Signal files without
     /// this field are ignored (Claude Code started outside Codirigent).
+    #[allow(dead_code)]
     fn check_hook_signals(&mut self) {
         let signals_dir = match hook_signals_dir() {
             Some(d) => d,

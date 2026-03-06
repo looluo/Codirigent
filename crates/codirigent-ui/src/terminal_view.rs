@@ -94,6 +94,17 @@ pub struct CachedTerminalContent {
     pub cols: usize,
 }
 
+/// Pre-shaped terminal text keyed by terminal content + font settings.
+#[derive(Debug)]
+pub struct CachedShapedTerminalContent {
+    /// Shaped text runs ready for painting.
+    pub shaped_runs: Arc<Vec<(usize, usize, gpui::ShapedLine)>>,
+    /// Font family used to build the shaped runs.
+    pub font_family: String,
+    /// Font size used to build the shaped runs.
+    pub font_size: f32,
+}
+
 /// Cursor shape for rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
 pub enum CursorShape {
@@ -209,6 +220,8 @@ pub struct TerminalView {
     focused: bool,
     /// Cached terminal content for canvas rendering.
     cached_content: Option<CachedTerminalContent>,
+    /// Cached shaped lines derived from `cached_content`.
+    cached_shaped_content: Option<CachedShapedTerminalContent>,
     /// Whether the content needs to be recomputed.
     content_dirty: bool,
     /// Whether cell dimensions have been initialized from font metrics.
@@ -251,6 +264,7 @@ impl TerminalView {
             cursor_shape: CursorShape::Block,
             focused: true,
             cached_content: None,
+            cached_shaped_content: None,
             content_dirty: true,
             dimensions_initialized: false,
             cached_terminal_bg,
@@ -267,7 +281,7 @@ impl TerminalView {
     ///
     /// Marks content as dirty since callers typically modify terminal state.
     pub fn terminal_mut(&mut self) -> &mut Terminal {
-        self.content_dirty = true;
+        self.invalidate_content_cache();
         &mut self.terminal
     }
 
@@ -281,7 +295,7 @@ impl TerminalView {
         self.cached_terminal_bg = theme.terminal_background.into();
         self.cached_terminal_fg = theme.terminal_foreground.into();
         self.theme = theme;
-        self.content_dirty = true;
+        self.invalidate_content_cache();
     }
 
     /// Get the cell width in pixels.
@@ -302,7 +316,7 @@ impl TerminalView {
         self.cell_width = width;
         self.cell_height = height;
         self.dimensions_initialized = true;
-        self.content_dirty = true;
+        self.invalidate_content_cache();
         self.terminal.resize_with_cells(TerminalSize::new(
             self.terminal.rows(),
             self.terminal.cols(),
@@ -324,7 +338,7 @@ impl TerminalView {
     /// Set the font size.
     pub fn set_font_size(&mut self, size: f32) {
         self.font_size = size;
-        self.content_dirty = true;
+        self.cached_shaped_content = None;
     }
 
     /// Get the font family.
@@ -345,7 +359,7 @@ impl TerminalView {
     /// Set the font family.
     pub fn set_font_family(&mut self, family: String) {
         self.font_family = family;
-        self.content_dirty = true;
+        self.cached_shaped_content = None;
     }
 
     /// Get the current selection.
@@ -388,7 +402,7 @@ impl TerminalView {
     /// Positive `Scroll::Delta` increases `display_offset`, moving the
     /// viewport up into the scrollback buffer.
     pub fn scroll_up(&mut self, lines: usize) {
-        self.content_dirty = true;
+        self.invalidate_content_cache();
         self.terminal
             .term_mut()
             .scroll_display(Scroll::Delta(lines as i32));
@@ -399,7 +413,7 @@ impl TerminalView {
     /// Negative `Scroll::Delta` decreases `display_offset`, moving the
     /// viewport down toward the most recent output.
     pub fn scroll_down(&mut self, lines: usize) {
-        self.content_dirty = true;
+        self.invalidate_content_cache();
         self.terminal
             .term_mut()
             .scroll_display(Scroll::Delta(-(lines as i32)));
@@ -407,8 +421,25 @@ impl TerminalView {
 
     /// Scroll to the bottom (most recent output).
     pub fn scroll_to_bottom(&mut self) {
-        self.content_dirty = true;
+        let _ = self.scroll_to_bottom_if_needed();
+    }
+
+    /// Scroll to the bottom only when the viewport is currently in scrollback.
+    ///
+    /// Returns `true` if the viewport changed.
+    pub fn scroll_to_bottom_if_needed(&mut self) -> bool {
+        if !self.is_scrolled_back() {
+            return false;
+        }
+
+        self.invalidate_content_cache();
         self.terminal.term_mut().scroll_display(Scroll::Bottom);
+        true
+    }
+
+    /// Check whether the viewport is showing scrollback instead of the live prompt.
+    pub fn is_scrolled_back(&self) -> bool {
+        self.terminal.term().renderable_content().display_offset != 0
     }
 
     /// Clear the terminal screen while preserving the current line (prompt).
@@ -416,7 +447,7 @@ impl TerminalView {
     /// This clears the scrollback and visible content while keeping
     /// the current line (typically the shell prompt) at the top.
     pub fn clear(&mut self) {
-        self.content_dirty = true;
+        self.invalidate_content_cache();
         self.terminal.clear();
     }
 
@@ -486,7 +517,7 @@ impl TerminalView {
         if rows == self.terminal.rows() && cols == self.terminal.cols() {
             return false;
         }
-        self.content_dirty = true;
+        self.invalidate_content_cache();
         self.terminal.resize(rows, cols);
         true
     }
@@ -497,7 +528,7 @@ impl TerminalView {
     pub fn start_selection(&mut self, row: usize, col: usize) {
         self.selection.set_start(row, col);
         self.selection.end = None;
-        self.content_dirty = true;
+        self.invalidate_content_cache();
     }
 
     /// Update the selection end position during a drag.
@@ -505,13 +536,13 @@ impl TerminalView {
     /// Sets the selection end and marks dirty for re-rendering.
     pub fn update_selection(&mut self, row: usize, col: usize) {
         self.selection.set_end(row, col);
-        self.content_dirty = true;
+        self.invalidate_content_cache();
     }
 
     /// Clear the current selection.
     pub fn clear_selection(&mut self) {
         self.selection.clear();
-        self.content_dirty = true;
+        self.invalidate_content_cache();
     }
 
     /// Get the currently selected text, if any.
@@ -532,7 +563,7 @@ impl TerminalView {
 
     /// Mark content as dirty, forcing recomputation on next access.
     pub fn mark_dirty(&mut self) {
-        self.content_dirty = true;
+        self.invalidate_content_cache();
     }
 
     /// Check if content is dirty (needs recomputation).
@@ -548,11 +579,40 @@ impl TerminalView {
         if self.content_dirty || self.cached_content.is_none() {
             let content = self.build_cached_content();
             self.cached_content = Some(content);
+            self.cached_shaped_content = None;
             self.content_dirty = false;
         }
         self.cached_content
             .as_ref()
             .expect("BUG: cached_content must be Some after rebuild")
+    }
+
+    /// Get shaped text runs, rebuilding only when content or font settings change.
+    pub fn shaped_content(
+        &mut self,
+        text_system: &gpui::WindowTextSystem,
+    ) -> Arc<Vec<(usize, usize, gpui::ShapedLine)>> {
+        let font_family = self.font_family.clone();
+        let font_size = self.font_size;
+        let needs_rebuild = self.cached_shaped_content.as_ref().is_none_or(|cached| {
+            cached.font_family != font_family || (cached.font_size - font_size).abs() > 0.01
+        });
+
+        if needs_rebuild {
+            let text_runs = self.cached_content().text_runs_hsla.clone();
+            let shaped_runs = shape_text_runs(text_system, &text_runs, &font_family, font_size);
+            self.cached_shaped_content = Some(CachedShapedTerminalContent {
+                shaped_runs,
+                font_family,
+                font_size,
+            });
+        }
+
+        self.cached_shaped_content
+            .as_ref()
+            .expect("BUG: shaped_content must be Some after rebuild")
+            .shaped_runs
+            .clone()
     }
 
     /// Build cached content by streaming directly from alacritty's display_iter.
@@ -728,6 +788,79 @@ impl TerminalView {
             None
         }
     }
+
+    fn invalidate_content_cache(&mut self) {
+        self.content_dirty = true;
+        self.cached_shaped_content = None;
+    }
+}
+
+fn shape_text_runs(
+    text_system: &gpui::WindowTextSystem,
+    text_runs: &[(TextRunSegment, gpui::Hsla)],
+    font_family: &str,
+    font_size: f32,
+) -> Arc<Vec<(usize, usize, gpui::ShapedLine)>> {
+    use gpui::{px, Font, FontFeatures, FontStyle, FontWeight, TextRun};
+
+    let font_size_px = px(font_size);
+    let font_family: gpui::SharedString = font_family.to_owned().into();
+    let mut shaped_runs = Vec::with_capacity(text_runs.len());
+
+    for (run, fg_color) in text_runs.iter() {
+        let weight = if run.bold {
+            FontWeight::BOLD
+        } else {
+            FontWeight::NORMAL
+        };
+        let style = if run.italic {
+            FontStyle::Italic
+        } else {
+            FontStyle::Normal
+        };
+
+        let font = Font {
+            family: font_family.clone(),
+            features: FontFeatures::default(),
+            fallbacks: None,
+            weight,
+            style,
+        };
+
+        let underline = if run.underline {
+            Some(gpui::UnderlineStyle {
+                thickness: px(1.0),
+                color: Some(*fg_color),
+                wavy: false,
+            })
+        } else {
+            None
+        };
+
+        let strikethrough = if run.strikethrough {
+            Some(gpui::StrikethroughStyle {
+                thickness: px(1.0),
+                color: Some(*fg_color),
+            })
+        } else {
+            None
+        };
+
+        let text: gpui::SharedString = run.text.clone().into();
+        let text_run = TextRun {
+            len: text.len(),
+            font,
+            color: *fg_color,
+            background_color: None,
+            underline,
+            strikethrough,
+        };
+
+        let shaped = text_system.shape_line(text, font_size_px, &[text_run], None);
+        shaped_runs.push((run.row, run.start_col, shaped));
+    }
+
+    Arc::new(shaped_runs)
 }
 
 /// Compute cell dimensions from actual font metrics using the text system.

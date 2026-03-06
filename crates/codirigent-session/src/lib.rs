@@ -96,7 +96,7 @@ pub use clipboard_service::{ClipboardService, DefaultClipboardService};
 pub use codex_session_reader::{CodexSessionReader, CodexSessionStatus};
 pub use gemini_session_reader::{GeminiSessionReader, GeminiSessionStatus};
 pub use git_status::GitStatusService;
-pub use manager::DefaultSessionManager;
+pub use manager::{DefaultSessionManager, DrainedOutput};
 pub use osc133::{extract_osc133_events, ShellState};
 pub use osc7::extract_osc7_path;
 pub use pty::{spawn_output_reader, OutputReader, PtyHandle, PtySize, ShellCommand};

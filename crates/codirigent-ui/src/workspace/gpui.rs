@@ -128,6 +128,17 @@ pub struct WorkspaceView {
 /// Returns `true` if the editor command refers to a terminal-based editor
 /// (one that needs to run inside an existing terminal session).
 impl WorkspaceView {
+    /// Poll cadence while output is actively streaming.
+    const ACTIVE_OUTPUT_POLL_INTERVAL_MS: u64 = 16;
+    /// Poll cadence once output briefly goes idle.
+    const LIGHT_IDLE_OUTPUT_POLL_INTERVAL_MS: u64 = 50;
+    /// Poll cadence once output has been idle for a few seconds.
+    const DEEP_IDLE_OUTPUT_POLL_INTERVAL_MS: u64 = 200;
+    /// Number of active-rate idle polls before backing off to the light-idle interval.
+    const LIGHT_IDLE_THRESHOLD_POLLS: u32 = 4;
+    /// Number of consecutive idle polls before backing off to the deep-idle interval.
+    const DEEP_IDLE_THRESHOLD_POLLS: u32 = 64;
+
     /// Returns true when a computed target size is a transient collapse that
     /// should be ignored to avoid 1-column/1-row PTY resizes.
     fn should_skip_collapsed_resize(
@@ -254,12 +265,11 @@ impl WorkspaceView {
 
     /// Start adaptive output polling background task.
     ///
-    /// Uses 4ms interval when output is being received (low latency for typing),
-    /// 50ms after 12 idle polls (~50ms of no output), and 200ms after 100 idle
-    /// polls (~5s of no output).
+    /// Uses a frame-rate-friendly interval while output is active, then backs
+    /// off once output has been quiet for a short period.
     fn start_output_polling(cx: &mut Context<Self>) {
         cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
-            let mut poll_interval_ms: u64 = 4;
+            let mut poll_interval_ms: u64 = Self::ACTIVE_OUTPUT_POLL_INTERVAL_MS;
             loop {
                 cx.background_executor()
                     .timer(Duration::from_millis(poll_interval_ms))
@@ -268,16 +278,15 @@ impl WorkspaceView {
                     this.poll_output(cx);
                     if this.polling.last_poll_had_output {
                         this.polling.idle_poll_count = 0;
-                        poll_interval_ms = 4;
+                        poll_interval_ms = Self::ACTIVE_OUTPUT_POLL_INTERVAL_MS;
                     } else {
                         this.polling.idle_poll_count =
                             this.polling.idle_poll_count.saturating_add(1);
-                        if this.polling.idle_poll_count > 100 {
-                            // Deep idle (~5s of no output): 200ms polling
-                            poll_interval_ms = 200;
-                        } else if this.polling.idle_poll_count > 12 {
-                            // Light idle (~50ms of no output): 50ms polling
-                            poll_interval_ms = 50;
+                        if this.polling.idle_poll_count > Self::DEEP_IDLE_THRESHOLD_POLLS {
+                            poll_interval_ms = Self::DEEP_IDLE_OUTPUT_POLL_INTERVAL_MS;
+                        } else if this.polling.idle_poll_count > Self::LIGHT_IDLE_THRESHOLD_POLLS
+                        {
+                            poll_interval_ms = Self::LIGHT_IDLE_OUTPUT_POLL_INTERVAL_MS;
                         }
                     }
                 });
@@ -457,6 +466,28 @@ impl WorkspaceView {
     /// This should be called before rendering to ensure all UI components
     /// reflect the current workspace state.
     fn sync_ui_state(&mut self) {
+        let (task_titles, task_counts) = if let Ok(manager) = self.task_manager.lock() {
+            let mut titles = HashMap::new();
+            let counts = manager.list_tasks().iter().fold(
+                (0usize, 0usize, 0usize, 0usize),
+                |(q, ip, r, d), task| {
+                    titles.insert(task.id.clone(), task.title.clone());
+                    match task.status {
+                        codirigent_core::TaskStatus::Queued
+                        | codirigent_core::TaskStatus::Blocked => (q + 1, ip, r, d),
+                        codirigent_core::TaskStatus::Assigned
+                        | codirigent_core::TaskStatus::Working => (q, ip + 1, r, d),
+                        codirigent_core::TaskStatus::Verifying
+                        | codirigent_core::TaskStatus::Review => (q, ip, r + 1, d),
+                        codirigent_core::TaskStatus::Done => (q, ip, r, d + 1),
+                    }
+                },
+            );
+            (titles, Some(counts))
+        } else {
+            (HashMap::new(), None)
+        };
+
         // Update terminal headers from sessions
         let sessions = self.workspace.sessions();
         let focused_id = self.workspace.focused_session_id();
@@ -472,26 +503,34 @@ impl WorkspaceView {
                 header.status = session.status;
                 header.context_usage = session.context_usage;
                 header.is_focused = focused_id == Some(session.id);
-                header.project_name = session
+                let project_name = session
                     .git_info
                     .as_ref()
                     .and_then(|gi| gi.repo_root.file_name())
                     .or_else(|| session.working_directory.file_name())
                     .and_then(|n| n.to_str())
                     .map(|s| s.to_string());
-                if let Some(color_hex) = &session.color {
-                    header.session_color = crate::sidebar::Color::from_hex(color_hex);
+                if header.project_name != project_name {
+                    header.project_name = project_name;
                 }
-                if let Some(task_id) = &session.current_task {
-                    // Show task title instead of raw ID
-                    let title = self
-                        .task_manager
-                        .lock()
-                        .ok()
-                        .and_then(|mgr| mgr.get_task(task_id).map(|t| t.title.clone()));
-                    header.task = Some(title.unwrap_or_else(|| task_id.0.to_string()));
-                } else {
-                    header.task = None;
+
+                let session_color = session
+                    .color
+                    .as_deref()
+                    .map(crate::sidebar::Color::from_hex)
+                    .unwrap_or_else(|| crate::sidebar::Color::from_hex("#6366f1"));
+                if header.session_color != session_color {
+                    header.session_color = session_color;
+                }
+
+                let task = session.current_task.as_ref().map(|task_id| {
+                    task_titles
+                        .get(task_id)
+                        .cloned()
+                        .unwrap_or_else(|| task_id.0.to_string())
+                });
+                if header.task != task {
+                    header.task = task;
                 }
             }
         }
@@ -512,20 +551,7 @@ impl WorkspaceView {
         self.empty_cells.setup_for_grid(rows, cols, &occupied);
 
         // Sync task board counts from TaskManager — single pass over all tasks
-        if let Ok(manager) = self.task_manager.lock() {
-            let (queue_count, in_progress_count, review_count, done_count) =
-                manager.list_tasks().iter().fold(
-                    (0usize, 0usize, 0usize, 0usize),
-                    |(q, ip, r, d), t| match t.status {
-                        codirigent_core::TaskStatus::Queued
-                        | codirigent_core::TaskStatus::Blocked => (q + 1, ip, r, d),
-                        codirigent_core::TaskStatus::Assigned
-                        | codirigent_core::TaskStatus::Working => (q, ip + 1, r, d),
-                        codirigent_core::TaskStatus::Verifying
-                        | codirigent_core::TaskStatus::Review => (q, ip, r + 1, d),
-                        codirigent_core::TaskStatus::Done => (q, ip, r, d + 1),
-                    },
-                );
+        if let Some((queue_count, in_progress_count, review_count, done_count)) = task_counts {
             self.task_board.set_task_counts(
                 queue_count,
                 in_progress_count,
@@ -1010,11 +1036,12 @@ impl WorkspaceView {
 
         // Convert to bytes
         if let Some(bytes) = key_to_bytes(&keystroke, term_mode) {
+            let mut scrolled_to_bottom = false;
             // Auto-scroll to bottom when user types while scrolled up in scrollback.
             // This is standard terminal behavior: typing should return the view
             // to the cursor position.
             if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
-                terminal_view.scroll_to_bottom();
+                scrolled_to_bottom = terminal_view.scroll_to_bottom_if_needed();
             }
 
             // Send to PTY
@@ -1023,6 +1050,10 @@ impl WorkspaceView {
                     warn!("Failed to send input to session {}: {}", session_id, e);
                 }
             });
+
+            if scrolled_to_bottom {
+                cx.notify();
+            }
         }
     }
 
@@ -1104,7 +1135,7 @@ impl WorkspaceView {
                     .p(px(grid_gap))
                     .overflow_hidden()
                     .min_h(px(0.0))
-                    .child(self.render_grid_with_headers(cx)),
+                    .child(self.render_grid_with_headers(window, cx)),
             );
 
         main_content = main_content.child(grid_area);
@@ -1384,13 +1415,15 @@ impl EntityInputHandler for WorkspaceView {
             return;
         }
 
+        let had_ime_overlay = self.ime_marked_range.is_some() || self.ime_preedit_text.is_some();
         self.ime_marked_range = None;
         self.ime_preedit_text = None;
+        let mut scrolled_to_bottom = false;
         if let Some(session_id) = self.workspace.focused_session_id() {
             // Typing while scrolled up should jump back to the cursor line,
             // matching native terminal behavior.
             if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
-                terminal_view.scroll_to_bottom();
+                scrolled_to_bottom = terminal_view.scroll_to_bottom_if_needed();
             }
 
             let text_bytes = text.as_bytes().to_vec();
@@ -1399,7 +1432,9 @@ impl EntityInputHandler for WorkspaceView {
                 let _ = sm.send_input(session_id, &text_bytes);
             });
         }
-        cx.notify();
+        if had_ime_overlay || scrolled_to_bottom {
+            cx.notify();
+        }
     }
 
     fn replace_and_mark_text_in_range(

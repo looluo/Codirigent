@@ -15,23 +15,27 @@ use codirigent_core::{LayoutNode, SessionId, SlotId, SplitDirection};
 use gpui::{
     div, px, relative, ClickEvent, Context, Focusable, FontWeight, InteractiveElement, IntoElement,
     MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, ScrollWheelEvent,
-    SharedString, StatefulInteractiveElement, Styled,
+    SharedString, StatefulInteractiveElement, Styled, Window,
 };
 use std::rc::Rc;
 use tracing::info;
 
 impl WorkspaceView {
     /// Dispatch workspace rendering to the appropriate layout: split-tree or NxM grid.
-    pub(super) fn render_grid_with_headers(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
+    pub(super) fn render_grid_with_headers(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> gpui::AnyElement {
         if self.workspace().is_split_tree_mode() {
-            self.render_split_tree_layout(cx).into_any_element()
+            self.render_split_tree_layout(window, cx).into_any_element()
         } else {
-            self.render_grid_layout(cx).into_any_element()
+            self.render_grid_layout(window, cx).into_any_element()
         }
     }
 
     /// Render the traditional NxM grid layout.
-    fn render_grid_layout(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_grid_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
         // Clone all theme values upfront to avoid borrow issues
         let theme = self.workspace().theme().clone();
         let panel_bg: gpui::Hsla = theme.panel_background.into();
@@ -79,6 +83,7 @@ impl WorkspaceView {
                         &header_hints,
                         &theme,
                         Some(cell_height),
+                        window,
                         cx,
                     )
                 } else {
@@ -105,7 +110,11 @@ impl WorkspaceView {
     }
 
     /// Render the split tree layout using recursive binary tree traversal.
-    fn render_split_tree_layout(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_split_tree_layout(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         let theme = self.workspace().theme().clone();
         let grid_gap = theme.grid_gap;
 
@@ -115,30 +124,6 @@ impl WorkspaceView {
             _ => return div().flex_1().into_any_element(),
         };
 
-        // Build a map of slot -> (session_id, is_focused, session_name, session_status)
-        let focused_session = self.workspace().focused_session_id();
-        let split_state = self.workspace().layout_state().as_split_tree();
-        let slot_sessions: std::collections::HashMap<
-            SlotId,
-            (SessionId, bool, String, codirigent_core::SessionStatus),
-        > = if let Some(state) = split_state {
-            state
-                .assignments()
-                .iter()
-                .filter_map(|(slot, opt_sid)| {
-                    let sid = (*opt_sid)?;
-                    let session = self.workspace().session(sid)?;
-                    let is_focused = focused_session == Some(sid);
-                    Some((
-                        *slot,
-                        (sid, is_focused, session.name.clone(), session.status),
-                    ))
-                })
-                .collect()
-        } else {
-            std::collections::HashMap::new()
-        };
-
         // Pre-compute colors once to avoid redundant conversions on every recursive call
         let panel_bg: gpui::Hsla = theme.panel_background.into();
         let border_color: gpui::Hsla = theme.border.into();
@@ -146,12 +131,12 @@ impl WorkspaceView {
 
         self.render_split_node(
             &tree,
-            &slot_sessions,
             &theme,
             grid_gap,
             panel_bg,
             border_color,
             muted,
+            window,
             cx,
         )
     }
@@ -161,33 +146,48 @@ impl WorkspaceView {
     fn render_split_node(
         &mut self,
         node: &LayoutNode,
-        slot_sessions: &std::collections::HashMap<
-            SlotId,
-            (SessionId, bool, String, codirigent_core::SessionStatus),
-        >,
         theme: &CodirigentTheme,
         gap: f32,
         panel_bg: gpui::Hsla,
         border_color: gpui::Hsla,
         muted: gpui::Hsla,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         match node {
             LayoutNode::Leaf { slot } => {
-                if let Some((session_id, is_focused, name, status)) = slot_sessions.get(slot) {
-                    let header_hints = if let Some(header) = self.get_terminal_header(*session_id) {
+                let focused_session = self.workspace().focused_session_id();
+                let session_data = self
+                    .workspace()
+                    .layout_state()
+                    .as_split_tree()
+                    .and_then(|state| state.session_at_slot(*slot))
+                    .and_then(|session_id| {
+                        self.workspace().session(session_id).map(|session| {
+                            (
+                                session_id,
+                                focused_session == Some(session_id),
+                                session.name.clone(),
+                                session.status,
+                            )
+                        })
+                    });
+
+                if let Some((session_id, is_focused, name, status)) = session_data {
+                    let header_hints = if let Some(header) = self.get_terminal_header(session_id) {
                         header.render_hints()
                     } else {
-                        crate::terminal_header::TerminalHeader::new(name, *status)
-                            .with_focused(*is_focused)
+                        crate::terminal_header::TerminalHeader::new(name, status)
+                            .with_focused(is_focused)
                             .render_hints()
                     };
 
                     self.render_session_cell_with_terminal(
-                        *session_id,
+                        session_id,
                         &header_hints,
                         theme,
                         None,
+                        window,
                         cx,
                     )
                     .into_any_element()
@@ -206,22 +206,22 @@ impl WorkspaceView {
                 // Render children recursively (pass pre-computed colors to avoid per-call conversion)
                 let first_elem = self.render_split_node(
                     first,
-                    slot_sessions,
                     theme,
                     gap,
                     panel_bg,
                     border_color,
                     muted,
+                    window,
                     cx,
                 );
                 let second_elem = self.render_split_node(
                     second,
-                    slot_sessions,
                     theme,
                     gap,
                     panel_bg,
                     border_color,
                     muted,
+                    window,
                     cx,
                 );
 
@@ -311,6 +311,7 @@ impl WorkspaceView {
         hints: &TerminalHeaderRenderHints,
         theme: &CodirigentTheme,
         cell_height: Option<f32>,
+        window: &mut Window,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         // Uses HEADER_HEIGHT from types.rs
@@ -458,6 +459,7 @@ impl WorkspaceView {
             session_id,
             theme,
             Some((entity, fh, is_focused, input_enabled)),
+            window,
         );
 
         // Clone canvas_origin for each mouse handler closure

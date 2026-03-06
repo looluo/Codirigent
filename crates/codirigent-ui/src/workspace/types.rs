@@ -318,6 +318,8 @@ pub(super) struct PollingState {
     pub git_refresh_in_flight: bool,
     /// Whether a background JSONL status check (Codex/Gemini) is in-flight.
     pub jsonl_check_in_flight: bool,
+    /// Whether a background hook-signal scan is in-flight.
+    pub hook_signal_check_in_flight: bool,
     /// Whether a background file tree rebuild is currently in-flight.
     pub file_tree_rebuild_in_flight: bool,
     /// Whether a background clipboard image save is currently in-flight.
@@ -341,6 +343,7 @@ impl PollingState {
             last_clipboard_check: Instant::now(),
             git_refresh_in_flight: false,
             jsonl_check_in_flight: false,
+            hook_signal_check_in_flight: false,
             file_tree_rebuild_in_flight: false,
             clipboard_load_in_flight: false,
             last_jsonl_check: Instant::now(),
