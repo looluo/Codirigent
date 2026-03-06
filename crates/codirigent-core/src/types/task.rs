@@ -253,6 +253,16 @@ impl Task {
             .all(|dep| completed_tasks.contains(dep))
     }
 
+    /// O(n) version using a pre-built set — use this in hot loops.
+    pub(crate) fn dependencies_satisfied_fast(
+        &self,
+        completed_set: &std::collections::HashSet<&TaskId>,
+    ) -> bool {
+        self.dependencies
+            .iter()
+            .all(|dep| completed_set.contains(dep))
+    }
+
     /// Check if the task can be retried.
     ///
     /// Returns true if the current retry count is less than the maximum

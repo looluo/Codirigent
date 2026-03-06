@@ -39,6 +39,8 @@ impl TaskQueue {
     /// assert_eq!(next.unwrap().id, TaskId::from("test"));
     /// ```
     pub fn next_task(&self, completed_tasks: &[TaskId]) -> Option<&Task> {
+        // Build HashSet once for O(1) dependency lookups inside the loop
+        let completed_set: std::collections::HashSet<&TaskId> = completed_tasks.iter().collect();
         self.state()
             .order
             .iter()
@@ -46,7 +48,7 @@ impl TaskQueue {
             .filter(|task| {
                 task.status == TaskStatus::Queued
                     && !self.is_blocked(&task.id)
-                    && task.dependencies_satisfied(completed_tasks)
+                    && task.dependencies_satisfied_fast(&completed_set)
             })
             .max_by(|a, b| {
                 let score_a = self.calculate_score(a, completed_tasks);
@@ -99,6 +101,7 @@ impl TaskQueue {
         session: &Session,
         completed_tasks: &[TaskId],
     ) -> Option<&Task> {
+        let completed_set: std::collections::HashSet<&TaskId> = completed_tasks.iter().collect();
         self.state()
             .order
             .iter()
@@ -106,7 +109,7 @@ impl TaskQueue {
             .filter(|task| {
                 task.status == TaskStatus::Queued
                     && !self.is_blocked(&task.id)
-                    && task.dependencies_satisfied(completed_tasks)
+                    && task.dependencies_satisfied_fast(&completed_set)
                     && task.project_dir.as_ref().map_or(true, |pd| {
                         super::session_matches_project(&session.working_directory, pd)
                     })
