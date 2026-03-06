@@ -616,6 +616,23 @@ impl WorkspaceView {
 
     /// Render the narrow icon rail (56px).
     /// Render a single task card for the right task board.
+    /// Build a vertically-stacked section div containing one task card per item.
+    ///
+    /// Eliminates the repeated 4-line section-builder pattern for each task
+    /// status group (Running, Queued, Review, Done).
+    fn build_task_items_section(
+        &self,
+        items: &[crate::task_board::TaskItem],
+        theme: &CodirigentTheme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let mut section = div().flex().flex_col().gap(px(4.0));
+        for item in items {
+            section = section.child(self.render_task_card(item, theme, cx));
+        }
+        section
+    }
+
     fn render_task_card(
         &self,
         item: &crate::task_board::TaskItem,
@@ -897,25 +914,10 @@ impl WorkspaceView {
 
         // Render task cards for each section
         let theme_ref = self.workspace().theme().clone();
-        let mut running_section = div().flex().flex_col().gap(px(4.0));
-        for item in &running_items {
-            running_section = running_section.child(self.render_task_card(item, &theme_ref, cx));
-        }
-
-        let mut queued_section = div().flex().flex_col().gap(px(4.0));
-        for item in &queued_items {
-            queued_section = queued_section.child(self.render_task_card(item, &theme_ref, cx));
-        }
-
-        let mut review_section = div().flex().flex_col().gap(px(4.0));
-        for item in &review_items {
-            review_section = review_section.child(self.render_task_card(item, &theme_ref, cx));
-        }
-
-        let mut done_section = div().flex().flex_col().gap(px(4.0));
-        for item in &done_items {
-            done_section = done_section.child(self.render_task_card(item, &theme_ref, cx));
-        }
+        let running_section = self.build_task_items_section(&running_items, &theme_ref, cx);
+        let queued_section = self.build_task_items_section(&queued_items, &theme_ref, cx);
+        let review_section = self.build_task_items_section(&review_items, &theme_ref, cx);
+        let done_section = self.build_task_items_section(&done_items, &theme_ref, cx);
 
         div()
             .id("right-task-board")
