@@ -1165,8 +1165,9 @@ impl WorkspaceView {
         let muted: gpui::Hsla = theme.muted.into();
 
         // Parse group color or use a default
-        let bar_color = color
+        let bar_color: gpui::Hsla = color
             .and_then(|c| crate::theme::hex_to_hsla(c))
+            .map(|h| h.into())
             .unwrap_or(muted);
 
         let chevron = if expanded {

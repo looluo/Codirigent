@@ -120,7 +120,7 @@ impl WorkspaceView {
                     Vec::with_capacity(text_runs.len());
                 let font_size_px = px(font_size);
 
-                for (run, fg_color) in &text_runs {
+                for (run, fg_color) in text_runs.iter() {
                     let weight = if run.bold {
                         gpui::FontWeight::BOLD
                     } else {
@@ -257,7 +257,7 @@ impl WorkspaceView {
                 }
 
                 // 1. Paint background rectangles
-                for (row, start_col, end_col, bg_color) in &bg_rects {
+                for (row, start_col, end_col, bg_color) in bg_rects.iter() {
                     let rect_x = ox + *start_col as f32 * cell_w;
                     let rect_y = oy + *row as f32 * cell_h;
                     let rect_w = (*end_col - *start_col) as f32 * cell_w;

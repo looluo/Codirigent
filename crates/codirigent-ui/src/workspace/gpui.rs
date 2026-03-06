@@ -39,7 +39,7 @@ use codirigent_core::compaction::{CompactionConfig, CompactionService};
 use codirigent_core::config_service::ConfigService;
 use codirigent_core::{
     CodirigentEvent, DefaultEventBus, EventBus, FileStorageService, GridPosition, SessionId,
-    SessionManager, SessionStatus, TaskManager, TaskManagerConfig,
+    SessionManager, TaskManager, TaskManagerConfig,
 };
 use codirigent_detector::InputDetector;
 use codirigent_filetree::FileTree;
@@ -1502,7 +1502,9 @@ impl Render for WorkspaceView {
         container = self.render_overlays(container, cx);
         container
     }
+}
 
+impl WorkspaceView {
     /// Sync terminal cell dimensions with font metrics, then throttle-trigger PTY resize.
     ///
     /// Uses a cache keyed on font family + size so font queries only run when

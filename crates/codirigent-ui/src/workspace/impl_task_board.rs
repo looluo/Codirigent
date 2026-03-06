@@ -53,95 +53,97 @@ impl WorkspaceView {
                     return;
                 }
 
-                if let Ok(mut manager) = self.task_manager.lock() {
-                    let result = match action {
-                        TaskAction::Start => {
-                            info!("Starting task {}", task_id);
-                            manager.start_task(&task_id)
-                        }
-                        TaskAction::Review => {
-                            // Move to Review status and release from session
-                            info!("Moving task {} to review", task_id);
-                            let r = manager.move_to_review(&task_id);
-                            if r.is_ok() {
-                                if let Some(sid) = self.session_with_task(&task_id) {
-                                    drop(manager);
-                                    self.clear_task_from_session(sid, cx);
-                                    return;
-                                }
-                            }
-                            r
-                        }
-                        TaskAction::Complete => {
-                            // Approve and complete the task, releasing it from its session
-                            info!("Approving task {}", task_id);
-                            let r = manager.approve_task(&task_id);
-                            if r.is_ok() {
-                                if let Some(sid) = self.session_with_task(&task_id) {
-                                    // Release task_manager before session_manager
-                                    drop(manager);
-                                    self.clear_task_from_session(sid, cx);
-                                    return;
-                                }
-                            }
-                            r
-                        }
-                        TaskAction::Delete => {
-                            info!("Deleting task {}", task_id);
-                            let r = manager.delete_task(&task_id);
-                            if r.is_ok() {
-                                if let Some(sid) = self.session_with_task(&task_id) {
-                                    drop(manager);
-                                    self.clear_task_from_session(sid, cx);
-                                    return;
-                                }
-                            }
-                            r
-                        }
-                        TaskAction::Assign => {
-                            info!("Assign action triggered for task {}", task_id);
-                            // Get task for directory matching
-                            let task = manager.get_task(&task_id).cloned();
-                            let target = task
-                                .as_ref()
-                                .and_then(|t| self.find_assignable_session_for_task(t));
-
-                            if let Some(session) = target {
-                                match manager.direct_assign(&task_id, session.id) {
-                                    Ok(prompt) => {
-                                        // Release task_manager before session_manager
-                                        drop(manager);
-
-                                        self.send_task_to_session(&task_id, session.id, &prompt);
-                                        // Mark session as having received a manual assignment,
-                                        // which unlocks auto-assign for future tasks.
-                                        self.cache.manually_assigned_sessions.insert(session.id);
-                                        info!(
-                                            "Manually assigned task {} to session {}",
-                                            task_id, session.id
-                                        );
-                                        cx.notify();
-                                        return;
-                                    }
-                                    Err(e) => {
-                                        warn!("Failed to assign task: {}", e);
-                                        Err(e)
-                                    }
-                                }
-                            } else {
-                                warn!("No matching session available for assignment (check directory matching)");
-                                Ok(())
-                            }
-                        }
-                        TaskAction::Edit => {
-                            // Handled above, before the lock
-                            unreachable!()
-                        }
-                    };
-
-                    if let Err(e) = result {
-                        warn!("Task action failed: {}", e);
+                let Ok(mut manager) = self.task_manager.lock() else {
+                    warn!("Failed to lock task manager");
+                    return;
+                };
+                let result = match action {
+                    TaskAction::Start => {
+                        info!("Starting task {}", task_id);
+                        manager.start_task(&task_id)
                     }
+                    TaskAction::Review => {
+                        // Move to Review status and release from session
+                        info!("Moving task {} to review", task_id);
+                        let r = manager.move_to_review(&task_id);
+                        let sid = r
+                            .is_ok()
+                            .then(|| self.session_with_task(&task_id))
+                            .flatten();
+                        drop(manager);
+                        if let Some(sid) = sid {
+                            self.clear_task_from_session(sid, cx);
+                            return;
+                        }
+                        r
+                    }
+                    TaskAction::Complete => {
+                        // Approve and complete the task, releasing it from its session
+                        info!("Approving task {}", task_id);
+                        let r = manager.approve_task(&task_id);
+                        let sid = r
+                            .is_ok()
+                            .then(|| self.session_with_task(&task_id))
+                            .flatten();
+                        drop(manager);
+                        if let Some(sid) = sid {
+                            self.clear_task_from_session(sid, cx);
+                            return;
+                        }
+                        r
+                    }
+                    TaskAction::Delete => {
+                        info!("Deleting task {}", task_id);
+                        let r = manager.delete_task(&task_id);
+                        let sid = r
+                            .is_ok()
+                            .then(|| self.session_with_task(&task_id))
+                            .flatten();
+                        drop(manager);
+                        if let Some(sid) = sid {
+                            self.clear_task_from_session(sid, cx);
+                            return;
+                        }
+                        r
+                    }
+                    TaskAction::Assign => {
+                        info!("Assign action triggered for task {}", task_id);
+                        let task = manager.get_task(&task_id).cloned();
+                        let target = task
+                            .as_ref()
+                            .and_then(|t| self.find_assignable_session_for_task(t));
+
+                        if let Some(session) = target {
+                            match manager.direct_assign(&task_id, session.id) {
+                                Ok(prompt) => {
+                                    drop(manager);
+                                    self.send_task_to_session(&task_id, session.id, &prompt);
+                                    self.cache.manually_assigned_sessions.insert(session.id);
+                                    info!(
+                                        "Manually assigned task {} to session {}",
+                                        task_id, session.id
+                                    );
+                                    cx.notify();
+                                    return;
+                                }
+                                Err(e) => {
+                                    warn!("Failed to assign task: {}", e);
+                                    Err(e)
+                                }
+                            }
+                        } else {
+                            warn!("No matching session available for assignment (check directory matching)");
+                            Ok(())
+                        }
+                    }
+                    TaskAction::Edit => {
+                        // Handled above, before the lock
+                        unreachable!()
+                    }
+                };
+
+                if let Err(e) = result {
+                    warn!("Task action failed: {}", e);
                 }
             }
             crate::task_board::TaskBoardEvent::ConfirmAssignment { task_id } => {

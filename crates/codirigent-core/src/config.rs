@@ -330,20 +330,31 @@ impl UserSettings {
 ///
 /// let settings = AppearanceSettings::default();
 /// assert_eq!(settings.theme, "dark");
+/// assert_eq!(settings.font_size, 13);
 /// assert_eq!(settings.grid_gap, 4);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AppearanceSettings {
     /// Theme name: dark, light, or custom.
     pub theme: String,
+    /// UI font size in points (10–24).
+    #[serde(default = "AppearanceSettings::default_font_size")]
+    pub font_size: u32,
     /// Grid gap in pixels.
     pub grid_gap: u32,
+}
+
+impl AppearanceSettings {
+    fn default_font_size() -> u32 {
+        13
+    }
 }
 
 impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
             theme: "dark".to_string(),
+            font_size: 13,
             grid_gap: 4,
         }
     }
@@ -764,6 +775,7 @@ mod tests {
     fn test_appearance_settings_default() {
         let settings = AppearanceSettings::default();
         assert_eq!(settings.theme, "dark");
+        assert_eq!(settings.font_size, 13);
         assert_eq!(settings.grid_gap, 4);
     }
 
@@ -771,11 +783,13 @@ mod tests {
     fn test_appearance_settings_serialization() {
         let settings = AppearanceSettings {
             theme: "light".to_string(),
+            font_size: 14,
             grid_gap: 8,
         };
         let json = serde_json::to_string(&settings).unwrap();
         let parsed: AppearanceSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.theme, "light");
+        assert_eq!(parsed.font_size, 14);
         assert_eq!(parsed.grid_gap, 8);
     }
 
