@@ -442,24 +442,6 @@ impl TerminalView {
         self.terminal.term_mut().scroll_display(Scroll::Bottom);
     }
 
-    /// Scroll to the top (oldest output in scrollback).
-    pub fn scroll_to_top(&mut self) {
-        self.content_dirty = true;
-        self.terminal.term_mut().scroll_display(Scroll::Top);
-    }
-
-    /// Scroll up by one page (viewport height).
-    pub fn page_up(&mut self) {
-        let lines = self.terminal.rows() as usize;
-        self.scroll_up(lines);
-    }
-
-    /// Scroll down by one page (viewport height).
-    pub fn page_down(&mut self) {
-        let lines = self.terminal.rows() as usize;
-        self.scroll_down(lines);
-    }
-
     /// Clear the terminal screen while preserving the current line (prompt).
     ///
     /// This clears the scrollback and visible content while keeping
@@ -533,7 +515,7 @@ impl TerminalView {
     }
 
     /// Get cells grouped by row for efficient rendering.
-    pub fn cells_by_row(&self) -> Vec<Vec<RenderedCell>> {
+    pub(crate) fn cells_by_row(&self) -> Vec<Vec<RenderedCell>> {
         let cells = self.visible_cells();
         let rows = self.terminal.rows() as usize;
 
@@ -596,7 +578,7 @@ impl TerminalView {
     }
 
     /// Calculate pixel dimensions for the current terminal size.
-    pub fn pixel_size(&self) -> (f32, f32) {
+    pub(crate) fn pixel_size(&self) -> (f32, f32) {
         let width = self.terminal.cols() as f32 * self.cell_width;
         let height = self.terminal.rows() as f32 * self.cell_height;
         (width, height)
@@ -831,13 +813,6 @@ impl TerminalView {
             None
         }
     }
-}
-
-/// Default monospace font family for terminals per platform.
-///
-/// Delegates to [`crate::theme::default_terminal_font_family`].
-pub fn default_terminal_font_family() -> &'static str {
-    crate::theme::default_terminal_font_family()
 }
 
 /// Compute cell dimensions from actual font metrics using the text system.
