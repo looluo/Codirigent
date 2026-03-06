@@ -498,22 +498,20 @@ impl WorkspaceView {
                             )
                         });
                         if detector_idle {
-                            // Check if cache entry is actually stale before removing
-                            let is_stale = this
-                                .cli_readers
-                                .lock()
-                                .ok()
-                                .and_then(|r| {
-                                    r.cached_status.get(session_id).map(|c| {
+                            // Check and remove stale cache entry atomically (single lock)
+                            // to avoid a TOCTOU race with the background JSONL refresh.
+                            if let Ok(mut readers) = this.cli_readers.lock() {
+                                let is_stale = readers
+                                    .cached_status
+                                    .get(session_id)
+                                    .map(|c| {
                                         c.seen_at.elapsed() > Self::GENERIC_SHELL_JSONL_CACHE_TTL
                                     })
-                                })
-                                .unwrap_or(false);
-                            if is_stale {
-                                if let Ok(mut readers) = this.cli_readers.lock() {
+                                    .unwrap_or(false);
+                                if is_stale {
                                     readers.cached_status.remove(session_id);
+                                    changed = true;
                                 }
-                                changed = true;
                             }
                         }
                     }

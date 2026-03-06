@@ -39,8 +39,10 @@ impl TaskQueue {
     /// assert_eq!(next.unwrap().id, TaskId::from("test"));
     /// ```
     pub fn next_task(&self, completed_tasks: &[TaskId]) -> Option<&Task> {
-        // Build HashSet once for O(1) dependency lookups inside the loop
+        // Build HashSet once for O(1) dependency lookups inside the loop.
         let completed_set: std::collections::HashSet<&TaskId> = completed_tasks.iter().collect();
+        // Pre-compute scores to avoid calling calculate_score twice per comparison
+        // (which in Smart mode would invoke chrono::Utc::now() O(n) extra times).
         self.state()
             .order
             .iter()
@@ -50,13 +52,9 @@ impl TaskQueue {
                     && !self.is_blocked(&task.id)
                     && task.dependencies_satisfied_fast(&completed_set)
             })
-            .max_by(|a, b| {
-                let score_a = self.calculate_score(a, completed_tasks);
-                let score_b = self.calculate_score(b, completed_tasks);
-                score_a
-                    .partial_cmp(&score_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            .map(|task| (task, self.calculate_score(task, completed_tasks)))
+            .max_by(|(_, sa), (_, sb)| sa.partial_cmp(sb).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(task, _)| task)
     }
 
     /// Get the next task for a specific session (considers tag matching).
@@ -114,13 +112,12 @@ impl TaskQueue {
                         super::session_matches_project(&session.working_directory, pd)
                     })
             })
-            .max_by(|a, b| {
-                let score_a = self.calculate_score_for_session(a, session, completed_tasks);
-                let score_b = self.calculate_score_for_session(b, session, completed_tasks);
-                score_a
-                    .partial_cmp(&score_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
+            .map(|task| {
+                let score = self.calculate_score_for_session(task, session, completed_tasks);
+                (task, score)
             })
+            .max_by(|(_, sa), (_, sb)| sa.partial_cmp(sb).unwrap_or(std::cmp::Ordering::Equal))
+            .map(|(task, _)| task)
     }
 
     /// Calculate priority score for a task.

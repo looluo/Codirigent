@@ -674,8 +674,11 @@ impl WorkspaceView {
     }
 
     /// Helper to acquire detector lock.
+    ///
+    /// # Panics
+    /// Panics if the detector lock is poisoned (should never happen in normal operation).
     pub(super) fn with_detector<R>(&self, f: impl FnOnce(&mut InputDetector) -> R) -> R {
-        let mut detector = self.detector.lock().unwrap_or_else(|p| p.into_inner());
+        let mut detector = self.detector.lock().expect("detector mutex poisoned");
         f(&mut detector)
     }
 

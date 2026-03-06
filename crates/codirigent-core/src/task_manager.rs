@@ -213,7 +213,7 @@ impl TaskManager {
     ///
     /// Returns an error if saving to storage fails.
     pub async fn save(&self) -> Result<()> {
-        for task in self.queue.queued_tasks() {
+        for task in self.queue.all_tasks().values() {
             self.storage.save_task(task)?;
         }
         Ok(())
@@ -321,12 +321,8 @@ impl TaskManager {
         task.plan_file = plan_file;
         task.project_dir = project_dir;
 
-        // Persist
-        let task_ref = self
-            .queue
-            .get_task(id)
-            .ok_or_else(|| anyhow!("Task {} not found after update", id))?;
-        self.storage.save_task(task_ref)?;
+        let snapshot = task.clone();
+        self.storage.save_task(&snapshot)?;
         Ok(())
     }
 
@@ -334,11 +330,7 @@ impl TaskManager {
     ///
     /// Returns tasks with `Queued` status.
     pub fn queued_tasks(&self) -> Vec<&Task> {
-        self.queue
-            .queued_tasks()
-            .into_iter()
-            .filter(|t| t.status == TaskStatus::Queued)
-            .collect()
+        self.queue.queued_tasks()
     }
 
     /// Get in-progress tasks.
@@ -452,8 +444,23 @@ impl TaskManager {
     ///
     /// Returns an error if the task doesn't exist.
     pub fn start_task(&mut self, task_id: &TaskId) -> Result<()> {
+        let task = self
+            .queue
+            .get_task_mut(task_id)
+            .ok_or_else(|| anyhow!("Task {} not found", task_id))?;
+
+        match task.status {
+            TaskStatus::Queued | TaskStatus::Blocked => {
+                task.status = TaskStatus::Working;
+                task.started_at.get_or_insert_with(chrono::Utc::now);
+            }
+            _ => {}
+        }
+
+        if let Some(task_ref) = self.queue.get_task(task_id) {
+            self.storage.save_task(task_ref)?;
+        }
         tracing::info!(?task_id, "Task started");
-        // The task status update is handled by the queue on assignment
         Ok(())
     }
 
@@ -704,15 +711,8 @@ impl TaskManager {
             .map(|(id, task)| (id.clone(), task))
     }
 
-    /// Find a task assigned to a specific session (mutable).
-    ///
-    /// Returns the task ID of the task assigned to the session.
     fn find_task_id_by_session(&self, session_id: SessionId) -> Option<TaskId> {
-        self.queue
-            .all_tasks()
-            .iter()
-            .find(|(_, task)| task.assigned_session == Some(session_id))
-            .map(|(id, _)| id.clone())
+        self.find_task_by_session(session_id).map(|(id, _)| id)
     }
 
     /// Handle session status change and automatically sync task status.

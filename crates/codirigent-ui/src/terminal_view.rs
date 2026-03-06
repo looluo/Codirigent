@@ -36,6 +36,17 @@
 
 use std::sync::Arc;
 
+/// Ratio of font_size used as a conservative initial cell width estimate
+/// before real font metrics arrive from `compute_cell_dimensions`.
+/// Slightly underestimates typical monospace advance to avoid over-allocating cols.
+const APPROX_CELL_WIDTH_RATIO: f32 = 0.55;
+
+/// Ratio of font_size used as fallback cell width when GPUI font advance fails.
+const FALLBACK_CELL_WIDTH_RATIO: f32 = 0.6;
+
+/// Minimum initial cell width in pixels to stay sane at tiny font sizes.
+const MIN_CELL_WIDTH_PX: f32 = 7.0;
+
 use crate::terminal::Terminal;
 use crate::terminal::TerminalSize;
 use crate::terminal_colors::{convert_color, dim_color};
@@ -136,6 +147,11 @@ impl Selection {
     /// Check if a cell position is within the selection.
     ///
     /// Returns `true` if the given (row, column) is selected.
+    ///
+    /// Comparison uses **lexicographic (row-major) order**: `(row, col)` tuples
+    /// compare by row first, then column. This means the selection spans full
+    /// rows between `start.row` and `end.row`, and only partial rows at the
+    /// endpoints — which is standard terminal selection behaviour.
     pub fn contains(&self, row: usize, col: usize) -> bool {
         match (self.start, self.end) {
             (Some(start), Some(end)) => {
@@ -240,7 +256,7 @@ impl TerminalView {
         // compute_cell_dimensions() on first render. Using conservative
         // ratios that slightly overestimate so the initial grid doesn't
         // allocate more rows/cols than will fit after correction.
-        let cell_width = (font_size * 0.55).max(7.0);
+        let cell_width = (font_size * APPROX_CELL_WIDTH_RATIO).max(MIN_CELL_WIDTH_PX);
         let cell_height = font_size.max(14.0);
 
         let mut terminal = terminal;
@@ -823,7 +839,7 @@ pub fn compute_cell_dimensions(
     let cell_width = text_system
         .advance(font_id, font_size_px, 'm')
         .map(|adv| f32::from(adv.width))
-        .unwrap_or(font_size * 0.6);
+        .unwrap_or(font_size * FALLBACK_CELL_WIDTH_RATIO);
 
     // GPUI's ascent already includes room for accented characters, so natural
     // ascent + |descent| gives correct terminal row height without extra leading.
@@ -902,6 +918,42 @@ mod tests {
         selection.set_end(5, 0);
         assert!(selection.contains(5, 0));
         assert!(selection.contains(7, 40));
+    }
+
+    /// Verifies lexicographic row-major ordering: the column at the end of
+    /// the start-row IS included, but a column that is AFTER the end-col on
+    /// the end-row is NOT included.
+    #[test]
+    fn test_selection_contains_row_major_boundary() {
+        let mut selection = Selection::default();
+        // Select from (2, 5) to (4, 3) in forward order
+        selection.set_start(2, 5);
+        selection.set_end(4, 3);
+
+        // Exact endpoints are included
+        assert!(selection.contains(2, 5));
+        assert!(selection.contains(4, 3));
+
+        // Middle row is fully included
+        assert!(selection.contains(3, 0));
+        assert!(selection.contains(3, 79));
+
+        // On start-row, columns BEFORE start-col are NOT selected
+        assert!(!selection.contains(2, 4));
+        // On end-row, columns AFTER end-col are NOT selected
+        assert!(!selection.contains(4, 4));
+
+        // Rows outside the range are not selected
+        assert!(!selection.contains(1, 99));
+        assert!(!selection.contains(5, 0));
+
+        // Single-cell selection
+        let mut sel2 = Selection::default();
+        sel2.set_start(3, 7);
+        sel2.set_end(3, 7);
+        assert!(sel2.contains(3, 7));
+        assert!(!sel2.contains(3, 6));
+        assert!(!sel2.contains(3, 8));
     }
 
     #[test]

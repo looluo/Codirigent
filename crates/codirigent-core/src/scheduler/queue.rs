@@ -10,8 +10,7 @@ use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::config::{SchedulerConfig, SchedulerMode};
-use super::selection::priority_to_value;
+use super::config::SchedulerConfig;
 
 /// Task queue manager handles task ordering and scheduling.
 ///
@@ -552,9 +551,12 @@ impl TaskQueue {
             self.update_blocked_for_task(&id);
         }
 
+        // Build a set for O(1) membership checks when pruning blocking entries.
+        let completed_set: std::collections::HashSet<&TaskId> = completed_tasks.iter().collect();
+
         // Also check against provided completed list
         for blocking in self.state.blocked.values_mut() {
-            blocking.retain(|b| !completed_tasks.contains(b));
+            blocking.retain(|b| !completed_set.contains(b));
         }
 
         // Remove entries with no blockers
@@ -656,35 +658,14 @@ impl TaskQueue {
         self.state.blocked.contains_key(id)
     }
 
-    /// Insert a task into the queue order based on priority.
+    /// Insert a task into the queue order.
+    ///
+    /// All modes simply append — `next_task` uses `max_by` scoring to select
+    /// the best task regardless of insertion order, so pre-sorting on enqueue
+    /// provides no benefit and would cost O(n) per insertion.
     pub(crate) fn insert_by_priority(&mut self, id: &TaskId) {
-        let task = match self.tasks.get(id) {
-            Some(t) => t,
-            None => return,
-        };
-
-        match self.config.mode {
-            SchedulerMode::Fifo => {
-                self.state.order.push(id.clone());
-            }
-            SchedulerMode::Priority | SchedulerMode::Smart => {
-                // Find insertion point based on priority
-                let priority_value = priority_to_value(&task.priority);
-                let pos = self.state.order.iter().position(|other_id| {
-                    self.tasks
-                        .get(other_id)
-                        .map(|t| priority_to_value(&t.priority) < priority_value)
-                        .unwrap_or(false)
-                });
-
-                match pos {
-                    Some(p) => self.state.order.insert(p, id.clone()),
-                    None => self.state.order.push(id.clone()),
-                }
-            }
-            SchedulerMode::Dependency => {
-                self.state.order.push(id.clone());
-            }
+        if self.tasks.contains_key(id) {
+            self.state.order.push(id.clone());
         }
     }
 
@@ -792,7 +773,7 @@ impl TaskQueueService for TaskQueue {
 mod tests {
     use super::*;
     use crate::event_bus::DefaultEventBus;
-    use crate::scheduler::config::SchedulerConfig;
+    use crate::scheduler::config::{SchedulerConfig, SchedulerMode};
 
     fn create_queue() -> TaskQueue {
         let event_bus = Arc::new(DefaultEventBus::new(16));

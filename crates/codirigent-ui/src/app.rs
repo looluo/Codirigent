@@ -323,7 +323,7 @@ impl CodirigentApp {
     /// Initializes the session manager, input detector, and event bus.
     /// By default, the splash screen is enabled.
     pub fn new() -> Self {
-        let event_bus = Arc::new(DefaultEventBus::new(64));
+        let event_bus = Arc::new(DefaultEventBus::with_default_capacity());
 
         let session_manager = Arc::new(Mutex::new(DefaultSessionManager::new(event_bus.clone())));
 
