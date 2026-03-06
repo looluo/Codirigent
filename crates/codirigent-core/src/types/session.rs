@@ -33,6 +33,9 @@ pub struct Session {
     pub color: Option<String>,
     /// Git repository information (branch, dirty count, etc.).
     pub git_info: Option<GitRepoInfo>,
+    /// Claude Code session ID (UUID) for this session, if Claude Code is running.
+    /// Used to resume with `claude --resume <id>` on next app startup.
+    pub claude_session_id: Option<String>,
 }
 
 impl Session {
@@ -49,6 +52,7 @@ impl Session {
             group: None,
             color: None,
             git_info: None,
+            claude_session_id: None,
         }
     }
 }

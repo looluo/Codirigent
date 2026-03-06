@@ -4,7 +4,6 @@
 //! implementation, including modal states and UI component data.
 
 use codirigent_core::{SessionId, SessionStatus, TaskId};
-use codirigent_session::claude_session_reader::ClaudeSessionReader;
 use codirigent_session::codex_session_reader::CodexSessionReader;
 use codirigent_session::gemini_session_reader::GeminiSessionReader;
 use gpui::Hsla;
@@ -309,8 +308,6 @@ pub(super) struct PollingState {
     pub pending_resize: bool,
     /// Last time git status was refreshed for sessions.
     pub last_git_refresh: Instant,
-    /// Last time JSONL status was checked (throttled to ~1/second).
-    pub last_jsonl_check: Instant,
     /// Sessions that need a deferred Enter keypress sent to their PTY.
     pub pending_enters: HashMap<SessionId, (Instant, bool)>,
     /// Last time sync_ui_state ran (throttled to avoid per-frame overhead).
@@ -319,12 +316,16 @@ pub(super) struct PollingState {
     pub last_clipboard_check: Instant,
     /// Whether a background git refresh is currently in-flight.
     pub git_refresh_in_flight: bool,
-    /// Whether a background JSONL status check is currently in-flight.
+    /// Whether a background JSONL status check (Codex/Gemini) is in-flight.
     pub jsonl_check_in_flight: bool,
     /// Whether a background file tree rebuild is currently in-flight.
     pub file_tree_rebuild_in_flight: bool,
     /// Whether a background clipboard image save is currently in-flight.
     pub clipboard_load_in_flight: bool,
+    /// Last time the Codex/Gemini JSONL check ran.
+    pub last_jsonl_check: Instant,
+    /// Last time hook signal files were scanned (~1/second throttle).
+    pub last_hook_signal_check: Instant,
 }
 
 impl PollingState {
@@ -335,7 +336,6 @@ impl PollingState {
             last_resize_time: Instant::now() - std::time::Duration::from_millis(200),
             pending_resize: false,
             last_git_refresh: Instant::now(),
-            last_jsonl_check: Instant::now(),
             pending_enters: HashMap::new(),
             last_ui_sync: Instant::now() - std::time::Duration::from_millis(200),
             last_clipboard_check: Instant::now(),
@@ -343,6 +343,8 @@ impl PollingState {
             jsonl_check_in_flight: false,
             file_tree_rebuild_in_flight: false,
             clipboard_load_in_flight: false,
+            last_jsonl_check: Instant::now(),
+            last_hook_signal_check: Instant::now() - std::time::Duration::from_secs(1),
         }
     }
 }
@@ -354,22 +356,25 @@ pub(super) struct CachedCliStatus {
     pub(super) seen_at: Instant,
     /// When the status last changed (for stale NeedsAttention detection).
     pub(super) status_since: Instant,
+    /// How long this entry is valid after `seen_at`.
+    /// Hook-based entries (Claude Code) use a longer TTL than JSONL-based ones
+    /// so a long-running task does not lose its "working" state between polls.
+    pub(super) ttl: std::time::Duration,
 }
 
 /// Grouped CLI session reader state for WorkspaceView.
 ///
-/// Contains JSONL session readers for different CLI types and the
-/// process-tree CLI detector.
+/// Contains JSONL session readers for Codex and Gemini (neither has a hooks
+/// API) and the process-tree CLI detector. Claude Code status is handled by
+/// hook signal files via `check_hook_signals` and does not need a reader here.
 pub(super) struct CliReaders {
-    /// Claude Code JSONL session reader for high-fidelity status detection.
-    pub claude: Option<ClaudeSessionReader>,
     /// Codex CLI JSONL session reader for high-fidelity status detection.
     pub codex: Option<CodexSessionReader>,
     /// Gemini CLI JSON session reader for high-fidelity status detection.
     pub gemini: Option<GeminiSessionReader>,
     /// Process-tree CLI detector for gating JSONL auto-probe on GenericShell sessions.
     pub detector: codirigent_session::DefaultCliDetector,
-    /// Cached JSONL-derived session status, persisted between poll cycles so
+    /// Cached CLI-derived session status, persisted between poll cycles so
     /// the high-frequency InputDetector does not overwrite it.
     pub cached_status: HashMap<SessionId, CachedCliStatus>,
 }
@@ -377,7 +382,6 @@ pub(super) struct CliReaders {
 impl CliReaders {
     pub fn new() -> Self {
         Self {
-            claude: ClaudeSessionReader::new(),
             codex: CodexSessionReader::new(),
             gemini: GeminiSessionReader::new(),
             detector: codirigent_session::DefaultCliDetector::new(),

@@ -341,6 +341,11 @@ impl SessionManager for DefaultSessionManager {
             ));
         }
 
+        // Inject CODIRIGENT_SESSION_ID so codirigent-hook can match hook signals
+        // back to this exact session without relying on CWD heuristics.
+        let id_str = id.0.to_string();
+        let env_vars: &[(&str, &str)] = &[("CODIRIGENT_SESSION_ID", &id_str)];
+
         // Spawn PTY: use specific shell if provided, otherwise auto-detect
         let mut pty = if let Some(ref shell_name) = shell {
             if !shell_name.is_empty() {
@@ -352,15 +357,15 @@ impl SessionManager for DefaultSessionManager {
                     &args,
                     DEFAULT_PTY_ROWS,
                     DEFAULT_PTY_COLS,
-                    &[],
+                    env_vars,
                 )
                 .context("Failed to spawn PTY with selected shell")?
             } else {
-                PtyHandle::spawn(&working_dir, DEFAULT_PTY_ROWS, DEFAULT_PTY_COLS, &[])
+                PtyHandle::spawn(&working_dir, DEFAULT_PTY_ROWS, DEFAULT_PTY_COLS, env_vars)
                     .context("Failed to spawn PTY")?
             }
         } else {
-            PtyHandle::spawn(&working_dir, DEFAULT_PTY_ROWS, DEFAULT_PTY_COLS, &[])
+            PtyHandle::spawn(&working_dir, DEFAULT_PTY_ROWS, DEFAULT_PTY_COLS, env_vars)
                 .context("Failed to spawn PTY")?
         };
 

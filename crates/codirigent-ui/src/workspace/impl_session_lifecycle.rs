@@ -20,6 +20,42 @@ use gpui::Context;
 use std::path::PathBuf;
 use tracing::{info, warn};
 
+/// Read the `permissionMode` value from the last complete JSON line of a
+/// Claude Code JSONL session file.
+///
+/// Returns `None` if the file cannot be found or does not contain the field.
+fn read_claude_permission_mode(claude_session_id: &str) -> Option<String> {
+    let home = {
+        #[cfg(target_os = "windows")]
+        {
+            std::env::var("USERPROFILE").ok().map(PathBuf::from)?
+        }
+        #[cfg(not(target_os = "windows"))]
+        {
+            std::env::var("HOME").ok().map(PathBuf::from)?
+        }
+    };
+    let projects_dir = home.join(".claude").join("projects");
+    // Search all project dirs for <claude_session_id>.jsonl
+    let target = format!("{}.jsonl", claude_session_id);
+    let entries = std::fs::read_dir(&projects_dir).ok()?;
+    for project_entry in entries.flatten() {
+        let jsonl_path = project_entry.path().join(&target);
+        if !jsonl_path.exists() {
+            continue;
+        }
+        // Read just the last non-empty line (cheapest way to get latest metadata).
+        let content = std::fs::read_to_string(&jsonl_path).ok()?;
+        let last_line = content.lines().rev().find(|l| !l.trim().is_empty())?;
+        if let Ok(obj) = serde_json::from_str::<serde_json::Value>(last_line) {
+            if let Some(mode) = obj.get("permissionMode").and_then(|v| v.as_str()) {
+                return Some(mode.to_owned());
+            }
+        }
+    }
+    None
+}
+
 impl WorkspaceView {
     /// Create a new terminal session in the focused pane.
     pub fn create_session(&mut self, cx: &mut Context<Self>) {
@@ -242,6 +278,21 @@ impl WorkspaceView {
                 Some(id) => id,
                 None => continue,
             };
+
+            // Resume Claude Code session if we have a stored session ID.
+            if let Some(ref claude_id) = saved.claude_session_id {
+                let permission_mode = read_claude_permission_mode(claude_id).unwrap_or_default();
+                let mut cmd = format!("claude --resume {}", claude_id);
+                if permission_mode == "bypassPermissions" {
+                    cmd.push_str(" --dangerously-skip-permissions");
+                }
+                cmd.push('\r');
+                if let Ok(mgr) = self.session_manager.lock() {
+                    if let Err(e) = mgr.send_input(session_id, cmd.as_bytes()) {
+                        warn!(?session_id, error = %e, "Failed to send claude --resume command");
+                    }
+                }
+            }
 
             // Restore group/color
             if saved.group.is_some() || saved.color.is_some() {

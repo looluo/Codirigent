@@ -4,7 +4,8 @@
 //! - Drains PTY output and feeds it to terminal emulators
 //! - Detects CLI types from output banners
 //! - Processes shell state markers (OSC 133) and working directory changes (OSC 7)
-//! - Overlays JSONL-derived session status over pattern-based detection
+//! - Reads Claude Code hook signal files for instant, low-overhead status updates
+//! - Polls Codex/Gemini JSONL logs (background thread, ~3s interval)
 //! - Manages automatic task assignment and context compaction
 //! - Handles clipboard preview auto-show/hide
 
@@ -12,8 +13,8 @@ use super::cli_helpers::clear_command;
 use super::gpui::WorkspaceView;
 use super::types::CachedCliStatus;
 use codirigent_core::{
-    AssignmentAction, CodirigentEvent, EventBus, ProcessMonitor, SessionId, SessionManager,
-    SessionStatus, TaskStatus,
+    hook_signals_dir, AssignmentAction, CodirigentEvent, EventBus, ProcessMonitor, SessionId,
+    SessionManager, SessionStatus, TaskStatus,
 };
 use codirigent_detector::notification::send_notification;
 use codirigent_session::cli_detector::CliDetector;
@@ -21,14 +22,29 @@ use codirigent_session::clipboard_service::{ClipboardService, DefaultClipboardSe
 use codirigent_session::detect_cli_from_output;
 use codirigent_session::CliSessionStatus;
 use gpui::Context;
-use std::time::{Duration, Instant};
+use serde::Deserialize;
+use std::collections::HashMap;
+use std::path::PathBuf;
+use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
 /// Session status result from a background JSONL read: (status, optional detail string).
 type JsonlStatusResult = Option<(SessionStatus, Option<String>)>;
 
+/// Signal file written by `codirigent-hook` for each Claude Code hook event.
+#[derive(Deserialize)]
+struct HookSignal {
+    status: String,
+    /// Codirigent session ID, present only when Claude Code was spawned by Codirigent
+    /// (via the `CODIRIGENT_SESSION_ID` environment variable).
+    codirigent_session_id: Option<String>,
+    ts: u64,
+}
+
 impl WorkspaceView {
     const GENERIC_SHELL_JSONL_MAX_AGE: Duration = Duration::from_secs(600);
+    /// TTL for Codex/Gemini cached JSONL status. Shorter than hook signals because
+    /// JSONL polling is infrequent (3s) and a stale cache entry is less reliable.
     const GENERIC_SHELL_JSONL_CACHE_TTL: Duration = Duration::from_secs(120);
     /// Interval between background JSONL checks and git refreshes (seconds).
     const BACKGROUND_REFRESH_INTERVAL: Duration = Duration::from_secs(3);
@@ -36,10 +52,18 @@ impl WorkspaceView {
     const STATUS_LOG_INTERVAL: u32 = 120;
     /// Delay before sending a deferred Enter keypress after a task prompt (ms).
     const PENDING_ENTER_DELAY: Duration = Duration::from_millis(100);
+    /// TTL for Claude Code hook signal cache. Matches the 600s stale-signal guard
+    /// in check_hook_signals so a long-running task never loses its "working" status
+    /// just because no hook fired recently.
+    const HOOK_SIGNAL_CACHE_TTL: Duration = Duration::from_secs(600);
 
     pub(super) fn poll_output(&mut self, cx: &mut Context<Self>) {
         self.process_deferred_enters();
         self.drain_vte_responses();
+        if self.polling.last_hook_signal_check.elapsed() >= Duration::from_secs(1) {
+            self.polling.last_hook_signal_check = Instant::now();
+            self.check_hook_signals();
+        }
         self.spawn_background_jsonl_check(cx);
 
         let session_ids: Vec<codirigent_core::SessionId> = self.terminals.keys().copied().collect();
@@ -302,7 +326,7 @@ impl WorkspaceView {
         let has_any_reader = self
             .cli_readers
             .lock()
-            .map(|r| r.claude.is_some() || r.codex.is_some() || r.gemini.is_some())
+            .map(|r| r.codex.is_some() || r.gemini.is_some())
             .unwrap_or(false);
         if !has_any_reader
             || self.polling.last_jsonl_check.elapsed() < Self::BACKGROUND_REFRESH_INTERVAL
@@ -771,12 +795,130 @@ impl WorkspaceView {
         let mut readers = self.cli_readers.lock().ok()?;
         let cached_status = readers.cached_status.get(&session_id)?;
 
-        if cached_status.seen_at.elapsed() > Self::GENERIC_SHELL_JSONL_CACHE_TTL {
+        // Use the per-entry TTL: hook-based entries (Claude Code) stay valid for
+        // HOOK_SIGNAL_CACHE_TTL (600s); JSONL-based entries (Codex/Gemini) expire
+        // after GENERIC_SHELL_JSONL_CACHE_TTL (120s).
+        if cached_status.seen_at.elapsed() > cached_status.ttl {
             readers.cached_status.remove(&session_id);
             return None;
         }
 
         Some((cached_status.status, cached_status.tool_name.clone()))
+    }
+
+    /// Check Claude Code hook signal files and update session status.
+    ///
+    /// Signal files are written by `codirigent-hook` (registered in
+    /// `~/.claude/settings.json`) every time Claude Code fires a
+    /// `UserPromptSubmit`, `Notification`, or `Stop` hook. Each file is tiny
+    /// (<100 bytes) so this runs synchronously on the UI thread without a
+    /// background task.
+    ///
+    /// Matching is exact: each signal file contains `codirigent_session_id`
+    /// which is injected via the `CODIRIGENT_SESSION_ID` environment variable
+    /// when Codirigent spawns the Claude Code process. Signal files without
+    /// this field are ignored (Claude Code started outside Codirigent).
+    fn check_hook_signals(&mut self) {
+        let signals_dir = match hook_signals_dir() {
+            Some(d) => d,
+            None => return,
+        };
+
+        let entries = match std::fs::read_dir(&signals_dir) {
+            Ok(e) => e,
+            Err(_) => return,
+        };
+
+        let now_ts = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0);
+
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.extension().and_then(|e| e.to_str()) != Some("json") {
+                continue;
+            }
+            // The filename stem is the Claude Code session_id.
+            let claude_session_id = match path.file_stem().and_then(|s| s.to_str()) {
+                Some(s) => s.to_owned(),
+                None => continue,
+            };
+            let content = match std::fs::read_to_string(&path) {
+                Ok(c) => c,
+                Err(_) => continue,
+            };
+            let signal: HookSignal = match serde_json::from_str(&content) {
+                Ok(s) => s,
+                Err(_) => continue,
+            };
+            // Ignore stale signals (older than 10 minutes).
+            if now_ts.saturating_sub(signal.ts) > 600 {
+                continue;
+            }
+            // Ignore signals from Claude Code sessions not spawned by Codirigent.
+            let codirigent_id_str = match &signal.codirigent_session_id {
+                Some(id) => id,
+                None => continue,
+            };
+            let session_id = match codirigent_id_str.parse::<u64>() {
+                Ok(n) => SessionId(n),
+                Err(_) => continue,
+            };
+
+            // Store the Claude session_id on the Session for resume on next startup.
+            if let Ok(mgr) = self.session_manager.lock() {
+                mgr.with_session_state_mut(session_id, |state| {
+                    state.session.claude_session_id = Some(claude_session_id.clone());
+                });
+            }
+
+            let new_status = match signal.status.as_str() {
+                "working" => SessionStatus::Working,
+                "needs_attention" => SessionStatus::NeedsAttention,
+                _ => SessionStatus::Idle,
+            };
+
+            if let Ok(mut readers) = self.cli_readers.lock() {
+                let status_since = readers
+                    .cached_status
+                    .get(&session_id)
+                    .filter(|c| c.status == new_status)
+                    .map(|c| c.status_since)
+                    .unwrap_or_else(Instant::now);
+                readers.cached_status.insert(
+                    session_id,
+                    CachedCliStatus {
+                        status: new_status,
+                        tool_name: None,
+                        seen_at: Instant::now(),
+                        status_since,
+                        ttl: Self::HOOK_SIGNAL_CACHE_TTL,
+                    },
+                );
+            }
+
+            // Fire AttentionRequired on transition to NeedsAttention.
+            if new_status == SessionStatus::NeedsAttention {
+                let prev = self
+                    .workspace
+                    .session(session_id)
+                    .map(|s| s.status)
+                    .unwrap_or(SessionStatus::Idle);
+                if prev != SessionStatus::NeedsAttention {
+                    self.event_bus.publish(CodirigentEvent::AttentionRequired {
+                        session_id,
+                        detail: None,
+                    });
+                    let name = self
+                        .workspace
+                        .session(session_id)
+                        .map(|s| s.name.clone())
+                        .unwrap_or_else(|| format!("Session {}", session_id.0));
+                    send_notification("Codirigent", &format!("{name} is waiting for input"));
+                }
+            }
+        }
     }
 
     /// Try to compact a session before verification.
@@ -903,5 +1045,68 @@ impl WorkspaceView {
             }
             Some(AssignmentAction::NoTask) | None => {}
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn sig(status: &str, codirigent_session_id: Option<&str>, ts: u64) -> HookSignal {
+        HookSignal {
+            status: status.to_owned(),
+            codirigent_session_id: codirigent_session_id.map(str::to_owned),
+            ts,
+        }
+    }
+
+    #[test]
+    fn hook_signal_without_codirigent_id_is_ignored() {
+        // Signals without codirigent_session_id come from Claude Code started
+        // outside Codirigent and should be silently discarded.
+        let signal = sig("working", None, 100);
+        assert!(signal.codirigent_session_id.is_none());
+    }
+
+    #[test]
+    fn hook_signal_with_codirigent_id_is_valid() {
+        let signal = sig("working", Some("42"), 100);
+        assert_eq!(signal.codirigent_session_id.as_deref(), Some("42"));
+        assert_eq!(signal.status, "working");
+    }
+
+    #[test]
+    fn hook_signal_codirigent_id_parses_to_session_id() {
+        let signal = sig("needs_attention", Some("7"), 100);
+        let id: u64 = signal
+            .codirigent_session_id
+            .unwrap()
+            .parse()
+            .expect("should parse");
+        assert_eq!(id, 7);
+    }
+
+    #[test]
+    fn hook_signal_invalid_codirigent_id_not_parseable() {
+        // Non-numeric IDs are rejected at parse time in check_hook_signals.
+        let bad_id = "not-a-number".to_owned();
+        assert!(bad_id.parse::<u64>().is_err());
+    }
+
+    #[test]
+    fn hook_signal_deserializes_from_json() {
+        let json = r#"{"status":"working","codirigent_session_id":"3","ts":1234567890}"#;
+        let signal: HookSignal = serde_json::from_str(json).unwrap();
+        assert_eq!(signal.status, "working");
+        assert_eq!(signal.codirigent_session_id.as_deref(), Some("3"));
+        assert_eq!(signal.ts, 1234567890);
+    }
+
+    #[test]
+    fn hook_signal_deserializes_without_codirigent_id() {
+        // Backwards-compatible: old signal files without the field deserialize fine.
+        let json = r#"{"status":"idle","ts":100}"#;
+        let signal: HookSignal = serde_json::from_str(json).unwrap();
+        assert!(signal.codirigent_session_id.is_none());
     }
 }

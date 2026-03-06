@@ -61,6 +61,12 @@ pub struct PersistentSession {
     pub group: Option<String>,
     /// Session color.
     pub color: Option<String>,
+    /// Last known Claude Code session ID (UUID).
+    /// When present, restored sessions run `claude --resume <id>`.
+    pub claude_session_id: Option<String>,
+    /// Last known Claude Code permission mode (e.g. `"bypassPermissions"`).
+    /// When `"bypassPermissions"`, resume adds `--dangerously-skip-permissions`.
+    pub claude_permission_mode: Option<String>,
 }
 
 impl PersistentSession {
@@ -99,6 +105,8 @@ impl PersistentSession {
             scrollback_hash: None,
             group: session.group.clone(),
             color: session.color.clone(),
+            claude_session_id: session.claude_session_id.clone(),
+            claude_permission_mode: None, // populated at save time from JSONL
         }
     }
 
@@ -166,6 +174,7 @@ impl PersistentSession {
             group: self.group.clone(),
             color: self.color.clone(),
             git_info: None, // Re-detected on restore
+            claude_session_id: self.claude_session_id.clone(),
         }
     }
 

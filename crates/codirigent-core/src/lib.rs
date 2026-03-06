@@ -89,6 +89,7 @@ pub mod context;
 pub mod error;
 pub mod event_bus;
 pub mod events;
+pub mod hook_installer;
 pub mod persistence;
 pub mod persistence_service;
 pub mod pipeline;
@@ -117,6 +118,7 @@ pub use context::{
 pub use error::{CodirigentError, Result};
 pub use event_bus::DefaultEventBus;
 pub use events::{ClipboardContentType, CodirigentEvent};
+pub use hook_installer::hook_signals_dir;
 pub use scheduler::{
     session_matches_project, SchedulerConfig, SchedulerMode, TaskQueue, TaskQueueService,
 };

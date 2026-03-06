@@ -5,6 +5,7 @@
 //!
 //! Requires the `gpui` feature to be enabled.
 
+use codirigent_core::hook_installer;
 use codirigent_core::DefaultEventBus;
 use codirigent_detector::{DetectorConfig, InputDetector};
 use codirigent_session::DefaultSessionManager;
@@ -15,7 +16,7 @@ use gpui::{
 };
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::layout::LayoutProfile;
 use crate::splash_screen::brand;
@@ -369,6 +370,13 @@ impl CodirigentApp {
     /// This method does not return until the application is closed.
     pub fn run(self) {
         info!("Starting Codirigent GPUI application...");
+
+        // Install Claude Code hooks so status detection works without manual setup.
+        match hook_installer::ensure_hooks_installed() {
+            Ok(true) => info!("Claude Code hooks installed"),
+            Ok(false) => {}
+            Err(e) => warn!("Failed to install Claude Code hooks: {e}"),
+        }
 
         let show_splash = self.show_splash;
         let splash_duration = self.splash_duration;

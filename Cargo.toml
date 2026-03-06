@@ -8,6 +8,7 @@ members = [
     "crates/codirigent-filetree",
     "crates/codirigent-plugin",
     "crates/codirigent-verification",
+    "crates/codirigent-hook",
 ]
 
 [workspace.package]

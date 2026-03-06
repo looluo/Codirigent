@@ -73,7 +73,6 @@ impl CliSessionStatus {
     }
 }
 
-pub mod claude_session_reader;
 pub mod cli_detector;
 pub mod cli_output_detection;
 pub mod clipboard_service;
@@ -91,7 +90,6 @@ pub mod shell_detection;
 pub mod skill_manager;
 pub mod worktree;
 
-pub use claude_session_reader::{ClaudeSessionReader, ClaudeSessionStatus};
 pub use cli_detector::{CliDetector, DefaultCliDetector};
 pub use cli_output_detection::detect_cli_from_output;
 pub use clipboard_service::{ClipboardService, DefaultClipboardService};

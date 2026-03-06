@@ -15,6 +15,7 @@ fn create_test_session(id: u64, name: &str, status: SessionStatus) -> Session {
         group: None,
         color: None,
         git_info: None,
+        claude_session_id: None,
     }
 }
 
@@ -36,6 +37,7 @@ fn create_grouped_session(
         group: Some(group.to_string()),
         color: Some(color.to_string()),
         git_info: None,
+        claude_session_id: None,
     }
 }
 
@@ -454,6 +456,7 @@ fn create_session_with_context(
         group: None,
         color: None,
         git_info: None,
+        claude_session_id: None,
     }
 }
 
@@ -470,6 +473,7 @@ fn create_session_with_task(id: u64, name: &str, status: SessionStatus, task: &s
         group: None,
         color: None,
         git_info: None,
+        claude_session_id: None,
     }
 }
 
