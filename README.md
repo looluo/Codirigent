@@ -39,7 +39,7 @@ Codirigent is a Tmux-style workspace built for this workflow. Open it once, and 
 
 ---
 
-<img src="website/images/customLayout.png" alt="Custom layout" width="100%" />
+<video src="website/video/customLayout.mp4" autoplay loop muted playsinline width="100%"></video>
 
 **Custom layouts** — arrange sessions in any grid configuration and save them. Restore your exact setup instantly.
 
