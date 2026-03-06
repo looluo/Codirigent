@@ -44,12 +44,17 @@ fn read_claude_permission_mode(claude_session_id: &str) -> Option<String> {
         if !jsonl_path.exists() {
             continue;
         }
-        // Read just the last non-empty line (cheapest way to get latest metadata).
+        // Scan lines in reverse to find the most recent entry that carries
+        // permissionMode — not every line has this field.
         let content = std::fs::read_to_string(&jsonl_path).ok()?;
-        let last_line = content.lines().rev().find(|l| !l.trim().is_empty())?;
-        if let Ok(obj) = serde_json::from_str::<serde_json::Value>(last_line) {
-            if let Some(mode) = obj.get("permissionMode").and_then(|v| v.as_str()) {
-                return Some(mode.to_owned());
+        for line in content.lines().rev() {
+            if line.trim().is_empty() || !line.contains("permissionMode") {
+                continue;
+            }
+            if let Ok(obj) = serde_json::from_str::<serde_json::Value>(line) {
+                if let Some(mode) = obj.get("permissionMode").and_then(|v| v.as_str()) {
+                    return Some(mode.to_owned());
+                }
             }
         }
     }
