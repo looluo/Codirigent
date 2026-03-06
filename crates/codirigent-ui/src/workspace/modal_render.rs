@@ -10,8 +10,8 @@ use crate::toolbar::CustomLayoutMode;
 use codirigent_core::{LayoutNode, SlotId, SplitDirection};
 use gpui::{
     div, prelude::FluentBuilder, px, relative, ClickEvent, Context, FontWeight, Image, ImageFormat,
-    InteractiveElement, IntoElement, MouseButton, ObjectFit, ParentElement, SharedString,
-    StatefulInteractiveElement, Styled, StyledImage,
+    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ObjectFit, ParentElement,
+    SharedString, StatefulInteractiveElement, Styled, StyledImage,
 };
 use std::sync::Arc;
 
@@ -169,6 +169,12 @@ impl WorkspaceView {
                 .items_center()
                 .justify_center()
                 .bg(gpui::Hsla::black().opacity(0.5))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                        cx.stop_propagation();
+                    }),
+                )
                 .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
                     this.custom_picker.close();
                     cx.notify();
@@ -183,6 +189,12 @@ impl WorkspaceView {
                         .rounded_lg()
                         .flex()
                         .flex_col()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                                cx.stop_propagation();
+                            }),
+                        )
                         .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
                             cx.stop_propagation();
                         }))
