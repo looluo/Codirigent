@@ -102,18 +102,19 @@ impl WorkspaceView {
 
             // Check for OSC 7 (working directory change) sequences
             if let Some(new_cwd) = codirigent_session::extract_osc7_path(&data) {
-                let changed = self.with_session_manager(|manager| {
-                    manager.update_working_directory(session_id, new_cwd)
+                // Combine all session_manager accesses into one lock acquisition
+                let (changed, git_info, mgr_session) = self.with_session_manager(|manager| {
+                    let changed = manager.update_working_directory(session_id, new_cwd);
+                    if changed {
+                        manager.invalidate_git_cache(session_id);
+                        let git_info = manager.refresh_git_status(session_id);
+                        let mgr_session = manager.get_session(session_id);
+                        (true, git_info, mgr_session)
+                    } else {
+                        (false, None, None)
+                    }
                 });
                 if changed {
-                    // Invalidate stale git cache so refresh picks up the new repo
-                    self.with_session_manager(|manager| {
-                        manager.invalidate_git_cache(session_id);
-                    });
-                    // Force immediate git refresh (updates the manager's copy)
-                    let git_info =
-                        self.with_session_manager(|manager| manager.refresh_git_status(session_id));
-
                     // Update terminal header (UI-only state, not part of Session)
                     if let Some(header) = self.terminal_headers.get_mut(&session_id) {
                         if let Some(ref info) = git_info {
@@ -126,10 +127,6 @@ impl WorkspaceView {
                     }
 
                     // Sync workspace cache so file tree sees the new CWD.
-                    // Update only the changed session instead of cloning all.
-                    // Fetch from manager first to avoid overlapping borrows.
-                    let mgr_session =
-                        self.with_session_manager(|manager| manager.get_session(session_id));
                     if let Some(mgr) = mgr_session {
                         if let Some(ws_session) = self.workspace.session_mut(session_id) {
                             ws_session.working_directory = mgr.working_directory;

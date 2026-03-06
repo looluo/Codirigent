@@ -450,11 +450,16 @@ impl WorkspaceView {
         let focused_id = self.workspace.focused_session_id();
         for session in sessions {
             if let Some(header) = self.terminal_headers.get_mut(&session.id) {
-                header.session_name = session.name.clone();
+                // Dirty-check string fields to avoid heap allocations every sync tick
+                if header.session_name != session.name {
+                    header.session_name = session.name.clone();
+                }
+                if header.group_name != session.group {
+                    header.group_name = session.group.clone();
+                }
                 header.status = session.status;
                 header.context_usage = session.context_usage;
                 header.is_focused = focused_id == Some(session.id);
-                header.group_name = session.group.clone();
                 header.project_name = session
                     .git_info
                     .as_ref()
