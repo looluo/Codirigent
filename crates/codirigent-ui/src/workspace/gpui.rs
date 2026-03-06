@@ -200,10 +200,12 @@ impl WorkspaceView {
             clipboard: super::clipboard_state::ClipboardState {
                 smart_clipboard: crate::platform::create_clipboard(),
                 clipboard_service: DefaultClipboardService::new(
-                    project_root
-                        .as_deref()
-                        .unwrap_or_else(|| std::path::Path::new("."))
-                        .join(".codirigent"),
+                    // Use a guaranteed user-writable directory for clipboard temp files.
+                    // project_root is the CWD which may be C:\Program Files\... (unwritable)
+                    // when launched from an installer shortcut.
+                    dirs::data_local_dir()
+                        .unwrap_or_else(std::env::temp_dir)
+                        .join("Codirigent"),
                 ),
                 clipboard_preview: ClipboardPreview::new(theme_for_clipboard),
                 clipboard_preview_shown_at: None,
