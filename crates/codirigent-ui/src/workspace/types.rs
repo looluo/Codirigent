@@ -28,6 +28,9 @@ pub(super) const CELL_BORDER_WIDTH: f32 = 2.0;
 /// Height of dropdown trigger buttons in pixels.
 pub(super) const DROPDOWN_TRIGGER_HEIGHT: f32 = 28.0;
 
+/// Height of the drawer (Sessions panel) header bar in pixels.
+pub(super) const DRAWER_HEADER_HEIGHT: f32 = 40.0;
+
 /// Default prefix used when generating session names (e.g. "Session 1").
 ///
 /// Used both for name generation (`format!("{}{}", SESSION_NAME_PREFIX, n)`)

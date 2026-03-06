@@ -45,14 +45,6 @@ use alacritty_terminal::term::cell::Flags as CellFlags;
 use alacritty_terminal::vte::ansi::{Color as TermColor, NamedColor};
 use codirigent_core::SessionId;
 
-/// Line height multiplier applied to font metrics (ascent + |descent|).
-///
-/// GPUI's Win metrics already include extra ascent space for accented
-/// characters, so the base glyph height (ascent + |descent|) is larger
-/// than font_size. A 1.0x factor gives natural terminal line spacing.
-/// If lines appear too tight, increase slightly (e.g. 1.05).
-const TERMINAL_LINE_HEIGHT_FACTOR: f32 = 1.0;
-
 /// A run of text with uniform style for efficient canvas painting.
 #[derive(Debug, Clone)]
 pub struct TextRunSegment {
@@ -79,12 +71,8 @@ pub struct TextRunSegment {
 }
 
 /// Pre-computed terminal content for canvas rendering.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct CachedTerminalContent {
-    /// Background rectangles grouped by color (row, start_col, end_col, color).
-    pub background_rects: Vec<(usize, usize, usize, Rgba)>,
-    /// Text runs batched by style for efficient painting.
-    pub text_runs: Vec<TextRunSegment>,
     /// Pre-converted background rects with GPUI Hsla colors (avoids per-frame conversion).
     /// Wrapped in Arc for cheap per-frame cloning into canvas closures.
     pub bg_rects_hsla: Arc<Vec<(usize, usize, usize, gpui::Hsla)>>,
@@ -124,11 +112,6 @@ pub struct Selection {
 }
 
 impl Selection {
-    /// Create a new empty selection.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
     /// Check if the selection is active (has both start and end).
     pub fn is_active(&self) -> bool {
         self.start.is_some() && self.end.is_some()
@@ -258,7 +241,7 @@ impl TerminalView {
         // ratios that slightly overestimate so the initial grid doesn't
         // allocate more rows/cols than will fit after correction.
         let cell_width = (font_size * 0.55).max(7.0);
-        let cell_height = (font_size * TERMINAL_LINE_HEIGHT_FACTOR).max(14.0);
+        let cell_height = font_size.max(14.0);
 
         let mut terminal = terminal;
         terminal.resize_with_cells(TerminalSize::new(
@@ -278,7 +261,7 @@ impl TerminalView {
             cell_height,
             font_size,
             font_family,
-            selection: Selection::new(),
+            selection: Selection::default(),
             cursor_shape: CursorShape::Block,
             focused: true,
             cached_content: None,
@@ -456,7 +439,8 @@ impl TerminalView {
         let content = self.terminal.term().renderable_content();
         let display_offset = content.display_offset;
         let rows = self.terminal.rows() as usize;
-        let mut cells = Vec::new();
+        let cols = self.terminal.cols() as usize;
+        let mut cells = Vec::with_capacity(rows * cols);
 
         for indexed in content.display_iter {
             let cell = &indexed.cell;
@@ -624,11 +608,6 @@ impl TerminalView {
         self.content_dirty = true;
     }
 
-    /// End the selection (no-op — selection stays active until explicitly cleared).
-    pub fn end_selection(&mut self) {
-        // Selection remains active until cleared by next click or copy
-    }
-
     /// Clear the current selection.
     pub fn clear_selection(&mut self) {
         self.selection.clear();
@@ -770,26 +749,25 @@ impl TerminalView {
             }
         }
 
-        // Pre-convert to GPUI Hsla colors so render.rs doesn't pay conversion cost per frame
+        // Pre-convert to GPUI Hsla colors so render.rs doesn't pay conversion cost per frame.
+        // Consume the raw vecs via into_iter() — no clone, no extra allocation.
         let bg_rects_hsla: Arc<Vec<(usize, usize, usize, gpui::Hsla)>> = Arc::new(
             background_rects
-                .iter()
-                .map(|(row, start, end, color)| (*row, *start, *end, (*color).into()))
+                .into_iter()
+                .map(|(row, start, end, color)| (row, start, end, color.into()))
                 .collect(),
         );
         let text_runs_hsla: Arc<Vec<(TextRunSegment, gpui::Hsla)>> = Arc::new(
             text_runs
-                .iter()
+                .into_iter()
                 .map(|run| {
                     let fg: gpui::Hsla = run.foreground.into();
-                    (run.clone(), fg)
+                    (run, fg)
                 })
                 .collect(),
         );
 
         CachedTerminalContent {
-            background_rects,
-            text_runs,
             bg_rects_hsla,
             text_runs_hsla,
             rows,
@@ -820,8 +798,8 @@ impl TerminalView {
 /// Compute cell dimensions from actual font metrics using the text system.
 ///
 /// Uses `text_system.advance('m')` to get the actual character width and
-/// `(ascent + descent) * TERMINAL_LINE_HEIGHT_FACTOR` to get the line height
-/// with comfortable inter-line spacing for the monospace font.
+/// `ascent + |descent|` to get the line height. GPUI's ascent already includes
+/// room for accented characters, so no leading factor is needed.
 ///
 /// Returns `(cell_width, cell_height)` in pixels.
 pub fn compute_cell_dimensions(
@@ -847,17 +825,12 @@ pub fn compute_cell_dimensions(
         .map(|adv| f32::from(adv.width))
         .unwrap_or(font_size * 0.6);
 
-    // Use font ascent + |descent| as the base line height, then apply a
-    // leading factor for readability. GPUI returns descent as a negative
-    // value (below baseline), so we use abs() to get the true glyph height.
-    // Without the leading factor, rows are packed with zero inter-line space.
-    // The previous 1.3x factor on font_size caused double-spacing.
-    // TERMINAL_LINE_HEIGHT_FACTOR (1.0x) gives natural terminal spacing
-    // since GPUI's ascent already includes room for accented characters.
+    // GPUI's ascent already includes room for accented characters, so natural
+    // ascent + |descent| gives correct terminal row height without extra leading.
+    // (The old 1.3x factor on font_size caused visible double-spacing.)
     let ascent: f32 = text_system.ascent(font_id, font_size_px).into();
     let descent: f32 = text_system.descent(font_id, font_size_px).into();
-    let glyph_height = ascent + descent.abs();
-    let cell_height = glyph_height * TERMINAL_LINE_HEIGHT_FACTOR;
+    let cell_height = ascent + descent.abs();
 
     (cell_width, cell_height)
 }
@@ -893,7 +866,7 @@ mod tests {
 
     #[test]
     fn test_selection_new() {
-        let selection = Selection::new();
+        let selection = Selection::default();
         assert!(!selection.is_active());
         assert_eq!(selection.start, None);
         assert_eq!(selection.end, None);
@@ -901,7 +874,7 @@ mod tests {
 
     #[test]
     fn test_selection_set_and_clear() {
-        let mut selection = Selection::new();
+        let mut selection = Selection::default();
         selection.set_start(5, 10);
         selection.set_end(10, 20);
         assert!(selection.is_active());
@@ -911,7 +884,7 @@ mod tests {
 
     #[test]
     fn test_selection_contains() {
-        let mut selection = Selection::new();
+        let mut selection = Selection::default();
         selection.set_start(5, 0);
         selection.set_end(10, 80);
 
@@ -924,7 +897,7 @@ mod tests {
 
     #[test]
     fn test_selection_contains_reversed() {
-        let mut selection = Selection::new();
+        let mut selection = Selection::default();
         selection.set_start(10, 80);
         selection.set_end(5, 0);
         assert!(selection.contains(5, 0));
@@ -933,7 +906,7 @@ mod tests {
 
     #[test]
     fn test_selection_normalized() {
-        let mut selection = Selection::new();
+        let mut selection = Selection::default();
         selection.set_start(10, 80);
         selection.set_end(5, 0);
 
@@ -1134,12 +1107,11 @@ mod tests {
     }
 
     #[test]
-    fn test_end_selection_keeps_active() {
+    fn test_selection_stays_active_after_update() {
         let mut view = create_test_view();
         view.start_selection(5, 10);
         view.update_selection(10, 20);
-        view.end_selection();
-        // Selection should remain active after end_selection
+        // Selection stays active until cleared — no separate end_selection needed
         assert!(view.selection().is_active());
     }
 

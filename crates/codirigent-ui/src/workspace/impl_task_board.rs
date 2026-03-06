@@ -7,7 +7,7 @@
 
 use super::cli_helpers::format_task_input;
 use super::gpui::WorkspaceView;
-use codirigent_core::{Session, SessionManager, TaskId};
+use codirigent_core::{SessionId, SessionManager, TaskId};
 use codirigent_session::clipboard_service::ClipboardService;
 use gpui::Context;
 use std::time::Instant;
@@ -109,20 +109,17 @@ impl WorkspaceView {
                     TaskAction::Assign => {
                         info!("Assign action triggered for task {}", task_id);
                         let task = manager.get_task(&task_id).cloned();
-                        let target = task
+                        let target_id = task
                             .as_ref()
                             .and_then(|t| self.find_assignable_session_for_task(t));
 
-                        if let Some(session) = target {
-                            match manager.direct_assign(&task_id, session.id) {
+                        if let Some(sid) = target_id {
+                            match manager.direct_assign(&task_id, sid) {
                                 Ok(prompt) => {
                                     drop(manager);
-                                    self.send_task_to_session(&task_id, session.id, &prompt);
-                                    self.cache.manually_assigned_sessions.insert(session.id);
-                                    info!(
-                                        "Manually assigned task {} to session {}",
-                                        task_id, session.id
-                                    );
+                                    self.send_task_to_session(&task_id, sid, &prompt);
+                                    self.cache.manually_assigned_sessions.insert(sid);
+                                    info!("Manually assigned task {} to session {}", task_id, sid);
                                     cx.notify();
                                     return;
                                 }
@@ -230,42 +227,33 @@ impl WorkspaceView {
             .insert(session_id, (Instant::now(), false));
     }
 
-    fn find_assignable_session_for_task(&self, task: &codirigent_core::Task) -> Option<Session> {
-        let candidates: Vec<_> = self
-            .workspace
-            .sessions()
-            .iter()
-            .filter(|s| {
-                s.status == codirigent_core::SessionStatus::Idle
-                    && s.current_task.is_none()
-                    && self.clipboard.clipboard_service.get_session_cli_type(s.id)
-                        != codirigent_core::CliType::GenericShell
-                    && task.project_dir.as_ref().map_or(true, |pd| {
-                        codirigent_core::session_matches_project(&s.working_directory, pd)
-                    })
-            })
-            .cloned()
-            .collect();
+    /// Find the best assignable session for a task, returning only its ID (no clone).
+    fn find_assignable_session_for_task(&self, task: &codirigent_core::Task) -> Option<SessionId> {
+        let focused_id = self.workspace.focused_session_id();
 
-        if candidates.is_empty() {
-            return None;
-        }
-
-        // Prefer the focused session if it's among candidates
-        if let Some(focused_id) = self.workspace.focused_session_id() {
-            if let Some(session) = candidates.iter().find(|s| s.id == focused_id) {
-                return Some(session.clone());
+        let mut best: Option<(SessionId, f32)> = None;
+        for s in self.workspace.sessions().iter().filter(|s| {
+            s.status == codirigent_core::SessionStatus::Idle
+                && s.current_task.is_none()
+                && self.clipboard.clipboard_service.get_session_cli_type(s.id)
+                    != codirigent_core::CliType::GenericShell
+                && task.project_dir.as_ref().map_or(true, |pd| {
+                    codirigent_core::session_matches_project(&s.working_directory, pd)
+                })
+        }) {
+            // Focused session wins immediately
+            if Some(s.id) == focused_id {
+                return Some(s.id);
+            }
+            let usage = s.context_usage.unwrap_or(0.0);
+            if best
+                .as_ref()
+                .map_or(true, |&(_, best_usage)| usage < best_usage)
+            {
+                best = Some((s.id, usage));
             }
         }
-
-        // Among remaining, pick the session with lowest context_usage (freshest context window)
-        candidates.into_iter().min_by(|a, b| {
-            let usage_a = a.context_usage.unwrap_or(0.0);
-            let usage_b = b.context_usage.unwrap_or(0.0);
-            usage_a
-                .partial_cmp(&usage_b)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+        best.map(|(id, _)| id)
     }
 
     /// Clear `current_task` from a session after a task action completes.

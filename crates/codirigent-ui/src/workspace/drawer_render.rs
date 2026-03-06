@@ -8,7 +8,9 @@
 //! - Session row and group header components
 
 use super::gpui::WorkspaceView;
-use super::types::{git_colors, HEADER_HEIGHT, MODAL_FIELD_HEIGHT, SESSION_ROW_HEIGHT};
+use super::types::{
+    git_colors, DRAWER_HEADER_HEIGHT, HEADER_HEIGHT, MODAL_FIELD_HEIGHT, SESSION_ROW_HEIGHT,
+};
 use crate::icons;
 use crate::theme::CodirigentTheme;
 use codirigent_core::{Session, SessionId};
@@ -72,7 +74,7 @@ impl WorkspaceView {
             // Header
             .child(
                 div()
-                    .h(px(40.0))
+                    .h(px(DRAWER_HEADER_HEIGHT))
                     .w_full()
                     .bg(header_bg)
                     .border_b_1()

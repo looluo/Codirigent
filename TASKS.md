@@ -1,50 +1,52 @@
 # Codirigent Fix Tasks
 
 ## Fix --all-features Build Errors (19 errors in codirigent-ui)
+- [x] Fix `font_size` field missing on `AppearanceSettings` (9x E0609)
+- [x] Fix borrow checker in `impl_task_board.rs` (4x E0502)
+- [x] Fix `sync_terminal_dimensions_and_resize` in wrong impl block (2x E0407/E0599)
+- [x] Fix `Fill: From<Hsla>` trait bound (1x E0277)
+- [x] Fix `Arc<Vec<...>>` not an iterator (2x E0277)
+- [x] Fix mismatched types (1x E0308)
 
-- [x] 1. Fix `font_size` field missing on `AppearanceSettings` (9x E0609)
-- [x] 2. Fix borrow checker in `impl_task_board.rs` (4x E0502)
-- [x] 3. Fix `sync_terminal_dimensions_and_resize` in wrong impl block (2x E0407/E0599)
-- [x] 4. Fix `Fill: From<Hsla>` trait bound (1x E0277)
-- [x] 5. Fix `Arc<Vec<...>>` not an iterator (2x E0277)
-- [x] 6. Fix mismatched types (1x E0308)
+## Round 1 Passes (all committed)
+- [x] Pass 1: Dead code removal (handle_worktree_event, setting_dropdown/number/text/path, cursor_position cfg(test), etc.)
+- [x] Pass 2: One-line fixes (is_ascii, div_ceil, redundant cast, is_some_and, wrapping_add, min(255))
+- [x] Pass 3: Pattern modernisation (collapsed if-let, is_some_and, to_path_buf)
+- [x] Pass 4: Type aliases (SplashCallback, JsonlStatusResult, remove terminal paint type annotation)
+- [x] Pass 5: Parameter reduction (render_session_cell_with_terminal: 9→5 params, remove render_split_node cell_height, clippy allows)
 
-## Deep Code Review Iterations
+## Round 2: 25 Findings
 
-- [~] Round 1: Post-fix review — 32 findings identified
+### HIGH
+- [ ] H-1: gpui.rs ~sync_ui_state — O(4n) four-pass task counting → single fold
+- [ ] H-2: terminal_view.rs — CachedTerminalContent stores raw `background_rects`+`text_runs` never read after build → remove raw fields, use into_iter
+- [ ] H-3: impl_task_board.rs:233 — find_assignable_session_for_task clones all sessions → return reference
+- [ ] H-4: grid_render.rs — render_split_node re-converts theme colors on every recursive call → pre-compute once
+- [ ] H-5: gpui.rs:741 — apply_terminal_font_family clones String per terminal → SharedString or final move
 
-### Pass 1: Dead code removal (F2-F8)
-- [ ] F1: `handle_session_menu_action` visibility (CRITICAL)
-- [ ] F2: Delete `handle_worktree_event` (never used)
-- [ ] F3-F6: Delete unused functions in settings/controls.rs
-- [ ] F7: Delete `cursor_position` on Terminal
-- [ ] F8: Delete `cells_by_row` and `pixel_size` on TerminalView
+### MEDIUM
+- [ ] M-1: terminal_view.rs:455 — visible_cells() Vec without capacity hint
+- [ ] M-2: render.rs:282 — render_session_menu clones sessions to find index → direct .position()
+- [ ] M-3: terminal_view.rs:780 — build_cached_content clones TextRunSegment → into_iter after H-2
+- [ ] M-4: gpui.rs:447 — sync_ui_state clones session.name/group every 100ms → dirty check
+- [ ] M-5: terminal_view.rs:128+ — broad pub visibility on TerminalView methods → pub(crate)
+- [ ] M-6: terminal_view.rs:57 — TextRunSegment fields pub → pub(crate)
+- [ ] M-7: impl_session_lifecycle.rs:56 — configured_shell() reads disk on each session create → cache
+- [ ] M-8: terminal_view.rs:628 — end_selection() is no-op → remove or document
+- [ ] M-9: terminal_view.rs:83 — CachedTerminalContent derives Clone unnecessarily → remove
+- [ ] M-10: impl_output_polling.rs:104 — multiple sequential mutex acquisitions → combine
 
-### Pass 2: One-line fixes (F9,F11,F18,F20,F26,F27,F29-F32)
-- [ ] F9: `!key_char.is_ascii()` instead of `chars().any()`
-- [ ] F11: `div_ceil()` instead of manual ceiling division
-- [ ] F18: Remove redundant `as isize` cast
-- [ ] F20: `and_then(hex_to_hsla)` remove redundant closure
-- [ ] F26-F27: Remove `..Default::default()` from TitlebarOptions
-- [ ] F29-F32: Remove redundant casts and `.min(255)` in mouse.rs
-
-### Pass 3: Pattern modernisation (F10,F12,F13,F15,F16,F17)
-- [ ] F10, F15: Collapse nested if-let patterns
-- [ ] F12, F13, F17: Replace `map_or(false, ...)` with `is_some_and()`
-- [ ] F16: Remove `unnecessary_to_owned`
-
-### Pass 4: Type aliases (F14,F19,F28)
-- [ ] F14: Type alias for complex Vec tuple
-- [ ] F19: TerminalPrepaintData struct
-- [ ] F28: SplashCallback type alias
-
-### Pass 5: Parameter structs (F21-F25)
-- [ ] F21-F22: IconLabelStyle struct for icon_utils.rs
-- [ ] F23: PriorityButtonConfig struct
-- [ ] F24: Remove `cell_height` from render_split_node
-- [ ] F25: Reduce render_session_cell_with_terminal params
-
-- [ ] Round 2: Continue until no more issues found
+### LOW
+- [ ] L-1: terminal_view.rs:54 — TERMINAL_LINE_HEIGHT_FACTOR=1.0 multiplication redundant → remove
+- [ ] L-2: workspace/types.rs:241+ — pub fields in pub(super) structs → pub(super)
+- [ ] L-3: gpui.rs:1306 — selected_text_range clones Copy type → remove .clone()
+- [ ] L-4: gpui.rs:1324 — marked_text_range clones Copy type → remove .clone()
+- [ ] L-5: terminal_view.rs:126 — Selection::new() duplicates Default → remove, use default()
+- [ ] L-6: drawer_render.rs:75 + render.rs:293 — magic number 40.0 → DRAWER_HEADER_HEIGHT const
+- [ ] L-7: gpui.rs:1386 — _element_bounds underscore misleading → remove underscore
+- [ ] L-8: gpui.rs:1396 — character_index_for_point always returns Some(0) → add TODO comment
+- [ ] L-9: impl_task_board.rs:10 — Session import may become unused after H-3
+- [ ] L-10: terminal_view.rs:867 — CursorRect width/height duplicate cell dims → consider removing
 
 ---
-Legend: [ ] pending, [x] done, [~] in progress
+Legend: [ ] pending, [x] done

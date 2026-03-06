@@ -280,18 +280,16 @@ impl WorkspaceView {
         };
 
         // Compute vertical position based on session's index in the list
-        let sessions = self.workspace().sessions().to_vec();
-        let mut row_index = 0usize;
-        for (i, s) in sessions.iter().enumerate() {
-            if s.id == session_id {
-                row_index = i;
-                break;
-            }
-        }
+        let row_index = self
+            .workspace()
+            .sessions()
+            .iter()
+            .position(|s| s.id == session_id)
+            .unwrap_or(0);
         let top_offset = crate::title_bar::TitleBar::DEFAULT_HEIGHT
             + crate::top_bar::TopBar::HEIGHT
-            + 40.0   // drawer header
-            + (row_index as f32) * 36.0;
+            + super::types::DRAWER_HEADER_HEIGHT
+            + (row_index as f32) * 36.0; // session rows in session-menu context are 36px
 
         // Transparent click-away backdrop (no dark overlay)
         let backdrop = div()

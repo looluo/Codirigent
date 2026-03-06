@@ -139,10 +139,25 @@ impl WorkspaceView {
             std::collections::HashMap::new()
         };
 
-        self.render_split_node(&tree, &slot_sessions, &theme, grid_gap, cx)
+        // Pre-compute colors once to avoid redundant conversions on every recursive call
+        let panel_bg: gpui::Hsla = theme.panel_background.into();
+        let border_color: gpui::Hsla = theme.border.into();
+        let muted: gpui::Hsla = theme.muted.into();
+
+        self.render_split_node(
+            &tree,
+            &slot_sessions,
+            &theme,
+            grid_gap,
+            panel_bg,
+            border_color,
+            muted,
+            cx,
+        )
     }
 
     /// Recursively render a layout node in the split tree.
+    #[allow(clippy::too_many_arguments)]
     fn render_split_node(
         &mut self,
         node: &LayoutNode,
@@ -152,12 +167,11 @@ impl WorkspaceView {
         >,
         theme: &CodirigentTheme,
         gap: f32,
+        panel_bg: gpui::Hsla,
+        border_color: gpui::Hsla,
+        muted: gpui::Hsla,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
-        let panel_bg: gpui::Hsla = theme.panel_background.into();
-        let border_color: gpui::Hsla = theme.border.into();
-        let muted: gpui::Hsla = theme.muted.into();
-
         match node {
             LayoutNode::Leaf { slot } => {
                 if let Some((session_id, is_focused, name, status)) = slot_sessions.get(slot) {
@@ -189,9 +203,27 @@ impl WorkspaceView {
                 first,
                 second,
             } => {
-                // Render children recursively
-                let first_elem = self.render_split_node(first, slot_sessions, theme, gap, cx);
-                let second_elem = self.render_split_node(second, slot_sessions, theme, gap, cx);
+                // Render children recursively (pass pre-computed colors to avoid per-call conversion)
+                let first_elem = self.render_split_node(
+                    first,
+                    slot_sessions,
+                    theme,
+                    gap,
+                    panel_bg,
+                    border_color,
+                    muted,
+                    cx,
+                );
+                let second_elem = self.render_split_node(
+                    second,
+                    slot_sessions,
+                    theme,
+                    gap,
+                    panel_bg,
+                    border_color,
+                    muted,
+                    cx,
+                );
 
                 // Use flex ratio to distribute space: first gets `ratio`, second gets `1 - ratio`
                 // Multiply by 1000 for precision in flex-grow values
@@ -552,9 +584,7 @@ impl WorkspaceView {
                         if this.selection.is_selecting
                             && this.selection.selecting_session_id == Some(session_id)
                         {
-                            if let Some(tv) = this.terminals_mut().get_mut(&session_id) {
-                                tv.end_selection();
-                            }
+                            // Selection stays active (for copy) until next click or clear
                             this.selection.is_selecting = false;
                             this.selection.selecting_session_id = None;
                             cx.notify();

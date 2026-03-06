@@ -494,47 +494,21 @@ impl WorkspaceView {
             .collect();
         self.empty_cells.setup_for_grid(rows, cols, &occupied);
 
-        // Sync task board counts from TaskManager
+        // Sync task board counts from TaskManager — single pass over all tasks
         if let Ok(manager) = self.task_manager.lock() {
-            let all_tasks = manager.list_tasks();
-
-            let queue_count = all_tasks
-                .iter()
-                .filter(|t| {
-                    matches!(
-                        t.status,
-                        codirigent_core::TaskStatus::Queued | codirigent_core::TaskStatus::Blocked
-                    )
-                })
-                .count();
-
-            let in_progress_count = all_tasks
-                .iter()
-                .filter(|t| {
-                    matches!(
-                        t.status,
+            let (queue_count, in_progress_count, review_count, done_count) =
+                manager.list_tasks().iter().fold(
+                    (0usize, 0usize, 0usize, 0usize),
+                    |(q, ip, r, d), t| match t.status {
+                        codirigent_core::TaskStatus::Queued
+                        | codirigent_core::TaskStatus::Blocked => (q + 1, ip, r, d),
                         codirigent_core::TaskStatus::Assigned
-                            | codirigent_core::TaskStatus::Working
-                    )
-                })
-                .count();
-
-            let review_count = all_tasks
-                .iter()
-                .filter(|t| {
-                    matches!(
-                        t.status,
+                        | codirigent_core::TaskStatus::Working => (q, ip + 1, r, d),
                         codirigent_core::TaskStatus::Verifying
-                            | codirigent_core::TaskStatus::Review
-                    )
-                })
-                .count();
-
-            let done_count = all_tasks
-                .iter()
-                .filter(|t| t.status == codirigent_core::TaskStatus::Done)
-                .count();
-
+                        | codirigent_core::TaskStatus::Review => (q, ip, r + 1, d),
+                        codirigent_core::TaskStatus::Done => (q, ip, r, d + 1),
+                    },
+                );
             self.task_board.set_task_counts(
                 queue_count,
                 in_progress_count,
@@ -1386,11 +1360,11 @@ impl EntityInputHandler for WorkspaceView {
     fn bounds_for_range(
         &mut self,
         _range: std::ops::Range<usize>,
-        _element_bounds: Bounds<Pixels>,
+        element_bounds: Bounds<Pixels>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        Some(_element_bounds)
+        Some(element_bounds)
     }
 
     fn character_index_for_point(
@@ -1399,6 +1373,7 @@ impl EntityInputHandler for WorkspaceView {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
+        // TODO: implement proper character index for correct IME candidate window positioning
         Some(0)
     }
 }
