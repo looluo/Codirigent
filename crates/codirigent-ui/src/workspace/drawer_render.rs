@@ -117,7 +117,6 @@ impl WorkspaceView {
     fn render_drawer_sessions_content(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.workspace().theme().clone();
         let muted: gpui::Hsla = theme.muted.into();
-        let _fg: gpui::Hsla = theme.foreground.into();
         let border_color: gpui::Hsla = theme.border.into();
         let header_bg: gpui::Hsla = theme.header_background.into();
 
@@ -209,18 +208,14 @@ impl WorkspaceView {
             .and_then(|id| sessions.iter().find(|s| s.id == id))
             .or_else(|| sessions.first());
 
-        let (dir_name, _has_git_info) = match session {
-            Some(s) => {
-                let dir_name = s
-                    .working_directory
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-                let has_git = s.git_info.is_some();
-                (dir_name, has_git)
-            }
-            None => ("No session".to_string(), false),
+        let dir_name = match session {
+            Some(s) => s
+                .working_directory
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string(),
+            None => "No session".to_string(),
         };
 
         let mut content = div()

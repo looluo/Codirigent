@@ -19,7 +19,6 @@ impl WorkspaceView {
         let fg: gpui::Hsla = theme.foreground.into();
         let muted: gpui::Hsla = theme.muted.into();
         let active: gpui::Hsla = theme.active.into();
-        let _primary: gpui::Hsla = theme.primary.into();
 
         // Clone tab data and state before building the element tree
         let tabs: Vec<(usize, String, bool, bool)> = self
