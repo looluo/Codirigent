@@ -60,7 +60,11 @@ impl WorkspaceView {
             self.polling.pending_enters.remove(&session_id);
         }
 
-        let session_ids: Vec<SessionId> = self.terminals.keys().copied().collect();
+        self.cache.session_id_buf.clear();
+        self.cache
+            .session_id_buf
+            .extend(self.terminals.keys().copied());
+        let session_ids = &self.cache.session_id_buf;
         let mut any_dirty = false;
 
         // Drain VTE PtyWrite responses (DSR, DA1, etc.) and forward to PTY immediately.
@@ -314,7 +318,7 @@ impl WorkspaceView {
             .detach();
         }
 
-        for session_id in session_ids {
+        for &session_id in session_ids {
             // Try to drain output from the session manager
             let output = self.with_session_manager(|manager| manager.try_drain_output(session_id));
 
@@ -383,6 +387,10 @@ impl WorkspaceView {
                         if let Some(mgr) = mgr_session {
                             if let Some(ws_session) = self.workspace.session_mut(session_id) {
                                 ws_session.working_directory = mgr.working_directory;
+                                // Keep drawer group in sync with current git branch
+                                if let Some(ref gi) = mgr.git_info {
+                                    ws_session.group = Some(gi.branch.clone());
+                                }
                                 ws_session.git_info = mgr.git_info;
                             }
                         }
@@ -624,6 +632,8 @@ impl WorkspaceView {
                         for (id, git_info) in &git_infos {
                             if let Some(session) = this.workspace.session_mut(*id) {
                                 session.git_info = Some(git_info.clone());
+                                // Keep drawer group in sync with current git branch
+                                session.group = Some(git_info.branch.clone());
                             }
                         }
                         cx.notify();
