@@ -106,8 +106,10 @@ impl NotificationManager {
                 notify_task_completed(session_id, session_name, false);
             }
             NotificationType::PermissionPrompt => {
-                let tool = detail.unwrap_or("unknown");
-                let body = format!("Session '{}' needs permission for {}", session_name, tool);
+                let body = match detail {
+                    Some(tool) => format!("'{}' needs permission for {}", session_name, tool),
+                    None => format!("'{}' needs your permission", session_name),
+                };
                 send_notification("Codirigent", &body);
             }
             NotificationType::ResponseReady => {

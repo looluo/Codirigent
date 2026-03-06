@@ -41,7 +41,7 @@ use codirigent_core::{
     CodirigentEvent, DefaultEventBus, EventBus, FileStorageService, GridPosition, SessionId,
     SessionManager, TaskManager, TaskManagerConfig,
 };
-use codirigent_detector::InputDetector;
+use codirigent_detector::{InputDetector, NotificationManager};
 use codirigent_filetree::FileTree;
 use codirigent_session::clipboard_service::DefaultClipboardService;
 use codirigent_session::DefaultSessionManager;
@@ -120,6 +120,9 @@ pub struct WorkspaceView {
     pub(super) cli_readers: Arc<Mutex<CliReaders>>,
     /// Cached detection results and memoized state.
     pub(super) cache: CacheState,
+    /// Notification manager — enforces master toggle, per-type toggles, and cooldown.
+    /// All desktop notifications must go through this instead of calling send_notification directly.
+    pub(super) notification_manager: NotificationManager,
 }
 
 /// Returns `true` if the editor command refers to a terminal-based editor
@@ -218,7 +221,16 @@ impl WorkspaceView {
             polling: PollingState::new(),
             cli_readers: Arc::new(Mutex::new(CliReaders::new())),
             cache: CacheState::new(),
+            notification_manager: NotificationManager::new(Default::default()),
         };
+
+        // Load notification settings from config so toggles and cooldown take effect from startup.
+        if let Some(ref cs) = view.settings.config_service {
+            if let Ok(user_settings) = cs.load_user_settings() {
+                view.notification_manager
+                    .update_settings(user_settings.notifications);
+            }
+        }
 
         // Pre-detect editors and shells in the background so settings open instantly
         Self::start_detection_background(cx);

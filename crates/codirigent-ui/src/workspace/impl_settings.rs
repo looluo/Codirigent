@@ -115,6 +115,8 @@ impl WorkspaceView {
                 if let Err(e) = cs.save_user_settings(&page.user_settings) {
                     warn!("Failed to save user settings: {}", e);
                 } else {
+                    self.notification_manager
+                        .update_settings(page.user_settings.notifications.clone());
                     page.mark_user_saved();
                 }
             }

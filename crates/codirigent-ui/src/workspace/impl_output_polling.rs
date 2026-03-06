@@ -16,7 +16,7 @@ use codirigent_core::{
     hook_signals_dir, AssignmentAction, CodirigentEvent, EventBus, ProcessMonitor, SessionId,
     SessionManager, SessionStatus, TaskStatus,
 };
-use codirigent_detector::notification::send_notification;
+use codirigent_detector::NotificationType;
 use codirigent_session::cli_detector::CliDetector;
 use codirigent_session::clipboard_service::{ClipboardService, DefaultClipboardService};
 use codirigent_session::detect_cli_from_output;
@@ -491,24 +491,25 @@ impl WorkspaceView {
                                     session_id: *session_id,
                                     detail: tool_name.clone(),
                                 });
-                                // Send Windows toast notification
-                                let session_name = inputs
-                                    .iter()
-                                    .find(|(id, ..)| id == session_id)
-                                    .map(|(id, ..)| format!("Session {}", id.0));
-                                let name = session_name.as_deref().unwrap_or("Session");
-                                let body = match tool_name.as_deref() {
-                                    Some("question") => {
-                                        format!("{name} has a question")
+                                let session_name = this
+                                    .workspace
+                                    .session(*session_id)
+                                    .map(|s| s.name.clone())
+                                    .unwrap_or_else(|| format!("Session {}", session_id.0));
+                                let (notif_type, detail) = match tool_name.as_deref() {
+                                    Some("question") | None => {
+                                        (NotificationType::InputRequired, None)
                                     }
                                     Some(tool) => {
-                                        format!("{name} needs attention: {tool}")
-                                    }
-                                    None => {
-                                        format!("{name} is waiting for input")
+                                        (NotificationType::PermissionPrompt, Some(tool))
                                     }
                                 };
-                                send_notification("Codirigent", &body);
+                                this.notification_manager.notify(
+                                    notif_type,
+                                    *session_id,
+                                    &session_name,
+                                    detail,
+                                );
                             }
                         }
                         changed = true;
@@ -976,7 +977,15 @@ impl WorkspaceView {
                     .session(session_id)
                     .map(|s| s.name.clone())
                     .unwrap_or_else(|| format!("Session {}", session_id.0));
-                send_notification("Codirigent", &format!("{name} is waiting for input"));
+                // Hook signals carry no tool detail — treat as InputRequired.
+                // If the hook protocol is later extended with a tool name, this
+                // can be dispatched as PermissionPrompt with detail.
+                self.notification_manager.notify(
+                    NotificationType::InputRequired,
+                    session_id,
+                    &name,
+                    None,
+                );
             }
 
             // Fire ResponseReady notification on transition from Working → ResponseReady.
@@ -988,7 +997,12 @@ impl WorkspaceView {
                     .session(session_id)
                     .map(|s| s.name.clone())
                     .unwrap_or_else(|| format!("Session {}", session_id.0));
-                send_notification("Codirigent", &format!("'{}' finished responding", name));
+                self.notification_manager.notify(
+                    NotificationType::ResponseReady,
+                    session_id,
+                    &name,
+                    None,
+                );
             }
         }
     }
