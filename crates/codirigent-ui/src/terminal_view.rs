@@ -515,6 +515,7 @@ impl TerminalView {
     }
 
     /// Get cells grouped by row for efficient rendering.
+    #[cfg(test)]
     pub(crate) fn cells_by_row(&self) -> Vec<Vec<RenderedCell>> {
         let cells = self.visible_cells();
         let rows = self.terminal.rows() as usize;
@@ -578,6 +579,7 @@ impl TerminalView {
     }
 
     /// Calculate pixel dimensions for the current terminal size.
+    #[cfg(test)]
     pub(crate) fn pixel_size(&self) -> (f32, f32) {
         let width = self.terminal.cols() as f32 * self.cell_width;
         let height = self.terminal.rows() as f32 * self.cell_height;

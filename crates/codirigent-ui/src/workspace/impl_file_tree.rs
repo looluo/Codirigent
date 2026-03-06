@@ -9,7 +9,7 @@
 
 use super::gpui::WorkspaceView;
 use super::types::FileTreeContextMenu;
-use crate::sidebar::{FileTreeEntryData, FileTreeEvent, WorktreeEvent};
+use crate::sidebar::{FileTreeEntryData, FileTreeEvent};
 use codirigent_core::{SessionId, SessionManager};
 use codirigent_filetree::FileTree;
 use std::path::PathBuf;
@@ -162,91 +162,6 @@ impl WorkspaceView {
                 if let Ok(manager) = self.session_manager.lock() {
                     if let Err(e) = manager.send_input(session_id, input.as_bytes()) {
                         warn!("Failed to send path to terminal: {}", e);
-                    }
-                }
-            }
-        }
-        cx.notify();
-    }
-
-    /// Handle worktree panel events.
-    pub(super) fn handle_worktree_event(
-        &mut self,
-        event: WorktreeEvent,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        match event {
-            WorktreeEvent::RemoveRequested(path) => {
-                info!(?path, "Remove worktree requested");
-                if let Some(ref manager) = self.project.worktree_manager {
-                    if let Ok(mut mgr) = manager.lock() {
-                        if let Err(e) = mgr.remove(&path, false) {
-                            warn!("Failed to remove worktree: {}", e);
-                        } else {
-                            // Refresh the list
-                            if let Ok(()) = mgr.refresh() {
-                                self.project
-                                    .worktree_panel
-                                    .set_worktrees(mgr.list().to_vec());
-                            }
-                        }
-                    }
-                }
-            }
-            WorktreeEvent::BindSession {
-                worktree_path,
-                session_id,
-            } => {
-                info!(?worktree_path, ?session_id, "Bind session to worktree");
-                if let Some(ref manager) = self.project.worktree_manager {
-                    if let Ok(mut mgr) = manager.lock() {
-                        if mgr.bind_session(&worktree_path, session_id).is_ok() {
-                            // Refresh the list
-                            mgr.refresh().ok();
-                            self.project
-                                .worktree_panel
-                                .set_worktrees(mgr.list().to_vec());
-                        }
-                    }
-                }
-            }
-            WorktreeEvent::UnbindSession(session_id) => {
-                info!(?session_id, "Unbind session from worktree");
-                if let Some(ref manager) = self.project.worktree_manager {
-                    if let Ok(mut mgr) = manager.lock() {
-                        if mgr.unbind_session(session_id).is_ok() {
-                            // Refresh the list
-                            mgr.refresh().ok();
-                            self.project
-                                .worktree_panel
-                                .set_worktrees(mgr.list().to_vec());
-                        }
-                    }
-                }
-            }
-            WorktreeEvent::CleanupMerged => {
-                info!("Cleanup merged worktrees");
-                if let Some(ref manager) = self.project.worktree_manager {
-                    if let Ok(mut mgr) = manager.lock() {
-                        if let Ok(removed) = mgr.cleanup_merged("main") {
-                            info!("Removed {} merged worktrees", removed.len());
-                            // Refresh the list
-                            let _: Result<(), anyhow::Error> = mgr.refresh();
-                            self.project
-                                .worktree_panel
-                                .set_worktrees(mgr.list().to_vec());
-                        }
-                    }
-                }
-            }
-            WorktreeEvent::Refresh => {
-                info!("Refresh worktree list");
-                if let Some(ref manager) = self.project.worktree_manager {
-                    if let Ok(mut mgr) = manager.lock() {
-                        let _: Result<(), anyhow::Error> = mgr.refresh();
-                        self.project
-                            .worktree_panel
-                            .set_worktrees(mgr.list().to_vec());
                     }
                 }
             }

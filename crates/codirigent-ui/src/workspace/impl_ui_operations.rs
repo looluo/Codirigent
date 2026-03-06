@@ -85,7 +85,7 @@ impl WorkspaceView {
     }
 
     /// Handle a session menu action (rename, assign to group, end session, etc.).
-    pub fn handle_session_menu_action(
+    pub(super) fn handle_session_menu_action(
         &mut self,
         session_id: SessionId,
         action: crate::workspace::render::SessionMenuAction,

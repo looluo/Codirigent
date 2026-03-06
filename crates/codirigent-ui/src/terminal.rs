@@ -430,6 +430,7 @@ impl Terminal {
     /// Get the cursor position as (row, column).
     ///
     /// Row and column are 0-indexed.
+    #[cfg(test)]
     pub(crate) fn cursor_position(&self) -> (usize, usize) {
         let cursor = &self.term.grid().cursor;
         (cursor.point.line.0 as usize, cursor.point.column.0)
