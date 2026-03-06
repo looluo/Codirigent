@@ -1572,65 +1572,7 @@ impl Render for WorkspaceView {
         };
         self.workspace.set_right_panel_width(right_panel_w);
 
-        // Sync terminal cell dimensions with actual font metrics so the
-        // emulator calculates the correct row/col counts.
-        // Uses a cache to skip font system calls when settings haven't changed.
-        {
-            let font_family = &self.workspace.theme().terminal_font_family;
-            let font_size = self.workspace.theme().terminal_font_size;
-            let (real_w, real_h) = match &self.cache.cached_cell_dims {
-                Some(cached)
-                    if cached.font_family == *font_family
-                        && (cached.font_size - font_size).abs() < 0.01 =>
-                {
-                    (cached.cell_width, cached.cell_height)
-                }
-                _ => {
-                    let (w, h) = crate::terminal_view::compute_cell_dimensions(
-                        window.text_system(),
-                        font_family,
-                        font_size,
-                    );
-                    self.cache.cached_cell_dims = Some(super::types::CachedCellDims {
-                        font_family: font_family.clone(),
-                        font_size,
-                        cell_width: w,
-                        cell_height: h,
-                    });
-                    (w, h)
-                }
-            };
-            for tv in self.terminals.values_mut() {
-                if !tv.dimensions_initialized() {
-                    tv.set_cell_dimensions(real_w, real_h);
-                }
-            }
-        }
-
-        // Resize terminals to fit the new grid cell bounds (throttled to ~10/sec
-        // to avoid resize feedback loop during window drag/resize)
-        let now = Instant::now();
-        if now.duration_since(self.polling.last_resize_time) > Duration::from_millis(100) {
-            self.resize_terminals_to_grid();
-            self.polling.last_resize_time = now;
-            self.polling.pending_resize = false;
-        } else if !self.polling.pending_resize {
-            self.polling.pending_resize = true;
-            cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
-                cx.background_executor()
-                    .timer(Duration::from_millis(100))
-                    .await;
-                let _ = this.update(cx, |this, cx| {
-                    let resized = this.resize_terminals_to_grid();
-                    this.polling.last_resize_time = Instant::now();
-                    this.polling.pending_resize = false;
-                    if resized {
-                        cx.notify();
-                    }
-                });
-            })
-            .detach();
-        }
+        self.sync_terminal_dimensions_and_resize(window, cx);
 
         // Clone theme values before any mutable borrows
         let theme = self.workspace.theme();
@@ -1677,6 +1619,68 @@ impl Render for WorkspaceView {
         container = self.render_active_modals(container, cx);
         container = self.render_overlays(container, cx);
         container
+    }
+
+    /// Sync terminal cell dimensions with font metrics, then throttle-trigger PTY resize.
+    ///
+    /// Uses a cache keyed on font family + size so font queries only run when
+    /// terminal appearance settings change, not on every frame.
+    ///
+    /// Resize is debounced to ≤10/sec to prevent PTY feedback loops during
+    /// continuous window drag/resize.
+    fn sync_terminal_dimensions_and_resize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let font_family = &self.workspace.theme().terminal_font_family;
+        let font_size = self.workspace.theme().terminal_font_size;
+        let (real_w, real_h) = match &self.cache.cached_cell_dims {
+            Some(cached)
+                if cached.font_family == *font_family
+                    && (cached.font_size - font_size).abs() < 0.01 =>
+            {
+                (cached.cell_width, cached.cell_height)
+            }
+            _ => {
+                let (w, h) = crate::terminal_view::compute_cell_dimensions(
+                    window.text_system(),
+                    font_family,
+                    font_size,
+                );
+                self.cache.cached_cell_dims = Some(super::types::CachedCellDims {
+                    font_family: font_family.clone(),
+                    font_size,
+                    cell_width: w,
+                    cell_height: h,
+                });
+                (w, h)
+            }
+        };
+        for tv in self.terminals.values_mut() {
+            if !tv.dimensions_initialized() {
+                tv.set_cell_dimensions(real_w, real_h);
+            }
+        }
+
+        let now = Instant::now();
+        if now.duration_since(self.polling.last_resize_time) > Duration::from_millis(100) {
+            self.resize_terminals_to_grid();
+            self.polling.last_resize_time = now;
+            self.polling.pending_resize = false;
+        } else if !self.polling.pending_resize {
+            self.polling.pending_resize = true;
+            cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    let resized = this.resize_terminals_to_grid();
+                    this.polling.last_resize_time = Instant::now();
+                    this.polling.pending_resize = false;
+                    if resized {
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
     }
 }
 
