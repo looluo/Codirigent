@@ -34,6 +34,8 @@
 //! view.terminal_mut().process_output(b"Hello, World!");
 //! ```
 
+use std::sync::Arc;
+
 use crate::terminal::Terminal;
 use crate::terminal::TerminalSize;
 use crate::terminal_colors::{convert_color, dim_color};
@@ -84,9 +86,11 @@ pub struct CachedTerminalContent {
     /// Text runs batched by style for efficient painting.
     pub text_runs: Vec<TextRunSegment>,
     /// Pre-converted background rects with GPUI Hsla colors (avoids per-frame conversion).
-    pub bg_rects_hsla: Vec<(usize, usize, usize, gpui::Hsla)>,
+    /// Wrapped in Arc for cheap per-frame cloning into canvas closures.
+    pub bg_rects_hsla: Arc<Vec<(usize, usize, usize, gpui::Hsla)>>,
     /// Pre-converted text runs with GPUI Hsla foreground colors (avoids per-frame conversion).
-    pub text_runs_hsla: Vec<(TextRunSegment, gpui::Hsla)>,
+    /// Wrapped in Arc for cheap per-frame cloning into canvas closures.
+    pub text_runs_hsla: Arc<Vec<(TextRunSegment, gpui::Hsla)>>,
     /// Terminal rows at time of caching.
     pub rows: usize,
     /// Terminal columns at time of caching.
@@ -783,17 +787,21 @@ impl TerminalView {
         }
 
         // Pre-convert to GPUI Hsla colors so render.rs doesn't pay conversion cost per frame
-        let bg_rects_hsla: Vec<(usize, usize, usize, gpui::Hsla)> = background_rects
-            .iter()
-            .map(|(row, start, end, color)| (*row, *start, *end, (*color).into()))
-            .collect();
-        let text_runs_hsla: Vec<(TextRunSegment, gpui::Hsla)> = text_runs
-            .iter()
-            .map(|run| {
-                let fg: gpui::Hsla = run.foreground.into();
-                (run.clone(), fg)
-            })
-            .collect();
+        let bg_rects_hsla: Arc<Vec<(usize, usize, usize, gpui::Hsla)>> = Arc::new(
+            background_rects
+                .iter()
+                .map(|(row, start, end, color)| (*row, *start, *end, (*color).into()))
+                .collect(),
+        );
+        let text_runs_hsla: Arc<Vec<(TextRunSegment, gpui::Hsla)>> = Arc::new(
+            text_runs
+                .iter()
+                .map(|run| {
+                    let fg: gpui::Hsla = run.foreground.into();
+                    (run.clone(), fg)
+                })
+                .collect(),
+        );
 
         CachedTerminalContent {
             background_rects,

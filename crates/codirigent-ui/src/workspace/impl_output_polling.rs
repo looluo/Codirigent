@@ -60,7 +60,11 @@ impl WorkspaceView {
             self.polling.pending_enters.remove(&session_id);
         }
 
-        let session_ids: Vec<SessionId> = self.terminals.keys().copied().collect();
+        self.cache.session_id_buf.clear();
+        self.cache
+            .session_id_buf
+            .extend(self.terminals.keys().copied());
+        let session_ids = &self.cache.session_id_buf;
         let mut any_dirty = false;
 
         // Drain VTE PtyWrite responses (DSR, DA1, etc.) and forward to PTY immediately.
@@ -314,7 +318,7 @@ impl WorkspaceView {
             .detach();
         }
 
-        for session_id in session_ids {
+        for &session_id in session_ids {
             // Try to drain output from the session manager
             let output = self.with_session_manager(|manager| manager.try_drain_output(session_id));
 

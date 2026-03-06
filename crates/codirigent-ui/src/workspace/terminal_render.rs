@@ -6,6 +6,8 @@
 //! - Cursor rendering (block, hollow, beam, underline)
 //! - IME pre-edit text overlay
 
+use std::sync::Arc;
+
 use super::gpui::WorkspaceView;
 use crate::icons;
 use crate::terminal_view::CursorShape;
@@ -68,7 +70,7 @@ impl WorkspaceView {
         let cursor_rect = terminal_view.cursor_rect();
         let needs_dimension_init = !terminal_view.dimensions_initialized();
 
-        // Get cached content — clone only the pre-converted Hsla Vecs (not the Rgba originals)
+        // Get cached content — Arc::clone is just a refcount bump (no deep copy)
         let content = terminal_view.cached_content();
         let bg_rects = content.bg_rects_hsla.clone();
         let text_runs = content.text_runs_hsla.clone();
@@ -230,7 +232,7 @@ impl WorkspaceView {
                   prepaint_data: (
                 f32,
                 f32,
-                Vec<(usize, usize, usize, gpui::Hsla)>,
+                Arc<Vec<(usize, usize, usize, gpui::Hsla)>>,
                 Vec<(usize, usize, gpui::ShapedLine)>,
                 Option<(f32, f32, gpui::ShapedLine)>,
                 Option<(crate::terminal_view::CursorRect, gpui::Hsla)>,

@@ -287,6 +287,8 @@ pub(super) struct CacheState {
     /// Cached result of font metric computation, keyed by font settings.
     /// Avoids repeated font system calls when settings haven't changed.
     pub cached_cell_dims: Option<CachedCellDims>,
+    /// Reusable buffer for session IDs, avoids per-poll-cycle Vec allocation.
+    pub session_id_buf: Vec<SessionId>,
 }
 
 impl CacheState {
@@ -300,6 +302,7 @@ impl CacheState {
             compaction_start_times: HashMap::new(),
             drawer_group_expanded: HashMap::new(),
             cached_cell_dims: None,
+            session_id_buf: Vec::new(),
         }
     }
 }
