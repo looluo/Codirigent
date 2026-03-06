@@ -438,6 +438,8 @@ impl WorkspaceView {
     ) -> gpui::Stateful<gpui::Div> {
         // Uses HEADER_HEIGHT from types.rs
         let fg: gpui::Hsla = theme.foreground.into();
+        let muted: gpui::Hsla = theme.muted.into();
+        let orange: gpui::Hsla = theme.orange.into();
 
         let header_border = if hints.is_focused {
             let primary: gpui::Hsla = theme.primary.into();
@@ -484,16 +486,10 @@ impl WorkspaceView {
 
         // Project/directory name (after session name)
         if let Some(project) = &hints.project_name {
-            let muted_fg = gpui::Hsla {
-                h: 0.0,
-                s: 0.0,
-                l: 0.5,
-                a: 0.7,
-            };
             header = header.child(
                 div()
                     .text_xs()
-                    .text_color(muted_fg)
+                    .text_color(muted.opacity(0.7))
                     .overflow_hidden()
                     .text_ellipsis()
                     .child(project.clone()),
@@ -502,12 +498,8 @@ impl WorkspaceView {
 
         // Git branch badge (after session name)
         if let Some(branch) = &hints.git_branch {
-            let git_muted = gpui::Hsla {
-                h: 0.0,
-                s: 0.0,
-                l: 0.6,
-                a: 0.8,
-            };
+            let git_fg = muted.opacity(0.8);
+            let git_badge_bg = border_color.opacity(0.25);
             let branch_label = if branch.chars().count() > 16 {
                 let truncated: String = branch.chars().take(13).collect();
                 format!("{}...", truncated)
@@ -518,12 +510,7 @@ impl WorkspaceView {
                 .px(px(4.0))
                 .py_px()
                 .rounded_sm()
-                .bg(gpui::Hsla {
-                    h: 0.0,
-                    s: 0.0,
-                    l: 1.0,
-                    a: 0.06,
-                })
+                .bg(git_badge_bg)
                 .flex()
                 .flex_shrink_0()
                 .items_center()
@@ -531,23 +518,18 @@ impl WorkspaceView {
                 .child(
                     div()
                         .text_xs()
-                        .text_color(git_muted)
+                        .text_color(git_fg)
                         .font_family(icons::LUCIDE_FONT_FAMILY)
                         .child(icons::git_branch()),
                 )
-                .child(div().text_xs().text_color(git_muted).child(branch_label));
+                .child(div().text_xs().text_color(git_fg).child(branch_label));
 
             if let Some(count) = hints.git_dirty_count {
                 if count > 0 {
                     git_badge = git_badge.child(
                         div()
                             .text_xs()
-                            .text_color(gpui::Hsla {
-                                h: 0.1,
-                                s: 0.8,
-                                l: 0.6,
-                                a: 1.0,
-                            })
+                            .text_color(orange)
                             .child(format!("+{}", count)),
                     );
                 }
