@@ -30,242 +30,13 @@ impl WorkspaceView {
     pub(super) fn poll_output(&mut self, cx: &mut Context<Self>) {
         self.process_deferred_enters();
         self.drain_vte_responses();
-        // Background JSONL check is spawned before session_ids to avoid holding
-        // the session_id_buf borrow across a &mut self call.
         self.spawn_background_jsonl_check(cx);
 
-        self.cache.session_id_buf.clear();
-        self.cache
-            .session_id_buf
-            .extend(self.terminals.keys().copied());
-        let session_ids = &self.cache.session_id_buf;
+        let session_ids: Vec<codirigent_core::SessionId> = self.terminals.keys().copied().collect();
         let mut any_dirty = false;
 
-        for &session_id in session_ids {
-            // Try to drain output from the session manager
-            let output = self.with_session_manager(|manager| manager.try_drain_output(session_id));
-
-            if let Some(data) = output {
-                // Feed output to terminal emulator
-                if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
-                    terminal_view.terminal_mut().process_output(&data);
-                    any_dirty = true;
-                }
-
-                // Detect CLI type from output banners
-                if let Some(cli_type) = detect_cli_from_output(&data) {
-                    let current = self
-                        .clipboard
-                        .clipboard_service
-                        .get_session_cli_type(session_id);
-                    if current == codirigent_core::CliType::GenericShell {
-                        self.clipboard
-                            .clipboard_service
-                            .set_session_cli_type(session_id, cli_type);
-                        info!(?session_id, ?cli_type, "Detected CLI type from output");
-                    }
-                }
-
-                // Feed output to detector for status detection
-                self.with_detector(|detector| {
-                    detector.process_output(session_id, &data);
-
-                    // Parse OSC 133 shell state markers for reliable idle detection
-                    let shell_events = codirigent_session::extract_osc133_events(&data);
-                    for event in shell_events {
-                        detector.set_shell_state(session_id, event);
-                    }
-                });
-
-                // Check for OSC 7 (working directory change) sequences
-                if let Some(new_cwd) = codirigent_session::extract_osc7_path(&data) {
-                    let changed = self.with_session_manager(|manager| {
-                        manager.update_working_directory(session_id, new_cwd)
-                    });
-                    if changed {
-                        // Invalidate stale git cache so refresh picks up the new repo
-                        self.with_session_manager(|manager| {
-                            manager.invalidate_git_cache(session_id);
-                        });
-                        // Force immediate git refresh (updates the manager's copy)
-                        let git_info = self
-                            .with_session_manager(|manager| manager.refresh_git_status(session_id));
-
-                        // Update terminal header (UI-only state, not part of Session)
-                        if let Some(header) = self.terminal_headers.get_mut(&session_id) {
-                            if let Some(ref info) = git_info {
-                                header.git_branch = Some(info.branch.clone());
-                                header.git_dirty_count = Some(info.dirty_count);
-                            } else {
-                                header.git_branch = None;
-                                header.git_dirty_count = None;
-                            }
-                        }
-
-                        // Sync workspace cache so file tree sees the new CWD.
-                        // Update only the changed session instead of cloning all.
-                        // Fetch from manager first to avoid overlapping borrows.
-                        let mgr_session =
-                            self.with_session_manager(|manager| manager.get_session(session_id));
-                        if let Some(mgr) = mgr_session {
-                            if let Some(ws_session) = self.workspace.session_mut(session_id) {
-                                ws_session.working_directory = mgr.working_directory;
-                                // Keep drawer group in sync with current git branch
-                                if let Some(ref gi) = mgr.git_info {
-                                    ws_session.group = Some(gi.branch.clone());
-                                }
-                                ws_session.git_info = mgr.git_info;
-                            }
-                        }
-
-                        // Update file tree panel if this is the focused session.
-                        // Uses sync_file_tree_to_focused_session which guards against
-                        // same-root refreshes (avoids redundant file tree rebuilds).
-                        if self.workspace.focused_session_id() == Some(session_id) {
-                            self.sync_file_tree_to_focused_session(cx);
-                        }
-                    }
-                }
-            }
-
-            // Update session status from detector
-            let (mut status, idle_time) = self.with_detector(|detector| {
-                (
-                    detector.get_status(session_id),
-                    detector.get_idle_time(session_id),
-                )
-            });
-
-            // Overlay cached JSONL status (background task updates the cache).
-            // But don't overlay stale NeedsAttention when the detector says Idle —
-            // this means Claude exited and the shell prompt is showing.
-            if let Some((cached_status, _tool_name)) = self.get_recent_cached_cli_status(session_id)
-            {
-                let is_stale_attention = cached_status == SessionStatus::NeedsAttention
-                    && matches!(status, Some(SessionStatus::Idle))
-                    && self.is_cli_status_stale(session_id, Duration::from_secs(30));
-                if is_stale_attention {
-                    // Claude likely exited — clear JSONL cache AND revert CLI type
-                    // so the JSONL reader stops being consulted on subsequent polls.
-                    if let Ok(mut readers) = self.cli_readers.lock() {
-                        readers.cached_status.remove(&session_id);
-                    }
-                    self.clipboard
-                        .clipboard_service
-                        .set_session_cli_type(session_id, codirigent_core::CliType::GenericShell);
-                    info!(
-                        ?session_id,
-                        "Cleared stale NeedsAttention, reverted to GenericShell"
-                    );
-                } else {
-                    status = Some(cached_status);
-                }
-            }
-
-            if let Some(status) = status {
-                if self.polling.idle_poll_count % 120 == 0 {
-                    info!(?session_id, ?status, ?idle_time, "Session status poll");
-                }
-                let old_status = self.workspace.session(session_id).map(|s| s.status);
-                let mut just_started_compaction = false;
-                if self.workspace.update_session_status(session_id, status) {
-                    any_dirty = true;
-                    // Sync task board with the canonical (JSONL-corrected) status
-                    if let Some(old) = old_status {
-                        // Check if task transitioned to Review
-                        let task_transitioned_to_review = if let Ok(mut task_mgr) =
-                            self.task_manager.lock()
-                        {
-                            let tid = task_mgr.on_session_status_changed(session_id, old, status);
-                            if let Some(ref task_id) = tid {
-                                task_mgr
-                                    .get_task(task_id)
-                                    .map_or(false, |t| t.status == TaskStatus::Review)
-                            } else {
-                                false
-                            }
-                        } else {
-                            false
-                        };
-
-                        // When task auto-transitions to Review:
-                        // 1. Clear current_task so auto-assign can work later
-                        // 2. Send /clear to reset context for the next task.
-                        if task_transitioned_to_review {
-                            // Keep the previous JSONL status during transient parse/IO misses.
-                            if let Ok(mgr) = self.session_manager.lock() {
-                                mgr.with_session_state_mut(session_id, |state| {
-                                    state.session.current_task = None;
-                                });
-                            }
-                            if let Some(session) = self.workspace.session_mut(session_id) {
-                                session.current_task = None;
-                            }
-                            // Start context clear and reuse compaction infrastructure
-                            let cli_type = self
-                                .clipboard
-                                .clipboard_service
-                                .get_session_cli_type(session_id);
-                            let clear_cmd = clear_command(cli_type);
-                            if let Ok(mut svc) = self.persistence.compaction.lock() {
-                                if svc.begin_compaction(session_id) {
-                                    if let Ok(mgr) = self.session_manager.lock() {
-                                        let _ = mgr.send_input(session_id, clear_cmd.as_bytes());
-                                    }
-                                    self.polling
-                                        .pending_enters
-                                        .insert(session_id, (Instant::now(), false));
-                                    self.cache
-                                        .compaction_start_times
-                                        .insert(session_id, Instant::now());
-                                    just_started_compaction = true;
-                                }
-                            }
-                        }
-                    }
-                }
-                // NeedsAttention is NOT treated as idle because session is blocked
-                // Skip if we just started compaction and wait for /clear to finish
-                // Skip if a deferred Enter is pending because text hasn't been submitted yet
-                if matches!(status, SessionStatus::Idle)
-                    && !just_started_compaction
-                    && !self.polling.pending_enters.contains_key(&session_id)
-                {
-                    let is_compacting = self
-                        .persistence
-                        .compaction
-                        .lock()
-                        .map(|svc| svc.is_compacting(session_id))
-                        .unwrap_or(false);
-
-                    if is_compacting {
-                        // Compaction just finished and session returned to Idle
-                        if let Ok(mut svc) = self.persistence.compaction.lock() {
-                            svc.end_compaction(session_id);
-                        }
-                        self.cache.compaction_start_times.remove(&session_id);
-                        self.event_bus
-                            .publish(CodirigentEvent::CompactionCompleted {
-                                session_id,
-                                success: true,
-                            });
-                        info!(?session_id, "Compaction completed successfully");
-                        // Fall through to try_auto_assign
-                    } else {
-                        // Not compacting; check if we should compact before proceeding
-                        let has_task = self
-                            .workspace
-                            .session(session_id)
-                            .map_or(false, |s| s.current_task.is_some());
-                        if has_task && self.try_compact(session_id) {
-                            // Compaction started; skip auto-assign this cycle
-                            continue;
-                        }
-                    }
-
-                    self.try_auto_assign(session_id);
-                }
-            }
+        for session_id in session_ids {
+            any_dirty |= self.poll_session_output(session_id, cx);
         }
 
         self.cleanup_compaction_timeouts();
@@ -281,13 +52,245 @@ impl WorkspaceView {
         }
     }
 
+    /// Process output and update status for a single session in the poll loop.
+    ///
+    /// Returns `true` if any UI-visible change was made that requires a repaint.
+    fn poll_session_output(
+        &mut self,
+        session_id: codirigent_core::SessionId,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let mut any_dirty = false;
+        // Try to drain output from the session manager
+        let output = self.with_session_manager(|manager| manager.try_drain_output(session_id));
+
+        if let Some(data) = output {
+            // Feed output to terminal emulator
+            if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
+                terminal_view.terminal_mut().process_output(&data);
+                any_dirty = true;
+            }
+
+            // Detect CLI type from output banners
+            if let Some(cli_type) = detect_cli_from_output(&data) {
+                let current = self
+                    .clipboard
+                    .clipboard_service
+                    .get_session_cli_type(session_id);
+                if current == codirigent_core::CliType::GenericShell {
+                    self.clipboard
+                        .clipboard_service
+                        .set_session_cli_type(session_id, cli_type);
+                    info!(?session_id, ?cli_type, "Detected CLI type from output");
+                }
+            }
+
+            // Feed output to detector for status detection
+            self.with_detector(|detector| {
+                detector.process_output(session_id, &data);
+
+                // Parse OSC 133 shell state markers for reliable idle detection
+                let shell_events = codirigent_session::extract_osc133_events(&data);
+                for event in shell_events {
+                    detector.set_shell_state(session_id, event);
+                }
+            });
+
+            // Check for OSC 7 (working directory change) sequences
+            if let Some(new_cwd) = codirigent_session::extract_osc7_path(&data) {
+                let changed = self.with_session_manager(|manager| {
+                    manager.update_working_directory(session_id, new_cwd)
+                });
+                if changed {
+                    // Invalidate stale git cache so refresh picks up the new repo
+                    self.with_session_manager(|manager| {
+                        manager.invalidate_git_cache(session_id);
+                    });
+                    // Force immediate git refresh (updates the manager's copy)
+                    let git_info =
+                        self.with_session_manager(|manager| manager.refresh_git_status(session_id));
+
+                    // Update terminal header (UI-only state, not part of Session)
+                    if let Some(header) = self.terminal_headers.get_mut(&session_id) {
+                        if let Some(ref info) = git_info {
+                            header.git_branch = Some(info.branch.clone());
+                            header.git_dirty_count = Some(info.dirty_count);
+                        } else {
+                            header.git_branch = None;
+                            header.git_dirty_count = None;
+                        }
+                    }
+
+                    // Sync workspace cache so file tree sees the new CWD.
+                    // Update only the changed session instead of cloning all.
+                    // Fetch from manager first to avoid overlapping borrows.
+                    let mgr_session =
+                        self.with_session_manager(|manager| manager.get_session(session_id));
+                    if let Some(mgr) = mgr_session {
+                        if let Some(ws_session) = self.workspace.session_mut(session_id) {
+                            ws_session.working_directory = mgr.working_directory;
+                            // Keep drawer group in sync with current git branch
+                            if let Some(ref gi) = mgr.git_info {
+                                ws_session.group = Some(gi.branch.clone());
+                            }
+                            ws_session.git_info = mgr.git_info;
+                        }
+                    }
+
+                    // Update file tree panel if this is the focused session.
+                    // Uses sync_file_tree_to_focused_session which guards against
+                    // same-root refreshes (avoids redundant file tree rebuilds).
+                    if self.workspace.focused_session_id() == Some(session_id) {
+                        self.sync_file_tree_to_focused_session(cx);
+                    }
+                }
+            }
+        }
+
+        // Update session status from detector
+        let (mut status, idle_time) = self.with_detector(|detector| {
+            (
+                detector.get_status(session_id),
+                detector.get_idle_time(session_id),
+            )
+        });
+
+        // Overlay cached JSONL status (background task updates the cache).
+        // But don't overlay stale NeedsAttention when the detector says Idle —
+        // this means Claude exited and the shell prompt is showing.
+        if let Some((cached_status, _tool_name)) = self.get_recent_cached_cli_status(session_id) {
+            let is_stale_attention = cached_status == SessionStatus::NeedsAttention
+                && matches!(status, Some(SessionStatus::Idle))
+                && self.is_cli_status_stale(session_id, Duration::from_secs(30));
+            if is_stale_attention {
+                // Claude likely exited — clear JSONL cache AND revert CLI type
+                // so the JSONL reader stops being consulted on subsequent polls.
+                if let Ok(mut readers) = self.cli_readers.lock() {
+                    readers.cached_status.remove(&session_id);
+                }
+                self.clipboard
+                    .clipboard_service
+                    .set_session_cli_type(session_id, codirigent_core::CliType::GenericShell);
+                info!(
+                    ?session_id,
+                    "Cleared stale NeedsAttention, reverted to GenericShell"
+                );
+            } else {
+                status = Some(cached_status);
+            }
+        }
+
+        if let Some(status) = status {
+            if self.polling.idle_poll_count % 120 == 0 {
+                info!(?session_id, ?status, ?idle_time, "Session status poll");
+            }
+            let old_status = self.workspace.session(session_id).map(|s| s.status);
+            let mut just_started_compaction = false;
+            if self.workspace.update_session_status(session_id, status) {
+                any_dirty = true;
+                // Sync task board with the canonical (JSONL-corrected) status
+                if let Some(old) = old_status {
+                    // Check if task transitioned to Review
+                    let task_transitioned_to_review =
+                        if let Ok(mut task_mgr) = self.task_manager.lock() {
+                            let tid = task_mgr.on_session_status_changed(session_id, old, status);
+                            if let Some(ref task_id) = tid {
+                                task_mgr
+                                    .get_task(task_id)
+                                    .map_or(false, |t| t.status == TaskStatus::Review)
+                            } else {
+                                false
+                            }
+                        } else {
+                            false
+                        };
+
+                    // When task auto-transitions to Review:
+                    // 1. Clear current_task so auto-assign can work later
+                    // 2. Send /clear to reset context for the next task.
+                    if task_transitioned_to_review {
+                        // Keep the previous JSONL status during transient parse/IO misses.
+                        if let Ok(mgr) = self.session_manager.lock() {
+                            mgr.with_session_state_mut(session_id, |state| {
+                                state.session.current_task = None;
+                            });
+                        }
+                        if let Some(session) = self.workspace.session_mut(session_id) {
+                            session.current_task = None;
+                        }
+                        // Start context clear and reuse compaction infrastructure
+                        let cli_type = self
+                            .clipboard
+                            .clipboard_service
+                            .get_session_cli_type(session_id);
+                        let clear_cmd = clear_command(cli_type);
+                        if let Ok(mut svc) = self.persistence.compaction.lock() {
+                            if svc.begin_compaction(session_id) {
+                                if let Ok(mgr) = self.session_manager.lock() {
+                                    let _ = mgr.send_input(session_id, clear_cmd.as_bytes());
+                                }
+                                self.polling
+                                    .pending_enters
+                                    .insert(session_id, (Instant::now(), false));
+                                self.cache
+                                    .compaction_start_times
+                                    .insert(session_id, Instant::now());
+                                just_started_compaction = true;
+                            }
+                        }
+                    }
+                }
+            }
+            // NeedsAttention is NOT treated as idle because session is blocked
+            // Skip if we just started compaction and wait for /clear to finish
+            // Skip if a deferred Enter is pending because text hasn't been submitted yet
+            if matches!(status, SessionStatus::Idle)
+                && !just_started_compaction
+                && !self.polling.pending_enters.contains_key(&session_id)
+            {
+                let is_compacting = self
+                    .persistence
+                    .compaction
+                    .lock()
+                    .map(|svc| svc.is_compacting(session_id))
+                    .unwrap_or(false);
+
+                if is_compacting {
+                    // Compaction just finished and session returned to Idle
+                    if let Ok(mut svc) = self.persistence.compaction.lock() {
+                        svc.end_compaction(session_id);
+                    }
+                    self.cache.compaction_start_times.remove(&session_id);
+                    self.event_bus
+                        .publish(CodirigentEvent::CompactionCompleted {
+                            session_id,
+                            success: true,
+                        });
+                    info!(?session_id, "Compaction completed successfully");
+                    // Fall through to try_auto_assign
+                } else {
+                    // Not compacting; check if we should compact before proceeding
+                    let has_task = self
+                        .workspace
+                        .session(session_id)
+                        .map_or(false, |s| s.current_task.is_some());
+                    if has_task && self.try_compact(session_id) {
+                        // Compaction started; skip auto-assign this cycle
+                        return any_dirty;
+                    }
+                }
+
+                self.try_auto_assign(session_id);
+            }
+        }
+        any_dirty
+    }
+
     /// Spawn a background JSONL status check for all sessions if the last check
     /// was more than 3 seconds ago and no check is currently in-flight.
     ///
-    /// The check reads JSONL files written by Claude Code, Codex, and Gemini CLIs
-    /// and updates the cached session status on the UI thread. Calling this before
-    /// building the `session_ids` slice avoids holding the `session_id_buf` borrow
-    /// across a `&mut self` call.
+    /// Reads JSONL files written by Claude Code, Codex, and Gemini CLIs and
+    /// updates the cached session status on the UI thread.
     fn spawn_background_jsonl_check(&mut self, cx: &mut Context<Self>) {
         let has_any_reader = self
             .cli_readers

@@ -1283,7 +1283,7 @@ impl WorkspaceView {
                 div()
                     .absolute()
                     .inset_0()
-                    .bg(gpui::Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.5 })
+                    .bg(super::types::MODAL_BACKDROP)
                     .flex()
                     .items_center()
                     .justify_center()
@@ -1329,7 +1329,7 @@ impl WorkspaceView {
                                             .text_color(fg)
                                             .cursor_pointer()
                                             .hover(|style| {
-                                                style.bg(gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.1 })
+                                                style.bg(super::types::CANCEL_BUTTON_HOVER)
                                             })
                                             .on_click(cx.listener(
                                                 move |this, _: &ClickEvent, _window, cx| {
@@ -1345,12 +1345,12 @@ impl WorkspaceView {
                                             .px_4()
                                             .py_2()
                                             .rounded_md()
-                                            .bg(gpui::Hsla { h: 0.0, s: 0.8, l: 0.5, a: 1.0 })
+                                            .bg(super::types::DESTRUCTIVE_BUTTON_BG)
                                             .text_sm()
-                                            .text_color(gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: 1.0 })
+                                            .text_color(gpui::Hsla::white())
                                             .cursor_pointer()
                                             .hover(|style| {
-                                                style.bg(gpui::Hsla { h: 0.0, s: 0.8, l: 0.4, a: 1.0 })
+                                                style.bg(super::types::DESTRUCTIVE_BUTTON_HOVER)
                                             })
                                             .on_click(cx.listener(
                                                 move |this, _: &ClickEvent, _window, cx| {

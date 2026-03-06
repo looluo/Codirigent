@@ -15,6 +15,25 @@ use gpui::{
     StatefulInteractiveElement, Styled,
 };
 
+const PRIORITY_HIGH_COLOR: gpui::Rgba = gpui::Rgba {
+    r: 1.0,
+    g: 0.42,
+    b: 0.42,
+    a: 1.0,
+};
+const PRIORITY_MEDIUM_COLOR: gpui::Rgba = gpui::Rgba {
+    r: 0.96,
+    g: 0.62,
+    b: 0.04,
+    a: 1.0,
+};
+const PRIORITY_LOW_COLOR: gpui::Rgba = gpui::Rgba {
+    r: 0.36,
+    g: 0.55,
+    b: 0.94,
+    a: 1.0,
+};
+
 impl WorkspaceView {
     /// Convert core Task to UI TaskItem with status mapping.
     fn core_task_to_ui_item(&self, task: &codirigent_core::Task) -> crate::task_board::TaskItem {
@@ -387,12 +406,7 @@ impl WorkspaceView {
                                                     "priority-high",
                                                     codirigent_core::TaskPriority::High,
                                                     "High",
-                                                    gpui::Hsla::from(gpui::Rgba {
-                                                        r: 1.0,
-                                                        g: 0.42,
-                                                        b: 0.42,
-                                                        a: 1.0,
-                                                    }),
+                                                    gpui::Hsla::from(PRIORITY_HIGH_COLOR),
                                                     modal.priority,
                                                     fg,
                                                     muted,
@@ -404,12 +418,7 @@ impl WorkspaceView {
                                                     "priority-medium",
                                                     codirigent_core::TaskPriority::Medium,
                                                     "Medium",
-                                                    gpui::Hsla::from(gpui::Rgba {
-                                                        r: 0.96,
-                                                        g: 0.62,
-                                                        b: 0.04,
-                                                        a: 1.0,
-                                                    }),
+                                                    gpui::Hsla::from(PRIORITY_MEDIUM_COLOR),
                                                     modal.priority,
                                                     fg,
                                                     muted,
@@ -421,12 +430,7 @@ impl WorkspaceView {
                                                     "priority-low",
                                                     codirigent_core::TaskPriority::Low,
                                                     "Low",
-                                                    gpui::Hsla::from(gpui::Rgba {
-                                                        r: 0.36,
-                                                        g: 0.55,
-                                                        b: 0.94,
-                                                        a: 1.0,
-                                                    }),
+                                                    gpui::Hsla::from(PRIORITY_LOW_COLOR),
                                                     modal.priority,
                                                     fg,
                                                     muted,

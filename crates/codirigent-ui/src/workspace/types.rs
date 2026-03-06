@@ -7,6 +7,7 @@ use codirigent_core::{SessionId, SessionStatus, TaskId};
 use codirigent_session::claude_session_reader::ClaudeSessionReader;
 use codirigent_session::codex_session_reader::CodexSessionReader;
 use codirigent_session::gemini_session_reader::GeminiSessionReader;
+use gpui::Hsla;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Instant;
@@ -77,6 +78,41 @@ pub(super) const REM_BASE: f32 = 16.0;
 
 /// Default font size base in pixels (used to compute rem scaling).
 pub(super) const FONT_SIZE_BASE_DEFAULT: f32 = 13.0;
+
+/// Label shown in empty grid cells (no session assigned).
+pub(super) const EMPTY_CELL_MESSAGE: &str = "Idle - Ready for next task";
+
+/// Semi-transparent black overlay used behind modal dialogs.
+pub(super) const MODAL_BACKDROP: Hsla = Hsla {
+    h: 0.0,
+    s: 0.0,
+    l: 0.0,
+    a: 0.5,
+};
+
+/// Background color for destructive action buttons (delete, end session).
+pub(super) const DESTRUCTIVE_BUTTON_BG: Hsla = Hsla {
+    h: 0.0,
+    s: 0.8,
+    l: 0.5,
+    a: 1.0,
+};
+
+/// Hover background color for destructive action buttons (slightly darker).
+pub(super) const DESTRUCTIVE_BUTTON_HOVER: Hsla = Hsla {
+    h: 0.0,
+    s: 0.8,
+    l: 0.4,
+    a: 1.0,
+};
+
+/// Hover background color for secondary/cancel buttons (subtle white tint).
+pub(super) const CANCEL_BUTTON_HOVER: Hsla = Hsla {
+    h: 0.0,
+    s: 0.0,
+    l: 1.0,
+    a: 0.1,
+};
 
 /// Predefined group color palette for visual distinction.
 ///
@@ -331,8 +367,6 @@ pub(super) struct CacheState {
     /// Cached result of font metric computation, keyed by font settings.
     /// Avoids repeated font system calls when settings haven't changed.
     pub cached_cell_dims: Option<CachedCellDims>,
-    /// Reusable buffer for session IDs, avoids per-poll-cycle Vec allocation.
-    pub session_id_buf: Vec<SessionId>,
 }
 
 impl CacheState {
@@ -346,7 +380,6 @@ impl CacheState {
             compaction_start_times: HashMap::new(),
             drawer_group_expanded: HashMap::new(),
             cached_cell_dims: None,
-            session_id_buf: Vec::new(),
         }
     }
 }

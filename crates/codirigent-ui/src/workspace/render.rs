@@ -236,7 +236,7 @@ impl WorkspaceView {
                 div()
                     .text_xs()
                     .text_color(muted)
-                    .child("Idle - Ready for next task"),
+                    .child(super::types::EMPTY_CELL_MESSAGE),
             )
     }
 
