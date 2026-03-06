@@ -226,52 +226,32 @@ impl WorkspaceView {
                 let first_flex = *ratio * 1000.0;
                 let second_flex = (1.0 - *ratio) * 1000.0;
 
-                let container = match direction {
-                    SplitDirection::Horizontal => {
-                        // Left-to-right split
-                        let mut first_div = div().flex().flex_col().size_full();
-                        first_div.style().flex_grow = Some(first_flex);
-                        first_div.style().flex_shrink = Some(1.0);
-                        first_div.style().flex_basis = Some(relative(0.).into());
-                        let first_div = first_div.child(first_elem);
+                // Horizontal: children are flex-col, container is flex-row
+                // Vertical: children are flex-row, container is flex-col
+                let is_horizontal = *direction == SplitDirection::Horizontal;
 
-                        let mut second_div = div().flex().flex_col().size_full();
-                        second_div.style().flex_grow = Some(second_flex);
-                        second_div.style().flex_shrink = Some(1.0);
-                        second_div.style().flex_basis = Some(relative(0.).into());
-                        let second_div = second_div.child(second_elem);
-
-                        div()
-                            .flex_1()
-                            .flex()
-                            .flex_row()
-                            .gap(px(gap))
-                            .child(first_div)
-                            .child(second_div)
-                    }
-                    SplitDirection::Vertical => {
-                        // Top-to-bottom split
-                        let mut first_div = div().flex().flex_row().size_full();
-                        first_div.style().flex_grow = Some(first_flex);
-                        first_div.style().flex_shrink = Some(1.0);
-                        first_div.style().flex_basis = Some(relative(0.).into());
-                        let first_div = first_div.child(first_elem);
-
-                        let mut second_div = div().flex().flex_row().size_full();
-                        second_div.style().flex_grow = Some(second_flex);
-                        second_div.style().flex_shrink = Some(1.0);
-                        second_div.style().flex_basis = Some(relative(0.).into());
-                        let second_div = second_div.child(second_elem);
-
-                        div()
-                            .flex_1()
-                            .flex()
-                            .flex_col()
-                            .gap(px(gap))
-                            .child(first_div)
-                            .child(second_div)
-                    }
+                let make_child_div = |elem: gpui::AnyElement, flex: f32| -> gpui::Div {
+                    let mut d = div().flex().size_full();
+                    d = if is_horizontal {
+                        d.flex_col()
+                    } else {
+                        d.flex_row()
+                    };
+                    d.style().flex_grow = Some(flex);
+                    d.style().flex_shrink = Some(1.0);
+                    d.style().flex_basis = Some(relative(0.).into());
+                    d.child(elem)
                 };
+
+                let mut container = div().flex_1().flex().gap(px(gap));
+                container = if is_horizontal {
+                    container.flex_row()
+                } else {
+                    container.flex_col()
+                };
+                let container = container
+                    .child(make_child_div(first_elem, first_flex))
+                    .child(make_child_div(second_elem, second_flex));
 
                 container.into_any_element()
             }

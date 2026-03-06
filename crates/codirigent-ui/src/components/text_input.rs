@@ -1,6 +1,6 @@
 //! Reusable text input rendering helpers.
 
-use gpui::{div, px, ParentElement, SharedString, Styled};
+use gpui::{div, px, ParentElement, Styled};
 
 /// Styling for a text input field.
 #[derive(Debug, Clone, Copy)]
@@ -23,10 +23,9 @@ pub struct TextInputStyle {
 
 /// Build a styled text input container.
 ///
-/// Note: Currently does not use element IDs to maintain API compatibility
-/// with callers that use `.cursor_pointer()` and other `Div` methods.
+/// Returns a plain `Div` (not `Stateful<Div>`) so callers can chain
+/// `.cursor_pointer()` and other `Div`-only methods.
 pub fn text_input(
-    _id: impl Into<SharedString>,
     display_value: impl Into<String>,
     focused: bool,
     has_error: bool,

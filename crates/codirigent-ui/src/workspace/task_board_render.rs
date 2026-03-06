@@ -362,7 +362,6 @@ impl WorkspaceView {
                                         )))
                                         .child(
                                             text_input(
-                                                "task-title-input",
                                                 title_value,
                                                 title_focused,
                                                 modal.error.is_some(),
@@ -503,7 +502,6 @@ impl WorkspaceView {
                                         )))
                                         .child(
                                             text_input(
-                                                "task-plan-file-input",
                                                 plan_file_value,
                                                 plan_focused,
                                                 false,

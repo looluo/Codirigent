@@ -479,15 +479,7 @@ impl ClipboardPreview {
     ///
     /// A formatted string like "1920x1080".
     ///
-    /// # Example
-    ///
-    /// ```
-    /// use codirigent_ui::clipboard_preview::ClipboardPreview;
-    ///
-    /// let dims = ClipboardPreview::format_dimensions(1920, 1080);
-    /// assert_eq!(dims, "1920x1080");
-    /// ```
-    pub fn format_dimensions(width: u32, height: u32) -> String {
+    pub(crate) fn format_dimensions(width: u32, height: u32) -> String {
         format!("{}x{}", width, height)
     }
 }

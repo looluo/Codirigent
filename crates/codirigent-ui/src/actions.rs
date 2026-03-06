@@ -102,12 +102,12 @@ pub struct FocusPreviousSession;
 
 /// Focus session in a direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FocusDirection_ {
+pub struct FocusDirectionAction {
     /// Direction to focus.
     pub direction: FocusDirection,
 }
 
-impl FocusDirection_ {
+impl FocusDirectionAction {
     /// Focus up.
     pub const fn up() -> Self {
         Self {
@@ -366,16 +366,16 @@ mod tests {
 
     #[test]
     fn test_focus_direction() {
-        let up = FocusDirection_::up();
+        let up = FocusDirectionAction::up();
         assert_eq!(up.direction, FocusDirection::Up);
 
-        let down = FocusDirection_::down();
+        let down = FocusDirectionAction::down();
         assert_eq!(down.direction, FocusDirection::Down);
 
-        let left = FocusDirection_::left();
+        let left = FocusDirectionAction::left();
         assert_eq!(left.direction, FocusDirection::Left);
 
-        let right = FocusDirection_::right();
+        let right = FocusDirectionAction::right();
         assert_eq!(right.direction, FocusDirection::Right);
     }
 

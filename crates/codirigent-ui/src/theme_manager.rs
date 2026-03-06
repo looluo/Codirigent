@@ -35,10 +35,9 @@ pub struct ThemeManager {
 }
 
 impl ThemeManager {
-    /// Create a new empty theme manager.
+    /// Create a new theme manager with the dark theme as default.
     ///
-    /// Note: This creates a manager with no themes. Most users should
-    /// use `with_defaults()` instead.
+    /// For a manager with both dark and light themes, use `with_defaults()`.
     pub fn new() -> Self {
         let dark = Theme::dark();
         let mut themes = HashMap::new();

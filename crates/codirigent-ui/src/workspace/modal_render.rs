@@ -313,21 +313,15 @@ impl WorkspaceView {
                             rows_value.clone()
                         };
 
-                        text_input(
-                            "rows-input",
-                            display_value,
-                            is_focused,
-                            has_error,
-                            &input_style,
-                        )
-                        .cursor_pointer()
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _event, _window, cx| {
-                                this.custom_picker.set_focus(0);
-                                cx.notify();
-                            }),
-                        )
+                        text_input(display_value, is_focused, has_error, &input_style)
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _event, _window, cx| {
+                                    this.custom_picker.set_focus(0);
+                                    cx.notify();
+                                }),
+                            )
                     }),
             )
             // Columns input
@@ -345,21 +339,15 @@ impl WorkspaceView {
                             cols_value.clone()
                         };
 
-                        text_input(
-                            "cols-input",
-                            display_value,
-                            is_focused,
-                            has_error,
-                            &input_style,
-                        )
-                        .cursor_pointer()
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _event, _window, cx| {
-                                this.custom_picker.set_focus(1);
-                                cx.notify();
-                            }),
-                        )
+                        text_input(display_value, is_focused, has_error, &input_style)
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _event, _window, cx| {
+                                    this.custom_picker.set_focus(1);
+                                    cx.notify();
+                                }),
+                            )
                     }),
             )
             // Preview grid
@@ -812,7 +800,6 @@ impl WorkspaceView {
                                 .child(div().text_sm().text_color(muted).child(label))
                                 .child(
                                     text_input(
-                                        "session-action-input",
                                         input_value,
                                         true, // Always focused in modal
                                         modal.error.is_some(),

@@ -159,12 +159,7 @@ pub fn setting_dropdown(
 }
 
 /// Render a number stepper (display only -- interactive behavior wired in render).
-pub fn setting_number(
-    value: &str,
-    _min: f32,
-    _max: f32,
-    theme: &CodirigentTheme,
-) -> impl IntoElement {
+pub fn setting_number(value: &str, theme: &CodirigentTheme) -> impl IntoElement {
     let fg: gpui::Hsla = theme.foreground.into();
     let panel_bg: gpui::Hsla = theme.panel_background.into();
     let border: gpui::Hsla = theme.border.into();
@@ -289,7 +284,7 @@ mod tests {
         let _ = setting_row("Label", "Description", &theme, div());
         let _ = setting_toggle(true, &theme);
         let _ = setting_dropdown(&["a", "b"], "a", &theme);
-        let _ = setting_number("10", 0.0, 100.0, &theme);
+        let _ = setting_number("10", &theme);
         let _ = setting_text("hello", "placeholder", &theme);
         let _ = setting_path("/some/path", &theme);
     }
