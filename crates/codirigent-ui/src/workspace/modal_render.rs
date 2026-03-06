@@ -705,7 +705,6 @@ impl WorkspaceView {
             .object_fit(ObjectFit::Contain)
     }
 
-    /// Render session context menu (dropdown near the trigger button).
     /// Render the session action modal for rename/group.
     pub(super) fn render_session_action_modal(
         &mut self,

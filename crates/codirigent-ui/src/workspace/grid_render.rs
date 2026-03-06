@@ -21,16 +21,7 @@ use std::rc::Rc;
 use tracing::info;
 
 impl WorkspaceView {
-    /// Render the terminal content for a session using canvas-based rendering.
-    ///
-    /// Uses GPUI's `canvas()` element to paint terminal cells directly with
-    /// `paint_quad()` and `ShapedLine::paint()`, reducing element count from
-    /// ~8,000 divs to a single canvas element per terminal.
-    ///
-    /// Returns `(element, canvas_origin)` where `canvas_origin` is an `Rc<Cell>`
-    /// that will contain the canvas origin (with padding) after prepaint, for use
-    /// in mouse coordinate translation.
-    /// and EmptySessionCell for empty slots, with actual terminal content.
+    /// Dispatch workspace rendering to the appropriate layout: split-tree or NxM grid.
     pub(super) fn render_grid_with_headers(&mut self, cx: &mut Context<Self>) -> gpui::AnyElement {
         if self.workspace().is_split_tree_mode() {
             self.render_split_tree_layout(cx).into_any_element()
@@ -325,7 +316,7 @@ impl WorkspaceView {
                 div()
                     .text_xs()
                     .text_color(muted)
-                    .child("Idle - Ready for next task"),
+                    .child(super::types::EMPTY_CELL_MESSAGE),
             )
     }
 

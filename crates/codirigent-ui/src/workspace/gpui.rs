@@ -431,8 +431,6 @@ impl WorkspaceView {
         }
     }
 
-    /// Save layout profiles to user settings.
-
     /// Cycle to next layout.
     pub fn next_layout(&mut self, cx: &mut Context<Self>) {
         self.workspace.next_layout();
@@ -684,28 +682,6 @@ impl WorkspaceView {
     /// Used by the render module to access workspace state.
     pub(super) fn workspace(&self) -> &Workspace {
         &self.workspace
-    }
-
-    /// Execute a closure with a locked task manager reference.
-    ///
-    /// This helper method reduces boilerplate for the common pattern of locking
-    /// the task manager, executing a closure, and handling lock failure.
-    ///
-    /// # Returns
-    /// - `Some(R)` if the lock was acquired and the closure executed successfully
-    /// - `None` if the lock could not be acquired
-    ///
-    /// # Example
-    /// ```ignore
-    /// self.with_task_manager(|manager| {
-    ///     manager.create_task(task)
-    /// })
-    /// ```
-    pub(super) fn with_task_manager<R>(&self, f: impl FnOnce(&mut TaskManager) -> R) -> Option<R> {
-        self.task_manager
-            .lock()
-            .ok()
-            .map(|mut manager| f(&mut manager))
     }
 
     /// Execute a closure with a locked session manager reference.
@@ -1679,18 +1655,6 @@ mod tests {
         // Quick sanity check that we can create a workspace
         let ws = Workspace::new();
         assert!(ws.sessions().is_empty());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_is_executable() {
-        use std::path::Path;
-        // /bin/sh should always exist and be executable on Unix
-        assert!(super::is_executable(Path::new("/bin/sh")));
-        // A non-existent path should not be executable
-        assert!(!super::is_executable(Path::new(
-            "/nonexistent_binary_abc123"
-        )));
     }
 
     #[test]

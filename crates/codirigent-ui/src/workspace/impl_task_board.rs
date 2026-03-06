@@ -64,13 +64,7 @@ impl WorkspaceView {
                             info!("Moving task {} to review", task_id);
                             let r = manager.move_to_review(&task_id);
                             if r.is_ok() {
-                                let sid = self
-                                    .workspace
-                                    .sessions()
-                                    .iter()
-                                    .find(|s| s.current_task.as_ref() == Some(&task_id))
-                                    .map(|s| s.id);
-                                if let Some(sid) = sid {
+                                if let Some(sid) = self.session_with_task(&task_id) {
                                     drop(manager);
                                     self.clear_task_from_session(sid, cx);
                                     return;
@@ -83,13 +77,7 @@ impl WorkspaceView {
                             info!("Approving task {}", task_id);
                             let r = manager.approve_task(&task_id);
                             if r.is_ok() {
-                                let sid = self
-                                    .workspace
-                                    .sessions()
-                                    .iter()
-                                    .find(|s| s.current_task.as_ref() == Some(&task_id))
-                                    .map(|s| s.id);
-                                if let Some(sid) = sid {
+                                if let Some(sid) = self.session_with_task(&task_id) {
                                     // Release task_manager before session_manager
                                     drop(manager);
                                     self.clear_task_from_session(sid, cx);
@@ -102,13 +90,7 @@ impl WorkspaceView {
                             info!("Deleting task {}", task_id);
                             let r = manager.delete_task(&task_id);
                             if r.is_ok() {
-                                let sid = self
-                                    .workspace
-                                    .sessions()
-                                    .iter()
-                                    .find(|s| s.current_task.as_ref() == Some(&task_id))
-                                    .map(|s| s.id);
-                                if let Some(sid) = sid {
+                                if let Some(sid) = self.session_with_task(&task_id) {
                                     drop(manager);
                                     self.clear_task_from_session(sid, cx);
                                     return;
@@ -299,5 +281,17 @@ impl WorkspaceView {
             session.current_task = None;
         }
         cx.notify();
+    }
+
+    /// Find the ID of the session currently running the given task.
+    ///
+    /// Used by task action handlers to locate which session to release after
+    /// a Review, Complete, or Delete action succeeds.
+    fn session_with_task(&self, task_id: &TaskId) -> Option<codirigent_core::SessionId> {
+        self.workspace
+            .sessions()
+            .iter()
+            .find(|s| s.current_task.as_ref() == Some(task_id))
+            .map(|s| s.id)
     }
 }

@@ -302,4 +302,12 @@ mod tests {
         assert!(is_terminal_editor("/usr/local/bin/nano"));
         assert!(!is_terminal_editor("/usr/local/bin/code"));
     }
+
+    #[cfg(unix)]
+    #[test]
+    fn test_is_executable() {
+        use std::path::Path;
+        assert!(is_executable(Path::new("/bin/sh")));
+        assert!(!is_executable(Path::new("/nonexistent_binary_abc123")));
+    }
 }
