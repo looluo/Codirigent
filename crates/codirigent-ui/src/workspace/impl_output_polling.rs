@@ -198,7 +198,7 @@ impl WorkspaceView {
                             if let Some(ref task_id) = tid {
                                 task_mgr
                                     .get_task(task_id)
-                                    .map_or(false, |t| t.status == TaskStatus::Review)
+                                    .is_some_and(|t| t.status == TaskStatus::Review)
                             } else {
                                 false
                             }
@@ -274,7 +274,7 @@ impl WorkspaceView {
                     let has_task = self
                         .workspace
                         .session(session_id)
-                        .map_or(false, |s| s.current_task.is_some());
+                        .is_some_and(|s| s.current_task.is_some());
                     if has_task && self.try_compact(session_id) {
                         // Compaction started; skip auto-assign this cycle
                         return any_dirty;
@@ -704,40 +704,40 @@ impl WorkspaceView {
             let changed = self.clipboard.smart_clipboard.has_changed();
             if changed && self.clipboard.smart_clipboard.has_image() {
                 // Read clipboard on UI thread (platform requirement on Windows)
-                if let Ok(content) = self.clipboard.smart_clipboard.read_content() {
-                    if let codirigent_core::ClipboardContent::Image(image_data) = content {
-                        self.polling.clipboard_load_in_flight = true;
-                        let temp_dir = self.clipboard.clipboard_service.temp_dir().to_path_buf();
+                if let Ok(codirigent_core::ClipboardContent::Image(image_data)) =
+                    self.clipboard.smart_clipboard.read_content()
+                {
+                    self.polling.clipboard_load_in_flight = true;
+                    let temp_dir = self.clipboard.clipboard_service.temp_dir().to_path_buf();
 
-                        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
-                            // Background: save image to disk + generate thumbnail
-                            let result = cx
-                                .background_executor()
-                                .spawn(async move {
-                                    let _ = std::fs::create_dir_all(&temp_dir);
-                                    let svc = DefaultClipboardService::new(
-                                        temp_dir.parent().unwrap_or(&temp_dir).to_path_buf(),
-                                    );
-                                    let path = svc.save_image(&image_data).unwrap_or_default();
-                                    let file_size = image_data.bytes.len() as u64;
-                                    crate::clipboard_preview::ClipboardPreview::create_preview(
-                                        &image_data,
-                                        path,
-                                        file_size,
-                                    )
-                                })
-                                .await;
+                    cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+                        // Background: save image to disk + generate thumbnail
+                        let result = cx
+                            .background_executor()
+                            .spawn(async move {
+                                let _ = std::fs::create_dir_all(&temp_dir);
+                                let svc = DefaultClipboardService::new(
+                                    temp_dir.parent().unwrap_or(&temp_dir),
+                                );
+                                let path = svc.save_image(&image_data).unwrap_or_default();
+                                let file_size = image_data.bytes.len() as u64;
+                                crate::clipboard_preview::ClipboardPreview::create_preview(
+                                    &image_data,
+                                    path,
+                                    file_size,
+                                )
+                            })
+                            .await;
 
-                            let _ = this.update(cx, |this, cx| {
-                                this.polling.clipboard_load_in_flight = false;
-                                this.clipboard.clipboard_preview.show(result);
-                                this.clipboard.clipboard_preview_shown_at =
-                                    Some(std::time::Instant::now());
-                                cx.notify();
-                            });
-                        })
-                        .detach();
-                    }
+                        let _ = this.update(cx, |this, cx| {
+                            this.polling.clipboard_load_in_flight = false;
+                            this.clipboard.clipboard_preview.show(result);
+                            this.clipboard.clipboard_preview_shown_at =
+                                Some(std::time::Instant::now());
+                            cx.notify();
+                        });
+                    })
+                    .detach();
                 }
             }
         }
@@ -762,7 +762,7 @@ impl WorkspaceView {
             .lock()
             .ok()
             .and_then(|r| r.cached_status.get(&session_id).map(|c| c.status_since))
-            .map_or(false, |since| since.elapsed() > threshold)
+            .is_some_and(|since| since.elapsed() > threshold)
     }
 
     fn get_recent_cached_cli_status(
