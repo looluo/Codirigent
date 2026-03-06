@@ -135,91 +135,19 @@
     }
     .btn-secondary:hover { border-color: var(--border-hover); color: var(--text); }
 
-    /* Terminal */
+    /* Demo video */
     .terminal-wrap {
       max-width: 960px; margin: 48px auto 0;
       padding-bottom: 80px;
     }
-    .terminal {
-      background: #050508;
-      border: 1px solid var(--border);
+    .demo-video-frame {
       border-radius: 12px; overflow: hidden;
+      border: 1px solid var(--border);
       box-shadow: 0 24px 64px rgba(0,0,0,0.5);
+      background: var(--bg-card);
     }
-    .terminal-bar {
-      display: flex; align-items: center; gap: 10px;
-      padding: 11px 16px;
-      background: #0d0d14;
-      border-bottom: 1px solid rgba(255,255,255,0.05);
-    }
-    .terminal-dots { display: flex; gap: 6px; }
-    .terminal-dots span { width: 11px; height: 11px; border-radius: 50%; }
-    .td-r { background: #ff5f57; }
-    .td-y { background: #febc2e; }
-    .td-g { background: #28c840; }
-    .terminal-bar-title {
-      font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-muted);
-      margin-left: 6px; flex: 1;
-    }
-    .terminal-bar-tabs {
-      display: flex; gap: 2px;
-    }
-    .t-tab {
-      font-family: var(--font-mono); font-size: 0.65rem;
-      padding: 3px 10px; border-radius: 4px; color: var(--text-muted);
-      background: rgba(255,255,255,0.03);
-    }
-    .t-tab.active { background: rgba(57,211,83,0.12); color: var(--green); }
-    .terminal-body {
-      display: grid; grid-template-columns: repeat(3, 1fr);
-    }
-    .t-pane {
-      background: #0d0d1a;
-      border-right: 1px solid rgba(255,255,255,0.05);
-      border-bottom: 1px solid rgba(255,255,255,0.05);
-      overflow: hidden;
-    }
-    .t-pane:nth-child(3n) { border-right: none; }
-    .t-pane:nth-child(n+4) { border-bottom: none; }
-    .t-pane.active {
-      background: rgba(57,211,83,0.03);
-      box-shadow: inset 2px 0 0 var(--green);
-    }
-    .t-pane-top {
-      display: flex; align-items: center; gap: 7px;
-      padding: 8px 14px;
-      background: rgba(0,0,0,0.25);
-      border-bottom: 1px solid rgba(255,255,255,0.04);
-      font-family: var(--font-mono); font-size: 0.65rem; color: var(--text-muted);
-    }
-    .t-pane.active .t-pane-top { color: rgba(255,255,255,0.5); }
-    .t-pane-top .t-name { flex: 1; }
-    .sd { width: 6px; height: 6px; border-radius: 50%; flex-shrink: 0; }
-    .sd-g { background: var(--green); box-shadow: 0 0 6px rgba(57,211,83,0.5); }
-    .sd-y { background: var(--text-muted); }
-    .sd-r { background: var(--red); box-shadow: 0 0 6px rgba(255,107,107,0.4); }
-    .t-pane-code {
-      font-family: var(--font-mono); font-size: 0.7rem;
-      line-height: 1.75; color: var(--text-muted);
-      padding: 12px 14px;
-    }
-    .t-pane-code .c-g { color: var(--green); }
-    .t-pane-code .c-w { color: #d4d4d8; }
-    .t-pane-code .c-r { color: var(--red); }
-    .t-pane-code .c-y { color: var(--yellow); }
-    .t-pane-code .c-b { color: #60a5fa; }
-    .t-pane-code .c-dim { color: #3f3f52; }
-    .blink-cursor {
-      display: inline-block; width: 6px; height: 13px;
-      background: var(--green); vertical-align: text-bottom;
-      margin-left: 1px; animation: blink 1s step-end infinite;
-    }
-    @keyframes blink { 50% { opacity: 0; } }
-    /* spinning dot for "working" state */
-    .spin { display: inline-block; animation: spin-dot 1.2s linear infinite; }
-    @keyframes spin-dot {
-      0%   { content: '⠋'; } 16%  { content: '⠙'; } 33%  { content: '⠹'; }
-      50%  { content: '⠸'; } 66%  { content: '⠼'; } 83%  { content: '⠴'; } 100% { content: '⠦'; }
+    .demo-video-frame video {
+      width: 100%; height: auto; display: block;
     }
 
     /* Sections */
@@ -413,10 +341,7 @@
       .hero { padding-top: 110px; }
       .hero-actions { flex-direction: column; align-items: center; }
       .btn { width: 100%; max-width: 260px; justify-content: center; }
-      .terminal-body { grid-template-columns: 1fr 1fr; }
-      .t-pane:nth-child(3n) { border-right: 1px solid var(--border); }
-      .t-pane:nth-child(2n) { border-right: none; }
-      .t-pane:nth-child(n+5) { display: none; }
+      .terminal-wrap { padding-bottom: 48px; }
       .section { padding: 72px 0; }
       .footer-inner { flex-direction: column; gap: 12px; text-align: center; }
       .header-right .nav-link { display: none; }
@@ -459,115 +384,10 @@
         <p class="hero-stack hero-in hero-in-4">Built in Rust &middot; Powered by GPUI &middot; No Electron</p>
       </div>
       <div class="terminal-wrap hero-in hero-in-5">
-        <div class="terminal">
-          <div class="terminal-bar">
-            <div class="terminal-dots"><span class="td-r"></span><span class="td-y"></span><span class="td-g"></span></div>
-            <span class="terminal-bar-title">Codirigent</span>
-            <div class="terminal-bar-tabs">
-              <span class="t-tab active">2x2</span>
-              <span class="t-tab">3x2</span>
-              <span class="t-tab">Focus</span>
-            </div>
-          </div>
-          <div class="terminal-body">
-
-            <div class="t-pane active">
-              <div class="t-pane-top">
-                <span class="sd sd-g"></span>
-                <span class="t-name">claude-code &middot; auth-feature</span>
-                <span style="font-size:0.6rem;color:rgba(57,211,83,0.5)">Working</span>
-              </div>
-              <div class="t-pane-code">
-                <span class="c-dim">~/projects/api</span> <span class="c-g">main</span><br>
-                <span class="c-g">$</span> <span class="c-w">claude</span><br>
-                <span class="c-dim">&#x2937; Reading src/auth/</span><br>
-                <span class="c-g">&#10003;</span> <span class="c-dim">Created</span> <span class="c-b">src/auth/jwt.ts</span><br>
-                <span class="c-g">&#10003;</span> <span class="c-dim">Modified</span> <span class="c-b">src/middleware.ts</span><br>
-                <span class="c-dim">&#x2937; Writing tests...</span><span class="blink-cursor"></span>
-              </div>
-            </div>
-
-            <div class="t-pane">
-              <div class="t-pane-top">
-                <span class="sd sd-y"></span>
-                <span class="t-name">codex &middot; api-routes</span>
-                <span style="font-size:0.6rem;">Idle</span>
-              </div>
-              <div class="t-pane-code">
-                <span class="c-dim">~/projects/api</span> <span class="c-g">main</span><br>
-                <span class="c-g">$</span> <span class="c-w">codex</span><br>
-                <span class="c-g">&#10003;</span> <span class="c-dim">All tests passing</span><br>
-                <span class="c-dim c-dim">  12 passed, 0 failed</span><br>
-                <span class="c-dim">  Coverage: 94%</span><br>
-                <span class="c-dim">Waiting for next task</span>
-              </div>
-            </div>
-
-            <div class="t-pane">
-              <div class="t-pane-top">
-                <span class="sd sd-g"></span>
-                <span class="t-name">gemini &middot; docs</span>
-                <span style="font-size:0.6rem;color:rgba(57,211,83,0.5)">Working</span>
-              </div>
-              <div class="t-pane-code">
-                <span class="c-dim">~/projects/api</span> <span class="c-g">main</span><br>
-                <span class="c-g">$</span> <span class="c-w">gemini code</span><br>
-                <span class="c-dim">Scanning codebase...</span><br>
-                <span class="c-dim">  2,847 files indexed</span><br>
-                <span class="c-dim">&#x2937; Generating README</span><br>
-                <span class="c-dim">  sections: 4 / 7</span>
-              </div>
-            </div>
-
-            <div class="t-pane">
-              <div class="t-pane-top">
-                <span class="sd sd-r"></span>
-                <span class="t-name">claude-code &middot; db</span>
-                <span style="font-size:0.6rem;color:rgba(255,107,107,0.8)">Needs attention</span>
-              </div>
-              <div class="t-pane-code">
-                <span class="c-dim">~/projects/api</span> <span class="c-g">main</span><br>
-                <span class="c-g">$</span> <span class="c-w">claude</span><br>
-                <span class="c-r">&#x25CF;</span> <span class="c-y">Action required</span><br>
-                <span class="c-dim">Drop table user_cache?</span><br>
-                <span class="c-dim">This cannot be undone.</span><br>
-                <span class="c-dim">[y/N]</span> <span class="blink-cursor" style="background:var(--red)"></span>
-              </div>
-            </div>
-
-            <div class="t-pane">
-              <div class="t-pane-top">
-                <span class="sd sd-g"></span>
-                <span class="t-name">codex &middot; refactor</span>
-                <span style="font-size:0.6rem;color:rgba(57,211,83,0.5)">Working</span>
-              </div>
-              <div class="t-pane-code">
-                <span class="c-dim">~/projects/api</span> <span class="c-g">main</span><br>
-                <span class="c-g">$</span> <span class="c-w">codex --fix</span><br>
-                <span class="c-g">&#10003;</span> <span class="c-dim">utils.ts</span> <span style="color:#3f3f52">:42</span><br>
-                <span class="c-g">&#10003;</span> <span class="c-dim">utils.ts</span> <span style="color:#3f3f52">:89</span><br>
-                <span class="c-g">&#10003;</span> <span class="c-dim">handlers.ts</span> <span style="color:#3f3f52">:14</span><br>
-                <span class="c-dim">3 issues fixed</span>
-              </div>
-            </div>
-
-            <div class="t-pane">
-              <div class="t-pane-top">
-                <span class="sd sd-y"></span>
-                <span class="t-name">claude &middot; review</span>
-                <span style="font-size:0.6rem;">Idle</span>
-              </div>
-              <div class="t-pane-code">
-                <span class="c-dim">~/projects/api</span> <span class="c-g">main</span><br>
-                <span class="c-g">$</span> <span class="c-w">claude review</span><br>
-                <span class="c-g">&#10003;</span> <span class="c-dim">PR #42 approved</span><br>
-                <span class="c-dim">  No security issues</span><br>
-                <span class="c-dim">  No breaking changes</span><br>
-                <span class="c-dim">Ready to merge</span>
-              </div>
-            </div>
-
-          </div>
+        <div class="demo-video-frame">
+          <video autoplay loop muted playsinline>
+            <source src="video/demo.mp4" type="video/mp4">
+          </video>
         </div>
       </div>
     </section>
