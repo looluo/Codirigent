@@ -37,33 +37,19 @@ impl WorkspaceView {
         let current_mode = picker.mode;
         let picker_error = picker.error.clone();
 
-        // Mode tab bar
-        let grid_tab_color = if current_mode == CustomLayoutMode::Grid {
-            primary
-        } else {
-            muted
+        // Mode tab bar — helpers to keep the active/inactive state consistent.
+        let tab_color = |mode| if current_mode == mode { primary } else { muted };
+        let tab_border = |mode| {
+            if current_mode == mode {
+                primary
+            } else {
+                gpui::Hsla::transparent_black()
+            }
         };
-        let split_tab_color = if current_mode == CustomLayoutMode::Split {
-            primary
-        } else {
-            muted
-        };
-        let transparent = gpui::Hsla {
-            h: 0.0,
-            s: 0.0,
-            l: 0.0,
-            a: 0.0,
-        };
-        let grid_tab_border = if current_mode == CustomLayoutMode::Grid {
-            primary
-        } else {
-            transparent
-        };
-        let split_tab_border = if current_mode == CustomLayoutMode::Split {
-            primary
-        } else {
-            transparent
-        };
+        let grid_tab_color = tab_color(CustomLayoutMode::Grid);
+        let grid_tab_border = tab_border(CustomLayoutMode::Grid);
+        let split_tab_color = tab_color(CustomLayoutMode::Split);
+        let split_tab_border = tab_border(CustomLayoutMode::Split);
 
         let mode_tabs = div()
             .flex()
