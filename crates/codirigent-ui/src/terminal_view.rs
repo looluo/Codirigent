@@ -63,8 +63,6 @@ pub struct TextRunSegment {
     pub text: String,
     /// Foreground color for the run.
     pub foreground: Rgba,
-    /// Background color for the run.
-    pub background: Rgba,
     /// Whether the run is bold.
     pub bold: bool,
     /// Whether the run is italic.
@@ -184,32 +182,6 @@ impl Selection {
             _ => None,
         }
     }
-}
-
-/// Rendered cell with resolved colors.
-///
-/// Represents a single terminal cell ready for rendering,
-/// with colors resolved from the terminal and theme.
-#[derive(Debug, Clone)]
-pub struct RenderedCell {
-    /// The character to display.
-    pub character: char,
-    /// Foreground color.
-    pub foreground: Rgba,
-    /// Background color.
-    pub background: Rgba,
-    /// Whether the cell is bold.
-    pub bold: bool,
-    /// Whether the cell is italic.
-    pub italic: bool,
-    /// Whether the cell is underlined.
-    pub underline: bool,
-    /// Whether the cell is strikethrough.
-    pub strikethrough: bool,
-    /// Row position (0-indexed).
-    pub row: usize,
-    /// Column position (0-indexed).
-    pub column: usize,
 }
 
 /// Terminal view component.
@@ -448,92 +420,6 @@ impl TerminalView {
         self.terminal.clear();
     }
 
-    /// Get all visible cells for rendering.
-    pub fn visible_cells(&self) -> Vec<RenderedCell> {
-        let content = self.terminal.term().renderable_content();
-        let display_offset = content.display_offset;
-        let rows = self.terminal.rows() as usize;
-        let cols = self.terminal.cols() as usize;
-        let mut cells = Vec::with_capacity(rows * cols);
-
-        for indexed in content.display_iter {
-            let cell = &indexed.cell;
-            let point = indexed.point;
-
-            // Convert grid-relative line to viewport-relative row.
-            // Grid lines are negative for scrollback, 0+ for active screen.
-            // Viewport row = grid_line + display_offset.
-            let viewport_line = point.line.0 + display_offset as i32;
-            if viewport_line < 0 || viewport_line as usize >= rows {
-                continue;
-            }
-            let row = viewport_line as usize;
-            let col = point.column.0;
-
-            // Skip empty cells (optimization)
-            let c = cell.c;
-            if c == ' ' && cell.bg == TermColor::Named(NamedColor::Background) {
-                continue;
-            }
-
-            // Resolve colors
-            let mut foreground = convert_color(cell.fg, &self.theme);
-            let mut background = convert_color(cell.bg, &self.theme);
-
-            // Handle inverse/reverse video
-            if cell.flags.contains(CellFlags::INVERSE) {
-                std::mem::swap(&mut foreground, &mut background);
-            }
-
-            // Handle selection (invert colors if selected)
-            if self.selection.contains(row, col) {
-                foreground = self.theme.terminal_selection_fg;
-                background = self.theme.terminal_selection_bg;
-            }
-
-            // Handle dim attribute
-            if cell.flags.contains(CellFlags::DIM) {
-                foreground = dim_color(foreground);
-            }
-
-            cells.push(RenderedCell {
-                character: c,
-                foreground,
-                background,
-                bold: cell.flags.contains(CellFlags::BOLD),
-                italic: cell.flags.contains(CellFlags::ITALIC),
-                underline: cell.flags.contains(CellFlags::UNDERLINE),
-                strikethrough: cell.flags.contains(CellFlags::STRIKEOUT),
-                row,
-                column: col,
-            });
-        }
-
-        cells
-    }
-
-    /// Get cells grouped by row for efficient rendering.
-    #[cfg(test)]
-    pub(crate) fn cells_by_row(&self) -> Vec<Vec<RenderedCell>> {
-        let cells = self.visible_cells();
-        let rows = self.terminal.rows() as usize;
-
-        let mut by_row: Vec<Vec<RenderedCell>> = vec![Vec::new(); rows];
-
-        for cell in cells {
-            if cell.row < rows {
-                by_row[cell.row].push(cell);
-            }
-        }
-
-        // Sort each row by column
-        for row in &mut by_row {
-            row.sort_by_key(|c| c.column);
-        }
-
-        by_row
-    }
-
     /// Get cursor rendering information.
     ///
     /// Returns `None` if the cursor is not visible or is scrolled off-screen.
@@ -658,10 +544,7 @@ impl TerminalView {
     /// canvas-based rendering.
     pub fn cached_content(&mut self) -> &CachedTerminalContent {
         if self.content_dirty || self.cached_content.is_none() {
-            let cells = self.visible_cells();
-            let rows = self.terminal.rows() as usize;
-            let cols = self.terminal.cols() as usize;
-            let content = Self::build_cached_content(cells, rows, cols, &self.theme);
+            let content = self.build_cached_content();
             self.cached_content = Some(content);
             self.content_dirty = false;
         }
@@ -670,105 +553,119 @@ impl TerminalView {
             .expect("BUG: cached_content must be Some after rebuild")
     }
 
-    /// Build cached content from visible cells.
+    /// Build cached content by streaming directly from alacritty's display_iter.
     ///
-    /// Groups cells into text runs (adjacent cells with same style) and
-    /// background rectangles for efficient canvas painting.
-    fn build_cached_content(
-        cells: Vec<RenderedCell>,
-        rows: usize,
-        cols: usize,
-        theme: &CodirigentTheme,
-    ) -> CachedTerminalContent {
-        let mut text_runs = Vec::new();
-        let mut background_rects = Vec::new();
+    /// `display_iter` yields cells in row-major, column-ascending order, so no
+    /// intermediate Vec or per-row sort is needed.
+    fn build_cached_content(&self) -> CachedTerminalContent {
+        let rows = self.terminal.rows() as usize;
+        let cols = self.terminal.cols() as usize;
 
-        // Group cells by row
-        let mut by_row: Vec<Vec<&RenderedCell>> = vec![Vec::new(); rows];
-        for cell in &cells {
-            if cell.row < rows {
-                by_row[cell.row].push(cell);
+        let renderable = self.terminal.term().renderable_content();
+        let display_offset = renderable.display_offset;
+
+        let mut text_runs: Vec<TextRunSegment> = Vec::new();
+        let mut background_rects: Vec<(usize, usize, usize, Rgba)> = Vec::new();
+        let mut current_run: Option<TextRunSegment> = None;
+
+        for indexed in renderable.display_iter {
+            let cell = &indexed.cell;
+            let point = indexed.point;
+
+            // Convert grid-relative line to viewport-relative row.
+            let viewport_line = point.line.0 + display_offset as i32;
+            if viewport_line < 0 || viewport_line as usize >= rows {
+                continue;
             }
-        }
+            let row = viewport_line as usize;
+            let col = point.column.0;
 
-        for (row_idx, row_cells) in by_row.iter_mut().enumerate() {
-            row_cells.sort_by_key(|c| c.column);
+            // Skip empty default-background cells.
+            let c = cell.c;
+            if (c == ' ' && cell.bg == TermColor::Named(NamedColor::Background))
+                || cell.flags.contains(CellFlags::WIDE_CHAR_SPACER)
+            {
+                continue;
+            }
 
-            // Build text runs: merge adjacent cells with same styling
-            let mut current_run: Option<TextRunSegment> = None;
+            // Resolve colors from alacritty cell data.
+            let mut foreground = convert_color(cell.fg, &self.theme);
+            let mut background = convert_color(cell.bg, &self.theme);
 
-            for cell in row_cells.iter() {
-                let same_style = current_run.as_ref().is_some_and(|run| {
-                    run.foreground == cell.foreground
-                        && run.bold == cell.bold
-                        && run.italic == cell.italic
-                        && run.underline == cell.underline
-                        && run.strikethrough == cell.strikethrough
-                        && run.start_col + run.cell_count == cell.column
+            if cell.flags.contains(CellFlags::INVERSE) {
+                std::mem::swap(&mut foreground, &mut background);
+            }
+            if self.selection.contains(row, col) {
+                foreground = self.theme.terminal_selection_fg;
+                background = self.theme.terminal_selection_bg;
+            }
+            if cell.flags.contains(CellFlags::DIM) {
+                foreground = dim_color(foreground);
+            }
+
+            // Extend current run if same style and adjacent column on same row.
+            // run.row == row explicitly breaks runs at row boundaries;
+            // the adjacency check alone would also prevent cross-row merges but the explicit check makes intent clear.
+            let same_style = current_run.as_ref().is_some_and(|run| {
+                run.row == row
+                    && run.foreground == foreground
+                    && run.bold == cell.flags.contains(CellFlags::BOLD)
+                    && run.italic == cell.flags.contains(CellFlags::ITALIC)
+                    && run.underline == cell.flags.contains(CellFlags::UNDERLINE)
+                    && run.strikethrough == cell.flags.contains(CellFlags::STRIKEOUT)
+                    && run.start_col + run.cell_count == col
+            });
+
+            if same_style {
+                let run = current_run
+                    .as_mut()
+                    .expect("BUG: current_run must be Some when same_style is true");
+                run.text.push(c);
+                run.cell_count += 1;
+            } else {
+                if let Some(run) = current_run.take() {
+                    text_runs.push(run);
+                }
+                current_run = Some(TextRunSegment {
+                    text: String::from(c),
+                    foreground,
+                    bold: cell.flags.contains(CellFlags::BOLD),
+                    italic: cell.flags.contains(CellFlags::ITALIC),
+                    underline: cell.flags.contains(CellFlags::UNDERLINE),
+                    strikethrough: cell.flags.contains(CellFlags::STRIKEOUT),
+                    row,
+                    start_col: col,
+                    cell_count: 1,
                 });
-
-                if same_style {
-                    let run = current_run
-                        .as_mut()
-                        .expect("BUG: current_run must be Some when same_style is true");
-                    run.text.push(cell.character);
-                    run.cell_count += 1;
-                } else {
-                    if let Some(run) = current_run.take() {
-                        text_runs.push(run);
-                    }
-                    current_run = Some(TextRunSegment {
-                        text: String::from(cell.character),
-                        foreground: cell.foreground,
-                        background: cell.background,
-                        bold: cell.bold,
-                        italic: cell.italic,
-                        underline: cell.underline,
-                        strikethrough: cell.strikethrough,
-                        row: row_idx,
-                        start_col: cell.column,
-                        cell_count: 1,
-                    });
-                }
-
-                // Collect non-default background rects
-                if cell.background != theme.terminal_background {
-                    // Check if we can merge with the previous background rect
-                    let merged = background_rects.last_mut().and_then(
-                        |last: &mut (usize, usize, usize, Rgba)| {
-                            if last.0 == row_idx
-                                && last.2 == cell.column
-                                && last.3 == cell.background
-                            {
-                                last.2 = cell.column + 1;
-                                Some(())
-                            } else {
-                                None
-                            }
-                        },
-                    );
-                    if merged.is_none() {
-                        background_rects.push((
-                            row_idx,
-                            cell.column,
-                            cell.column + 1,
-                            cell.background,
-                        ));
-                    }
-                }
             }
 
-            if let Some(run) = current_run.take() {
-                text_runs.push(run);
+            // Collect non-default background rects (merge adjacent same-colour cells).
+            if background != self.theme.terminal_background {
+                let merged = background_rects.last_mut().and_then(
+                    |last: &mut (usize, usize, usize, Rgba)| {
+                        if last.0 == row && last.2 == col && last.3 == background {
+                            last.2 = col + 1;
+                            Some(())
+                        } else {
+                            None
+                        }
+                    },
+                );
+                if merged.is_none() {
+                    background_rects.push((row, col, col + 1, background));
+                }
             }
         }
 
-        // Pre-convert to GPUI Hsla colors so render.rs doesn't pay conversion cost per frame.
-        // Consume the raw vecs via into_iter() — no clone, no extra allocation.
+        // Flush the last pending run.
+        if let Some(run) = current_run.take() {
+            text_runs.push(run);
+        }
+
         let bg_rects_hsla: Arc<Vec<(usize, usize, usize, gpui::Hsla)>> = Arc::new(
             background_rects
                 .into_iter()
-                .map(|(row, start, end, color)| (row, start, end, color.into()))
+                .map(|(r, start, end, color)| (r, start, end, color.into()))
                 .collect(),
         );
         let text_runs_hsla: Arc<Vec<(TextRunSegment, gpui::Hsla)>> = Arc::new(
@@ -1049,29 +946,29 @@ mod tests {
     }
 
     #[test]
-    fn test_visible_cells_empty() {
-        let view = create_test_view();
-        let cells = view.visible_cells();
-        assert!(cells.is_empty());
+    fn test_cached_content_empty() {
+        let mut view = create_test_view();
+        let content = view.cached_content();
+        assert!(
+            content.text_runs_hsla.is_empty() && content.bg_rects_hsla.is_empty(),
+            "Expected empty terminal to produce no text runs or background rects"
+        );
     }
 
     #[test]
-    fn test_visible_cells_with_content() {
+    fn test_cached_content_with_content() {
         let mut view = create_test_view();
         view.terminal_mut().process_output(b"Hello");
-        let cells = view.visible_cells();
-        assert!(!cells.is_empty());
-        let h_cell = cells.iter().find(|c| c.character == 'H');
-        assert!(h_cell.is_some());
-    }
-
-    #[test]
-    fn test_cells_by_row() {
-        let mut view = create_test_view();
-        view.terminal_mut().process_output(b"Line 1\nLine 2");
-        let by_row = view.cells_by_row();
-        assert_eq!(by_row.len(), 24);
-        assert!(!by_row[0].is_empty());
+        let content = view.cached_content();
+        assert!(
+            !content.text_runs_hsla.is_empty(),
+            "Expected non-empty text runs after writing 'Hello'"
+        );
+        let has_h = content
+            .text_runs_hsla
+            .iter()
+            .any(|(run, _)| run.text.contains('H'));
+        assert!(has_h, "Expected a text run containing 'H'");
     }
 
     #[test]
@@ -1098,17 +995,21 @@ mod tests {
     }
 
     #[test]
-    fn test_visible_cells_consecutive_rows() {
+    fn test_cached_content_consecutive_rows() {
         let mut view = create_test_view();
         // Simulate multi-line output with Windows-style \r\n endings
         // This mimics what ConPTY sends for a simple dir/ls listing
         view.terminal_mut().process_output(
             b"file1.txt\x1b[K\r\nfile2.txt\x1b[K\r\nfile3.txt\x1b[K\r\nfile4.txt\x1b[K\r\n",
         );
-        let cells = view.visible_cells();
+        let content = view.cached_content();
 
-        // Collect unique sorted row indices
-        let mut rows: Vec<usize> = cells.iter().map(|c| c.row).collect();
+        // Collect unique sorted row indices from text runs
+        let mut rows: Vec<usize> = content
+            .text_runs_hsla
+            .iter()
+            .map(|(run, _)| run.row)
+            .collect();
         rows.sort();
         rows.dedup();
 
@@ -1196,7 +1097,7 @@ mod tests {
     }
 
     #[test]
-    fn test_visible_cells_row_indices_with_ansi() {
+    fn test_cached_content_row_indices_with_ansi() {
         let mut view = create_test_view();
         // More realistic ConPTY output with ANSI sequences
         view.terminal_mut().process_output(
@@ -1208,9 +1109,13 @@ mod tests {
             Row4 text here\x1b[K\r\n\
             \x1b[?25h",
         );
-        let cells = view.visible_cells();
+        let content = view.cached_content();
 
-        let mut rows: Vec<usize> = cells.iter().map(|c| c.row).collect();
+        let mut rows: Vec<usize> = content
+            .text_runs_hsla
+            .iter()
+            .map(|(run, _)| run.row)
+            .collect();
         rows.sort();
         rows.dedup();
 
