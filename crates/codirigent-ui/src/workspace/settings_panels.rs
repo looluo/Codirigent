@@ -13,6 +13,9 @@ use crate::terminal_view::CursorShape;
 
 use super::types::DROPDOWN_TRIGGER_HEIGHT;
 
+/// Displayed in dropdowns when no specific value is configured (auto-selected).
+const AUTO_DETECT_LABEL: &str = AUTO_DETECT_LABEL;
+
 impl super::gpui::WorkspaceView {
     /// Render the full settings overlay (sidebar + content area).
     pub(super) fn render_settings_overlay(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -346,13 +349,13 @@ impl super::gpui::WorkspaceView {
 
         let editor_options: Vec<&str> = page.detected_editors.iter().map(|s| s.as_str()).collect();
 
-        // Build shell options: empty string displays as "(Auto-detect)"
+        // Build shell options: empty string displays as AUTO_DETECT_LABEL
         let shell_display_options: Vec<String> = page
             .detected_shells
             .iter()
             .map(|s| {
                 if s.is_empty() {
-                    "(Auto-detect)".to_string()
+                    AUTO_DETECT_LABEL.to_string()
                 } else {
                     s.clone()
                 }
@@ -361,7 +364,7 @@ impl super::gpui::WorkspaceView {
         let shell_option_refs: Vec<&str> =
             shell_display_options.iter().map(|s| s.as_str()).collect();
         let shell_display = if shell.is_empty() {
-            "(Auto-detect)".to_string()
+            AUTO_DETECT_LABEL.to_string()
         } else {
             shell.clone()
         };
@@ -400,8 +403,8 @@ impl super::gpui::WorkspaceView {
                     cx,
                     |this, val, _, _| {
                         if let Some(page) = this.settings.page.as_mut() {
-                            // Map "(Auto-detect)" back to empty string
-                            let stored = if val == "(Auto-detect)" {
+                            // Map AUTO_DETECT_LABEL back to empty string
+                            let stored = if val == AUTO_DETECT_LABEL {
                                 String::new()
                             } else {
                                 val
