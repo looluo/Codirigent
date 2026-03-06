@@ -12,7 +12,11 @@
 //! use codirigent_ui::keybindings::{KeybindingManager, KeyBinding, Modifiers, Action};
 //!
 //! let manager = KeybindingManager::with_defaults();
+//! // Platform modifier: Cmd on macOS, Ctrl elsewhere.
+//! #[cfg(target_os = "macos")]
 //! let binding = KeybindingManager::parse_binding("Cmd+N").unwrap();
+//! #[cfg(not(target_os = "macos"))]
+//! let binding = KeybindingManager::parse_binding("Ctrl+N").unwrap();
 //! assert_eq!(manager.get_action(&binding), Some(&Action::NewSession));
 //! ```
 
@@ -230,65 +234,75 @@ impl KeybindingManager {
     /// use codirigent_ui::keybindings::{KeybindingManager, Action};
     ///
     /// let manager = KeybindingManager::with_defaults();
+    /// // Platform modifier key: Cmd on macOS, Ctrl elsewhere.
+    /// #[cfg(target_os = "macos")]
     /// let binding = KeybindingManager::parse_binding("Cmd+N").unwrap();
+    /// #[cfg(not(target_os = "macos"))]
+    /// let binding = KeybindingManager::parse_binding("Ctrl+N").unwrap();
     /// assert_eq!(manager.get_action(&binding), Some(&Action::NewSession));
     /// ```
     pub fn with_defaults() -> Self {
+        // Use platform modifier: Cmd on macOS, Ctrl elsewhere.
+        #[cfg(target_os = "macos")]
+        let m = "Cmd";
+        #[cfg(not(target_os = "macos"))]
+        let m = "Ctrl";
+
         let mut manager = Self::new();
 
-        // Session number shortcuts (Cmd+1 through Cmd+9)
+        // Session number shortcuts
         for i in 1..=9 {
-            if let Ok(binding) = Self::parse_binding(&format!("Cmd+{}", i)) {
+            if let Ok(binding) = Self::parse_binding(&format!("{m}+{i}")) {
                 manager.set_binding(binding, Action::SwitchSession(i));
             }
         }
 
         // Session management
-        if let Ok(binding) = Self::parse_binding("Cmd+N") {
+        if let Ok(binding) = Self::parse_binding(&format!("{m}+N")) {
             manager.set_binding(binding, Action::NewSession);
         }
-        if let Ok(binding) = Self::parse_binding("Cmd+W") {
+        if let Ok(binding) = Self::parse_binding(&format!("{m}+W")) {
             manager.set_binding(binding, Action::CloseSession);
         }
 
         // Navigation
-        if let Ok(binding) = Self::parse_binding("Cmd+K") {
+        if let Ok(binding) = Self::parse_binding(&format!("{m}+K")) {
             manager.set_binding(binding, Action::QuickSwitch);
         }
-        if let Ok(binding) = Self::parse_binding("Cmd+Shift+P") {
+        if let Ok(binding) = Self::parse_binding(&format!("{m}+Shift+P")) {
             manager.set_binding(binding, Action::CommandPalette);
         }
-        if let Ok(binding) = Self::parse_binding("Cmd+Tab") {
+        if let Ok(binding) = Self::parse_binding(&format!("{m}+Tab")) {
             manager.set_binding(binding, Action::NextSession);
         }
-        if let Ok(binding) = Self::parse_binding("Cmd+Shift+Tab") {
+        if let Ok(binding) = Self::parse_binding(&format!("{m}+Shift+Tab")) {
             manager.set_binding(binding, Action::PreviousSession);
         }
 
         // Layout
-        if let Ok(binding) = Self::parse_binding("Cmd+\\") {
+        if let Ok(binding) = Self::parse_binding(&format!("{m}+\\")) {
             manager.set_binding(binding, Action::ToggleLayout);
         }
-        if let Ok(binding) = Self::parse_binding("Cmd+B") {
+        if let Ok(binding) = Self::parse_binding(&format!("{m}+B")) {
             manager.set_binding(binding, Action::ToggleTaskBoard);
         }
-        if let Ok(binding) = Self::parse_binding("Cmd+Shift+B") {
+        if let Ok(binding) = Self::parse_binding(&format!("{m}+Shift+B")) {
             manager.set_binding(binding, Action::Broadcast);
         }
 
         // Clipboard
-        if let Ok(binding) = Self::parse_binding("Cmd+C") {
+        if let Ok(binding) = Self::parse_binding(&format!("{m}+C")) {
             manager.set_binding(binding, Action::Copy);
         }
-        if let Ok(binding) = Self::parse_binding("Cmd+V") {
+        if let Ok(binding) = Self::parse_binding(&format!("{m}+V")) {
             manager.set_binding(binding, Action::Paste);
         }
 
         // Application
-        if let Ok(binding) = Self::parse_binding("Cmd+Q") {
+        if let Ok(binding) = Self::parse_binding(&format!("{m}+Q")) {
             manager.set_binding(binding, Action::Quit);
         }
-        if let Ok(binding) = Self::parse_binding("Cmd+,") {
+        if let Ok(binding) = Self::parse_binding(&format!("{m}+,")) {
             manager.set_binding(binding, Action::OpenSettings);
         }
 
@@ -777,18 +791,27 @@ mod tests {
     fn test_keybinding_manager_with_defaults() {
         let manager = KeybindingManager::with_defaults();
 
-        // Check some default bindings
-        let binding = KeybindingManager::parse_binding("Cmd+N").unwrap();
+        // Check some default bindings (platform modifier: Cmd on macOS, Ctrl elsewhere)
+        #[cfg(target_os = "macos")]
+        let (new_key, close_key) = ("Cmd+N", "Cmd+W");
+        #[cfg(not(target_os = "macos"))]
+        let (new_key, close_key) = ("Ctrl+N", "Ctrl+W");
+
+        let binding = KeybindingManager::parse_binding(new_key).unwrap();
         assert_eq!(manager.get_action(&binding), Some(&Action::NewSession));
 
-        let binding = KeybindingManager::parse_binding("Cmd+W").unwrap();
+        let binding = KeybindingManager::parse_binding(close_key).unwrap();
         assert_eq!(manager.get_action(&binding), Some(&Action::CloseSession));
     }
 
     #[test]
     fn test_default_bindings() {
         let manager = KeybindingManager::with_defaults();
-        let binding = KeybindingManager::parse_binding("Cmd+N").unwrap();
+        #[cfg(target_os = "macos")]
+        let key = "Cmd+N";
+        #[cfg(not(target_os = "macos"))]
+        let key = "Ctrl+N";
+        let binding = KeybindingManager::parse_binding(key).unwrap();
         assert_eq!(manager.get_action(&binding), Some(&Action::NewSession));
     }
 
@@ -854,8 +877,12 @@ mod tests {
         let mut config = HashMap::new();
         config.insert("new_session".to_string(), "Invalid+Key+Combo".to_string());
         let manager = KeybindingManager::from_config(&config);
-        // Should still have defaults
-        let binding = KeybindingManager::parse_binding("Cmd+N").unwrap();
+        // Should still have defaults (platform modifier: Cmd on macOS, Ctrl elsewhere)
+        #[cfg(target_os = "macos")]
+        let key = "Cmd+N";
+        #[cfg(not(target_os = "macos"))]
+        let key = "Ctrl+N";
+        let binding = KeybindingManager::parse_binding(key).unwrap();
         assert_eq!(manager.get_action(&binding), Some(&Action::NewSession));
     }
 
@@ -922,7 +949,11 @@ mod tests {
     #[test]
     fn test_keybinding_manager_default() {
         let manager = KeybindingManager::default();
-        let binding = KeybindingManager::parse_binding("Cmd+N").unwrap();
+        #[cfg(target_os = "macos")]
+        let key = "Cmd+N";
+        #[cfg(not(target_os = "macos"))]
+        let key = "Ctrl+N";
+        let binding = KeybindingManager::parse_binding(key).unwrap();
         assert_eq!(manager.get_action(&binding), Some(&Action::NewSession));
     }
 
@@ -930,7 +961,11 @@ mod tests {
     fn test_keybinding_manager_clone() {
         let manager = KeybindingManager::with_defaults();
         let cloned = manager.clone();
-        let binding = KeybindingManager::parse_binding("Cmd+N").unwrap();
+        #[cfg(target_os = "macos")]
+        let key = "Cmd+N";
+        #[cfg(not(target_os = "macos"))]
+        let key = "Ctrl+N";
+        let binding = KeybindingManager::parse_binding(key).unwrap();
         assert_eq!(cloned.get_action(&binding), Some(&Action::NewSession));
     }
 
@@ -955,9 +990,13 @@ mod tests {
     #[test]
     fn test_session_number_bindings() {
         let manager = KeybindingManager::with_defaults();
+        #[cfg(target_os = "macos")]
+        let m = "Cmd";
+        #[cfg(not(target_os = "macos"))]
+        let m = "Ctrl";
 
         for i in 1..=9 {
-            let binding = KeybindingManager::parse_binding(&format!("Cmd+{}", i)).unwrap();
+            let binding = KeybindingManager::parse_binding(&format!("{m}+{i}")).unwrap();
             assert_eq!(
                 manager.get_action(&binding),
                 Some(&Action::SwitchSession(i))

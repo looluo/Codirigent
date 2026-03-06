@@ -211,7 +211,7 @@ pub struct TerminalSettings {
     /// Font family for terminal rendering.
     pub font_family: String,
     /// Font size in points.
-    pub font_size: u32,
+    pub font_size: f32,
     /// Cursor style (block, underline, bar).
     pub cursor_style: String,
     /// Line height multiplier.
@@ -224,7 +224,7 @@ impl Default for TerminalSettings {
     fn default() -> Self {
         Self {
             font_family: "JetBrains Mono".to_string(),
-            font_size: 13,
+            font_size: 13.0,
             cursor_style: "block".to_string(),
             line_height: 1.0,
             color_scheme: "default".to_string(),
@@ -304,16 +304,22 @@ impl UserSettings {
     ///
     /// Returns a map of action names to key combinations.
     pub fn default_keybindings() -> HashMap<String, String> {
+        // Use platform modifier key: Cmd on macOS, Ctrl elsewhere.
+        #[cfg(target_os = "macos")]
+        let m = "Cmd";
+        #[cfg(not(target_os = "macos"))]
+        let m = "Ctrl";
+
         let mut bindings = HashMap::new();
-        bindings.insert("switch_session_1".to_string(), "Cmd+1".to_string());
-        bindings.insert("switch_session_2".to_string(), "Cmd+2".to_string());
-        bindings.insert("switch_session_3".to_string(), "Cmd+3".to_string());
-        bindings.insert("switch_session_4".to_string(), "Cmd+4".to_string());
-        bindings.insert("new_session".to_string(), "Cmd+N".to_string());
-        bindings.insert("close_session".to_string(), "Cmd+W".to_string());
-        bindings.insert("quick_switch".to_string(), "Cmd+K".to_string());
-        bindings.insert("toggle_layout".to_string(), "Cmd+\\".to_string());
-        bindings.insert("toggle_task_board".to_string(), "Cmd+B".to_string());
+        bindings.insert("switch_session_1".to_string(), format!("{m}+1"));
+        bindings.insert("switch_session_2".to_string(), format!("{m}+2"));
+        bindings.insert("switch_session_3".to_string(), format!("{m}+3"));
+        bindings.insert("switch_session_4".to_string(), format!("{m}+4"));
+        bindings.insert("new_session".to_string(), format!("{m}+N"));
+        bindings.insert("close_session".to_string(), format!("{m}+W"));
+        bindings.insert("quick_switch".to_string(), format!("{m}+K"));
+        bindings.insert("toggle_layout".to_string(), format!("{m}+\\"));
+        bindings.insert("toggle_task_board".to_string(), format!("{m}+B"));
         bindings
     }
 }
@@ -330,7 +336,7 @@ impl UserSettings {
 ///
 /// let settings = AppearanceSettings::default();
 /// assert_eq!(settings.theme, "dark");
-/// assert_eq!(settings.font_size, 13);
+/// assert_eq!(settings.font_size, 13.0);
 /// assert_eq!(settings.grid_gap, 4);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -339,14 +345,14 @@ pub struct AppearanceSettings {
     pub theme: String,
     /// UI font size in points (10–24).
     #[serde(default = "AppearanceSettings::default_font_size")]
-    pub font_size: u32,
+    pub font_size: f32,
     /// Grid gap in pixels.
     pub grid_gap: u32,
 }
 
 impl AppearanceSettings {
-    fn default_font_size() -> u32 {
-        13
+    fn default_font_size() -> f32 {
+        13.0
     }
 }
 
@@ -354,7 +360,7 @@ impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
             theme: "dark".to_string(),
-            font_size: 13,
+            font_size: 13.0,
             grid_gap: 4,
         }
     }
@@ -752,9 +758,18 @@ mod tests {
     #[test]
     fn test_default_keybindings() {
         let bindings = UserSettings::default_keybindings();
-        assert_eq!(bindings.get("new_session"), Some(&"Cmd+N".to_string()));
-        assert_eq!(bindings.get("close_session"), Some(&"Cmd+W".to_string()));
-        assert_eq!(bindings.get("quick_switch"), Some(&"Cmd+K".to_string()));
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(bindings.get("new_session"), Some(&"Cmd+N".to_string()));
+            assert_eq!(bindings.get("close_session"), Some(&"Cmd+W".to_string()));
+            assert_eq!(bindings.get("quick_switch"), Some(&"Cmd+K".to_string()));
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(bindings.get("new_session"), Some(&"Ctrl+N".to_string()));
+            assert_eq!(bindings.get("close_session"), Some(&"Ctrl+W".to_string()));
+            assert_eq!(bindings.get("quick_switch"), Some(&"Ctrl+K".to_string()));
+        }
         assert!(bindings.contains_key("toggle_task_board"));
     }
 
@@ -775,7 +790,7 @@ mod tests {
     fn test_appearance_settings_default() {
         let settings = AppearanceSettings::default();
         assert_eq!(settings.theme, "dark");
-        assert_eq!(settings.font_size, 13);
+        assert_eq!(settings.font_size, 13.0);
         assert_eq!(settings.grid_gap, 4);
     }
 
@@ -783,13 +798,13 @@ mod tests {
     fn test_appearance_settings_serialization() {
         let settings = AppearanceSettings {
             theme: "light".to_string(),
-            font_size: 14,
+            font_size: 14.0,
             grid_gap: 8,
         };
         let json = serde_json::to_string(&settings).unwrap();
         let parsed: AppearanceSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.theme, "light");
-        assert_eq!(parsed.font_size, 14);
+        assert_eq!(parsed.font_size, 14.0);
         assert_eq!(parsed.grid_gap, 8);
     }
 

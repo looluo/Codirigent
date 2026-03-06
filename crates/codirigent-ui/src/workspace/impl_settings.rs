@@ -48,9 +48,9 @@ impl WorkspaceView {
             };
 
             let theme = self.workspace.theme();
-            user_settings.appearance.font_size = theme.font_size_base as u32;
+            user_settings.appearance.font_size = theme.font_size_base;
             user_settings.appearance.grid_gap = theme.grid_gap as u32;
-            user_settings.terminal.font_size = theme.terminal_font_size as u32;
+            user_settings.terminal.font_size = theme.terminal_font_size;
 
             // Use pre-cached results from background detection (started at init).
             // Falls back to synchronous detection if background task hasn't finished yet.
