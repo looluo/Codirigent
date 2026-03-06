@@ -14,6 +14,9 @@ use std::time::Duration;
 /// Embedded logo PNG (240x240 @2x, matches logo-primary-dark.svg).
 pub const LOGO_PNG_BYTES: &[u8] = include_bytes!("../../../assets/icons/logo-primary-dark@2x.png");
 
+/// Callback invoked when the splash screen completes.
+type SplashCallback = Box<dyn FnOnce(&mut gpui::Context<SplashScreen>) + Send + 'static>;
+
 /// Brand colors used in the splash screen.
 pub mod brand {
     use gpui::Hsla;
@@ -100,7 +103,7 @@ pub struct SplashScreen {
     /// Loading message to display.
     loading_message: String,
     /// Callback to invoke when splash is complete.
-    on_complete: Option<Box<dyn FnOnce(&mut Context<Self>) + Send + 'static>>,
+    on_complete: Option<SplashCallback>,
 }
 
 impl SplashScreen {

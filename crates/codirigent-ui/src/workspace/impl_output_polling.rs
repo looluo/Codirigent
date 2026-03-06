@@ -24,6 +24,9 @@ use gpui::Context;
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
+/// Session status result from a background JSONL read: (status, optional detail string).
+type JsonlStatusResult = Option<(SessionStatus, Option<String>)>;
+
 impl WorkspaceView {
     const GENERIC_SHELL_JSONL_MAX_AGE: Duration = Duration::from_secs(600);
     const GENERIC_SHELL_JSONL_CACHE_TTL: Duration = Duration::from_secs(120);
@@ -342,8 +345,7 @@ impl WorkspaceView {
             let results = cx
                 .background_executor()
                 .spawn(async move {
-                    let mut out: Vec<(SessionId, Option<(SessionStatus, Option<String>)>)> =
-                        Vec::new();
+                    let mut out: Vec<(SessionId, JsonlStatusResult)> = Vec::new();
                     let mut detected_types: Vec<(SessionId, codirigent_core::CliType)> = Vec::new();
                     if let Ok(mut readers) = cli_readers.lock() {
                         for (

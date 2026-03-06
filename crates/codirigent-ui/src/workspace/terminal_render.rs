@@ -6,8 +6,6 @@
 //! - Cursor rendering (block, hollow, beam, underline)
 //! - IME pre-edit text overlay
 
-use std::sync::Arc;
-
 use super::gpui::WorkspaceView;
 use crate::icons;
 use crate::terminal_view::CursorShape;
@@ -228,16 +226,7 @@ impl WorkspaceView {
             },
             // Paint: draw backgrounds, text, and cursor
             move |bounds: gpui::Bounds<gpui::Pixels>,
-                  prepaint_data: (
-                f32,
-                f32,
-                Arc<Vec<(usize, usize, usize, gpui::Hsla)>>,
-                Vec<(usize, usize, gpui::ShapedLine)>,
-                Option<(f32, f32, gpui::ShapedLine)>,
-                Option<(crate::terminal_view::CursorRect, gpui::Hsla)>,
-                f32,
-                f32,
-            ),
+                  prepaint_data,
                   window: &mut gpui::Window,
                   cx: &mut gpui::App| {
                 let (ox, oy, bg_rects, shaped_runs, ime_preedit, cursor_data, cell_w, cell_h) =
