@@ -387,6 +387,10 @@ impl WorkspaceView {
                         if let Some(mgr) = mgr_session {
                             if let Some(ws_session) = self.workspace.session_mut(session_id) {
                                 ws_session.working_directory = mgr.working_directory;
+                                // Keep drawer group in sync with current git branch
+                                if let Some(ref gi) = mgr.git_info {
+                                    ws_session.group = Some(gi.branch.clone());
+                                }
                                 ws_session.git_info = mgr.git_info;
                             }
                         }
@@ -628,6 +632,8 @@ impl WorkspaceView {
                         for (id, git_info) in &git_infos {
                             if let Some(session) = this.workspace.session_mut(*id) {
                                 session.git_info = Some(git_info.clone());
+                                // Keep drawer group in sync with current git branch
+                                session.group = Some(git_info.branch.clone());
                             }
                         }
                         cx.notify();
