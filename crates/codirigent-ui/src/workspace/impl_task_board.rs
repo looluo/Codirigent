@@ -64,53 +64,35 @@ impl WorkspaceView {
                             info!("Moving task {} to review", task_id);
                             let r = manager.move_to_review(&task_id);
                             if r.is_ok() {
-                                let assigned_session_id = self
+                                let sid = self
                                     .workspace
                                     .sessions()
                                     .iter()
                                     .find(|s| s.current_task.as_ref() == Some(&task_id))
                                     .map(|s| s.id);
-                                if let Some(sid) = assigned_session_id {
+                                if let Some(sid) = sid {
                                     drop(manager);
-                                    if let Ok(mgr) = self.session_manager.lock() {
-                                        mgr.with_session_state_mut(sid, |state| {
-                                            state.session.current_task = None;
-                                        });
-                                    }
-                                    if let Some(session) = self.workspace.session_mut(sid) {
-                                        session.current_task = None;
-                                    }
-                                    cx.notify();
+                                    self.clear_task_from_session(sid, cx);
                                     return;
                                 }
                             }
                             r
                         }
                         TaskAction::Complete => {
-                            // Actually approve and complete the task
+                            // Approve and complete the task, releasing it from its session
                             info!("Approving task {}", task_id);
                             let r = manager.approve_task(&task_id);
                             if r.is_ok() {
-                                // Find session that had this task and clear current_task
-                                let assigned_session_id = self
+                                let sid = self
                                     .workspace
                                     .sessions()
                                     .iter()
                                     .find(|s| s.current_task.as_ref() == Some(&task_id))
                                     .map(|s| s.id);
-
-                                if let Some(sid) = assigned_session_id {
+                                if let Some(sid) = sid {
                                     // Release task_manager before session_manager
                                     drop(manager);
-                                    if let Ok(mgr) = self.session_manager.lock() {
-                                        mgr.with_session_state_mut(sid, |state| {
-                                            state.session.current_task = None;
-                                        });
-                                    }
-                                    if let Some(session) = self.workspace.session_mut(sid) {
-                                        session.current_task = None;
-                                    }
-                                    cx.notify();
+                                    self.clear_task_from_session(sid, cx);
                                     return;
                                 }
                             }
@@ -120,24 +102,15 @@ impl WorkspaceView {
                             info!("Deleting task {}", task_id);
                             let r = manager.delete_task(&task_id);
                             if r.is_ok() {
-                                // Clear current_task from any session that had this task
-                                let assigned_session_id = self
+                                let sid = self
                                     .workspace
                                     .sessions()
                                     .iter()
                                     .find(|s| s.current_task.as_ref() == Some(&task_id))
                                     .map(|s| s.id);
-                                if let Some(sid) = assigned_session_id {
+                                if let Some(sid) = sid {
                                     drop(manager);
-                                    if let Ok(mgr) = self.session_manager.lock() {
-                                        mgr.with_session_state_mut(sid, |state| {
-                                            state.session.current_task = None;
-                                        });
-                                    }
-                                    if let Some(session) = self.workspace.session_mut(sid) {
-                                        session.current_task = None;
-                                    }
-                                    cx.notify();
+                                    self.clear_task_from_session(sid, cx);
                                     return;
                                 }
                             }
@@ -327,5 +300,22 @@ impl WorkspaceView {
                 .partial_cmp(&usage_b)
                 .unwrap_or(std::cmp::Ordering::Equal)
         })
+    }
+
+    /// Clear `current_task` from a session after a task action completes.
+    ///
+    /// Updates both the in-memory workspace view and the persisted session state
+    /// managed by the session manager. Must be called **after** dropping the
+    /// task manager lock to avoid lock-order issues.
+    fn clear_task_from_session(&mut self, sid: codirigent_core::SessionId, cx: &mut Context<Self>) {
+        if let Ok(mgr) = self.session_manager.lock() {
+            mgr.with_session_state_mut(sid, |state| {
+                state.session.current_task = None;
+            });
+        }
+        if let Some(session) = self.workspace.session_mut(sid) {
+            session.current_task = None;
+        }
+        cx.notify();
     }
 }
