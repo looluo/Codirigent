@@ -15,6 +15,7 @@
 //! - [`config`] - Configuration types (ProjectConfig, UserSettings)
 //! - [`config_service`] - Configuration loading and saving service
 //! - [`skill`] - Skill management types (Skill, SkillPreset, TokenBudget)
+//! - [`clipboard_types`] - Clipboard content types for Smart Clipboard functionality
 //! - [`change_summary`] - Change detection and risk assessment types
 //! - [`persistence`] - Session persistence types
 //! - [`persistence_service`] - Persistence service trait and implementation

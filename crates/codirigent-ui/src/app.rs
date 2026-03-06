@@ -231,7 +231,7 @@ impl AppView {
                     .w(px(400.0))
                     .h(px(400.0))
                     .rounded_full()
-                    .bg(gpui::hsla(130.0 / 360.0, 0.64, 0.525, 0.1)),
+                    .bg(brand::GLOW),
             )
             .child(
                 // Main content

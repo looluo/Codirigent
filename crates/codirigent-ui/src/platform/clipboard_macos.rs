@@ -51,7 +51,7 @@ where
     // Use mutex serialization instead.
     #[cfg(test)]
     {
-        let _guard = CLIPBOARD_MUTEX.lock().unwrap();
+        let _guard = CLIPBOARD_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
         f()
     }
 
