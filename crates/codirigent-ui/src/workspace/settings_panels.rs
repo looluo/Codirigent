@@ -426,155 +426,132 @@ impl super::gpui::WorkspaceView {
                 "Show splash screen",
                 "Display splash screen on application start",
                 theme,
-                div()
-                    .id("toggle-splash")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            if let Some(page) = this.settings.page.as_mut() {
-                                page.user_settings.general.show_splash =
-                                    !page.user_settings.general.show_splash;
-                                page.user_save_pending = true;
-                            }
-                            cx.notify();
-                        }),
-                    )
-                    .child(setting_toggle(show_splash, theme)),
+                self.render_toggle_control("toggle-splash", show_splash, cx, |this, _, cx| {
+                    if let Some(page) = this.settings.page.as_mut() {
+                        page.user_settings.general.show_splash =
+                            !page.user_settings.general.show_splash;
+                        page.user_save_pending = true;
+                    }
+                    cx.notify();
+                }),
             ))
             .child(settings_section_header("Notifications", theme, false))
             .child(setting_row(
                 "Desktop notifications",
                 "Send OS notifications when agents need attention",
                 theme,
-                div()
-                    .id("toggle-notif-desktop")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            if let Some(page) = this.settings.page.as_mut() {
-                                page.user_settings.notifications.desktop =
-                                    !page.user_settings.notifications.desktop;
-                                page.user_save_pending = true;
-                            }
-                            cx.notify();
-                        }),
-                    )
-                    .child(setting_toggle(notif.desktop, theme)),
+                self.render_toggle_control(
+                    "toggle-notif-desktop",
+                    notif.desktop,
+                    cx,
+                    |this, _, cx| {
+                        if let Some(page) = this.settings.page.as_mut() {
+                            page.user_settings.notifications.desktop =
+                                !page.user_settings.notifications.desktop;
+                            page.user_save_pending = true;
+                        }
+                        cx.notify();
+                    },
+                ),
             ))
             .child(setting_row(
                 "Sound",
                 "Play a sound with each notification",
                 theme,
-                div()
-                    .id("toggle-notif-sound")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            if let Some(page) = this.settings.page.as_mut() {
-                                page.user_settings.notifications.sound =
-                                    !page.user_settings.notifications.sound;
-                                page.user_save_pending = true;
-                            }
-                            cx.notify();
-                        }),
-                    )
-                    .child(setting_toggle(notif.sound, theme)),
+                self.render_toggle_control("toggle-notif-sound", notif.sound, cx, |this, _, cx| {
+                    if let Some(page) = this.settings.page.as_mut() {
+                        page.user_settings.notifications.sound =
+                            !page.user_settings.notifications.sound;
+                        page.user_save_pending = true;
+                    }
+                    cx.notify();
+                }),
             ))
             .child(settings_section_header("Notification types", theme, false))
             .child(setting_row(
                 "Input required",
                 "Notify when an agent is waiting for your input",
                 theme,
-                div()
-                    .id("toggle-notif-input-required")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            if let Some(page) = this.settings.page.as_mut() {
-                                page.user_settings.notifications.input_required =
-                                    !page.user_settings.notifications.input_required;
-                                page.user_save_pending = true;
-                            }
-                            cx.notify();
-                        }),
-                    )
-                    .child(setting_toggle(notif.input_required, theme)),
+                self.render_toggle_control(
+                    "toggle-notif-input-required",
+                    notif.input_required,
+                    cx,
+                    |this, _, cx| {
+                        if let Some(page) = this.settings.page.as_mut() {
+                            page.user_settings.notifications.input_required =
+                                !page.user_settings.notifications.input_required;
+                            page.user_save_pending = true;
+                        }
+                        cx.notify();
+                    },
+                ),
             ))
             .child(setting_row(
                 "Task completed",
                 "Notify when a task finishes successfully",
                 theme,
-                div()
-                    .id("toggle-notif-task-completed")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            if let Some(page) = this.settings.page.as_mut() {
-                                page.user_settings.notifications.task_completed =
-                                    !page.user_settings.notifications.task_completed;
-                                page.user_save_pending = true;
-                            }
-                            cx.notify();
-                        }),
-                    )
-                    .child(setting_toggle(notif.task_completed, theme)),
+                self.render_toggle_control(
+                    "toggle-notif-task-completed",
+                    notif.task_completed,
+                    cx,
+                    |this, _, cx| {
+                        if let Some(page) = this.settings.page.as_mut() {
+                            page.user_settings.notifications.task_completed =
+                                !page.user_settings.notifications.task_completed;
+                            page.user_save_pending = true;
+                        }
+                        cx.notify();
+                    },
+                ),
             ))
             .child(setting_row(
                 "Task failed",
                 "Notify when a task fails or errors out",
                 theme,
-                div()
-                    .id("toggle-notif-task-failed")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            if let Some(page) = this.settings.page.as_mut() {
-                                page.user_settings.notifications.task_failed =
-                                    !page.user_settings.notifications.task_failed;
-                                page.user_save_pending = true;
-                            }
-                            cx.notify();
-                        }),
-                    )
-                    .child(setting_toggle(notif.task_failed, theme)),
+                self.render_toggle_control(
+                    "toggle-notif-task-failed",
+                    notif.task_failed,
+                    cx,
+                    |this, _, cx| {
+                        if let Some(page) = this.settings.page.as_mut() {
+                            page.user_settings.notifications.task_failed =
+                                !page.user_settings.notifications.task_failed;
+                            page.user_save_pending = true;
+                        }
+                        cx.notify();
+                    },
+                ),
             ))
             .child(setting_row(
                 "Permission prompt",
                 "Notify when an agent requests a permission",
                 theme,
-                div()
-                    .id("toggle-notif-permission")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            if let Some(page) = this.settings.page.as_mut() {
-                                page.user_settings.notifications.permission_prompt =
-                                    !page.user_settings.notifications.permission_prompt;
-                                page.user_save_pending = true;
-                            }
-                            cx.notify();
-                        }),
-                    )
-                    .child(setting_toggle(notif.permission_prompt, theme)),
+                self.render_toggle_control(
+                    "toggle-notif-permission",
+                    notif.permission_prompt,
+                    cx,
+                    |this, _, cx| {
+                        if let Some(page) = this.settings.page.as_mut() {
+                            page.user_settings.notifications.permission_prompt =
+                                !page.user_settings.notifications.permission_prompt;
+                            page.user_save_pending = true;
+                        }
+                        cx.notify();
+                    },
+                ),
             ))
             .child(setting_row(
                 "Error",
                 "Notify on unexpected errors",
                 theme,
-                div()
-                    .id("toggle-notif-error")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            if let Some(page) = this.settings.page.as_mut() {
-                                page.user_settings.notifications.error =
-                                    !page.user_settings.notifications.error;
-                                page.user_save_pending = true;
-                            }
-                            cx.notify();
-                        }),
-                    )
-                    .child(setting_toggle(notif.error, theme)),
+                self.render_toggle_control("toggle-notif-error", notif.error, cx, |this, _, cx| {
+                    if let Some(page) = this.settings.page.as_mut() {
+                        page.user_settings.notifications.error =
+                            !page.user_settings.notifications.error;
+                        page.user_save_pending = true;
+                    }
+                    cx.notify();
+                }),
             ))
             .child(settings_section_header("Cooldown", theme, false))
             .child(setting_row(
@@ -1390,6 +1367,26 @@ impl super::gpui::WorkspaceView {
                     )
                     .child("+"),
             )
+    }
+
+    /// Build an interactive toggle control — a `setting_toggle` wired to a click handler.
+    fn render_toggle_control(
+        &self,
+        id: &str,
+        current: bool,
+        cx: &mut Context<Self>,
+        on_toggle: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) -> impl IntoElement {
+        let theme = self.workspace.theme();
+        div()
+            .id(SharedString::from(id.to_string()))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, window, cx| {
+                    on_toggle(this, window, cx);
+                }),
+            )
+            .child(setting_toggle(current, theme))
     }
 }
 
