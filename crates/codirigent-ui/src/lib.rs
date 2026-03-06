@@ -161,9 +161,6 @@ pub use empty_session::{
     EmptySessionCell, EmptySessionEvent, EmptySessionPool, EmptySessionRenderHints,
 };
 
-// Re-export UI composition types
-pub use ui_composition::{AppUiEvents, AppUiState};
-
 // Re-export GPUI app when feature is enabled
 #[cfg(feature = "gpui-full")]
 pub use app::CodirigentApp;

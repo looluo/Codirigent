@@ -76,65 +76,6 @@ pub fn copy_selection<T>(term: &Term<T>, start: (usize, usize), end: (usize, usi
     text.trim_end().to_string()
 }
 
-/// Trait for clipboard operations.
-///
-/// This trait abstracts clipboard access to allow for testing and
-/// platform-specific implementations.
-pub trait ClipboardProvider: Send + Sync {
-    /// Write text to the clipboard.
-    fn write(&self, text: String) -> anyhow::Result<()>;
-
-    /// Read text from the clipboard.
-    fn read(&self) -> anyhow::Result<Option<String>>;
-}
-
-/// A no-op clipboard provider for testing.
-#[derive(Debug, Default)]
-pub struct NoopClipboard;
-
-impl ClipboardProvider for NoopClipboard {
-    fn write(&self, _text: String) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    fn read(&self) -> anyhow::Result<Option<String>> {
-        Ok(None)
-    }
-}
-
-/// An in-memory clipboard provider for testing.
-#[derive(Debug, Default)]
-pub struct TestClipboard {
-    content: std::sync::Mutex<Option<String>>,
-}
-
-impl TestClipboard {
-    /// Create a new test clipboard.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Create a test clipboard with initial content.
-    pub fn with_content(content: impl Into<String>) -> Self {
-        Self {
-            content: std::sync::Mutex::new(Some(content.into())),
-        }
-    }
-}
-
-impl ClipboardProvider for TestClipboard {
-    fn write(&self, text: String) -> anyhow::Result<()> {
-        let mut content = self.content.lock().expect("TestClipboard mutex poisoned");
-        *content = Some(text);
-        Ok(())
-    }
-
-    fn read(&self) -> anyhow::Result<Option<String>> {
-        let content = self.content.lock().expect("TestClipboard mutex poisoned");
-        Ok(content.clone())
-    }
-}
-
 /// Prepare text for pasting into terminal.
 ///
 /// Handles bracketed paste mode by wrapping the text with the appropriate
@@ -221,34 +162,5 @@ mod tests {
         let text = "hello \u{4E2D}\u{6587}"; // Chinese characters
         let result = sanitize_paste(text);
         assert_eq!(result, "hello \u{4E2D}\u{6587}");
-    }
-
-    #[test]
-    fn test_test_clipboard() {
-        let clipboard = TestClipboard::new();
-
-        // Initially empty
-        assert_eq!(clipboard.read().unwrap(), None);
-
-        // Write and read back
-        clipboard.write("test".to_string()).unwrap();
-        assert_eq!(clipboard.read().unwrap(), Some("test".to_string()));
-
-        // Overwrite
-        clipboard.write("new".to_string()).unwrap();
-        assert_eq!(clipboard.read().unwrap(), Some("new".to_string()));
-    }
-
-    #[test]
-    fn test_test_clipboard_with_content() {
-        let clipboard = TestClipboard::with_content("initial");
-        assert_eq!(clipboard.read().unwrap(), Some("initial".to_string()));
-    }
-
-    #[test]
-    fn test_noop_clipboard() {
-        let clipboard = NoopClipboard;
-        clipboard.write("test".to_string()).unwrap();
-        assert_eq!(clipboard.read().unwrap(), None);
     }
 }
