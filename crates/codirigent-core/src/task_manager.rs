@@ -130,9 +130,6 @@ pub struct TaskManager {
 
     /// Event bus.
     event_bus: Arc<dyn EventBus>,
-
-    /// Completed task IDs (for dependency checking).
-    completed_tasks: Vec<TaskId>,
 }
 
 impl TaskManager {
@@ -169,7 +166,6 @@ impl TaskManager {
             context: ContextTracker::new(config.context),
             storage,
             event_bus,
-            completed_tasks: Vec::new(),
         }
     }
 
@@ -187,7 +183,10 @@ impl TaskManager {
             if let Some(task) = self.storage.load_task(&id)? {
                 match task.status {
                     TaskStatus::Done => {
-                        self.completed_tasks.push(task.id.clone());
+                        // Enqueue with Done status so all_tasks() includes them
+                        // for dependency checking. queued_tasks() / next_task()
+                        // filter out Done, so they won't be re-assigned.
+                        self.queue.enqueue(task)?;
                     }
                     TaskStatus::Queued => {
                         self.queue.enqueue(task)?;
@@ -351,9 +350,20 @@ impl TaskManager {
 
     /// Get completed task IDs.
     ///
-    /// Returns the list of task IDs that have been completed.
-    pub fn completed_task_ids(&self) -> &[TaskId] {
-        &self.completed_tasks
+    /// Returns all task IDs that have reached `Done` status,
+    /// derived from the task map (no unbounded separate list).
+    pub fn completed_task_ids(&self) -> Vec<TaskId> {
+        self.done_ids()
+    }
+
+    /// Collect IDs of all Done tasks for dependency checking.
+    fn done_ids(&self) -> Vec<TaskId> {
+        self.queue
+            .all_tasks()
+            .values()
+            .filter(|t| t.status == TaskStatus::Done)
+            .map(|t| t.id.clone())
+            .collect()
     }
 
     // === Assignment Operations ===
@@ -370,8 +380,9 @@ impl TaskManager {
     ///
     /// An assignment action indicating what should be done.
     pub fn on_session_idle(&mut self, session: &Session) -> Option<AssignmentAction> {
+        let done = self.done_ids();
         self.assignment
-            .on_session_idle(session, &mut self.queue, &self.completed_tasks)
+            .on_session_idle(session, &mut self.queue, &done)
     }
 
     /// Confirm a pending assignment.
@@ -620,7 +631,6 @@ impl TaskManager {
     /// Returns an error if the task doesn't exist or completion fails.
     pub fn approve_task(&mut self, task_id: &TaskId) -> Result<()> {
         self.queue.complete_task(task_id, true)?;
-        self.completed_tasks.push(task_id.clone());
 
         // Save updated task
         if let Some(task) = self.get_task(task_id) {
@@ -885,7 +895,7 @@ impl std::fmt::Debug for TaskManager {
         f.debug_struct("TaskManager")
             .field("queue", &self.queue)
             .field("assignment", &self.assignment)
-            .field("completed_tasks_count", &self.completed_tasks.len())
+            .field("done_tasks_count", &self.done_ids().len())
             .finish()
     }
 }
