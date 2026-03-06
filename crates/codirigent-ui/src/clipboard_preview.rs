@@ -479,6 +479,7 @@ impl ClipboardPreview {
     ///
     /// A formatted string like "1920x1080".
     ///
+    #[cfg(feature = "gpui-full")]
     pub(crate) fn format_dimensions(width: u32, height: u32) -> String {
         format!("{}x{}", width, height)
     }
@@ -695,6 +696,7 @@ mod tests {
         assert_eq!(preview.thumbnail_bytes, image.bytes);
     }
 
+    #[cfg(feature = "gpui-full")]
     #[test]
     fn test_clipboard_preview_format_dimensions() {
         assert_eq!(ClipboardPreview::format_dimensions(1920, 1080), "1920x1080");
