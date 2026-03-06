@@ -8,7 +8,7 @@
 //! - Manages automatic task assignment and context compaction
 //! - Handles clipboard preview auto-show/hide
 
-use super::cli_helpers::{clear_command, detect_cli_from_output};
+use super::cli_helpers::clear_command;
 use super::gpui::WorkspaceView;
 use super::types::CachedCliStatus;
 use codirigent_core::{
@@ -18,6 +18,7 @@ use codirigent_core::{
 use codirigent_detector::notification::send_notification;
 use codirigent_session::cli_detector::CliDetector;
 use codirigent_session::clipboard_service::{ClipboardService, DefaultClipboardService};
+use codirigent_session::detect_cli_from_output;
 use codirigent_session::CliSessionStatus;
 use gpui::Context;
 use std::time::{Duration, Instant};

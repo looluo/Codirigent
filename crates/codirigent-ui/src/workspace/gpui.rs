@@ -100,7 +100,7 @@ pub struct WorkspaceView {
     pub(super) empty_cells: EmptySessionPool,
     /// Terminal headers by session ID.
     pub(super) terminal_headers: HashMap<SessionId, TerminalHeader>,
-    /// Project and file tree state (file_tree, file_tree_model, project_root, worktree_panel, worktree_manager, current_branch).
+    /// Project and file tree state (file_tree, file_tree_model, project_root, worktree_panel, worktree_manager).
     pub(super) project: super::project_state::ProjectState,
     /// Clipboard state (smart_clipboard, clipboard_service, clipboard_preview, clipboard_preview_shown_at).
     pub(super) clipboard: super::clipboard_state::ClipboardState,
@@ -192,7 +192,6 @@ impl WorkspaceView {
                 project_root: project_root.clone(),
                 worktree_panel: WorktreePanel::new(),
                 worktree_manager: Self::init_worktree_manager(),
-                current_branch: Self::detect_git_branch(),
             },
             clipboard: super::clipboard_state::ClipboardState {
                 smart_clipboard: crate::platform::create_clipboard(),
@@ -378,23 +377,6 @@ impl WorkspaceView {
             }
         }
         None
-    }
-
-    /// Detect the current git branch.
-    fn detect_git_branch() -> Option<String> {
-        use git2::Repository;
-
-        let cwd = std::env::current_dir().ok()?;
-        let repo = Repository::discover(cwd).ok()?;
-        let head = repo.head().ok()?;
-
-        if head.is_branch() {
-            head.shorthand().map(String::from)
-        } else {
-            // Detached HEAD - show short commit hash
-            let commit = head.peel_to_commit().ok()?;
-            Some(format!("{:.7}", commit.id()))
-        }
     }
 
     /// Check if a session should be created at the given position.

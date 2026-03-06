@@ -107,13 +107,7 @@ impl WorkspaceView {
                 }
                 let text: String = paths
                     .iter()
-                    .map(|p| {
-                        if let Some(tree) = &self.project.file_tree_model {
-                            tree.path_for_terminal(p)
-                        } else {
-                            p.to_string_lossy().to_string()
-                        }
-                    })
+                    .map(|p| self.project.format_path_for_terminal(p))
                     .collect::<Vec<_>>()
                     .join(" ");
                 let bytes = crate::clipboard::prepare_paste(&text, bracketed);

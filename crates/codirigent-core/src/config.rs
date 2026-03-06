@@ -4,7 +4,7 @@
 //! and global user preferences. Configuration is stored in JSON files:
 //!
 //! - Project config: `.codirigent/config.json`
-//! - User settings: `~/.config/dirigent/settings.json`
+//! - User settings: `~/.config/codirigent/settings.json`
 //!
 //! ## Project Configuration
 //!
@@ -17,6 +17,7 @@
 //! and module-specific preferences.
 
 use crate::scheduler::SchedulerConfig;
+use crate::session_notes::SessionNotesConfig;
 use crate::LayoutMode;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -104,61 +105,6 @@ impl Default for VerificationSettings {
             auto_detect: true,
             max_retries: 3,
             commands: HashMap::new(),
-        }
-    }
-}
-
-/// Session notes configuration.
-///
-/// Controls the session notes feature for tracking work history.
-///
-/// # Example
-///
-/// ```
-/// use codirigent_core::config::{SessionNotesConfig, SummaryMode};
-///
-/// let config = SessionNotesConfig::default();
-/// assert!(config.enabled);
-/// assert_eq!(config.summary_mode, SummaryMode::Manual);
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SessionNotesConfig {
-    /// Enable session notes.
-    pub enabled: bool,
-    /// Summary generation mode: auto, manual, none.
-    pub summary_mode: SummaryMode,
-    /// Only record structured data (no AI summary).
-    pub structured_data_only: bool,
-}
-
-impl Default for SessionNotesConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            summary_mode: SummaryMode::Manual,
-            structured_data_only: false,
-        }
-    }
-}
-
-/// Summary generation mode for session notes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum SummaryMode {
-    /// AI-generated summaries (uses tokens).
-    Auto,
-    /// Manual summaries only.
-    #[default]
-    Manual,
-    /// No summaries.
-    None,
-}
-
-impl std::fmt::Display for SummaryMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SummaryMode::Auto => write!(f, "Auto"),
-            SummaryMode::Manual => write!(f, "Manual"),
-            SummaryMode::None => write!(f, "None"),
         }
     }
 }
@@ -304,7 +250,7 @@ pub struct SavedLayout {
     pub layout: LayoutMode,
 }
 
-/// Global user settings stored in `~/.config/dirigent/settings.json`.
+/// Global user settings stored in `~/.config/codirigent/settings.json`.
 ///
 /// These settings apply across all projects and control user preferences.
 ///
@@ -374,7 +320,8 @@ impl UserSettings {
 
 /// Appearance settings.
 ///
-/// Controls the visual appearance of the application.
+/// Controls the visual appearance of the application. Terminal-specific
+/// font settings (family, size) live in [`TerminalSettings`].
 ///
 /// # Example
 ///
@@ -383,16 +330,12 @@ impl UserSettings {
 ///
 /// let settings = AppearanceSettings::default();
 /// assert_eq!(settings.theme, "dark");
-/// assert_eq!(settings.font_size, 14);
+/// assert_eq!(settings.grid_gap, 4);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AppearanceSettings {
     /// Theme name: dark, light, or custom.
     pub theme: String,
-    /// Font family for terminals.
-    pub font_family: String,
-    /// Font size in points.
-    pub font_size: u32,
     /// Grid gap in pixels.
     pub grid_gap: u32,
 }
@@ -401,8 +344,6 @@ impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
             theme: "dark".to_string(),
-            font_family: "JetBrains Mono".to_string(),
-            font_size: 14,
             grid_gap: 4,
         }
     }
@@ -542,6 +483,7 @@ impl Default for ContextTrackerSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session_notes::SummaryMode;
 
     // ProjectConfig tests
 
@@ -690,7 +632,7 @@ mod tests {
         let config = SessionNotesConfig::default();
         assert!(config.enabled);
         assert_eq!(config.summary_mode, SummaryMode::Manual);
-        assert!(!config.structured_data_only);
+        assert!(config.structured_data_only);
     }
 
     #[test]
@@ -698,13 +640,14 @@ mod tests {
         let config = SessionNotesConfig {
             enabled: false,
             summary_mode: SummaryMode::Auto,
-            structured_data_only: true,
+            structured_data_only: false,
+            output_dir: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: SessionNotesConfig = serde_json::from_str(&json).unwrap();
         assert!(!parsed.enabled);
         assert_eq!(parsed.summary_mode, SummaryMode::Auto);
-        assert!(parsed.structured_data_only);
+        assert!(!parsed.structured_data_only);
     }
 
     // SummaryMode tests
@@ -821,8 +764,6 @@ mod tests {
     fn test_appearance_settings_default() {
         let settings = AppearanceSettings::default();
         assert_eq!(settings.theme, "dark");
-        assert_eq!(settings.font_family, "JetBrains Mono");
-        assert_eq!(settings.font_size, 14);
         assert_eq!(settings.grid_gap, 4);
     }
 
@@ -830,14 +771,12 @@ mod tests {
     fn test_appearance_settings_serialization() {
         let settings = AppearanceSettings {
             theme: "light".to_string(),
-            font_family: "Fira Code".to_string(),
-            font_size: 16,
             grid_gap: 8,
         };
         let json = serde_json::to_string(&settings).unwrap();
         let parsed: AppearanceSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.theme, "light");
-        assert_eq!(parsed.font_size, 16);
+        assert_eq!(parsed.grid_gap, 8);
     }
 
     // NotificationSettings tests

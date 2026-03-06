@@ -59,7 +59,7 @@ pub trait EventBus: Send + Sync {
 
 /// Session management service.
 ///
-/// Implemented by `dirigent-session`, consumed by `dirigent-ui` and others.
+/// Implemented by `codirigent-session`, consumed by `codirigent-ui` and others.
 /// This trait defines the contract for managing terminal sessions.
 ///
 /// # Thread Safety
@@ -68,7 +68,7 @@ pub trait EventBus: Send + Sync {
 ///
 /// # Implementors
 ///
-/// The primary implementation is in the `dirigent-session` crate.
+/// The primary implementation is in the `codirigent-session` crate.
 pub trait SessionManager: Send + Sync {
     /// Get all active sessions.
     ///
@@ -187,7 +187,7 @@ pub trait SessionManager: Send + Sync {
 
 /// Process monitoring service.
 ///
-/// Implemented by `dirigent-detector`, used to track session status
+/// Implemented by `codirigent-detector`, used to track session status
 /// based on process state and output patterns.
 ///
 /// # Thread Safety
@@ -196,7 +196,7 @@ pub trait SessionManager: Send + Sync {
 ///
 /// # Implementors
 ///
-/// The primary implementation is in the `dirigent-detector` crate.
+/// The primary implementation is in the `codirigent-detector` crate.
 pub trait ProcessMonitor: Send + Sync {
     /// Start monitoring a session's PTY process.
     ///

@@ -156,12 +156,7 @@ impl WorkspaceView {
             FileTreeEvent::PathDraggedToTerminal { path, session_id } => {
                 info!(?path, ?session_id, "Path dragged to terminal");
                 // C3 implementation: insert path into terminal
-                let path_str = if let Some(tree) = &self.project.file_tree_model {
-                    let tree: &FileTree = tree;
-                    tree.path_for_terminal(&path)
-                } else {
-                    path.to_string_lossy().to_string()
-                };
+                let path_str = self.project.format_path_for_terminal(&path);
                 let input = format!("{} ", path_str); // Add space after path
                 let session_id = SessionId(session_id);
                 if let Ok(manager) = self.session_manager.lock() {
@@ -278,11 +273,7 @@ impl WorkspaceView {
     /// Insert a file path into the focused terminal session.
     pub(super) fn insert_path_to_terminal(&mut self, path: &std::path::Path) {
         if let Some(session_id) = self.workspace.focused_session_id() {
-            let path_str = if let Some(tree) = &self.project.file_tree_model {
-                tree.path_for_terminal(path)
-            } else {
-                path.to_string_lossy().to_string()
-            };
+            let path_str = self.project.format_path_for_terminal(path);
             let input = format!("{} ", path_str);
             if let Ok(manager) = self.session_manager.lock() {
                 if let Err(e) = manager.send_input(session_id, input.as_bytes()) {
@@ -294,11 +285,7 @@ impl WorkspaceView {
 
     /// Copy a file path to the system clipboard.
     pub(super) fn copy_path_to_clipboard(&self, path: &std::path::Path) {
-        let path_str = if let Some(tree) = &self.project.file_tree_model {
-            tree.path_for_terminal(path)
-        } else {
-            path.to_string_lossy().to_string()
-        };
+        let path_str = self.project.format_path_for_terminal(path);
         if let Err(e) = self.clipboard.smart_clipboard.write_text(path_str) {
             warn!("Failed to copy path to clipboard: {}", e);
         }

@@ -94,10 +94,8 @@ impl DefaultSessionManager {
 
     /// Acquire the sessions lock.
     ///
-    /// # Panics
-    /// Panics if the mutex is poisoned (another thread panicked while holding the lock).
     fn lock_sessions(&self) -> MutexGuard<'_, HashMap<SessionId, SessionState>> {
-        self.sessions.lock().expect("sessions mutex poisoned")
+        self.sessions.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     /// Generate a unique session ID.
@@ -1047,7 +1045,7 @@ mod tests {
 
         // Create a temporary file (not a directory)
         let temp_dir = std::env::temp_dir();
-        let temp_file = temp_dir.join(format!("dirigent_test_file_{}", std::process::id()));
+        let temp_file = temp_dir.join(format!("codirigent_test_file_{}", std::process::id()));
         {
             let mut file = std::fs::File::create(&temp_file).unwrap();
             file.write_all(b"test").unwrap();

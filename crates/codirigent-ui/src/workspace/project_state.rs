@@ -1,6 +1,6 @@
 //! Project and file tree state for WorkspaceView.
 
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::sidebar::{FileTreePanel, WorktreePanel};
@@ -18,6 +18,18 @@ pub(super) struct ProjectState {
     pub(super) worktree_panel: WorktreePanel,
     /// Shared worktree manager for git worktree operations.
     pub(super) worktree_manager: Option<Arc<Mutex<codirigent_session::WorktreeManager>>>,
-    /// Current git branch name.
-    pub(super) current_branch: Option<String>,
+}
+
+impl ProjectState {
+    /// Format a filesystem path for insertion into a terminal command line.
+    ///
+    /// When a file tree model is available, delegates to its path formatting
+    /// (e.g. relative paths, shell escaping). Falls back to the raw path string.
+    pub(super) fn format_path_for_terminal(&self, path: &Path) -> String {
+        if let Some(tree) = &self.file_tree_model {
+            tree.path_for_terminal(path)
+        } else {
+            path.to_string_lossy().to_string()
+        }
+    }
 }

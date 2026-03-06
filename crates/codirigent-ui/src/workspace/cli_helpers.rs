@@ -7,14 +7,6 @@
 
 use tracing::warn;
 
-/// Detect CLI type from terminal output by scanning for CLI-specific banners.
-///
-/// Delegates to `codirigent_session::detect_cli_from_output` which performs
-/// byte pattern matching for known CLI identification strings.
-pub(super) fn detect_cli_from_output(data: &[u8]) -> Option<codirigent_core::CliType> {
-    codirigent_session::detect_cli_from_output(data)
-}
-
 /// Format a task prompt for sending to a session's PTY.
 ///
 /// Collapses multi-line prompts into a single line so newlines aren't
@@ -69,18 +61,6 @@ pub(super) fn clear_command(cli_type: codirigent_core::CliType) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn test_detect_cli_delegates_to_session() {
-        // Detection logic is now in codirigent_session::cli_output_detection
-        // This test verifies the delegation still works
-        let output = b"Welcome to claude code v1.0\n";
-        assert_eq!(
-            detect_cli_from_output(output),
-            Some(codirigent_core::CliType::ClaudeCode)
-        );
-        assert_eq!(detect_cli_from_output(b"bash-5.0$ \n"), None);
-    }
 
     #[test]
     fn test_format_task_input_multiline() {

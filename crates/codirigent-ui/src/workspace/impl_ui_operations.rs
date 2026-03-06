@@ -30,11 +30,7 @@ impl WorkspaceView {
 
         if is_terminal_editor(&editor) {
             if let Some(session_id) = self.workspace.focused_session_id() {
-                let path_str = if let Some(tree) = &self.project.file_tree_model {
-                    tree.path_for_terminal(path)
-                } else {
-                    path.to_string_lossy().to_string()
-                };
+                let path_str = self.project.format_path_for_terminal(path);
 
                 let command = format!("{} {}\n", editor, path_str);
                 if let Ok(manager) = self.session_manager.lock() {
