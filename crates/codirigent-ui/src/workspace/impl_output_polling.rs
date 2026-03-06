@@ -8,7 +8,7 @@
 //! - Manages automatic task assignment and context compaction
 //! - Handles clipboard preview auto-show/hide
 
-use super::cli_helpers::{clear_command, detect_cli_from_output, format_task_input};
+use super::cli_helpers::{clear_command, detect_cli_from_output};
 use super::gpui::WorkspaceView;
 use super::types::CachedCliStatus;
 use codirigent_core::{
@@ -880,33 +880,7 @@ impl WorkspaceView {
                     }
                 }
 
-                // Update session's current_task in the session manager
-                if let Ok(mgr) = self.session_manager.lock() {
-                    mgr.with_session_state_mut(target_id, |state| {
-                        state.session.current_task = Some(task_id.clone());
-                    });
-                }
-
-                // Update workspace's cached copy
-                if let Some(ws_session) = self.workspace.session_mut(target_id) {
-                    ws_session.current_task = Some(task_id.clone());
-                }
-
-                // Send prompt to PTY (format based on CLI type)
-                let cli_type = self
-                    .clipboard
-                    .clipboard_service
-                    .get_session_cli_type(target_id);
-                let input = format_task_input(&prompt, cli_type);
-                if let Ok(mgr) = self.session_manager.lock() {
-                    if let Err(e) = mgr.send_input(target_id, input.as_bytes()) {
-                        warn!("Failed to send task prompt to session {}: {}", target_id, e);
-                    }
-                }
-                self.polling
-                    .pending_enters
-                    .insert(target_id, (Instant::now(), false));
-
+                self.send_task_to_session(&task_id, target_id, &prompt);
                 info!(?task_id, ?target_id, "Auto-assigned task to session");
             }
             Some(AssignmentAction::AwaitConfirmation {

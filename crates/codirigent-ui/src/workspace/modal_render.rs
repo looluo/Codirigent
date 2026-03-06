@@ -705,61 +705,6 @@ impl WorkspaceView {
             .object_fit(ObjectFit::Contain)
     }
 
-    /// Parse a group color string into Hsla.
-    fn parse_group_color(&self, color: &str) -> Option<gpui::Hsla> {
-        match color.to_lowercase().as_str() {
-            "teal" | "blue-green" => Some(gpui::Hsla {
-                h: 0.52,
-                s: 0.70,
-                l: 0.60,
-                a: 1.0,
-            }),
-            "coral" | "orange-red" => Some(gpui::Hsla {
-                h: 0.03,
-                s: 0.80,
-                l: 0.62,
-                a: 1.0,
-            }),
-            "orange" => Some(gpui::Hsla {
-                h: 0.08,
-                s: 0.90,
-                l: 0.60,
-                a: 1.0,
-            }),
-            "blue" => Some(gpui::Hsla {
-                h: 0.60,
-                s: 0.70,
-                l: 0.60,
-                a: 1.0,
-            }),
-            "purple" => Some(gpui::Hsla {
-                h: 0.75,
-                s: 0.60,
-                l: 0.65,
-                a: 1.0,
-            }),
-            "green" => Some(gpui::Hsla {
-                h: 0.33,
-                s: 0.60,
-                l: 0.55,
-                a: 1.0,
-            }),
-            "yellow" => Some(gpui::Hsla {
-                h: 0.15,
-                s: 0.80,
-                l: 0.65,
-                a: 1.0,
-            }),
-            "red" => Some(gpui::Hsla {
-                h: 0.0,
-                s: 0.80,
-                l: 0.60,
-                a: 1.0,
-            }),
-            _ => None,
-        }
-    }
-
     /// Render session context menu (dropdown near the trigger button).
     /// Render the session action modal for rename/group.
     pub(super) fn render_session_action_modal(

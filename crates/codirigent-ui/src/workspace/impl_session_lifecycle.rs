@@ -65,14 +65,7 @@ impl WorkspaceView {
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(|| PathBuf::from("/tmp"));
 
-        // Determine shell from user settings (empty string = auto-detect)
-        let shell = self
-            .settings
-            .config_service
-            .as_ref()
-            .and_then(|cs| cs.load_user_settings().ok())
-            .map(|s| s.general.default_shell)
-            .filter(|s| !s.is_empty());
+        let shell = self.configured_shell();
 
         // Create session with real PTY via session manager
         let session_id = self.with_session_manager(|manager| {
@@ -213,14 +206,7 @@ impl WorkspaceView {
                     .unwrap_or_else(|| PathBuf::from("."))
             };
 
-            // Determine shell from user settings (empty string = auto-detect)
-            let shell = self
-                .settings
-                .config_service
-                .as_ref()
-                .and_then(|cs| cs.load_user_settings().ok())
-                .map(|s| s.general.default_shell)
-                .filter(|s| !s.is_empty());
+            let shell = self.configured_shell();
 
             // Ensure session name is unique
             let mut session_name = saved.name.clone();
@@ -315,42 +301,20 @@ impl WorkspaceView {
         cx.notify();
     }
 
+    /// Return the configured shell, or `None` to use the system default.
+    fn configured_shell(&self) -> Option<String> {
+        self.settings
+            .config_service
+            .as_ref()
+            .and_then(|cs| cs.load_user_settings().ok())
+            .map(|s| s.general.default_shell)
+            .filter(|s| !s.is_empty())
+    }
+
     /// Close the focused session.
     pub fn close_focused_session(&mut self, cx: &mut Context<Self>) {
         if let Some(id) = self.workspace.focused_session_id() {
-            // Stop monitoring (from main branch)
-            self.with_detector(|detector| {
-                detector.stop_monitoring(id);
-            });
-
-            // Remove terminal view and PTY writer (from main branch)
-            self.terminals.remove(&id);
-            self.pty_write_receivers.remove(&id);
-
-            // Close PTY session (from main branch)
-            self.with_session_manager(|manager| {
-                if let Err(e) = manager.close_session(id) {
-                    warn!("Failed to close session {}: {}", id, e);
-                }
-            });
-
-            // Clean up compaction state
-            if let Ok(mut svc) = self.persistence.compaction.lock() {
-                svc.end_compaction(id);
-            }
-            self.cache.compaction_start_times.remove(&id);
-            if let Ok(mut readers) = self.cli_readers.lock() {
-                readers.cached_status.remove(&id);
-            }
-
-            // Remove the terminal header for this session (from feature branch)
-            self.terminal_headers.remove(&id);
-
-            // Remove from workspace UI
-            self.workspace.remove_session(id);
-            info!(?id, "Closed session");
-            self.save_state_to_disk();
-            cx.notify();
+            self.close_session(id, cx);
         }
     }
 

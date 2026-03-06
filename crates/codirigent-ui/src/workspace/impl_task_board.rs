@@ -127,36 +127,10 @@ impl WorkspaceView {
                             if let Some(session) = target {
                                 match manager.direct_assign(&task_id, session.id) {
                                     Ok(prompt) => {
-                                        // Check CLI type to decide how to send the prompt
-                                        let cli_type = self
-                                            .clipboard
-                                            .clipboard_service
-                                            .get_session_cli_type(session.id);
-
                                         // Release task_manager before session_manager
                                         drop(manager);
 
-                                        // Build the command to send to the PTY
-                                        let input = format_task_input(&prompt, cli_type);
-
-                                        if let Ok(mgr) = self.session_manager.lock() {
-                                            mgr.with_session_state_mut(session.id, |state| {
-                                                state.session.current_task = Some(task_id.clone());
-                                            });
-                                            if let Err(e) =
-                                                mgr.send_input(session.id, input.as_bytes())
-                                            {
-                                                warn!("Failed to send task prompt: {}", e);
-                                            }
-                                        }
-                                        self.polling
-                                            .pending_enters
-                                            .insert(session.id, (Instant::now(), false));
-                                        if let Some(ws_session) =
-                                            self.workspace.session_mut(session.id)
-                                        {
-                                            ws_session.current_task = Some(task_id.clone());
-                                        }
+                                        self.send_task_to_session(&task_id, session.id, &prompt);
                                         // Mark session as having received a manual assignment,
                                         // which unlocks auto-assign for future tasks.
                                         self.cache.manually_assigned_sessions.insert(session.id);
@@ -222,34 +196,7 @@ impl WorkspaceView {
                     }
                 };
 
-                // Update session's current_task
-                if let Ok(mgr) = self.session_manager.lock() {
-                    mgr.with_session_state_mut(session_id, |state| {
-                        state.session.current_task = Some(task_id.clone());
-                    });
-                }
-                if let Some(ws_session) = self.workspace.session_mut(session_id) {
-                    ws_session.current_task = Some(task_id.clone());
-                }
-
-                // Send prompt to PTY
-                let cli_type = self
-                    .clipboard
-                    .clipboard_service
-                    .get_session_cli_type(session_id);
-                let input = format_task_input(&prompt, cli_type);
-                if let Ok(mgr) = self.session_manager.lock() {
-                    if let Err(e) = mgr.send_input(session_id, input.as_bytes()) {
-                        warn!(
-                            "Failed to send confirmed task prompt to session {}: {}",
-                            session_id, e
-                        );
-                    }
-                }
-                self.polling
-                    .pending_enters
-                    .insert(session_id, (Instant::now(), false));
-
+                self.send_task_to_session(&task_id, session_id, &prompt);
                 info!(?task_id, ?session_id, "Confirmed and sent task to session");
             }
             crate::task_board::TaskBoardEvent::RejectAssignment { task_id } => {
@@ -262,6 +209,41 @@ impl WorkspaceView {
             }
         }
         cx.notify();
+    }
+
+    /// Send a task prompt to a session: updates `current_task` in both the
+    /// session manager and the workspace cache, formats and sends the PTY input,
+    /// and inserts a deferred Enter keypress.
+    ///
+    /// Must be called **after** any task-manager lock has been dropped.
+    pub(super) fn send_task_to_session(
+        &mut self,
+        task_id: &TaskId,
+        session_id: codirigent_core::SessionId,
+        prompt: &str,
+    ) {
+        let cli_type = self
+            .clipboard
+            .clipboard_service
+            .get_session_cli_type(session_id);
+        let input = format_task_input(prompt, cli_type);
+        if let Ok(mgr) = self.session_manager.lock() {
+            mgr.with_session_state_mut(session_id, |state| {
+                state.session.current_task = Some(task_id.clone());
+            });
+            if let Err(e) = mgr.send_input(session_id, input.as_bytes()) {
+                warn!(
+                    "Failed to send task prompt to session {}: {}",
+                    session_id, e
+                );
+            }
+        }
+        if let Some(ws_session) = self.workspace.session_mut(session_id) {
+            ws_session.current_task = Some(task_id.clone());
+        }
+        self.polling
+            .pending_enters
+            .insert(session_id, (Instant::now(), false));
     }
 
     fn find_assignable_session_for_task(&self, task: &codirigent_core::Task) -> Option<Session> {

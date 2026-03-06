@@ -566,7 +566,6 @@ impl WorkspaceView {
         label: &str,
         session_id: SessionId,
         action: SessionMenuAction,
-        _theme: &CodirigentTheme,
         hover_bg: gpui::Hsla,
         fg: gpui::Hsla,
         cx: &mut Context<Self>,
