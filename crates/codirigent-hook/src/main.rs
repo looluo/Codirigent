@@ -49,8 +49,8 @@ struct SignalFile {
 
 fn main() {
     let payload = match read_payload() {
-        Ok(p) => p,
-        Err(_) => return,
+        Some(p) => p,
+        None => return,
     };
 
     handle_payload(payload);
@@ -68,7 +68,8 @@ fn handle_payload(payload: HookPayload) {
         .as_deref()
         .filter(|id| is_safe_filename(id))
         .or_else(|| codirigent_session_id.as_deref().filter(|id| is_safe_filename(id)))
-        .unwrap_or_default();
+        .unwrap_or_default()
+        .to_owned(); // owned String releases the borrow on codirigent_session_id
     if filename_session_id.is_empty() {
         return;
     }
@@ -79,12 +80,22 @@ fn handle_payload(payload: HookPayload) {
         payload.event_type.as_deref(),
         payload.cli_type.as_deref(),
     );
-    let cli_type = payload
-        .cli_type
-        .as_deref()
-        .or_else(|| payload.hook_event_name.as_deref().map(|_| CLI_TYPE_CLAUDE))
-        .or_else(|| payload.event_type.as_deref().map(|_| CLI_TYPE_CODEX))
-        .unwrap_or(CLI_TYPE_GEMINI);
+    // Map the raw cli_type string to a known &'static str so it can be stored
+    // in SignalFile. Unknown values fall through to heuristic detection below.
+    let cli_type: &'static str = match payload.cli_type.as_deref() {
+        Some(CLI_TYPE_CLAUDE) => CLI_TYPE_CLAUDE,
+        Some(CLI_TYPE_CODEX) => CLI_TYPE_CODEX,
+        Some(CLI_TYPE_GEMINI) => CLI_TYPE_GEMINI,
+        _ => {
+            if payload.hook_event_name.is_some() {
+                CLI_TYPE_CLAUDE
+            } else if payload.event_type.is_some() {
+                CLI_TYPE_CODEX
+            } else {
+                CLI_TYPE_GEMINI
+            }
+        }
+    };
 
     let signal = SignalFile {
         status,
@@ -105,22 +116,21 @@ fn handle_payload(payload: HookPayload) {
     }
 }
 
-fn read_payload() -> Result<HookPayload, serde_json::Error> {
+fn read_payload() -> Option<HookPayload> {
     let mut input = String::new();
     if std::io::stdin().read_to_string(&mut input).is_ok() {
         let trimmed = input.trim();
         if !trimmed.is_empty() {
             if let Ok(payload) = serde_json::from_str::<HookPayload>(trimmed) {
-                return Ok(payload);
+                return Some(payload);
             }
         }
     }
 
     let args: Vec<String> = env::args().collect();
-    match args.get(1..).and_then(|parts| parts.last()) {
-        Some(last) => serde_json::from_str(last),
-        None => Err(serde_json::Error::custom("No hook payload")),
-    }
+    args.get(1..)
+        .and_then(|parts| parts.last())
+        .and_then(|last| serde_json::from_str(last).ok())
 }
 
 fn map_status(
@@ -241,31 +251,31 @@ mod tests {
 
     #[test]
     fn map_status_user_prompt_submit_is_working() {
-        assert_eq!(map_status(Some("UserPromptSubmit"), None, None), "working");
+        assert_eq!(map_status(Some("UserPromptSubmit"), None, None, None), "working");
     }
 
     #[test]
     fn map_status_stop_is_response_ready() {
-        assert_eq!(map_status(Some("Stop"), None, None), "response_ready");
+        assert_eq!(map_status(Some("Stop"), None, None, None), "response_ready");
     }
 
     #[test]
     fn map_status_notification_permission_prompt_is_needs_attention() {
         assert_eq!(
-            map_status(Some("Notification"), Some("permission_prompt"), None),
+            map_status(Some("Notification"), Some("permission_prompt"), None, None),
             "needs_attention"
         );
     }
 
     #[test]
     fn map_status_notification_other_is_idle() {
-        assert_eq!(map_status(Some("Notification"), Some("idle_prompt"), None), "idle");
-        assert_eq!(map_status(Some("Notification"), None, None), "idle");
+        assert_eq!(map_status(Some("Notification"), Some("idle_prompt"), None, None), "idle");
+        assert_eq!(map_status(Some("Notification"), None, None, None), "idle");
     }
 
     #[test]
     fn map_status_unknown_event_is_idle() {
-        assert_eq!(map_status(Some("UnknownEvent"), None, None), "idle");
+        assert_eq!(map_status(Some("UnknownEvent"), None, None, None), "idle");
     }
 
     #[test]
