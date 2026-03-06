@@ -227,9 +227,13 @@ pub(super) fn detect_monospace_fonts(text_system: &gpui::TextSystem) -> Vec<Stri
 /// Checks if an editor command is a terminal-based editor.
 ///
 /// Extracts the base command name (ignoring path) and checks against
-/// the list of known terminal editors.
+/// the list of known terminal editors. Handles both Unix (`/`) and
+/// Windows (`\`) path separators via `std::path::Path`.
 pub(super) fn is_terminal_editor(editor: &str) -> bool {
-    let base = editor.rsplit('/').next().unwrap_or(editor);
+    let base = std::path::Path::new(editor)
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or(editor);
     KNOWN_TERMINAL_EDITORS.contains(&base)
 }
 
@@ -282,5 +286,20 @@ mod tests {
         assert!(is_terminal_editor("/usr/bin/vim"));
         assert!(!is_terminal_editor("code"));
         assert!(!is_terminal_editor("zed"));
+    }
+
+    #[test]
+    fn test_is_terminal_editor_windows_path() {
+        assert!(is_terminal_editor("C:\\Users\\user\\nvim.exe"));
+        assert!(is_terminal_editor("C:\\tools\\vim.exe"));
+        assert!(!is_terminal_editor("C:\\Users\\user\\code.exe"));
+        assert!(!is_terminal_editor("C:\\Program Files\\Zed\\zed.exe"));
+    }
+
+    #[test]
+    fn test_is_terminal_editor_unix_absolute_path() {
+        assert!(is_terminal_editor("/usr/local/bin/nvim"));
+        assert!(is_terminal_editor("/usr/local/bin/nano"));
+        assert!(!is_terminal_editor("/usr/local/bin/code"));
     }
 }
