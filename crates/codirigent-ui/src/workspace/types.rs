@@ -27,6 +27,12 @@ pub(super) const CELL_BORDER_WIDTH: f32 = 2.0;
 /// Height of dropdown trigger buttons in pixels.
 pub(super) const DROPDOWN_TRIGGER_HEIGHT: f32 = 28.0;
 
+/// Default prefix used when generating session names (e.g. "Session 1").
+///
+/// Used both for name generation (`format!("{}{}", SESSION_NAME_PREFIX, n)`)
+/// and for reverse-parsing the session number (`strip_prefix(SESSION_NAME_PREFIX)`).
+pub(super) const SESSION_NAME_PREFIX: &str = "Session ";
+
 /// Height of session and group rows in the Sessions drawer panel.
 pub(super) const SESSION_ROW_HEIGHT: f32 = 28.0;
 

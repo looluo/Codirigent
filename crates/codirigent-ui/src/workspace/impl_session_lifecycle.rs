@@ -7,6 +7,7 @@
 //! - State persistence to disk
 
 use super::gpui::WorkspaceView;
+use super::types::SESSION_NAME_PREFIX;
 use crate::terminal::Terminal;
 use crate::terminal_header::TerminalHeader;
 use crate::terminal_view::TerminalView;
@@ -41,7 +42,7 @@ impl WorkspaceView {
             .iter()
             .filter_map(|s| {
                 s.name
-                    .strip_prefix("Session ")
+                    .strip_prefix(SESSION_NAME_PREFIX)
                     .and_then(|n| n.parse::<u64>().ok())
             })
             .collect();
@@ -49,7 +50,7 @@ impl WorkspaceView {
         while existing_numbers.contains(&num) {
             num += 1;
         }
-        let name = format!("Session {}", num);
+        let name = format!("{}{}", SESSION_NAME_PREFIX, num);
         self.next_session_id = num + 1;
 
         let working_dir = self
