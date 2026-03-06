@@ -372,8 +372,11 @@ impl CodirigentApp {
         info!("Starting Codirigent GPUI application...");
 
         // Install Claude Code hooks so status detection works without manual setup.
-        match hook_installer::ensure_hooks_installed() {
-            Ok(true) => info!("Claude Code hooks installed"),
+        // Use the full path to the sibling binary so the hook runs correctly
+        // regardless of whether its directory is on PATH.
+        let hook_binary = hook_installer::hook_binary_path();
+        match hook_installer::ensure_hooks_installed(&hook_binary) {
+            Ok(true) => info!("Claude Code hooks installed ({})", hook_binary.display()),
             Ok(false) => {}
             Err(e) => warn!("Failed to install Claude Code hooks: {e}"),
         }

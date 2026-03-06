@@ -25,19 +25,25 @@ use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
-/// Name embedded in each hook command so we can detect existing installations.
+/// Substring that identifies a Codirigent hook command, used to detect and
+/// upgrade legacy bare-name registrations.
 const HOOK_MARKER: &str = "codirigent-hook";
 
 /// Ensure Codirigent's hooks are present in `~/.claude/settings.json`.
 ///
+/// `hook_binary` should be the full path to the `codirigent-hook` binary.
+/// Using the full path avoids relying on PATH, which may not include the
+/// binary's directory during Claude Code's hook execution.
+///
 /// Safe to call on every launch — the function is idempotent.
 /// Returns `Ok(true)` if the file was modified, `Ok(false)` if already up to date.
-pub fn ensure_hooks_installed() -> Result<bool> {
+pub fn ensure_hooks_installed(hook_binary: &Path) -> Result<bool> {
     let settings_path =
         claude_settings_path().context("Could not determine ~/.claude/settings.json path")?;
 
+    let command = hook_binary.to_string_lossy().into_owned();
     let mut settings = read_settings(&settings_path)?;
-    let modified = merge_hooks(&mut settings)?;
+    let modified = merge_hooks(&mut settings, &command)?;
 
     if modified {
         write_settings(&settings_path, &settings)?;
@@ -47,6 +53,23 @@ pub fn ensure_hooks_installed() -> Result<bool> {
     }
 
     Ok(modified)
+}
+
+/// Returns the full path to the `codirigent-hook` binary that lives next to
+/// the currently-running executable.
+///
+/// Falls back to the bare binary name `codirigent-hook` (relying on PATH)
+/// if the current executable path cannot be determined.
+pub fn hook_binary_path() -> PathBuf {
+    let hook_name = if cfg!(windows) {
+        "codirigent-hook.exe"
+    } else {
+        "codirigent-hook"
+    };
+    std::env::current_exe()
+        .ok()
+        .and_then(|p| p.parent().map(|dir| dir.join(hook_name)))
+        .unwrap_or_else(|| PathBuf::from(hook_name))
 }
 
 fn claude_settings_path() -> Option<PathBuf> {
@@ -120,7 +143,11 @@ fn write_settings(path: &Path, settings: &Value) -> Result<()> {
 }
 
 /// Merge Codirigent's hooks into the settings value. Returns true if modified.
-fn merge_hooks(settings: &mut Value) -> Result<bool> {
+///
+/// If a hook entry already exists with the correct `command`, it is left
+/// unchanged. If a legacy bare-name entry (containing `HOOK_MARKER` but not
+/// matching `command`) is found, it is upgraded in place to `command`.
+fn merge_hooks(settings: &mut Value, command: &str) -> Result<bool> {
     let hooks = settings
         .as_object_mut()
         .context("settings.json root must be an object")?
@@ -138,14 +165,21 @@ fn merge_hooks(settings: &mut Value) -> Result<bool> {
             .as_array_mut()
             .with_context(|| format!("{event} hooks must be an array"))?;
 
-        if already_installed(event_hooks) {
+        if already_installed(event_hooks, command) {
+            continue;
+        }
+
+        // Upgrade a legacy bare-name entry rather than adding a duplicate.
+        if upgrade_hook(event_hooks, command) {
+            debug!("Upgraded Codirigent hook for {event} to full binary path");
+            modified = true;
             continue;
         }
 
         debug!("Adding Codirigent hook for {event} ({description})");
         event_hooks.push(json!({
             "matcher": matcher,
-            "hooks": [{ "type": "command", "command": HOOK_MARKER }]
+            "hooks": [{ "type": "command", "command": command }]
         }));
         modified = true;
     }
@@ -165,7 +199,8 @@ fn hook_definitions() -> &'static [(&'static str, &'static str, &'static str)] {
     ]
 }
 
-fn already_installed(event_hooks: &[Value]) -> bool {
+/// Returns true if any hook entry already uses exactly `command`.
+fn already_installed(event_hooks: &[Value], command: &str) -> bool {
     event_hooks.iter().any(|hook| {
         hook.get("hooks")
             .and_then(|h| h.as_array())
@@ -173,7 +208,7 @@ fn already_installed(event_hooks: &[Value]) -> bool {
                 cmds.iter().any(|cmd| {
                     cmd.get("command")
                         .and_then(|c| c.as_str())
-                        .map(|s| s.contains(HOOK_MARKER))
+                        .map(|s| s == command)
                         .unwrap_or(false)
                 })
             })
@@ -181,14 +216,40 @@ fn already_installed(event_hooks: &[Value]) -> bool {
     })
 }
 
+/// Upgrades a legacy bare-name hook (containing `HOOK_MARKER`) to `command`.
+/// Returns true if any entry was updated.
+fn upgrade_hook(event_hooks: &mut [Value], command: &str) -> bool {
+    let mut upgraded = false;
+    for hook in event_hooks.iter_mut() {
+        if let Some(cmds) = hook.get_mut("hooks").and_then(|h| h.as_array_mut()) {
+            for cmd in cmds.iter_mut() {
+                let current = cmd
+                    .get("command")
+                    .and_then(|c| c.as_str())
+                    .map(|s| s.to_owned());
+                if let Some(c) = current {
+                    if c.contains(HOOK_MARKER) && c != command {
+                        cmd["command"] = json!(command);
+                        upgraded = true;
+                    }
+                }
+            }
+        }
+    }
+    upgraded
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    const CMD: &str = "/usr/local/bin/codirigent-hook";
+    const CMD2: &str = "/opt/codirigent/codirigent-hook";
+
     #[test]
     fn fresh_install_adds_three_hooks() {
         let mut settings = json!({});
-        let modified = merge_hooks(&mut settings).unwrap();
+        let modified = merge_hooks(&mut settings, CMD).unwrap();
         assert!(modified);
 
         let hooks = settings["hooks"].as_object().unwrap();
@@ -198,10 +259,20 @@ mod tests {
     }
 
     #[test]
+    fn fresh_install_uses_provided_command() {
+        let mut settings = json!({});
+        merge_hooks(&mut settings, CMD).unwrap();
+        let cmd = settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert_eq!(cmd, CMD);
+    }
+
+    #[test]
     fn idempotent_second_call() {
         let mut settings = json!({});
-        merge_hooks(&mut settings).unwrap();
-        let modified = merge_hooks(&mut settings).unwrap();
+        merge_hooks(&mut settings, CMD).unwrap();
+        let modified = merge_hooks(&mut settings, CMD).unwrap();
         assert!(!modified, "second call should not modify");
     }
 
@@ -214,7 +285,7 @@ mod tests {
                 ]
             }
         });
-        merge_hooks(&mut settings).unwrap();
+        merge_hooks(&mut settings, CMD).unwrap();
 
         let arr = settings["hooks"]["UserPromptSubmit"].as_array().unwrap();
         assert_eq!(arr.len(), 2, "existing hook must be preserved");
@@ -222,7 +293,31 @@ mod tests {
 
     #[test]
     fn does_not_duplicate_if_already_present() {
-        // Pre-seed all three events that hook_definitions() produces.
+        let mut settings = json!({
+            "hooks": {
+                "UserPromptSubmit": [
+                    {"matcher": "", "hooks": [{"type": "command", "command": CMD}]}
+                ],
+                "Notification": [
+                    {"matcher": "idle_prompt|permission_prompt", "hooks": [{"type": "command", "command": CMD}]}
+                ],
+                "Stop": [
+                    {"matcher": "", "hooks": [{"type": "command", "command": CMD}]}
+                ]
+            }
+        });
+        let modified = merge_hooks(&mut settings, CMD).unwrap();
+        assert!(!modified);
+
+        for event in &["UserPromptSubmit", "Notification", "Stop"] {
+            let arr = settings["hooks"][event].as_array().unwrap();
+            assert_eq!(arr.len(), 1, "{event} must not be duplicated");
+        }
+    }
+
+    #[test]
+    fn upgrades_bare_name_to_full_path() {
+        // Simulate a legacy install with just "codirigent-hook" (no path).
         let mut settings = json!({
             "hooks": {
                 "UserPromptSubmit": [
@@ -236,12 +331,63 @@ mod tests {
                 ]
             }
         });
-        let modified = merge_hooks(&mut settings).unwrap();
-        assert!(!modified);
+        let modified = merge_hooks(&mut settings, CMD).unwrap();
+        assert!(modified, "legacy entry must be upgraded");
 
         for event in &["UserPromptSubmit", "Notification", "Stop"] {
             let arr = settings["hooks"][event].as_array().unwrap();
-            assert_eq!(arr.len(), 1, "{event} must not be duplicated");
+            // No duplicate added — the existing entry was upgraded in place.
+            assert_eq!(arr.len(), 1, "{event} must not grow");
+            let cmd = arr[0]["hooks"][0]["command"].as_str().unwrap();
+            assert_eq!(cmd, CMD, "{event} command must be updated to full path");
+        }
+    }
+
+    #[test]
+    fn idempotent_after_upgrade() {
+        let mut settings = json!({
+            "hooks": {
+                "UserPromptSubmit": [
+                    {"matcher": "", "hooks": [{"type": "command", "command": "codirigent-hook"}]}
+                ],
+                "Notification": [
+                    {"matcher": "idle_prompt|permission_prompt", "hooks": [{"type": "command", "command": "codirigent-hook"}]}
+                ],
+                "Stop": [
+                    {"matcher": "", "hooks": [{"type": "command", "command": "codirigent-hook"}]}
+                ]
+            }
+        });
+        merge_hooks(&mut settings, CMD).unwrap();
+        // Second call with same command must be a no-op.
+        let modified = merge_hooks(&mut settings, CMD).unwrap();
+        assert!(!modified, "second call after upgrade must be idempotent");
+    }
+
+    #[test]
+    fn upgrades_when_binary_path_changes() {
+        // Simulate a previous install with CMD, now re-installed to CMD2.
+        let mut settings = json!({
+            "hooks": {
+                "UserPromptSubmit": [
+                    {"matcher": "", "hooks": [{"type": "command", "command": CMD}]}
+                ],
+                "Notification": [
+                    {"matcher": "idle_prompt|permission_prompt", "hooks": [{"type": "command", "command": CMD}]}
+                ],
+                "Stop": [
+                    {"matcher": "", "hooks": [{"type": "command", "command": CMD}]}
+                ]
+            }
+        });
+        let modified = merge_hooks(&mut settings, CMD2).unwrap();
+        assert!(modified, "changed path must trigger upgrade");
+
+        for event in &["UserPromptSubmit", "Notification", "Stop"] {
+            let arr = settings["hooks"][event].as_array().unwrap();
+            assert_eq!(arr.len(), 1, "{event} must not grow");
+            let cmd = arr[0]["hooks"][0]["command"].as_str().unwrap();
+            assert_eq!(cmd, CMD2);
         }
     }
 }
