@@ -28,37 +28,8 @@ impl WorkspaceView {
     const GENERIC_SHELL_JSONL_CACHE_TTL: Duration = Duration::from_secs(120);
 
     pub(super) fn poll_output(&mut self, cx: &mut Context<Self>) {
-        // Send deferred Enter keypresses (text was sent earlier; Enter comes
-        // as a separate write so ink treats it as a distinct stdin event).
-        // Phase 1: entries where Enter hasn't been sent yet and 100ms elapsed; send \r.
-        let need_enter: Vec<SessionId> = self
-            .polling
-            .pending_enters
-            .iter()
-            .filter(|(_, (when, sent))| !sent && when.elapsed() >= Duration::from_millis(100))
-            .map(|(id, _)| *id)
-            .collect();
-        for session_id in need_enter {
-            if let Ok(mgr) = self.session_manager.lock() {
-                let _ = mgr.send_input(session_id, b"\r");
-            }
-            // Flip to phase 2: keep entry for a grace period so the CLI can
-            // process the command before auto-assign considers this session.
-            self.polling
-                .pending_enters
-                .insert(session_id, (Instant::now(), true));
-        }
-        // Phase 2: remove entries where Enter was already sent and grace period elapsed.
-        let expired: Vec<SessionId> = self
-            .polling
-            .pending_enters
-            .iter()
-            .filter(|(_, (when, sent))| *sent && when.elapsed() >= Duration::from_millis(500))
-            .map(|(id, _)| *id)
-            .collect();
-        for session_id in expired {
-            self.polling.pending_enters.remove(&session_id);
-        }
+        self.process_deferred_enters();
+        self.drain_vte_responses();
 
         self.cache.session_id_buf.clear();
         self.cache
@@ -66,24 +37,6 @@ impl WorkspaceView {
             .extend(self.terminals.keys().copied());
         let session_ids = &self.cache.session_id_buf;
         let mut any_dirty = false;
-
-        // Drain VTE PtyWrite responses (DSR, DA1, etc.) and forward to PTY immediately.
-        // This is critical: PowerShell blocks on DSR (\x1b[6n]) until it gets a response.
-        for sid in &session_ids {
-            if let Some(rx) = self.pty_write_receivers.get_mut(sid) {
-                let mut buf = Vec::with_capacity(64);
-                while let Ok(bytes) = rx.try_recv() {
-                    buf.extend_from_slice(&bytes);
-                }
-                if !buf.is_empty() {
-                    if let Ok(mgr) = self.session_manager.lock() {
-                        if let Err(e) = mgr.send_input(*sid, &buf) {
-                            warn!(?sid, error = %e, "Failed to forward VTE PtyWrite response");
-                        }
-                    }
-                }
-            }
-        }
 
         // Spawn background JSONL check if due (throttled to ~3 seconds, non-overlapping)
         let has_any_reader = self
@@ -148,9 +101,6 @@ impl WorkspaceView {
                                 created_at,
                             ) in &jsonl_inputs
                             {
-                                // For GenericShell sessions, try process-tree detection.
-                                // The detector walks the PTY's child processes looking
-                                // for known CLI binaries (claude, gemini, codex).
                                 // For GenericShell sessions, try process-tree detection.
                                 // The detector walks the PTY's child processes looking
                                 // for known CLI binaries (claude, gemini, codex).
@@ -545,7 +495,80 @@ impl WorkspaceView {
             }
         }
 
-        // Compaction timeout: end compaction for sessions that exceeded the limit
+        self.cleanup_compaction_timeouts();
+        self.cleanup_stale_proposals();
+        self.schedule_background_git_refresh(cx);
+        any_dirty |= self.update_clipboard_preview(cx);
+
+        // Track output activity for adaptive polling
+        self.polling.last_poll_had_output = any_dirty;
+
+        if any_dirty {
+            cx.notify();
+        }
+    }
+
+    /// Send deferred Enter keypresses and clean up phase-2 grace periods.
+    ///
+    /// Task input is split into two PTY writes (the prompt text, then `\r`) so
+    /// that the CLI treats them as separate stdin events. This helper runs the
+    /// two-phase timing logic:
+    ///
+    /// - Phase 1: send `\r` once 100 ms have elapsed since the text was sent.
+    /// - Phase 2: remove the entry after a 500 ms grace period so auto-assign
+    ///   does not consider the session available while the CLI processes the command.
+    fn process_deferred_enters(&mut self) {
+        let need_enter: Vec<SessionId> = self
+            .polling
+            .pending_enters
+            .iter()
+            .filter(|(_, (when, sent))| !sent && when.elapsed() >= Duration::from_millis(100))
+            .map(|(id, _)| *id)
+            .collect();
+        for session_id in need_enter {
+            if let Ok(mgr) = self.session_manager.lock() {
+                let _ = mgr.send_input(session_id, b"\r");
+            }
+            // Flip to phase 2: keep entry for a grace period so the CLI can
+            // process the command before auto-assign considers this session.
+            self.polling
+                .pending_enters
+                .insert(session_id, (Instant::now(), true));
+        }
+        let expired: Vec<SessionId> = self
+            .polling
+            .pending_enters
+            .iter()
+            .filter(|(_, (when, sent))| *sent && when.elapsed() >= Duration::from_millis(500))
+            .map(|(id, _)| *id)
+            .collect();
+        for session_id in expired {
+            self.polling.pending_enters.remove(&session_id);
+        }
+    }
+
+    /// Drain VTE PtyWrite responses (DSR, DA1, etc.) and forward them to each PTY.
+    ///
+    /// This is critical: PowerShell blocks on DSR (`\x1b[6n]`) until it gets a
+    /// response. Failing to forward these makes PowerShell hang at its prompt.
+    fn drain_vte_responses(&mut self) {
+        for (sid, rx) in &mut self.pty_write_receivers {
+            let mut buf = Vec::with_capacity(64);
+            while let Ok(bytes) = rx.try_recv() {
+                buf.extend_from_slice(&bytes);
+            }
+            if !buf.is_empty() {
+                if let Ok(mgr) = self.session_manager.lock() {
+                    if let Err(e) = mgr.send_input(*sid, &buf) {
+                        warn!(?sid, error = %e, "Failed to forward VTE PtyWrite response");
+                    }
+                }
+            }
+        }
+    }
+
+    /// End compaction for sessions that have exceeded the configured timeout.
+    fn cleanup_compaction_timeouts(&mut self) {
         let timeout_secs = self
             .persistence
             .compaction
@@ -571,9 +594,11 @@ impl WorkspaceView {
                 });
             warn!(?session_id, "Compaction timed out");
         }
+    }
 
-        // Stale proposal cleanup: reject pending assignments whose target session
-        // now has a current_task (became busy), and clear proposals older than 5 min.
+    /// Reject pending task assignments whose target session became busy,
+    /// and expire proposals older than 5 minutes.
+    fn cleanup_stale_proposals(&mut self) {
         if let Ok(mut manager) = self.task_manager.lock() {
             let stale_task_ids: Vec<_> = manager
                 .assignment()
@@ -591,62 +616,71 @@ impl WorkspaceView {
             }
             manager.assignment_mut().clear_expired(300);
         }
+    }
 
-        // Refresh git status every 3 seconds (on background thread)
-        if self.polling.last_git_refresh.elapsed() >= Duration::from_secs(3)
-            && !self.polling.git_refresh_in_flight
+    /// Spawn a background git-status refresh for all sessions if the last
+    /// refresh was more than 3 seconds ago and no refresh is in-flight.
+    fn schedule_background_git_refresh(&mut self, cx: &mut Context<Self>) {
+        if self.polling.last_git_refresh.elapsed() < Duration::from_secs(3)
+            || self.polling.git_refresh_in_flight
         {
-            self.polling.last_git_refresh = Instant::now();
-            self.polling.git_refresh_in_flight = true;
-            let session_ids: Vec<SessionId> =
-                self.workspace.sessions().iter().map(|s| s.id).collect();
-            let session_manager = self.session_manager.clone();
-
-            cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
-                let git_infos = cx
-                    .background_executor()
-                    .spawn(async move {
-                        let mgr = session_manager.lock().expect("session manager poisoned");
-                        session_ids
-                            .iter()
-                            .filter_map(|id| mgr.refresh_git_status(*id).map(|info| (*id, info)))
-                            .collect::<Vec<_>>()
-                    })
-                    .await;
-
-                let _ = this.update(cx, |this, cx| {
-                    this.polling.git_refresh_in_flight = false;
-                    let mut git_changed = false;
-                    for (id, git_info) in &git_infos {
-                        if let Some(header) = this.terminal_headers.get_mut(id) {
-                            if header.git_branch.as_deref() != Some(git_info.branch.as_str())
-                                || header.git_dirty_count != Some(git_info.dirty_count)
-                            {
-                                header.git_branch = Some(git_info.branch.clone());
-                                header.git_dirty_count = Some(git_info.dirty_count);
-                                git_changed = true;
-                            }
-                        }
-                    }
-                    if git_changed {
-                        for (id, git_info) in &git_infos {
-                            if let Some(session) = this.workspace.session_mut(*id) {
-                                session.git_info = Some(git_info.clone());
-                                // Keep drawer group in sync with current git branch
-                                session.group = Some(git_info.branch.clone());
-                            }
-                        }
-                        cx.notify();
-                    }
-                });
-            })
-            .detach();
+            return;
         }
+        self.polling.last_git_refresh = Instant::now();
+        self.polling.git_refresh_in_flight = true;
+        let session_ids: Vec<SessionId> = self.workspace.sessions().iter().map(|s| s.id).collect();
+        let session_manager = self.session_manager.clone();
 
-        // Clipboard preview: show for 4 seconds whenever clipboard content changes and has an image.
-        // Uses platform clipboard sequence number (has_changed) to detect new content.
-        // Clipboard read stays on UI thread (Windows requirement); image save + thumbnail
-        // generation run on a background thread to avoid blocking rendering.
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+            let git_infos = cx
+                .background_executor()
+                .spawn(async move {
+                    let mgr = session_manager.lock().expect("session manager poisoned");
+                    session_ids
+                        .iter()
+                        .filter_map(|id| mgr.refresh_git_status(*id).map(|info| (*id, info)))
+                        .collect::<Vec<_>>()
+                })
+                .await;
+
+            let _ = this.update(cx, |this, cx| {
+                this.polling.git_refresh_in_flight = false;
+                let mut git_changed = false;
+                for (id, git_info) in &git_infos {
+                    if let Some(header) = this.terminal_headers.get_mut(id) {
+                        if header.git_branch.as_deref() != Some(git_info.branch.as_str())
+                            || header.git_dirty_count != Some(git_info.dirty_count)
+                        {
+                            header.git_branch = Some(git_info.branch.clone());
+                            header.git_dirty_count = Some(git_info.dirty_count);
+                            git_changed = true;
+                        }
+                    }
+                }
+                if git_changed {
+                    for (id, git_info) in &git_infos {
+                        if let Some(session) = this.workspace.session_mut(*id) {
+                            session.git_info = Some(git_info.clone());
+                            // Keep drawer group in sync with current git branch
+                            session.group = Some(git_info.branch.clone());
+                        }
+                    }
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    /// Check the clipboard for new image content and start a background
+    /// save/thumbnail if found. Auto-dismiss the preview after 4 seconds.
+    ///
+    /// Clipboard reads stay on the UI thread (Windows platform requirement);
+    /// image saving and thumbnail generation run on a background thread.
+    ///
+    /// Returns `true` if `any_dirty` should be set (preview was auto-dismissed).
+    fn update_clipboard_preview(&mut self, cx: &mut Context<Self>) -> bool {
+        // Show new clipboard image if content changed
         if self.polling.last_clipboard_check.elapsed() >= Duration::from_secs(1)
             && !self.polling.clipboard_load_in_flight
         {
@@ -661,24 +695,22 @@ impl WorkspaceView {
 
                         cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
                             // Background: save image to disk + generate thumbnail
-                            let result =
-                                cx.background_executor()
-                                    .spawn(async move {
-                                        // Ensure temp dir exists
-                                        let _ = std::fs::create_dir_all(&temp_dir);
-                                        // Build a temporary service just for saving
-                                        let svc = DefaultClipboardService::new(
-                                            temp_dir.parent().unwrap_or(&temp_dir).to_path_buf(),
-                                        );
-                                        let path = svc.save_image(&image_data).unwrap_or_default();
-                                        let file_size = image_data.bytes.len() as u64;
-                                        let preview =
-                                        crate::clipboard_preview::ClipboardPreview::create_preview(
-                                            &image_data, path, file_size,
-                                        );
-                                        preview
-                                    })
-                                    .await;
+                            let result = cx
+                                .background_executor()
+                                .spawn(async move {
+                                    let _ = std::fs::create_dir_all(&temp_dir);
+                                    let svc = DefaultClipboardService::new(
+                                        temp_dir.parent().unwrap_or(&temp_dir).to_path_buf(),
+                                    );
+                                    let path = svc.save_image(&image_data).unwrap_or_default();
+                                    let file_size = image_data.bytes.len() as u64;
+                                    crate::clipboard_preview::ClipboardPreview::create_preview(
+                                        &image_data,
+                                        path,
+                                        file_size,
+                                    )
+                                })
+                                .await;
 
                             let _ = this.update(cx, |this, cx| {
                                 this.polling.clipboard_load_in_flight = false;
@@ -694,23 +726,18 @@ impl WorkspaceView {
             }
         }
 
-        // Auto-dismiss clipboard preview after 4 seconds (checked every poll, not just clipboard interval)
+        // Auto-dismiss after 4 seconds (checked every poll, not just the 1-second interval)
         if self.clipboard.clipboard_preview.is_visible() {
             if let Some(shown_at) = self.clipboard.clipboard_preview_shown_at {
                 if shown_at.elapsed() > std::time::Duration::from_secs(4) {
                     self.clipboard.clipboard_preview.hide();
                     self.clipboard.clipboard_preview_shown_at = None;
-                    any_dirty = true;
+                    return true;
                 }
             }
         }
 
-        // Track output activity for adaptive polling
-        self.polling.last_poll_had_output = any_dirty;
-
-        if any_dirty {
-            cx.notify();
-        }
+        false
     }
 
     /// Check if the cached JSONL status hasn't changed for longer than `threshold`.
