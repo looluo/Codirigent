@@ -647,7 +647,10 @@ impl WorkspaceView {
             let git_infos = cx
                 .background_executor()
                 .spawn(async move {
-                    let mgr = session_manager.lock().expect("session manager poisoned");
+                    let mgr = match session_manager.lock() {
+                        Ok(m) => m,
+                        Err(_) => return Vec::new(),
+                    };
                     session_ids
                         .iter()
                         .filter_map(|id| mgr.refresh_git_status(*id).map(|info| (*id, info)))

@@ -304,12 +304,7 @@ impl WorkspaceView {
         };
 
         // Branch + HEAD
-        let branch_color = gpui::Hsla {
-            h: 0.0,
-            s: 0.0,
-            l: 0.75,
-            a: 1.0,
-        };
+        let branch_color = super::types::BRANCH_NAME_COLOR;
         content = content.child(
             div()
                 .flex()
@@ -1108,12 +1103,7 @@ impl WorkspaceView {
                             el.child(
                                 div()
                                     .text_xs()
-                                    .text_color(gpui::Hsla {
-                                        h: 0.1,
-                                        s: 0.8,
-                                        l: 0.6,
-                                        a: 1.0,
-                                    })
+                                    .text_color(super::types::DIRTY_INDICATOR_COLOR)
                                     .child(format!("\u{25CF}{}", gi.dirty_count)),
                             )
                         }),
@@ -1145,14 +1135,7 @@ impl WorkspaceView {
                     .justify_center()
                     .flex_shrink_0()
                     .cursor_pointer()
-                    .hover(|style| {
-                        style.bg(gpui::Hsla {
-                            h: 0.0,
-                            s: 0.0,
-                            l: 1.0,
-                            a: 0.1,
-                        })
-                    })
+                    .hover(|style| style.bg(super::types::CANCEL_BUTTON_HOVER))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _, _, cx| {

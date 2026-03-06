@@ -240,10 +240,10 @@ impl WorkspaceView {
             )
     }
 
-    /// Render the custom layout picker modal.
+    /// Render the session context menu (right-click dropdown).
     ///
-    /// Displays a modal overlay with tabs for Grid and Split modes.
-    /// Grid mode provides rows/columns inputs; Split mode provides an
+    /// Displays a floating dropdown near the session row with options for
+    /// rename, group management, and session termination.
     pub(super) fn render_session_menu(
         &mut self,
         cx: &mut Context<Self>,
@@ -256,12 +256,7 @@ impl WorkspaceView {
         let fg: gpui::Hsla = theme.foreground.into();
         let muted: gpui::Hsla = theme.muted.into();
         let hover_bg: gpui::Hsla = theme.active.into();
-        let destructive = gpui::Hsla {
-            h: 0.0,
-            s: 0.7,
-            l: 0.55,
-            a: 1.0,
-        };
+        let destructive = super::types::DESTRUCTIVE_ITEM_COLOR;
 
         // Check if this session has a group
         let session_group = self
@@ -420,7 +415,7 @@ impl WorkspaceView {
 
 /// Session menu actions.
 #[derive(Debug, Clone)]
-pub enum SessionMenuAction {
+pub(super) enum SessionMenuAction {
     Rename,
     AssignToGroup(String),
     NewGroup,

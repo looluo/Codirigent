@@ -26,18 +26,15 @@ use super::types::{
     FONT_SIZE_BASE_DEFAULT, HEADER_HEIGHT, REM_BASE, TERMINAL_CONTENT_PADDING,
 };
 use crate::app::{Copy, Paste};
-// Imports from main branch (terminal integration)
-use crate::input::{key_to_bytes, TerminalKeystroke, TerminalModifiers};
-use crate::terminal_view::TerminalView;
-// Imports from feature branch (UI components)
+use crate::clipboard_preview::ClipboardPreview;
 use crate::empty_session::{EmptySessionEvent, EmptySessionPool};
+use crate::input::{key_to_bytes, TerminalKeystroke, TerminalModifiers};
 use crate::sidebar::{FileTreePanel, WorktreePanel};
 use crate::task_board::TaskBoardPanel;
 use crate::terminal_header::TerminalHeader;
+use crate::terminal_view::TerminalView;
 use crate::theme::CodirigentTheme;
 use crate::toolbar::CustomLayoutPicker;
-// Core imports (combined)
-use crate::clipboard_preview::ClipboardPreview;
 use codirigent_core::compaction::{CompactionConfig, CompactionService};
 use codirigent_core::config_service::ConfigService;
 use codirigent_core::{
@@ -400,13 +397,6 @@ impl WorkspaceView {
         }
     }
 
-    /// Refresh the file tree panel from the current model.
-
-    /// Poll PTY output and feed to terminal emulators.
-
-    /// Try to compact a session before verification.
-    /// Returns true if compaction was started, false if skipped.
-
     /// Check if a session should be created at the given position.
     /// Returns true if this is not a duplicate click (same position within 100ms).
     pub(super) fn should_create_session_at(&mut self, position: GridPosition) -> bool {
@@ -424,8 +414,6 @@ impl WorkspaceView {
         self.selection.last_click_position = Some((position, now));
         true
     }
-
-    /// Create a new session.
 
     /// Save current session state to disk.
     pub(super) fn save_state_to_disk(&self) {
@@ -581,24 +569,6 @@ impl WorkspaceView {
         self.terminal_headers.get(&id)
     }
 
-    /// Get a mutable terminal header for a session.
-    pub fn get_terminal_header_mut(&mut self, id: SessionId) -> Option<&mut TerminalHeader> {
-        self.terminal_headers.get_mut(&id)
-    }
-
-    /// Update a session's terminal header.
-    pub fn update_session_header(
-        &mut self,
-        id: SessionId,
-        status: SessionStatus,
-        context_usage: Option<f32>,
-    ) {
-        if let Some(header) = self.terminal_headers.get_mut(&id) {
-            header.status = status;
-            header.context_usage = context_usage;
-        }
-    }
-
     /// Process pending events from all UI components.
     ///
     /// This method is called at the start of each render cycle to handle
@@ -681,13 +651,6 @@ impl WorkspaceView {
         self.sync_file_tree_to_focused_session(cx);
     }
 
-    /// Select a session without GPUI context (skips background file tree rebuild).
-    pub(super) fn select_session(&mut self, session_id: SessionId) {
-        self.selection.selected_session_id = Some(session_id);
-        self.drawer.set_selected_session(Some(session_id));
-        self.workspace.focus_session(session_id);
-    }
-
     /// Process icon rail events (drawer toggling, settings).
     pub(super) fn process_icon_rail_events(&mut self) {
         let events = self.icon_rail.drain_events();
@@ -703,10 +666,6 @@ impl WorkspaceView {
         }
     }
 
-    /// Open the settings page overlay.
-
-    /// Handle task board events.
-
     /// Handle empty session cell events.
     fn handle_empty_session_event(&mut self, event: EmptySessionEvent, cx: &mut Context<Self>) {
         match event {
@@ -719,34 +678,6 @@ impl WorkspaceView {
         }
         cx.notify();
     }
-
-    /// Open a file in the user's configured editor.
-    ///
-    /// GUI editors (code, zed, cursor, etc.) are spawned as separate processes.
-    /// Terminal editors (vim, nvim, nano, etc.) are injected into the focused terminal.
-    // --- Action Handlers ---
-    // These are called by GPUI when keyboard shortcuts or menu items trigger actions.
-
-    /// Handle Paste action (Cmd+V / Ctrl+V / right-click).
-
-    /// Find the best session to assign a task to.
-    ///
-    /// Only returns idle sessions with a known CLI running (not GenericShell).
-    /// Never assigns to bare shell sessions ??the CLI must be detected first.
-    /// Find the best assignable session for a given task.
-    ///
-    /// Filters sessions by:
-    /// 1. Idle status, no current task, known CLI type
-    /// 2. Directory matching (session working_directory under task's project_dir)
-    ///
-    /// Among matching sessions, prefers:
-    /// 1. The currently focused session (if it matches)
-    /// 2. Otherwise, the session with the lowest context_usage (freshest context)
-
-    /// Detect CLI type from PTY output by scanning for known banners.
-    ///
-    /// Uses simple byte string matching for speed. Returns `None` if no
-    /// known CLI banner is found.
 
     /// Get a reference to the underlying workspace.
     ///
@@ -863,13 +794,6 @@ impl WorkspaceView {
     /// Get grid layout accounting for task board height.
     pub(super) fn grid_layout_with_task_board(&self) -> crate::layout::GridLayout {
         self.workspace.grid_layout()
-    }
-
-    /// Get a reference to the terminals HashMap.
-    ///
-    /// Used by the render module to access terminal views.
-    pub(super) fn terminals(&self) -> &HashMap<SessionId, TerminalView> {
-        &self.terminals
     }
 
     /// Get a mutable reference to the terminals HashMap.

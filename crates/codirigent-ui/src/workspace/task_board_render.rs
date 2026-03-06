@@ -34,6 +34,51 @@ const PRIORITY_LOW_COLOR: gpui::Rgba = gpui::Rgba {
     a: 1.0,
 };
 
+/// Amber color for "confirm assignment" button and pending-assignment banners.
+const AMBER_CONFIRM: gpui::Hsla = gpui::Hsla {
+    h: 0.11,
+    s: 0.95,
+    l: 0.55,
+    a: 1.0,
+};
+const AMBER_BG: gpui::Hsla = gpui::Hsla {
+    h: 0.11,
+    s: 0.95,
+    l: 0.55,
+    a: 0.08,
+};
+const AMBER_BORDER: gpui::Hsla = gpui::Hsla {
+    h: 0.11,
+    s: 0.95,
+    l: 0.55,
+    a: 0.25,
+};
+const AMBER_TEXT: gpui::Hsla = gpui::Hsla {
+    h: 0.11,
+    s: 0.95,
+    l: 0.55,
+    a: 0.9,
+};
+/// Green color for "accept/approve" assignment banners.
+const GREEN_BG: gpui::Hsla = gpui::Hsla {
+    h: 0.40,
+    s: 0.7,
+    l: 0.45,
+    a: 0.20,
+};
+const GREEN_FG: gpui::Hsla = gpui::Hsla {
+    h: 0.40,
+    s: 0.8,
+    l: 0.60,
+    a: 1.0,
+};
+const GREEN_BG_HOVER: gpui::Hsla = gpui::Hsla {
+    h: 0.40,
+    s: 0.7,
+    l: 0.45,
+    a: 0.35,
+};
+
 impl WorkspaceView {
     /// Convert core Task to UI TaskItem with status mapping.
     fn core_task_to_ui_item(&self, task: &codirigent_core::Task) -> crate::task_board::TaskItem {
@@ -870,18 +915,7 @@ impl WorkspaceView {
                 })
                 .collect();
 
-            let queue_count = queued.len();
-            let in_progress_count = running.len();
-            let review_count = review.len();
-            let done_count = done.len();
             drop(manager);
-            self.task_board.set_task_counts(
-                queue_count,
-                in_progress_count,
-                review_count,
-                done_count,
-            );
-
             (running, queued, review, done, mode, pending)
         } else {
             (
@@ -900,7 +934,7 @@ impl WorkspaceView {
         let done_count = done_items.len();
 
         // Auto-assign badge colors based on three-state mode
-        let amber: gpui::Hsla = gpui::hsla(0.11, 0.95, 0.55, 1.0); // Amber for Confirm
+        let amber: gpui::Hsla = AMBER_CONFIRM;
         let (auto_dot_color, auto_text_opacity, auto_bg_opacity, auto_border_opacity, auto_label) =
             match auto_assign_mode {
                 crate::task_board::AutoAssignMode::Off => {
@@ -1025,11 +1059,11 @@ impl WorkspaceView {
                     .map(|(task_id, session_num, task_title)| {
                         let confirm_task_id = task_id.clone();
                         let reject_task_id = task_id.clone();
-                        let amber_bg: gpui::Hsla = gpui::hsla(0.11, 0.95, 0.55, 0.08);
-                        let amber_border: gpui::Hsla = gpui::hsla(0.11, 0.95, 0.55, 0.25);
-                        let amber_text: gpui::Hsla = gpui::hsla(0.11, 0.95, 0.55, 0.9);
-                        let green_bg: gpui::Hsla = gpui::hsla(0.40, 0.7, 0.45, 0.20);
-                        let green_fg: gpui::Hsla = gpui::hsla(0.40, 0.8, 0.60, 1.0);
+                        let amber_bg: gpui::Hsla = AMBER_BG;
+                        let amber_border: gpui::Hsla = AMBER_BORDER;
+                        let amber_text: gpui::Hsla = AMBER_TEXT;
+                        let green_bg: gpui::Hsla = GREEN_BG;
+                        let green_fg: gpui::Hsla = GREEN_FG;
 
                         div()
                             .id(SharedString::from(format!("pending-confirm-{}", task_id)))
@@ -1085,9 +1119,7 @@ impl WorkspaceView {
                                             .rounded(px(4.0))
                                             .bg(green_bg)
                                             .cursor_pointer()
-                                            .hover(|style| {
-                                                style.bg(gpui::hsla(0.40, 0.7, 0.45, 0.35))
-                                            })
+                                            .hover(|style| style.bg(GREEN_BG_HOVER))
                                             .on_click(cx.listener(
                                                 move |this, _: &ClickEvent, _window, _cx| {
                                                     this.task_board.confirm_pending_assignment(

@@ -114,6 +114,43 @@ pub(super) const CANCEL_BUTTON_HOVER: Hsla = Hsla {
     a: 0.1,
 };
 
+/// Muted grey used for git branch name labels in the worktrees panel.
+pub(super) const BRANCH_NAME_COLOR: Hsla = Hsla {
+    h: 0.0,
+    s: 0.0,
+    l: 0.75,
+    a: 1.0,
+};
+
+/// Amber color used for the dirty-file count indicator in session rows.
+pub(super) const DIRTY_INDICATOR_COLOR: Hsla = Hsla {
+    h: 0.1,
+    s: 0.8,
+    l: 0.6,
+    a: 1.0,
+};
+
+/// Light red used for destructive hover text (close-tab button, etc.).
+///
+/// Lighter than `DESTRUCTIVE_BUTTON_BG` to work as foreground text color.
+pub(super) const DESTRUCTIVE_HOVER_TEXT: Hsla = Hsla {
+    h: 0.0,
+    s: 0.8,
+    l: 0.6,
+    a: 1.0,
+};
+
+/// Destructive action color for menu item text (softer red; used for "End Session" etc.).
+///
+/// Distinct from `DESTRUCTIVE_BUTTON_BG` which is used as a button fill.
+/// The lighter lightness makes it readable as colored text against panel backgrounds.
+pub(super) const DESTRUCTIVE_ITEM_COLOR: Hsla = Hsla {
+    h: 0.0,
+    s: 0.7,
+    l: 0.55,
+    a: 1.0,
+};
+
 /// Predefined group color palette for visual distinction.
 ///
 /// These colors are used to assign distinct colors to session groups,

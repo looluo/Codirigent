@@ -96,8 +96,7 @@ impl WorkspaceView {
                 // Store origin as f32 for arithmetic (Pixels doesn't support Add in gpui 0.2.1)
                 let origin_x: f32 = bounds.origin.x.into();
                 let origin_y: f32 = bounds.origin.y.into();
-                // Must match TERMINAL_CONTENT_PADDING in resize_terminals_to_grid
-                let padding = 4.0_f32;
+                let padding = super::types::TERMINAL_CONTENT_PADDING;
                 let ox = origin_x + padding;
                 let oy = origin_y + padding;
 

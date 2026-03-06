@@ -92,14 +92,7 @@ impl WorkspaceView {
                         .text_xs()
                         .text_color(muted)
                         .cursor_pointer()
-                        .hover(|style| {
-                            style.text_color(gpui::Hsla {
-                                h: 0.0,
-                                s: 0.8,
-                                l: 0.6,
-                                a: 1.0,
-                            })
-                        })
+                        .hover(|style| style.text_color(super::types::DESTRUCTIVE_HOVER_TEXT))
                         .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
                             // Set pending deletion to show confirmation dialog
                             this.modals.pending_profile_deletion =
