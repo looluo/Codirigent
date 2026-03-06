@@ -30,6 +30,9 @@ impl WorkspaceView {
     pub(super) fn poll_output(&mut self, cx: &mut Context<Self>) {
         self.process_deferred_enters();
         self.drain_vte_responses();
+        // Background JSONL check is spawned before session_ids to avoid holding
+        // the session_id_buf borrow across a &mut self call.
+        self.spawn_background_jsonl_check(cx);
 
         self.cache.session_id_buf.clear();
         self.cache
@@ -37,236 +40,6 @@ impl WorkspaceView {
             .extend(self.terminals.keys().copied());
         let session_ids = &self.cache.session_id_buf;
         let mut any_dirty = false;
-
-        // Spawn background JSONL check if due (throttled to ~3 seconds, non-overlapping)
-        let has_any_reader = self
-            .cli_readers
-            .lock()
-            .map(|r| r.claude.is_some() || r.codex.is_some() || r.gemini.is_some())
-            .unwrap_or(false);
-        if has_any_reader
-            && self.polling.last_jsonl_check.elapsed() >= Duration::from_secs(3)
-            && !self.polling.jsonl_check_in_flight
-        {
-            self.polling.last_jsonl_check = Instant::now();
-            self.polling.jsonl_check_in_flight = true;
-
-            // Collect inputs for background JSONL check
-            let jsonl_inputs: Vec<(
-                SessionId,
-                std::path::PathBuf,
-                Option<u32>,
-                codirigent_core::CliType,
-                SessionStatus, // current status for transition detection
-                i64,           // session created_at (unix timestamp for JSONL file filtering)
-            )> = self
-                .workspace
-                .sessions()
-                .iter()
-                .map(|s| {
-                    let cli_type = self.clipboard.clipboard_service.get_session_cli_type(s.id);
-                    let child_pid =
-                        self.with_session_manager(|manager| manager.get_child_pid(s.id));
-                    (
-                        s.id,
-                        s.working_directory.clone(),
-                        child_pid,
-                        cli_type,
-                        s.status,
-                        s.created_at.timestamp(),
-                    )
-                })
-                .collect();
-
-            let cli_readers = self.cli_readers.clone();
-            let event_bus = self.event_bus.clone();
-            let max_age = Self::GENERIC_SHELL_JSONL_MAX_AGE;
-
-            cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
-                // Background: perform JSONL reads (the expensive I/O)
-                let results = cx
-                    .background_executor()
-                    .spawn(async move {
-                        let mut out: Vec<(SessionId, Option<(SessionStatus, Option<String>)>)> =
-                            Vec::new();
-                        let mut detected_types: Vec<(SessionId, codirigent_core::CliType)> =
-                            Vec::new();
-                        if let Ok(mut readers) = cli_readers.lock() {
-                            for (
-                                session_id,
-                                working_dir,
-                                child_pid,
-                                cli_type,
-                                _current_status,
-                                created_at,
-                            ) in &jsonl_inputs
-                            {
-                                // For GenericShell sessions, try process-tree detection.
-                                // The detector walks the PTY's child processes looking
-                                // for known CLI binaries (claude, gemini, codex).
-                                // Note: don't use process-tree to REVERT ClaudeCode → GenericShell
-                                // because detection is unreliable (returns GenericShell even when
-                                // Claude is running). Banner detection handles initial detection.
-                                let effective_type =
-                                    if *cli_type == codirigent_core::CliType::GenericShell {
-                                        if let Some(pid) = child_pid {
-                                            let detected = readers.detector.detect_cli_type(*pid);
-                                            if detected != codirigent_core::CliType::GenericShell {
-                                                info!(
-                                                    ?session_id,
-                                                    ?detected,
-                                                    "Process-tree detected CLI type"
-                                                );
-                                                detected_types.push((*session_id, detected));
-                                                detected
-                                            } else {
-                                                *cli_type
-                                            }
-                                        } else {
-                                            *cli_type
-                                        }
-                                    } else {
-                                        *cli_type
-                                    };
-
-                                let cli_status: Option<CliSessionStatus> = match effective_type {
-                                    codirigent_core::CliType::ClaudeCode => {
-                                        readers.claude.as_mut().and_then(|r| {
-                                            r.get_status_if_recent(
-                                                working_dir,
-                                                *child_pid,
-                                                max_age,
-                                                Some(*created_at),
-                                            )
-                                        })
-                                    }
-                                    codirigent_core::CliType::CodexCli => {
-                                        readers.codex.as_mut().and_then(|r| {
-                                            r.get_status_if_recent(working_dir, *child_pid, max_age)
-                                        })
-                                    }
-                                    codirigent_core::CliType::GeminiCli => {
-                                        readers.gemini.as_mut().and_then(|r| {
-                                            r.get_status_if_recent(working_dir, *child_pid, max_age)
-                                        })
-                                    }
-                                    codirigent_core::CliType::GenericShell => None,
-                                };
-                                let resolved = cli_status.and_then(|s| s.to_session_status());
-                                out.push((*session_id, resolved));
-                            }
-                        }
-                        (out, jsonl_inputs, detected_types)
-                    })
-                    .await;
-
-                // Marshal results back to UI thread
-                let _ = this.update(cx, |this, cx| {
-                    this.polling.jsonl_check_in_flight = false;
-                    let mut changed = false;
-                    let (results, inputs, detected_types) = results;
-
-                    // Apply process-tree CLI type detections on UI thread
-                    for (session_id, detected_type) in &detected_types {
-                        this.clipboard
-                            .clipboard_service
-                            .set_session_cli_type(*session_id, *detected_type);
-                        info!(
-                            ?session_id,
-                            ?detected_type,
-                            "Applied process-tree CLI type detection"
-                        );
-                    }
-                    for (session_id, cli_status) in &results {
-                        if let Some((new_status, tool_name)) = cli_status {
-                            // Cache the JSONL result
-                            if let Ok(mut readers) = this.cli_readers.lock() {
-                                // Preserve status_since if status hasn't changed
-                                let status_since = readers
-                                    .cached_status
-                                    .get(session_id)
-                                    .filter(|c| c.status == *new_status)
-                                    .map(|c| c.status_since)
-                                    .unwrap_or_else(Instant::now);
-                                readers.cached_status.insert(
-                                    *session_id,
-                                    CachedCliStatus {
-                                        status: *new_status,
-                                        tool_name: tool_name.clone(),
-                                        seen_at: Instant::now(),
-                                        status_since,
-                                    },
-                                );
-                            }
-                            // Fire AttentionRequired on transition
-                            if *new_status == SessionStatus::NeedsAttention {
-                                let current_status = inputs
-                                    .iter()
-                                    .find(|(id, ..)| id == session_id)
-                                    .map(|(_, _, _, _, s, _)| *s);
-                                if current_status != Some(SessionStatus::NeedsAttention) {
-                                    event_bus.publish(CodirigentEvent::AttentionRequired {
-                                        session_id: *session_id,
-                                        detail: tool_name.clone(),
-                                    });
-                                    // Send Windows toast notification
-                                    let session_name = inputs
-                                        .iter()
-                                        .find(|(id, ..)| id == session_id)
-                                        .map(|(id, ..)| format!("Session {}", id.0));
-                                    let name = session_name.as_deref().unwrap_or("Session");
-                                    let body = match tool_name.as_deref() {
-                                        Some("question") => {
-                                            format!("{name} has a question")
-                                        }
-                                        Some(tool) => {
-                                            format!("{name} needs attention: {tool}")
-                                        }
-                                        None => {
-                                            format!("{name} is waiting for input")
-                                        }
-                                    };
-                                    send_notification("Codirigent", &body);
-                                }
-                            }
-                            changed = true;
-                        } else {
-                            // No JSONL result — check if detector says idle and clear stale cache
-                            let detector_idle = this.with_detector(|detector| {
-                                matches!(
-                                    detector.get_status(*session_id),
-                                    Some(SessionStatus::Idle) | None
-                                )
-                            });
-                            if detector_idle {
-                                // Check if cache entry is actually stale before removing
-                                let is_stale = this
-                                    .cli_readers
-                                    .lock()
-                                    .ok()
-                                    .and_then(|r| {
-                                        r.cached_status.get(session_id).map(|c| {
-                                            c.seen_at.elapsed()
-                                                > Self::GENERIC_SHELL_JSONL_CACHE_TTL
-                                        })
-                                    })
-                                    .unwrap_or(false);
-                                if is_stale {
-                                    if let Ok(mut readers) = this.cli_readers.lock() {
-                                        readers.cached_status.remove(session_id);
-                                    }
-                                    changed = true;
-                                }
-                            }
-                        }
-                    }
-                    if changed {
-                        cx.notify();
-                    }
-                });
-            })
-            .detach();
-        }
 
         for &session_id in session_ids {
             // Try to drain output from the session manager
@@ -506,6 +279,242 @@ impl WorkspaceView {
         if any_dirty {
             cx.notify();
         }
+    }
+
+    /// Spawn a background JSONL status check for all sessions if the last check
+    /// was more than 3 seconds ago and no check is currently in-flight.
+    ///
+    /// The check reads JSONL files written by Claude Code, Codex, and Gemini CLIs
+    /// and updates the cached session status on the UI thread. Calling this before
+    /// building the `session_ids` slice avoids holding the `session_id_buf` borrow
+    /// across a `&mut self` call.
+    fn spawn_background_jsonl_check(&mut self, cx: &mut Context<Self>) {
+        let has_any_reader = self
+            .cli_readers
+            .lock()
+            .map(|r| r.claude.is_some() || r.codex.is_some() || r.gemini.is_some())
+            .unwrap_or(false);
+        if !has_any_reader
+            || self.polling.last_jsonl_check.elapsed() < Duration::from_secs(3)
+            || self.polling.jsonl_check_in_flight
+        {
+            return;
+        }
+        self.polling.last_jsonl_check = Instant::now();
+        self.polling.jsonl_check_in_flight = true;
+
+        // Collect inputs for background JSONL check
+        let jsonl_inputs: Vec<(
+            SessionId,
+            std::path::PathBuf,
+            Option<u32>,
+            codirigent_core::CliType,
+            SessionStatus, // current status for transition detection
+            i64,           // session created_at (unix timestamp for JSONL file filtering)
+        )> = self
+            .workspace
+            .sessions()
+            .iter()
+            .map(|s| {
+                let cli_type = self.clipboard.clipboard_service.get_session_cli_type(s.id);
+                let child_pid = self.with_session_manager(|manager| manager.get_child_pid(s.id));
+                (
+                    s.id,
+                    s.working_directory.clone(),
+                    child_pid,
+                    cli_type,
+                    s.status,
+                    s.created_at.timestamp(),
+                )
+            })
+            .collect();
+
+        let cli_readers = self.cli_readers.clone();
+        let event_bus = self.event_bus.clone();
+        let max_age = Self::GENERIC_SHELL_JSONL_MAX_AGE;
+
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+            // Background: perform JSONL reads (the expensive I/O)
+            let results = cx
+                .background_executor()
+                .spawn(async move {
+                    let mut out: Vec<(SessionId, Option<(SessionStatus, Option<String>)>)> =
+                        Vec::new();
+                    let mut detected_types: Vec<(SessionId, codirigent_core::CliType)> = Vec::new();
+                    if let Ok(mut readers) = cli_readers.lock() {
+                        for (
+                            session_id,
+                            working_dir,
+                            child_pid,
+                            cli_type,
+                            _current_status,
+                            created_at,
+                        ) in &jsonl_inputs
+                        {
+                            // For GenericShell sessions, try process-tree detection.
+                            // The detector walks the PTY's child processes looking
+                            // for known CLI binaries (claude, gemini, codex).
+                            // Note: don't use process-tree to REVERT ClaudeCode → GenericShell
+                            // because detection is unreliable (returns GenericShell even when
+                            // Claude is running). Banner detection handles initial detection.
+                            let effective_type =
+                                if *cli_type == codirigent_core::CliType::GenericShell {
+                                    if let Some(pid) = child_pid {
+                                        let detected = readers.detector.detect_cli_type(*pid);
+                                        if detected != codirigent_core::CliType::GenericShell {
+                                            info!(
+                                                ?session_id,
+                                                ?detected,
+                                                "Process-tree detected CLI type"
+                                            );
+                                            detected_types.push((*session_id, detected));
+                                            detected
+                                        } else {
+                                            *cli_type
+                                        }
+                                    } else {
+                                        *cli_type
+                                    }
+                                } else {
+                                    *cli_type
+                                };
+
+                            let cli_status: Option<CliSessionStatus> = match effective_type {
+                                codirigent_core::CliType::ClaudeCode => {
+                                    readers.claude.as_mut().and_then(|r| {
+                                        r.get_status_if_recent(
+                                            working_dir,
+                                            *child_pid,
+                                            max_age,
+                                            Some(*created_at),
+                                        )
+                                    })
+                                }
+                                codirigent_core::CliType::CodexCli => {
+                                    readers.codex.as_mut().and_then(|r| {
+                                        r.get_status_if_recent(working_dir, *child_pid, max_age)
+                                    })
+                                }
+                                codirigent_core::CliType::GeminiCli => {
+                                    readers.gemini.as_mut().and_then(|r| {
+                                        r.get_status_if_recent(working_dir, *child_pid, max_age)
+                                    })
+                                }
+                                codirigent_core::CliType::GenericShell => None,
+                            };
+                            let resolved = cli_status.and_then(|s| s.to_session_status());
+                            out.push((*session_id, resolved));
+                        }
+                    }
+                    (out, jsonl_inputs, detected_types)
+                })
+                .await;
+
+            // Marshal results back to UI thread
+            let _ = this.update(cx, |this, cx| {
+                this.polling.jsonl_check_in_flight = false;
+                let mut changed = false;
+                let (results, inputs, detected_types) = results;
+
+                // Apply process-tree CLI type detections on UI thread
+                for (session_id, detected_type) in &detected_types {
+                    this.clipboard
+                        .clipboard_service
+                        .set_session_cli_type(*session_id, *detected_type);
+                    info!(
+                        ?session_id,
+                        ?detected_type,
+                        "Applied process-tree CLI type detection"
+                    );
+                }
+                for (session_id, cli_status) in &results {
+                    if let Some((new_status, tool_name)) = cli_status {
+                        // Cache the JSONL result
+                        if let Ok(mut readers) = this.cli_readers.lock() {
+                            // Preserve status_since if status hasn't changed
+                            let status_since = readers
+                                .cached_status
+                                .get(session_id)
+                                .filter(|c| c.status == *new_status)
+                                .map(|c| c.status_since)
+                                .unwrap_or_else(Instant::now);
+                            readers.cached_status.insert(
+                                *session_id,
+                                CachedCliStatus {
+                                    status: *new_status,
+                                    tool_name: tool_name.clone(),
+                                    seen_at: Instant::now(),
+                                    status_since,
+                                },
+                            );
+                        }
+                        // Fire AttentionRequired on transition
+                        if *new_status == SessionStatus::NeedsAttention {
+                            let current_status = inputs
+                                .iter()
+                                .find(|(id, ..)| id == session_id)
+                                .map(|(_, _, _, _, s, _)| *s);
+                            if current_status != Some(SessionStatus::NeedsAttention) {
+                                event_bus.publish(CodirigentEvent::AttentionRequired {
+                                    session_id: *session_id,
+                                    detail: tool_name.clone(),
+                                });
+                                // Send Windows toast notification
+                                let session_name = inputs
+                                    .iter()
+                                    .find(|(id, ..)| id == session_id)
+                                    .map(|(id, ..)| format!("Session {}", id.0));
+                                let name = session_name.as_deref().unwrap_or("Session");
+                                let body = match tool_name.as_deref() {
+                                    Some("question") => {
+                                        format!("{name} has a question")
+                                    }
+                                    Some(tool) => {
+                                        format!("{name} needs attention: {tool}")
+                                    }
+                                    None => {
+                                        format!("{name} is waiting for input")
+                                    }
+                                };
+                                send_notification("Codirigent", &body);
+                            }
+                        }
+                        changed = true;
+                    } else {
+                        // No JSONL result — check if detector says idle and clear stale cache
+                        let detector_idle = this.with_detector(|detector| {
+                            matches!(
+                                detector.get_status(*session_id),
+                                Some(SessionStatus::Idle) | None
+                            )
+                        });
+                        if detector_idle {
+                            // Check if cache entry is actually stale before removing
+                            let is_stale = this
+                                .cli_readers
+                                .lock()
+                                .ok()
+                                .and_then(|r| {
+                                    r.cached_status.get(session_id).map(|c| {
+                                        c.seen_at.elapsed() > Self::GENERIC_SHELL_JSONL_CACHE_TTL
+                                    })
+                                })
+                                .unwrap_or(false);
+                            if is_stale {
+                                if let Ok(mut readers) = this.cli_readers.lock() {
+                                    readers.cached_status.remove(session_id);
+                                }
+                                changed = true;
+                            }
+                        }
+                    }
+                }
+                if changed {
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
     }
 
     /// Send deferred Enter keypresses and clean up phase-2 grace periods.
