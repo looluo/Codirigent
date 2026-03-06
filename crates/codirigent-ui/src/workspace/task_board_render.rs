@@ -146,6 +146,7 @@ impl WorkspaceView {
     /// - `border_color`: Default border color
     /// - `input_bg`: Default background color
     /// - `cx`: GPUI context
+    #[allow(clippy::too_many_arguments)]
     fn build_priority_button(
         &self,
         id: impl Into<SharedString>,

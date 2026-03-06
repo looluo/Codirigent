@@ -142,7 +142,7 @@ impl TerminalMouseEvent {
                     0x1b,
                     b'[',
                     b'M',
-                    (code + 32) as u8,
+                    code + 32,
                     (self.col + 1 + 32) as u8,
                     (self.row + 1 + 32) as u8,
                 ])

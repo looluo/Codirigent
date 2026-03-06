@@ -36,7 +36,6 @@ impl WorkspaceView {
         let theme = self.workspace().theme().clone();
         let panel_bg: gpui::Hsla = theme.panel_background.into();
         let border_color: gpui::Hsla = theme.border.into();
-        let primary_color: gpui::Hsla = theme.primary.into();
         let muted: gpui::Hsla = theme.muted.into();
         let grid_gap = theme.grid_gap;
 
@@ -63,13 +62,6 @@ impl WorkspaceView {
                 let position = codirigent_core::GridPosition { row, col };
 
                 let cell_div = if let Some(info) = cells.get(index) {
-                    // Session cell with terminal header
-                    let cell_border = if info.is_focused {
-                        primary_color
-                    } else {
-                        border_color
-                    };
-
                     // Get or create terminal header hints
                     let header_hints =
                         if let Some(header) = self.get_terminal_header(info.session_id) {
@@ -85,9 +77,6 @@ impl WorkspaceView {
                     self.render_session_cell_with_terminal(
                         info.session_id,
                         &header_hints,
-                        panel_bg,
-                        cell_border,
-                        border_color,
                         &theme,
                         Some(cell_height),
                         cx,
@@ -150,11 +139,7 @@ impl WorkspaceView {
             std::collections::HashMap::new()
         };
 
-        // Get cell height for the full grid area (used for empty cells)
-        let layout = self.grid_layout_with_task_board();
-        let cell_height = layout.cell_size().height;
-
-        self.render_split_node(&tree, &slot_sessions, &theme, cell_height, grid_gap, cx)
+        self.render_split_node(&tree, &slot_sessions, &theme, grid_gap, cx)
     }
 
     /// Recursively render a layout node in the split tree.
@@ -166,24 +151,16 @@ impl WorkspaceView {
             (SessionId, bool, String, codirigent_core::SessionStatus),
         >,
         theme: &CodirigentTheme,
-        cell_height: f32,
         gap: f32,
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         let panel_bg: gpui::Hsla = theme.panel_background.into();
         let border_color: gpui::Hsla = theme.border.into();
-        let primary_color: gpui::Hsla = theme.primary.into();
         let muted: gpui::Hsla = theme.muted.into();
 
         match node {
             LayoutNode::Leaf { slot } => {
                 if let Some((session_id, is_focused, name, status)) = slot_sessions.get(slot) {
-                    let cell_border = if *is_focused {
-                        primary_color
-                    } else {
-                        border_color
-                    };
-
                     let header_hints = if let Some(header) = self.get_terminal_header(*session_id) {
                         header.render_hints()
                     } else {
@@ -195,9 +172,6 @@ impl WorkspaceView {
                     self.render_session_cell_with_terminal(
                         *session_id,
                         &header_hints,
-                        panel_bg,
-                        cell_border,
-                        border_color,
                         theme,
                         None,
                         cx,
@@ -216,10 +190,8 @@ impl WorkspaceView {
                 second,
             } => {
                 // Render children recursively
-                let first_elem =
-                    self.render_split_node(first, slot_sessions, theme, cell_height, gap, cx);
-                let second_elem =
-                    self.render_split_node(second, slot_sessions, theme, cell_height, gap, cx);
+                let first_elem = self.render_split_node(first, slot_sessions, theme, gap, cx);
+                let second_elem = self.render_split_node(second, slot_sessions, theme, gap, cx);
 
                 // Use flex ratio to distribute space: first gets `ratio`, second gets `1 - ratio`
                 // Multiply by 1000 for precision in flex-grow values
@@ -305,24 +277,23 @@ impl WorkspaceView {
         &mut self,
         session_id: SessionId,
         hints: &TerminalHeaderRenderHints,
-        panel_bg: gpui::Hsla,
-        cell_border: gpui::Hsla,
-        border_color: gpui::Hsla,
         theme: &CodirigentTheme,
         cell_height: Option<f32>,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         // Uses HEADER_HEIGHT from types.rs
+        let panel_bg: gpui::Hsla = theme.panel_background.into();
+        let border_color: gpui::Hsla = theme.border.into();
+        let cell_border: gpui::Hsla = if hints.is_focused {
+            theme.primary.into()
+        } else {
+            border_color
+        };
         let fg: gpui::Hsla = theme.foreground.into();
         let muted: gpui::Hsla = theme.muted.into();
         let orange: gpui::Hsla = theme.orange.into();
 
-        let header_border = if hints.is_focused {
-            let primary: gpui::Hsla = theme.primary.into();
-            primary
-        } else {
-            border_color
-        };
+        let header_border = cell_border;
 
         // Color indicator bar
         let color_indicator: gpui::Hsla = hints.color_indicator.into();

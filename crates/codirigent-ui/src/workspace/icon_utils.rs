@@ -97,6 +97,7 @@ impl WorkspaceView {
     ///     6.0,
     /// )
     /// ```
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn aligned_icon_label_row(
         &self,
         icon: String,
@@ -155,6 +156,7 @@ impl WorkspaceView {
     ///     1.5,  // Custom offset
     /// )
     /// ```
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn aligned_icon_label_row_with_offset(
         &self,
         icon: String,
