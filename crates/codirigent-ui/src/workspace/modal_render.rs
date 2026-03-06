@@ -4,6 +4,7 @@
 //! custom layout modal and session action modal.
 
 use super::gpui::WorkspaceView;
+use super::types::MODAL_FIELD_HEIGHT;
 use crate::components::text_input::{text_input, TextInputStyle};
 use crate::icons;
 use crate::toolbar::CustomLayoutMode;
@@ -60,7 +61,7 @@ impl WorkspaceView {
                 div()
                     .id("mode-tab-grid")
                     .flex_1()
-                    .h(px(36.0))
+                    .h(px(MODAL_FIELD_HEIGHT))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -81,7 +82,7 @@ impl WorkspaceView {
                 div()
                     .id("mode-tab-split")
                     .flex_1()
-                    .h(px(36.0))
+                    .h(px(MODAL_FIELD_HEIGHT))
                     .flex()
                     .items_center()
                     .justify_center()
