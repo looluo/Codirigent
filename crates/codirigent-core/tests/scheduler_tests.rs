@@ -3,7 +3,8 @@
 //! Tests verify priority ordering, dependency resolution, and different scheduling modes.
 
 use codirigent_core::{
-    DefaultEventBus, SchedulerConfig, SchedulerMode, Task, TaskId, TaskPriority, TaskQueue,
+    DefaultEventBus, SchedulerConfig, SchedulerMode, SessionId, Task, TaskId, TaskPriority,
+    TaskQueue,
 };
 use std::sync::Arc;
 
@@ -59,7 +60,10 @@ fn test_priority_ordering() {
     let next = queue.next_task(&[]).unwrap();
     assert_eq!(next.id, TaskId::from("critical"));
 
-    // Mark as completed
+    // Mark as completed (assign first to satisfy status guard)
+    queue
+        .assign_task(&TaskId::from("critical"), SessionId(1))
+        .unwrap();
     queue
         .complete_task(&TaskId::from("critical"), true)
         .unwrap();
@@ -68,12 +72,18 @@ fn test_priority_ordering() {
     let next = queue.next_task(&[]).unwrap();
     assert_eq!(next.id, TaskId::from("high"));
 
+    queue
+        .assign_task(&TaskId::from("high"), SessionId(1))
+        .unwrap();
     queue.complete_task(&TaskId::from("high"), true).unwrap();
 
     // Should get medium next
     let next = queue.next_task(&[]).unwrap();
     assert_eq!(next.id, TaskId::from("medium"));
 
+    queue
+        .assign_task(&TaskId::from("medium"), SessionId(1))
+        .unwrap();
     queue.complete_task(&TaskId::from("medium"), true).unwrap();
 
     // Should get low last
@@ -119,11 +129,13 @@ fn test_fifo_ordering() {
     let next = queue.next_task(&[]).unwrap();
     assert_eq!(next.id, TaskId::from("1"));
 
+    queue.assign_task(&TaskId::from("1"), SessionId(1)).unwrap();
     queue.complete_task(&TaskId::from("1"), true).unwrap();
 
     let next = queue.next_task(&[]).unwrap();
     assert_eq!(next.id, TaskId::from("2"));
 
+    queue.assign_task(&TaskId::from("2"), SessionId(1)).unwrap();
     queue.complete_task(&TaskId::from("2"), true).unwrap();
 
     let next = queue.next_task(&[]).unwrap();
@@ -171,6 +183,9 @@ fn test_dependency_blocking() {
     assert_eq!(next.id, TaskId::from("task1"));
 
     // Mark task1 as completed
+    queue
+        .assign_task(&TaskId::from("task1"), SessionId(1))
+        .unwrap();
     queue.complete_task(&TaskId::from("task1"), true).unwrap();
     completed.push(TaskId::from("task1"));
 
@@ -178,6 +193,9 @@ fn test_dependency_blocking() {
     let next = queue.next_task(&completed).unwrap();
     assert_eq!(next.id, TaskId::from("task2"));
 
+    queue
+        .assign_task(&TaskId::from("task2"), SessionId(1))
+        .unwrap();
     queue.complete_task(&TaskId::from("task2"), true).unwrap();
     completed.push(TaskId::from("task2"));
 
@@ -208,6 +226,9 @@ fn test_completed_tasks_not_returned() {
     let next = queue.next_task(&[]).unwrap();
     assert_eq!(next.id, TaskId::from("task1"));
 
+    queue
+        .assign_task(&TaskId::from("task1"), SessionId(1))
+        .unwrap();
     queue.complete_task(&TaskId::from("task1"), true).unwrap();
 
     // Should have no more tasks
@@ -265,10 +286,11 @@ fn test_multiple_dependencies() {
     // Track completed tasks
     let mut completed: Vec<TaskId> = Vec::new();
 
-    // Complete task A
+    // Complete task A or B (whichever is first)
     let next = queue.next_task(&completed).unwrap();
     assert!(next.id == TaskId::from("A") || next.id == TaskId::from("B"));
     let task_id = next.id.clone();
+    queue.assign_task(&task_id, SessionId(1)).unwrap();
     queue.complete_task(&task_id, true).unwrap();
     completed.push(task_id);
 
@@ -277,6 +299,7 @@ fn test_multiple_dependencies() {
     assert!(next.id == TaskId::from("A") || next.id == TaskId::from("B"));
     assert_ne!(next.id, TaskId::from("C"), "Task C should still be blocked");
     let task_id = next.id.clone();
+    queue.assign_task(&task_id, SessionId(1)).unwrap();
     queue.complete_task(&task_id, true).unwrap();
     completed.push(task_id);
 

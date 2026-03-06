@@ -424,6 +424,20 @@ impl TaskQueue {
             .get_mut(task_id)
             .ok_or_else(|| anyhow!("Task {} not found", task_id))?;
 
+        match task.status {
+            TaskStatus::Assigned
+            | TaskStatus::Working
+            | TaskStatus::Verifying
+            | TaskStatus::Review => {}
+            other => {
+                return Err(anyhow!(
+                    "Task {} cannot be completed from {:?} state",
+                    task_id,
+                    other
+                ));
+            }
+        }
+
         task.status = TaskStatus::Done;
         task.completed_at = Some(chrono::Utc::now());
 
