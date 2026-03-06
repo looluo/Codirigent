@@ -113,15 +113,16 @@ impl WorkspaceView {
         // Uses native Segoe icon fonts and WindowControlArea for OS-level handling.
         #[cfg(not(target_os = "macos"))]
         {
-            let icon_font = "Segoe MDL2 Assets";
-
-            let close_hover_bg: gpui::Hsla = gpui::Rgba {
+            /// Windows-standard close-button hover red (matches OS titlebar).
+            const CLOSE_BUTTON_RED: gpui::Rgba = gpui::Rgba {
                 r: 232.0 / 255.0,
                 g: 17.0 / 255.0,
                 b: 32.0 / 255.0,
                 a: 1.0,
-            }
-            .into();
+            };
+
+            let icon_font = "Segoe MDL2 Assets";
+            let close_hover_bg: gpui::Hsla = CLOSE_BUTTON_RED.into();
 
             let maximize_icon = if window.is_maximized() {
                 "\u{e923}" // Restore
