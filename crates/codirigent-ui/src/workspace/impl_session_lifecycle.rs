@@ -12,8 +12,8 @@ use crate::terminal_header::TerminalHeader;
 use crate::terminal_view::TerminalView;
 use codirigent_core::config_service::ConfigService;
 use codirigent_core::{
-    CodirigentEvent, EventBus, GridPosition, ProcessMonitor, Session, SessionId, SessionManager,
-    SessionStatus, SlotId,
+    CodirigentEvent, EventBus, ProcessMonitor, Session, SessionId, SessionManager, SessionStatus,
+    SlotId,
 };
 use gpui::Context;
 use std::path::PathBuf;
@@ -23,13 +23,6 @@ impl WorkspaceView {
     /// Create a new terminal session in the focused pane.
     pub fn create_session(&mut self, cx: &mut Context<Self>) {
         self.create_session_inner(None, cx);
-    }
-
-    /// Create a new session at a specific grid position.
-    pub fn create_session_at(&mut self, _position: GridPosition, cx: &mut Context<Self>) {
-        // For now, just create a regular session
-        // In the future, this could assign the session to a specific grid slot
-        self.create_session(cx);
     }
 
     /// Create a new session in a specific split tree slot.
