@@ -859,10 +859,22 @@ impl WorkspaceView {
             };
 
             // Store the Claude session_id on the Session for resume on next startup.
-            if let Ok(mgr) = self.session_manager.lock() {
-                mgr.with_session_state_mut(session_id, |state| {
-                    state.session.claude_session_id = Some(claude_session_id.clone());
-                });
+            // Persist to disk immediately when first discovered so a clean app
+            // quit (without closing individual sessions) doesn't lose the ID.
+            let newly_assigned = self
+                .session_manager
+                .lock()
+                .ok()
+                .and_then(|mgr| {
+                    mgr.with_session_state_mut(session_id, |state| {
+                        let is_new = state.session.claude_session_id.is_none();
+                        state.session.claude_session_id = Some(claude_session_id.clone());
+                        is_new
+                    })
+                })
+                .unwrap_or(false);
+            if newly_assigned {
+                self.save_state_to_disk();
             }
 
             let new_status = match signal.status.as_str() {
