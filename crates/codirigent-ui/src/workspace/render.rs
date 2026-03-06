@@ -81,7 +81,7 @@ impl WorkspaceView {
         {
             use raw_window_handle::HasWindowHandle;
             let raw_handle = window.window_handle().ok().map(|h| match h.as_raw() {
-                raw_window_handle::RawWindowHandle::Win32(win32) => win32.hwnd.get() as isize,
+                raw_window_handle::RawWindowHandle::Win32(win32) => win32.hwnd.get(),
                 _ => 0,
             });
             if let Some(hwnd) = raw_handle {

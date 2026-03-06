@@ -1166,7 +1166,7 @@ impl WorkspaceView {
 
         // Parse group color or use a default
         let bar_color: gpui::Hsla = color
-            .and_then(|c| crate::theme::hex_to_hsla(c))
+            .and_then(crate::theme::hex_to_hsla)
             .map(|h| h.into())
             .unwrap_or(muted);
 

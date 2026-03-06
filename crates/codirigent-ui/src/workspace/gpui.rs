@@ -960,7 +960,7 @@ impl WorkspaceView {
 
         // Use key_char for IME-composed characters (non-ASCII input like CJK, accented chars)
         if let Some(ref key_char) = event.keystroke.key_char {
-            if key_char.chars().any(|c| !c.is_ascii()) {
+            if !key_char.is_ascii() {
                 keystroke.ime_key = Some(key_char.clone());
             }
         }

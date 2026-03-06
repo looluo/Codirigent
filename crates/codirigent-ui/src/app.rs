@@ -423,7 +423,6 @@ impl CodirigentApp {
                             title: Some("Codirigent".into()),
                             appears_transparent: true, // Custom titlebar like Zed
                             traffic_light_position: None,
-                            ..Default::default()
                         }),
                         ..Default::default()
                     },
@@ -451,7 +450,6 @@ impl CodirigentApp {
                             title: Some("Codirigent".into()),
                             appears_transparent: true, // Custom titlebar like Zed
                             traffic_light_position: None,
-                            ..Default::default()
                         }),
                         ..Default::default()
                     },

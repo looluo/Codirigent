@@ -120,7 +120,7 @@ impl TerminalMouseEvent {
             if mode.contains(TermMode::UTF8_MOUSE) {
                 // UTF-8 mouse mode (supports larger coordinates)
                 let mut bytes = vec![0x1b, b'[', b'M'];
-                bytes.push((code + 32) as u8);
+                bytes.push(code.wrapping_add(32));
                 let col = self.col + 1 + 32;
                 let row = self.row + 1 + 32;
                 if col < 128 {
@@ -143,8 +143,8 @@ impl TerminalMouseEvent {
                     b'[',
                     b'M',
                     (code + 32) as u8,
-                    ((self.col + 1 + 32) as u8).min(255),
-                    ((self.row + 1 + 32) as u8).min(255),
+                    (self.col + 1 + 32) as u8,
+                    (self.row + 1 + 32) as u8,
                 ])
             }
         }

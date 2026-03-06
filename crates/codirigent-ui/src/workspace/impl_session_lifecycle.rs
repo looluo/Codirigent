@@ -179,7 +179,7 @@ impl WorkspaceView {
             } else {
                 // For more than 9 sessions, create a custom grid
                 let cols = 4;
-                let rows = (session_count as u32 + cols - 1) / cols; // Ceiling division
+                let rows = (session_count as u32).div_ceil(cols);
                 LayoutProfile::Custom { rows, cols }
             };
 
