@@ -28,8 +28,6 @@ pub enum IconRailEvent {
 pub struct IconRail {
     /// Currently active drawer panel (None = all closed).
     active_panel: Option<DrawerPanel>,
-    /// Whether the worktree panel has a notification dot.
-    worktree_has_notification: bool,
     /// Pending events.
     pending_events: Vec<IconRailEvent>,
 }
@@ -42,7 +40,6 @@ impl IconRail {
     pub fn new() -> Self {
         Self {
             active_panel: None,
-            worktree_has_notification: false,
             pending_events: Vec::new(),
         }
     }
@@ -71,16 +68,6 @@ impl IconRail {
         }
     }
 
-    /// Set whether worktree icon shows a notification dot.
-    pub fn set_worktree_notification(&mut self, has_notification: bool) {
-        self.worktree_has_notification = has_notification;
-    }
-
-    /// Check if worktree has notification.
-    pub fn has_worktree_notification(&self) -> bool {
-        self.worktree_has_notification
-    }
-
     /// Drain pending events.
     pub fn drain_events(&mut self) -> Vec<IconRailEvent> {
         std::mem::take(&mut self.pending_events)
@@ -101,7 +88,6 @@ mod tests {
     fn new_icon_rail_starts_closed() {
         let rail = IconRail::new();
         assert_eq!(rail.active_panel(), None);
-        assert!(!rail.has_worktree_notification());
     }
 
     #[test]
@@ -135,14 +121,6 @@ mod tests {
         let mut rail = IconRail::new();
         rail.close_drawer();
         assert_eq!(rail.drain_events().len(), 0);
-    }
-
-    #[test]
-    fn notification_dot() {
-        let mut rail = IconRail::new();
-        assert!(!rail.has_worktree_notification());
-        rail.set_worktree_notification(true);
-        assert!(rail.has_worktree_notification());
     }
 
     #[test]
