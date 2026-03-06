@@ -133,6 +133,7 @@ impl SettingsPage {
         match self.active_category {
             SettingsCategory::General => {
                 self.user_settings.general = defaults.general;
+                self.user_settings.notifications = defaults.notifications;
             }
             SettingsCategory::Appearance => {
                 self.user_settings.appearance = defaults.appearance;
@@ -305,5 +306,27 @@ mod tests {
         page.mark_user_saved();
         assert!(!page.is_user_dirty());
         assert!(!page.user_save_pending);
+    }
+
+    #[test]
+    fn test_reset_general_also_resets_notifications() {
+        let mut page = SettingsPage::new(
+            UserSettings::default(),
+            ProjectConfig::default(),
+            vec![],
+            vec![],
+            vec![],
+        );
+        // Mutate notification fields
+        page.user_settings.notifications.desktop = false;
+        page.user_settings.notifications.cooldown_seconds = 120;
+        assert!(page.is_user_dirty());
+
+        page.set_category(SettingsCategory::General);
+        page.reset_user_category();
+
+        assert!(page.user_settings.notifications.desktop);
+        assert_eq!(page.user_settings.notifications.cooldown_seconds, 30);
+        assert!(page.user_save_pending);
     }
 }
