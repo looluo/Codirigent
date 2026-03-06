@@ -1086,7 +1086,6 @@ mod tests {
         rows.sort();
         rows.dedup();
 
-        println!("Content rows: {:?}", rows);
         assert!(
             rows.len() >= 4,
             "Expected at least 4 content rows, got {:?}",
@@ -1190,7 +1189,6 @@ mod tests {
         rows.sort();
         rows.dedup();
 
-        println!("ANSI content rows: {:?}", rows);
         assert!(
             rows.len() >= 5,
             "Expected at least 5 content rows, got {:?}",
