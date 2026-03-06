@@ -785,7 +785,10 @@ mod tests {
                 ..Default::default()
             },
         );
+        #[cfg(target_os = "macos")]
         assert_eq!(KeybindingManager::format_binding(&binding), "Cmd+Shift+N");
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(KeybindingManager::format_binding(&binding), "Ctrl+Shift+N");
     }
 
     #[test]
@@ -799,9 +802,15 @@ mod tests {
                 shift: true,
             },
         );
+        #[cfg(target_os = "macos")]
         assert_eq!(
             KeybindingManager::format_binding(&binding),
             "Cmd+Ctrl+Alt+Shift+X"
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(
+            KeybindingManager::format_binding(&binding),
+            "Ctrl+Ctrl+Alt+Shift+X"
         );
     }
 
