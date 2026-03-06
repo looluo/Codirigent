@@ -41,7 +41,14 @@ pub fn ensure_hooks_installed(hook_binary: &Path) -> Result<bool> {
     let settings_path =
         claude_settings_path().context("Could not determine ~/.claude/settings.json path")?;
 
-    let command = hook_binary.to_string_lossy().into_owned();
+    let raw = hook_binary.to_string_lossy().into_owned();
+    // Quote paths that contain spaces so the shell (bash on Windows) does
+    // not split the command at word boundaries during hook execution.
+    let command = if raw.contains(' ') {
+        format!("\"{raw}\"")
+    } else {
+        raw
+    };
     let mut settings = read_settings(&settings_path)?;
     let modified = merge_hooks(&mut settings, &command)?;
 
@@ -245,6 +252,7 @@ mod tests {
 
     const CMD: &str = "/usr/local/bin/codirigent-hook";
     const CMD2: &str = "/opt/codirigent/codirigent-hook";
+    const CMD_SPACES: &str = r#""C:\Program Files\Codirigent\codirigent-hook.exe""#;
 
     #[test]
     fn fresh_install_adds_three_hooks() {
@@ -388,6 +396,46 @@ mod tests {
             assert_eq!(arr.len(), 1, "{event} must not grow");
             let cmd = arr[0]["hooks"][0]["command"].as_str().unwrap();
             assert_eq!(cmd, CMD2);
+        }
+    }
+
+    #[test]
+    fn path_with_spaces_is_stored_quoted() {
+        // CMD_SPACES is the already-quoted form; verify merge_hooks stores it as-is
+        // and that the quote is detectable (contains the marker).
+        let mut settings = json!({});
+        merge_hooks(&mut settings, CMD_SPACES).unwrap();
+        let cmd = settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
+            .as_str()
+            .unwrap();
+        assert_eq!(cmd, CMD_SPACES);
+        assert!(cmd.contains(HOOK_MARKER));
+    }
+
+    #[test]
+    fn unquoted_path_with_spaces_is_upgraded_to_quoted() {
+        let unquoted = r"C:\Program Files\Codirigent\codirigent-hook.exe";
+        let mut settings = json!({
+            "hooks": {
+                "UserPromptSubmit": [
+                    {"matcher": "", "hooks": [{"type": "command", "command": unquoted}]}
+                ],
+                "Notification": [
+                    {"matcher": "idle_prompt|permission_prompt", "hooks": [{"type": "command", "command": unquoted}]}
+                ],
+                "Stop": [
+                    {"matcher": "", "hooks": [{"type": "command", "command": unquoted}]}
+                ]
+            }
+        });
+        let modified = merge_hooks(&mut settings, CMD_SPACES).unwrap();
+        assert!(modified, "unquoted path must be upgraded to quoted form");
+
+        for event in &["UserPromptSubmit", "Notification", "Stop"] {
+            let arr = settings["hooks"][event].as_array().unwrap();
+            assert_eq!(arr.len(), 1, "{event} must not grow");
+            let cmd = arr[0]["hooks"][0]["command"].as_str().unwrap();
+            assert_eq!(cmd, CMD_SPACES, "{event} must be quoted now");
         }
     }
 }
