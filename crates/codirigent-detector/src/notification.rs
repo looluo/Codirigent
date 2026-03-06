@@ -38,6 +38,8 @@ pub enum NotificationType {
     TaskFailed,
     /// Session needs permission for a tool.
     PermissionPrompt,
+    /// Agent finished responding in a background session.
+    ResponseReady,
     /// Session encountered an error.
     Error,
 }
@@ -108,6 +110,10 @@ impl NotificationManager {
                 let body = format!("Session '{}' needs permission for {}", session_name, tool);
                 send_notification("Codirigent", &body);
             }
+            NotificationType::ResponseReady => {
+                let body = format!("'{}' finished responding", session_name);
+                send_notification("Codirigent", &body);
+            }
             NotificationType::Error => {
                 let error_msg = detail.unwrap_or("Unknown error");
                 notify_error(session_id, session_name, error_msg);
@@ -124,6 +130,7 @@ impl NotificationManager {
             NotificationType::TaskCompleted => self.settings.task_completed,
             NotificationType::TaskFailed => self.settings.task_failed,
             NotificationType::PermissionPrompt => self.settings.permission_prompt,
+            NotificationType::ResponseReady => self.settings.response_ready,
             NotificationType::Error => self.settings.error,
         }
     }

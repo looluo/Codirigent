@@ -17,7 +17,11 @@ use codirigent_core::{
     SlotId,
 };
 use gpui::Context;
-use std::path::PathBuf;
+use serde::Deserialize;
+use std::fs;
+use std::io::{BufRead, BufReader};
+use std::path::{Path, PathBuf};
+use std::time::SystemTime;
 use tracing::{info, warn};
 
 /// Read the `permissionMode` value from the last complete JSON line of a
@@ -59,6 +63,132 @@ fn read_claude_permission_mode(claude_session_id: &str) -> Option<String> {
         }
     }
     None
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexRolloutEntry {
+    #[serde(rename = "type", default)]
+    entry_type: String,
+    #[serde(default)]
+    payload: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexSessionMeta {
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    approval_mode: Option<String>,
+}
+
+fn resolve_codex_home() -> Option<PathBuf> {
+    if let Ok(home) = std::env::var("CODEX_HOME") {
+        return Some(PathBuf::from(home));
+    }
+    dirs::home_dir().map(|home| home.join(".codex"))
+}
+
+fn read_first_line(path: &Path) -> Option<String> {
+    let file = fs::File::open(path).ok()?;
+    let mut reader = BufReader::new(file);
+    let mut first = String::new();
+    if reader.read_line(&mut first).ok()? == 0 {
+        None
+    } else {
+        Some(first)
+    }
+}
+
+fn read_codex_session_meta(path: &Path) -> Option<CodexSessionMeta> {
+    let first_line = read_first_line(path)?;
+    let entry: CodexRolloutEntry = serde_json::from_str(first_line.trim()).ok()?;
+    if entry.entry_type != "session_meta" {
+        return None;
+    }
+    let payload = entry.payload?;
+    serde_json::from_value::<CodexSessionMeta>(payload).ok()
+}
+
+fn collect_codex_rollout_files(base: &Path, out: &mut Vec<(PathBuf, SystemTime)>) {
+    let entries = match fs::read_dir(base) {
+        Ok(entries) => entries,
+        Err(_) => return,
+    };
+
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if path.is_dir() {
+            collect_codex_rollout_files(&path, out);
+            continue;
+        }
+
+        let Some(file_name) = path.file_name().and_then(|n| n.to_str()) else {
+            continue;
+        };
+        if !file_name.starts_with("rollout-") || !file_name.ends_with(".jsonl") {
+            continue;
+        }
+
+        let Ok(metadata) = path.metadata() else {
+            continue;
+        };
+        let Ok(modified) = metadata.modified() else {
+            continue;
+        };
+        out.push((path, modified));
+    }
+}
+
+fn read_codex_permission_mode(working_directory: &Path, codex_session_id: &str) -> Option<String> {
+    let codex_home = resolve_codex_home()?;
+    let sessions_dir = codex_home.join("sessions");
+    if !sessions_dir.is_dir() {
+        return None;
+    }
+
+    let mut rollout_files = Vec::new();
+    collect_codex_rollout_files(&sessions_dir, &mut rollout_files);
+    if rollout_files.is_empty() {
+        return None;
+    }
+
+    rollout_files.sort_unstable_by(|a, b| b.1.cmp(&a.1));
+
+    if !codex_session_id.is_empty() {
+        let session_suffix = format!("-{}.jsonl", codex_session_id);
+        for (path, _) in &rollout_files {
+            let Some(file_name) = path.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if !file_name.ends_with(&session_suffix) {
+                continue;
+            }
+            if let Some(meta) = read_codex_session_meta(path) {
+                if let Some(approval_mode) = meta.approval_mode {
+                    return Some(approval_mode);
+                }
+            }
+        }
+    }
+
+    let expected_cwd = working_directory.to_string_lossy();
+    for (path, _) in &rollout_files {
+        let Some(meta) = read_codex_session_meta(path) else {
+            continue;
+        };
+        if meta.cwd.as_deref() == Some(expected_cwd.as_ref()) {
+            return meta.approval_mode;
+        }
+    }
+
+    None
+}
+
+fn is_codex_full_auto_mode(mode: &str) -> bool {
+    mode.eq_ignore_ascii_case("full-auto")
+        || mode.eq_ignore_ascii_case("full_auto")
+        || mode.eq_ignore_ascii_case("fullauto")
+        || mode.eq_ignore_ascii_case("yolo")
 }
 
 impl WorkspaceView {
@@ -295,6 +425,34 @@ impl WorkspaceView {
                 if let Ok(mgr) = self.session_manager.lock() {
                     if let Err(e) = mgr.send_input(session_id, cmd.as_bytes()) {
                         warn!(?session_id, error = %e, "Failed to send claude --resume command");
+                    }
+                }
+            }
+
+            // Resume Codex CLI session if we have a stored session ID.
+            if let Some(ref codex_id) = saved.codex_session_id {
+                let permission_mode = read_codex_permission_mode(&working_dir, codex_id);
+                let mut cmd = format!("codex --session {}", codex_id);
+                if permission_mode
+                    .as_deref()
+                    .is_some_and(|mode| is_codex_full_auto_mode(mode))
+                {
+                    cmd.push_str(" --full-auto");
+                }
+                cmd.push('\r');
+                if let Ok(mgr) = self.session_manager.lock() {
+                    if let Err(e) = mgr.send_input(session_id, cmd.as_bytes()) {
+                        warn!(?session_id, error = %e, "Failed to send codex --session command");
+                    }
+                }
+            }
+
+            // Resume Gemini CLI session if we have a stored session ID.
+            if let Some(ref gemini_id) = saved.gemini_session_id {
+                let cmd = format!("gemini --resume {}\r", gemini_id);
+                if let Ok(mgr) = self.session_manager.lock() {
+                    if let Err(e) = mgr.send_input(session_id, cmd.as_bytes()) {
+                        warn!(?session_id, error = %e, "Failed to send gemini --resume command");
                     }
                 }
             }

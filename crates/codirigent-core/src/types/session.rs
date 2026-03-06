@@ -36,6 +36,11 @@ pub struct Session {
     /// Claude Code session ID (UUID) for this session, if Claude Code is running.
     /// Used to resume with `claude --resume <id>` on next app startup.
     pub claude_session_id: Option<String>,
+    /// Codex session ID for this session, if Codex CLI is running.
+    /// Used to resume with `codex --session <id>` on next app startup.
+    pub codex_session_id: Option<String>,
+    /// Gemini CLI session ID (UUID) for this session, if Gemini CLI is running.
+    pub gemini_session_id: Option<String>,
 }
 
 impl Session {
@@ -53,6 +58,8 @@ impl Session {
             color: None,
             git_info: None,
             claude_session_id: None,
+            codex_session_id: None,
+            gemini_session_id: None,
         }
     }
 }

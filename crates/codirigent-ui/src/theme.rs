@@ -306,6 +306,8 @@ pub struct CodirigentTheme {
     pub session_working: Hsla,
     /// Color for sessions needing attention (input or permission).
     pub session_needs_attention: Hsla,
+    /// Color for sessions where Claude just finished responding (not yet viewed).
+    pub session_response_ready: Hsla,
     /// Color for sessions with errors.
     pub session_error: Hsla,
 
@@ -419,6 +421,7 @@ impl CodirigentTheme {
             session_idle: hex("#52525b"),            // Zinc-600 for idle
             session_working: hex("#f59e0b"),         // Amber-500 for working
             session_needs_attention: hex("#f43f5e"), // Rose-500 for needs attention
+            session_response_ready: hex("#22c55e"),  // Green-500 for response ready
             session_error: hex("#ef4444"),           // Red-500 for error
 
             // === Priority Colors ===
@@ -515,6 +518,7 @@ impl CodirigentTheme {
             session_idle: hex("#71717a"),            // Zinc-500
             session_working: hex("#d97706"),         // Amber-600
             session_needs_attention: hex("#e11d48"), // Rose-600
+            session_response_ready: hex("#16a34a"),  // Green-600 for response ready
             session_error: hex("#dc2626"),           // Red-600
 
             // === Priority Colors ===
@@ -576,6 +580,7 @@ impl CodirigentTheme {
             SessionStatus::Idle => self.session_idle,
             SessionStatus::Working => self.session_working,
             SessionStatus::NeedsAttention => self.session_needs_attention,
+            SessionStatus::ResponseReady => self.session_response_ready,
             SessionStatus::Error => self.session_error,
         }
     }
@@ -596,6 +601,7 @@ impl CodirigentTheme {
             SessionStatus::Idle => "Idle",
             SessionStatus::Working => "Working",
             SessionStatus::NeedsAttention => "Attention",
+            SessionStatus::ResponseReady => "Ready",
             SessionStatus::Error => "Error",
         }
     }
@@ -723,6 +729,7 @@ mod tests {
             SessionStatus::Idle,
             SessionStatus::Working,
             SessionStatus::NeedsAttention,
+            SessionStatus::ResponseReady,
             SessionStatus::Error,
         ];
 
@@ -763,6 +770,10 @@ mod tests {
         assert_eq!(
             CodirigentTheme::status_name(SessionStatus::NeedsAttention),
             "Attention"
+        );
+        assert_eq!(
+            CodirigentTheme::status_name(SessionStatus::ResponseReady),
+            "Ready"
         );
         assert_eq!(CodirigentTheme::status_name(SessionStatus::Error), "Error");
     }

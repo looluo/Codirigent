@@ -270,7 +270,7 @@ impl CodexSessionReader {
         };
 
         match meta.approval_mode.as_deref() {
-            Some("full-auto") => ApprovalMode::FullAuto,
+            Some(mode) if is_full_auto_mode(mode) => ApprovalMode::FullAuto,
             Some("auto-edit") => ApprovalMode::AutoEdit,
             _ => ApprovalMode::Suggest,
         }
@@ -379,6 +379,13 @@ impl CodexSessionReader {
             || lower.contains("patch")
             || lower.contains("apply")
     }
+}
+
+fn is_full_auto_mode(mode: &str) -> bool {
+    mode.eq_ignore_ascii_case("full-auto")
+        || mode.eq_ignore_ascii_case("full_auto")
+        || mode.eq_ignore_ascii_case("fullauto")
+        || mode.eq_ignore_ascii_case("yolo")
 }
 
 #[cfg(test)]

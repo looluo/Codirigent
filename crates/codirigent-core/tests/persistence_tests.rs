@@ -27,6 +27,7 @@ fn test_save_and_load_state() {
         color: None,
         git_info: None,
         claude_session_id: None,
+        gemini_session_id: None,
     };
 
     let mut state = PersistentState::default();
@@ -93,6 +94,7 @@ fn test_overwrite_state() {
         color: None,
         git_info: None,
         claude_session_id: None,
+        gemini_session_id: None,
     };
 
     let mut state = PersistentState::default();
@@ -114,6 +116,7 @@ fn test_overwrite_state() {
         color: None,
         git_info: None,
         claude_session_id: None,
+        gemini_session_id: None,
     };
 
     state
@@ -251,6 +254,7 @@ fn test_multiple_checkpoints_independent() {
         color: None,
         git_info: None,
         claude_session_id: None,
+        gemini_session_id: None,
     };
     state1
         .sessions
@@ -269,6 +273,7 @@ fn test_multiple_checkpoints_independent() {
         color: None,
         git_info: None,
         claude_session_id: None,
+        gemini_session_id: None,
     };
     state2
         .sessions
@@ -357,6 +362,7 @@ fn test_session_to_persistent_conversion() {
         color: Some("#ff0000".to_string()),
         git_info: None,
         claude_session_id: None,
+        gemini_session_id: None,
     };
 
     let persistent = PersistentSession::from_session(&session);

@@ -399,6 +399,9 @@ pub struct NotificationSettings {
     /// Enable "permission prompt" notifications.
     #[serde(default = "default_true")]
     pub permission_prompt: bool,
+    /// Enable "response ready" notifications (Claude finished responding in a background session).
+    #[serde(default = "default_true")]
+    pub response_ready: bool,
     /// Enable "error" notifications.
     #[serde(default = "default_true")]
     pub error: bool,
@@ -425,6 +428,7 @@ impl Default for NotificationSettings {
             task_completed: true,
             task_failed: true,
             permission_prompt: true,
+            response_ready: true,
             error: true,
             cooldown_seconds: 30,
         }
@@ -863,6 +867,7 @@ mod tests {
             task_completed: true,
             task_failed: false,
             permission_prompt: true,
+            response_ready: true,
             error: false,
             cooldown_seconds: 60,
         };

@@ -608,6 +608,16 @@ impl WorkspaceView {
         self.drawer.set_selected_session(Some(session_id));
         self.workspace.focus_session(session_id);
         self.sync_file_tree_to_focused_session(cx);
+        // If the session showed ResponseReady, downgrade the cache to Idle
+        // immediately so the badge clears without waiting for the next poll.
+        if let Ok(mut readers) = self.cli_readers.lock() {
+            if let Some(cached) = readers.cached_status.get_mut(&session_id) {
+                if cached.status == codirigent_core::SessionStatus::ResponseReady {
+                    cached.status = codirigent_core::SessionStatus::Idle;
+                    cached.status_since = std::time::Instant::now();
+                }
+            }
+        }
     }
 
     /// Process icon rail events (drawer toggling, settings).

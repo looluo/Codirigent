@@ -381,6 +381,12 @@ impl CodirigentApp {
             Err(e) => warn!("Failed to install Claude Code hooks: {e}"),
         }
 
+        match hook_installer::ensure_codex_hooks_installed(&hook_binary) {
+            Ok(true) => info!("Codex hooks installed ({})", hook_binary.display()),
+            Ok(false) => {}
+            Err(e) => warn!("Failed to install Codex hooks: {e}"),
+        }
+
         let show_splash = self.show_splash;
         let splash_duration = self.splash_duration;
 

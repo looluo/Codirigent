@@ -26,13 +26,18 @@ use serde::Deserialize;
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
+const CLI_TYPE_CLAUDE: &str = "claude";
+const CLI_TYPE_GEMINI: &str = "gemini";
+const CLI_TYPE_CODEX: &str = "codex";
+
 /// Session status result from a background JSONL read: (status, optional detail string).
 type JsonlStatusResult = Option<(SessionStatus, Option<String>)>;
 
-/// Signal file written by `codirigent-hook` for each Claude Code hook event.
+/// Signal file written by `codirigent-hook` for each hook event.
 #[derive(Deserialize)]
 struct HookSignal {
     status: String,
+    cli_type: Option<String>,
     /// Codirigent session ID, present only when Claude Code was spawned by Codirigent
     /// (via the `CODIRIGENT_SESSION_ID` environment variable).
     codirigent_session_id: Option<String>,
@@ -800,9 +805,8 @@ impl WorkspaceView {
 
     /// Check Claude Code hook signal files and update session status.
     ///
-    /// Signal files are written by `codirigent-hook` (registered in
-    /// `~/.claude/settings.json`) every time Claude Code fires a
-    /// `UserPromptSubmit`, `Notification`, or `Stop` hook. Each file is tiny
+    /// Signal files are written by `codirigent-hook` for Claude and Codex sessions.
+    /// Each file is tiny
     /// (<100 bytes) so this runs synchronously on the UI thread without a
     /// background task.
     ///
@@ -858,29 +862,79 @@ impl WorkspaceView {
                 Err(_) => continue,
             };
 
-            // Store the Claude session_id on the Session for resume on next startup.
+            // Store the Claude/Gemini/Codex session_id on the Session for resume on next startup.
             // Persist to disk whenever it changes (first assignment or new session
             // started in the same terminal) so a clean app quit never loses the ID.
-            let id_changed = self
-                .session_manager
-                .lock()
-                .ok()
-                .and_then(|mgr| {
-                    mgr.with_session_state_mut(session_id, |state| {
-                        let changed =
-                            state.session.claude_session_id.as_deref() != Some(&claude_session_id);
-                        state.session.claude_session_id = Some(claude_session_id.clone());
-                        changed
-                    })
-                })
-                .unwrap_or(false);
+            let mut id_changed = false;
+
+            let cli_type = signal.cli_type.as_deref().unwrap_or(CLI_TYPE_CLAUDE);
+            match cli_type {
+                CLI_TYPE_CLAUDE => {
+                    id_changed = self
+                        .session_manager
+                        .lock()
+                        .ok()
+                        .and_then(|mgr| {
+                            mgr.with_session_state_mut(session_id, |state| {
+                                let changed = state.session.claude_session_id.as_deref()
+                                    != Some(&claude_session_id);
+                                state.session.claude_session_id = Some(claude_session_id.clone());
+                                changed
+                            })
+                        })
+                        .unwrap_or(false);
+                }
+                CLI_TYPE_GEMINI => {
+                    id_changed = self
+                        .session_manager
+                        .lock()
+                        .ok()
+                        .and_then(|mgr| {
+                            mgr.with_session_state_mut(session_id, |state| {
+                                let changed = state.session.gemini_session_id.as_deref()
+                                    != Some(&claude_session_id);
+                                state.session.gemini_session_id = Some(claude_session_id.clone());
+                                changed
+                            })
+                        })
+                        .unwrap_or(false);
+                }
+                CLI_TYPE_CODEX => {
+                    id_changed = self
+                        .session_manager
+                        .lock()
+                        .ok()
+                        .and_then(|mgr| {
+                            mgr.with_session_state_mut(session_id, |state| {
+                                let changed = state.session.codex_session_id.as_deref()
+                                    != Some(&claude_session_id);
+                                state.session.codex_session_id = Some(claude_session_id.clone());
+                                changed
+                            })
+                        })
+                        .unwrap_or(false);
+                }
+                _ => {}
+            }
+
             if id_changed {
                 self.save_state_to_disk();
             }
 
+            let focused_id = self.workspace.focused_session_id();
             let new_status = match signal.status.as_str() {
                 "working" => SessionStatus::Working,
                 "needs_attention" => SessionStatus::NeedsAttention,
+                // response_ready: use ResponseReady only for non-focused sessions.
+                // If the session is already in view, the user is seeing the response,
+                // so treat it as plain Idle to avoid a spurious badge.
+                "response_ready" => {
+                    if Some(session_id) == focused_id {
+                        SessionStatus::Idle
+                    } else {
+                        SessionStatus::ResponseReady
+                    }
+                }
                 _ => SessionStatus::Idle,
             };
 
@@ -895,7 +949,7 @@ impl WorkspaceView {
                     session_id,
                     CachedCliStatus {
                         status: new_status,
-                        tool_name: None,
+                        tool_name: signal.cli_type.clone(),
                         seen_at: Instant::now(),
                         status_since,
                         ttl: Self::HOOK_SIGNAL_CACHE_TTL,
@@ -903,25 +957,38 @@ impl WorkspaceView {
                 );
             }
 
+            let prev_status = self
+                .workspace
+                .session(session_id)
+                .map(|s| s.status)
+                .unwrap_or(SessionStatus::Idle);
+
             // Fire AttentionRequired on transition to NeedsAttention.
-            if new_status == SessionStatus::NeedsAttention {
-                let prev = self
+            if new_status == SessionStatus::NeedsAttention
+                && prev_status != SessionStatus::NeedsAttention
+            {
+                self.event_bus.publish(CodirigentEvent::AttentionRequired {
+                    session_id,
+                    detail: None,
+                });
+                let name = self
                     .workspace
                     .session(session_id)
-                    .map(|s| s.status)
-                    .unwrap_or(SessionStatus::Idle);
-                if prev != SessionStatus::NeedsAttention {
-                    self.event_bus.publish(CodirigentEvent::AttentionRequired {
-                        session_id,
-                        detail: None,
-                    });
-                    let name = self
-                        .workspace
-                        .session(session_id)
-                        .map(|s| s.name.clone())
-                        .unwrap_or_else(|| format!("Session {}", session_id.0));
-                    send_notification("Codirigent", &format!("{name} is waiting for input"));
-                }
+                    .map(|s| s.name.clone())
+                    .unwrap_or_else(|| format!("Session {}", session_id.0));
+                send_notification("Codirigent", &format!("{name} is waiting for input"));
+            }
+
+            // Fire ResponseReady notification on transition from Working → ResponseReady.
+            if new_status == SessionStatus::ResponseReady
+                && prev_status == SessionStatus::Working
+            {
+                let name = self
+                    .workspace
+                    .session(session_id)
+                    .map(|s| s.name.clone())
+                    .unwrap_or_else(|| format!("Session {}", session_id.0));
+                send_notification("Codirigent", &format!("'{}' finished responding", name));
             }
         }
     }
@@ -1060,6 +1127,7 @@ mod tests {
     fn sig(status: &str, codirigent_session_id: Option<&str>, ts: u64) -> HookSignal {
         HookSignal {
             status: status.to_owned(),
+            cli_type: None,
             codirigent_session_id: codirigent_session_id.map(str::to_owned),
             ts,
         }

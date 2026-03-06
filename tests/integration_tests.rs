@@ -674,6 +674,7 @@ fn test_session_idle_to_working() {
         color: None,
         git_info: None,
         claude_session_id: None,
+        gemini_session_id: None,
     };
 
     // Verify initial state
@@ -704,6 +705,7 @@ fn test_session_working_to_needs_attention() {
         color: None,
         git_info: None,
         claude_session_id: None,
+        gemini_session_id: None,
     };
 
     // Verify initial state
@@ -734,6 +736,7 @@ fn test_session_needs_attention_to_idle() {
         color: None,
         git_info: None,
         claude_session_id: None,
+        gemini_session_id: None,
     };
 
     // Verify initial state
@@ -764,6 +767,7 @@ fn test_session_to_error_state() {
         color: None,
         git_info: None,
         claude_session_id: None,
+        gemini_session_id: None,
     };
 
     // Simulate error detection
@@ -791,6 +795,7 @@ fn test_session_state_invariants() {
         color: None,
         git_info: None,
         claude_session_id: None,
+        gemini_session_id: None,
     };
 
     // Idle sessions should have no active task (initially)

@@ -64,6 +64,11 @@ pub struct PersistentSession {
     /// Last known Claude Code session ID (UUID).
     /// When present, restored sessions run `claude --resume <id>`.
     pub claude_session_id: Option<String>,
+    /// Last known Codex session ID (UUID).
+    /// When present, restored sessions run `codex --session <id>`.
+    pub codex_session_id: Option<String>,
+    /// Last known Gemini CLI session ID (UUID).
+    pub gemini_session_id: Option<String>,
     /// Last known Claude Code permission mode (e.g. `"bypassPermissions"`).
     /// When `"bypassPermissions"`, resume adds `--dangerously-skip-permissions`.
     pub claude_permission_mode: Option<String>,
@@ -106,6 +111,8 @@ impl PersistentSession {
             group: session.group.clone(),
             color: session.color.clone(),
             claude_session_id: session.claude_session_id.clone(),
+            codex_session_id: session.codex_session_id.clone(),
+            gemini_session_id: session.gemini_session_id.clone(),
             claude_permission_mode: None, // populated at save time from JSONL
         }
     }
@@ -175,6 +182,8 @@ impl PersistentSession {
             color: self.color.clone(),
             git_info: None, // Re-detected on restore
             claude_session_id: self.claude_session_id.clone(),
+            codex_session_id: self.codex_session_id.clone(),
+            gemini_session_id: self.gemini_session_id.clone(),
         }
     }
 

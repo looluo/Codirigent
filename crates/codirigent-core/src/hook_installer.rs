@@ -21,7 +21,8 @@
 //! update session status without reading multi-megabyte JSONL logs.
 
 use anyhow::{Context, Result};
-use serde_json::{json, Value};
+use serde_json::{json, Value as JsonValue};
+use toml::Value as TomlValue;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
@@ -62,6 +63,32 @@ pub fn ensure_hooks_installed(hook_binary: &Path) -> Result<bool> {
     Ok(modified)
 }
 
+/// Ensure Codirigent's hooks are present in `~/.codex/config.toml`.
+///
+/// `hook_binary` should be the full path to the `codirigent-hook` binary.
+/// Using the full path avoids relying on PATH when Codex invokes notification
+/// hooks from user shell environments.
+///
+/// Safe to call on every launch -- the function is idempotent.
+/// Returns `Ok(true)` if the file was modified, `Ok(false)` if already up to date.
+pub fn ensure_codex_hooks_installed(hook_binary: &Path) -> Result<bool> {
+    let config_path =
+        codex_config_path().context("Could not determine ~/.codex/config.toml path")?;
+
+    let command = hook_binary.to_string_lossy().into_owned();
+    let mut settings = read_toml_settings(&config_path)?;
+    let modified = merge_codex_notify(&mut settings, &command)?;
+
+    if modified {
+        write_toml_settings(&config_path, &settings)?;
+        info!("Codirigent hooks installed in {}", config_path.display());
+    } else {
+        debug!("Codirigent Codex hooks already present, no changes needed");
+    }
+
+    Ok(modified)
+}
+
 /// Returns the full path to the `codirigent-hook` binary that lives next to
 /// the currently-running executable.
 ///
@@ -82,6 +109,10 @@ pub fn hook_binary_path() -> PathBuf {
 fn claude_settings_path() -> Option<PathBuf> {
     let home = home_dir()?;
     Some(home.join(".claude").join("settings.json"))
+}
+
+fn codex_config_path() -> Option<PathBuf> {
+    home_dir().map(|home| home.join(".codex").join("config.toml"))
 }
 
 /// Returns the directory where `codirigent-hook` writes signal files.
@@ -122,7 +153,7 @@ fn home_dir() -> Option<PathBuf> {
     }
 }
 
-fn read_settings(path: &Path) -> Result<Value> {
+fn read_settings(path: &Path) -> Result<JsonValue> {
     if !path.exists() {
         return Ok(json!({}));
     }
@@ -131,7 +162,7 @@ fn read_settings(path: &Path) -> Result<Value> {
     serde_json::from_str(&content).with_context(|| format!("Failed to parse {}", path.display()))
 }
 
-fn write_settings(path: &Path, settings: &Value) -> Result<()> {
+fn write_settings(path: &Path, settings: &JsonValue) -> Result<()> {
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)
             .with_context(|| format!("Failed to create directory {}", parent.display()))?;
@@ -149,12 +180,82 @@ fn write_settings(path: &Path, settings: &Value) -> Result<()> {
     Ok(())
 }
 
+fn read_toml_settings(path: &Path) -> Result<TomlValue> {
+    if !path.exists() {
+        return Ok(TomlValue::Table(Default::default()));
+    }
+    let content = std::fs::read_to_string(path)
+        .with_context(|| format!("Failed to read {}", path.display()))?;
+    let settings = toml::from_str(&content).with_context(|| format!("Failed to parse {}", path.display()))?;
+    Ok(settings)
+}
+
+fn write_toml_settings(path: &Path, settings: &TomlValue) -> Result<()> {
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .with_context(|| format!("Failed to create directory {}", parent.display()))?;
+    }
+    let toml = toml::to_string_pretty(settings).context("Failed to serialize TOML settings")?;
+
+    // Atomic write: write to a PID-scoped temp file then rename.
+    // Using the process ID prevents two concurrent Codirigent instances from
+    // clobbering each other's temp file during simultaneous startup.
+    let tmp = path.with_file_name(format!(".config-{}.tmp", std::process::id()));
+    std::fs::write(&tmp, &toml).with_context(|| format!("Failed to write {}", tmp.display()))?;
+    std::fs::rename(&tmp, path)
+        .with_context(|| format!("Failed to rename {} to {}", tmp.display(), path.display()))?;
+
+    Ok(())
+}
+
+fn merge_codex_notify(settings: &mut TomlValue, command: &str) -> Result<bool> {
+    let table = settings
+        .as_table_mut()
+        .context("codex config root must be a TOML table")?;
+
+    let notify_value = match table.get_mut("notify") {
+        None => {
+            table.insert(
+                "notify".to_string(),
+                TomlValue::Array(vec![TomlValue::String(command.to_owned())]),
+            );
+            return Ok(true);
+        }
+        Some(v) => v,
+    };
+
+    match notify_value {
+        TomlValue::Array(arr) => {
+            if arr.iter().any(|value| value.as_str() == Some(command)) {
+                return Ok(false);
+            }
+            arr.push(TomlValue::String(command.to_owned()));
+            Ok(true)
+        }
+        TomlValue::String(existing) => {
+            if existing == command {
+                Ok(false)
+            } else {
+                *notify_value = TomlValue::Array(vec![
+                    TomlValue::String(existing.clone()),
+                    TomlValue::String(command.to_owned()),
+                ]);
+                Ok(true)
+            }
+        }
+        _ => {
+            *notify_value = TomlValue::Array(vec![TomlValue::String(command.to_owned())]);
+            Ok(true)
+        }
+    }
+}
+
 /// Merge Codirigent's hooks into the settings value. Returns true if modified.
 ///
 /// If a hook entry already exists with the correct `command`, it is left
 /// unchanged. If a legacy bare-name entry (containing `HOOK_MARKER` but not
 /// matching `command`) is found, it is upgraded in place to `command`.
-fn merge_hooks(settings: &mut Value, command: &str) -> Result<bool> {
+fn merge_hooks(settings: &mut JsonValue, command: &str) -> Result<bool> {
     let hooks = settings
         .as_object_mut()
         .context("settings.json root must be an object")?
@@ -207,7 +308,7 @@ fn hook_definitions() -> &'static [(&'static str, &'static str, &'static str)] {
 }
 
 /// Returns true if any hook entry already uses exactly `command`.
-fn already_installed(event_hooks: &[Value], command: &str) -> bool {
+fn already_installed(event_hooks: &[JsonValue], command: &str) -> bool {
     event_hooks.iter().any(|hook| {
         hook.get("hooks")
             .and_then(|h| h.as_array())
@@ -225,7 +326,7 @@ fn already_installed(event_hooks: &[Value], command: &str) -> bool {
 
 /// Upgrades a legacy bare-name hook (containing `HOOK_MARKER`) to `command`.
 /// Returns true if any entry was updated.
-fn upgrade_hook(event_hooks: &mut [Value], command: &str) -> bool {
+fn upgrade_hook(event_hooks: &mut [JsonValue], command: &str) -> bool {
     let mut upgraded = false;
     for hook in event_hooks.iter_mut() {
         if let Some(cmds) = hook.get_mut("hooks").and_then(|h| h.as_array_mut()) {
@@ -437,5 +538,40 @@ mod tests {
             let cmd = arr[0]["hooks"][0]["command"].as_str().unwrap();
             assert_eq!(cmd, CMD_SPACES, "{event} must be quoted now");
         }
+    }
+
+    #[test]
+    fn codex_config_adds_notify() {
+        let mut settings: TomlValue = toml::from_str("").unwrap();
+        let modified = merge_codex_notify(&mut settings, CMD).unwrap();
+        assert!(modified);
+        assert_eq!(
+            settings["notify"].as_array().unwrap()[0].as_str().unwrap(),
+            CMD
+        );
+    }
+
+    #[test]
+    fn codex_config_is_idempotent_for_notify_array() {
+        let mut settings: TomlValue = toml::from_str(
+            r#"
+            notify = ["/usr/local/bin/codirigent-hook", "notify-send"]
+            "#,
+        )
+        .unwrap();
+        let modified = merge_codex_notify(&mut settings, CMD).unwrap();
+        assert!(!modified);
+        assert_eq!(settings["notify"].as_array().unwrap().len(), 2);
+    }
+
+    #[test]
+    fn codex_config_upgrades_string_notify_to_array() {
+        let mut settings: TomlValue = toml::from_str(r#"notify = "/usr/bin/old""#).unwrap();
+        let modified = merge_codex_notify(&mut settings, CMD).unwrap();
+        assert!(modified);
+        let notify = settings["notify"].as_array().unwrap();
+        assert_eq!(notify.len(), 2);
+        assert_eq!(notify[0].as_str().unwrap(), "/usr/bin/old");
+        assert_eq!(notify[1].as_str().unwrap(), CMD);
     }
 }

@@ -435,7 +435,7 @@ impl super::gpui::WorkspaceView {
             .child(settings_section_header("Notifications", theme, false))
             .child(setting_row(
                 "Desktop notifications",
-                "Send OS notifications when agents need attention",
+                "Send OS notifications when an agent responds or needs your input",
                 theme,
                 self.render_toggle_control(
                     "toggle-notif-desktop",
@@ -467,7 +467,7 @@ impl super::gpui::WorkspaceView {
             .child(settings_section_header("Notification types", theme, false))
             .child(setting_row(
                 "Input required",
-                "Notify when an agent is waiting for your input",
+                "Notify when an agent is waiting for your response",
                 theme,
                 self.render_toggle_control(
                     "toggle-notif-input-required",
@@ -521,7 +521,7 @@ impl super::gpui::WorkspaceView {
             ))
             .child(setting_row(
                 "Permission prompt",
-                "Notify when an agent requests a permission",
+                "Notify when an agent needs permission to use a tool",
                 theme,
                 self.render_toggle_control(
                     "toggle-notif-permission",
@@ -531,6 +531,24 @@ impl super::gpui::WorkspaceView {
                         if let Some(page) = this.settings.page.as_mut() {
                             page.user_settings.notifications.permission_prompt =
                                 !page.user_settings.notifications.permission_prompt;
+                            page.user_save_pending = true;
+                        }
+                        cx.notify();
+                    },
+                ),
+            ))
+            .child(setting_row(
+                "Response ready",
+                "Notify when an agent finishes responding in a background session",
+                theme,
+                self.render_toggle_control(
+                    "toggle-notif-response-ready",
+                    notif.response_ready,
+                    cx,
+                    |this, _, cx| {
+                        if let Some(page) = this.settings.page.as_mut() {
+                            page.user_settings.notifications.response_ready =
+                                !page.user_settings.notifications.response_ready;
                             page.user_save_pending = true;
                         }
                         cx.notify();

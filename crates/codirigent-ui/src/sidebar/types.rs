@@ -125,6 +125,8 @@ pub struct StatusColors {
     pub working: Color,
     /// Color for NeedsAttention status.
     pub needs_attention: Color,
+    /// Color for ResponseReady status.
+    pub response_ready: Color,
     /// Color for Error status.
     pub error: Color,
 }
@@ -135,6 +137,7 @@ impl Default for StatusColors {
             idle: Color::from_hex("#6c7086"),            // Gray
             working: Color::from_hex("#f9e2af"),         // Yellow
             needs_attention: Color::from_hex("#f43f5e"), // Rose
+            response_ready: Color::from_hex("#22c55e"),  // Green
             error: Color::from_hex("#f38ba8"),           // Red
         }
     }
@@ -147,6 +150,7 @@ impl StatusColors {
             SessionStatus::Idle => self.idle,
             SessionStatus::Working => self.working,
             SessionStatus::NeedsAttention => self.needs_attention,
+            SessionStatus::ResponseReady => self.response_ready,
             SessionStatus::Error => self.error,
         }
     }
@@ -238,6 +242,12 @@ impl StatusBadge {
                 bg_color: Color::rgba(0.96, 0.25, 0.37, 0.15), // Rose @ 15%
                 text_color: status_colors.needs_attention,
                 animated: true,
+            },
+            SessionStatus::ResponseReady => Self {
+                text: "Ready",
+                bg_color: Color::rgba(0.13, 0.77, 0.37, 0.15), // Green @ 15%
+                text_color: status_colors.response_ready,
+                animated: false,
             },
             SessionStatus::Error => Self {
                 text: "Error",

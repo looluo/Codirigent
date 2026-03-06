@@ -15,6 +15,9 @@ pub enum SessionStatus {
     Working,
     /// Session needs user attention (input required or permission prompt).
     NeedsAttention,
+    /// Claude just finished responding (Stop hook) and the session is not focused.
+    /// Cleared to Idle when the user switches to this session.
+    ResponseReady,
     /// Error detected in output.
     Error,
 }
