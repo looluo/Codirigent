@@ -859,21 +859,22 @@ impl WorkspaceView {
             };
 
             // Store the Claude session_id on the Session for resume on next startup.
-            // Persist to disk immediately when first discovered so a clean app
-            // quit (without closing individual sessions) doesn't lose the ID.
-            let newly_assigned = self
+            // Persist to disk whenever it changes (first assignment or new session
+            // started in the same terminal) so a clean app quit never loses the ID.
+            let id_changed = self
                 .session_manager
                 .lock()
                 .ok()
                 .and_then(|mgr| {
                     mgr.with_session_state_mut(session_id, |state| {
-                        let is_new = state.session.claude_session_id.is_none();
+                        let changed =
+                            state.session.claude_session_id.as_deref() != Some(&claude_session_id);
                         state.session.claude_session_id = Some(claude_session_id.clone());
-                        is_new
+                        changed
                     })
                 })
                 .unwrap_or(false);
-            if newly_assigned {
+            if id_changed {
                 self.save_state_to_disk();
             }
 
