@@ -1166,21 +1166,7 @@ impl WorkspaceView {
 
         // Parse group color or use a default
         let bar_color = color
-            .and_then(|c| {
-                if c.starts_with('#') && c.len() == 7 {
-                    let r = u8::from_str_radix(&c[1..3], 16).ok()?;
-                    let g = u8::from_str_radix(&c[3..5], 16).ok()?;
-                    let b = u8::from_str_radix(&c[5..7], 16).ok()?;
-                    Some(gpui::Hsla::from(gpui::Rgba {
-                        r: r as f32 / 255.0,
-                        g: g as f32 / 255.0,
-                        b: b as f32 / 255.0,
-                        a: 1.0,
-                    }))
-                } else {
-                    None
-                }
-            })
+            .and_then(|c| crate::theme::hex_to_hsla(c))
             .unwrap_or(muted);
 
         let chevron = if expanded {

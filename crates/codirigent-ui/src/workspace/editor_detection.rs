@@ -8,6 +8,10 @@
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
+/// Windows process creation flag: suppress console window for spawned processes.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 /// Known GUI-based code editors with CLI support.
 pub(super) const KNOWN_GUI_EDITORS: &[&str] =
     &["code", "zed", "cursor", "windsurf", "codium", "subl"];
@@ -97,7 +101,7 @@ pub(super) fn detect_installed_editors() -> Vec<String> {
         #[cfg(windows)]
         {
             use std::os::windows::process::CommandExt;
-            cmd.creation_flags(0x08000000); // CREATE_NO_WINDOW
+            cmd.creation_flags(CREATE_NO_WINDOW);
         }
         let on_path = cmd.status().map(|s| s.success()).unwrap_or(false);
         if on_path {

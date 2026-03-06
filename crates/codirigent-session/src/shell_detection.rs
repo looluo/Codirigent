@@ -11,6 +11,10 @@ use anyhow::{Context, Result};
 #[cfg(unix)]
 use tracing::warn;
 
+/// Windows process creation flag: suppress console window for spawned processes.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
 /// Shell command and arguments selected for a PTY session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShellCommand {
@@ -111,8 +115,6 @@ fn detect_windows_shell() -> ShellCommand {
     use std::os::windows::process::CommandExt;
     use std::process::Command;
 
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-
     // Try PowerShell 7 first
     if Command::new("pwsh.exe")
         .arg("--version")
@@ -175,8 +177,6 @@ pub fn detect_available_shells() -> Vec<String> {
     {
         use std::os::windows::process::CommandExt;
         use std::process::Command;
-
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
 
         if Command::new("pwsh.exe")
             .arg("--version")
