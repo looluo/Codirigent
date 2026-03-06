@@ -249,7 +249,7 @@ pub struct TerminalView {
 
 impl TerminalView {
     /// Create a new terminal view.
-    pub fn new(terminal: Terminal, theme: CodirigentTheme) -> Self {
+    pub fn new(mut terminal: Terminal, theme: CodirigentTheme) -> Self {
         let font_size = theme.terminal_font_size;
         let font_family = theme.terminal_font_family.clone();
         // Approximate cell dimensions until real font metrics arrive via
@@ -258,8 +258,6 @@ impl TerminalView {
         // allocate more rows/cols than will fit after correction.
         let cell_width = (font_size * APPROX_CELL_WIDTH_RATIO).max(MIN_CELL_WIDTH_PX);
         let cell_height = font_size.max(14.0);
-
-        let mut terminal = terminal;
         terminal.resize_with_cells(TerminalSize::new(
             terminal.rows(),
             terminal.cols(),
@@ -822,6 +820,7 @@ pub fn compute_cell_dimensions(
     text_system: &gpui::TextSystem,
     font_family: &str,
     font_size: f32,
+    line_height: f32,
 ) -> (f32, f32) {
     use gpui::{px, Font, FontFeatures, FontStyle, FontWeight};
 
@@ -846,7 +845,7 @@ pub fn compute_cell_dimensions(
     // (The old 1.3x factor on font_size caused visible double-spacing.)
     let ascent: f32 = text_system.ascent(font_id, font_size_px).into();
     let descent: f32 = text_system.descent(font_id, font_size_px).into();
-    let cell_height = ascent + descent.abs();
+    let cell_height = (ascent + descent.abs()) * line_height.max(1.0);
 
     (cell_width, cell_height)
 }

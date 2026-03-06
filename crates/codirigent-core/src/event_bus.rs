@@ -46,6 +46,7 @@ impl DefaultEventBus {
     ///
     /// Panics if `capacity` is 0.
     pub fn new(capacity: usize) -> Self {
+        assert!(capacity > 0, "EventBus capacity must be > 0");
         let (sender, _) = broadcast::channel(capacity);
         Self { sender }
     }

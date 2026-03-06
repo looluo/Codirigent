@@ -289,6 +289,9 @@ impl KeybindingManager {
         if let Ok(binding) = Self::parse_binding(&format!("{m}+Shift+B")) {
             manager.set_binding(binding, Action::Broadcast);
         }
+        if let Ok(binding) = Self::parse_binding(&format!("{m}+E")) {
+            manager.set_binding(binding, Action::ToggleSidebar);
+        }
 
         // Clipboard
         if let Ok(binding) = Self::parse_binding(&format!("{m}+C")) {
@@ -330,9 +333,25 @@ impl KeybindingManager {
     pub fn from_config(config: &HashMap<String, String>) -> Self {
         let mut manager = Self::with_defaults();
         for (action_name, binding_str) in config {
-            if let Ok(binding) = Self::parse_binding(binding_str) {
-                if let Some(action) = Self::action_from_name(action_name) {
-                    manager.set_binding(binding, action);
+            match Self::parse_binding(binding_str) {
+                Ok(binding) => match Self::action_from_name(action_name) {
+                    Some(action) => {
+                        manager.set_binding(binding, action);
+                    }
+                    None => {
+                        tracing::warn!(
+                            action = %action_name,
+                            "Ignoring unknown keybinding action in user settings"
+                        );
+                    }
+                },
+                Err(e) => {
+                    tracing::warn!(
+                        action = %action_name,
+                        binding = %binding_str,
+                        error = %e,
+                        "Ignoring unparseable keybinding in user settings"
+                    );
                 }
             }
         }
@@ -488,7 +507,12 @@ impl KeybindingManager {
     pub fn format_binding(binding: &KeyBinding) -> String {
         let mut parts = Vec::new();
         if binding.modifiers.cmd {
+            // On macOS show "Cmd"; on other platforms the platform modifier key
+            // is Ctrl, so display it as "Ctrl" to avoid confusing users.
+            #[cfg(target_os = "macos")]
             parts.push("Cmd");
+            #[cfg(not(target_os = "macos"))]
+            parts.push("Ctrl");
         }
         if binding.modifiers.ctrl {
             parts.push("Ctrl");
@@ -533,6 +557,12 @@ impl KeybindingManager {
             s if s.starts_with("custom:") => s
                 .strip_prefix("custom:")
                 .map(|n| Action::Custom(n.to_string())),
+            s if s.starts_with("set_layout:") => s
+                .strip_prefix("set_layout:")
+                .map(|n| Action::SetLayout(n.to_string())),
+            s if s.starts_with("send_input:") => s
+                .strip_prefix("send_input:")
+                .map(|n| Action::SendInput(n.to_string())),
             _ => None,
         }
     }

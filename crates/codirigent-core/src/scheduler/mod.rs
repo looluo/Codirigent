@@ -34,7 +34,7 @@
 //! queue.enqueue(task).unwrap();
 //!
 //! // Get the next task to work on
-//! if let Some(next) = queue.next_task(&[]) {
+//! if let Some(next) = queue.next_task() {
 //!     println!("Next task: {}", next.title);
 //! }
 //! ```

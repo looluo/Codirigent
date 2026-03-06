@@ -24,6 +24,9 @@ use gpui::{
 };
 use tracing::info;
 
+/// Row height for session entries in the session context menu.
+const SESSION_MENU_ROW_HEIGHT: f32 = 36.0;
+
 impl WorkspaceView {
     /// Render the title bar with window controls (minimize, maximize, close).
     ///
@@ -289,7 +292,7 @@ impl WorkspaceView {
         let top_offset = crate::title_bar::TitleBar::DEFAULT_HEIGHT
             + crate::top_bar::TopBar::HEIGHT
             + super::types::DRAWER_HEADER_HEIGHT
-            + (row_index as f32) * 36.0; // session rows in session-menu context are 36px
+            + (row_index as f32) * SESSION_MENU_ROW_HEIGHT;
 
         // Transparent click-away backdrop (no dark overlay)
         let backdrop = div()

@@ -214,10 +214,8 @@ pub struct TerminalSettings {
     pub font_size: f32,
     /// Cursor style (block, underline, bar).
     pub cursor_style: String,
-    /// Line height multiplier.
+    /// Line height multiplier (1.0 = natural font height).
     pub line_height: f32,
-    /// Color scheme name.
-    pub color_scheme: String,
 }
 
 impl Default for TerminalSettings {
@@ -227,7 +225,6 @@ impl Default for TerminalSettings {
             font_size: 13.0,
             cursor_style: "block".to_string(),
             line_height: 1.0,
-            color_scheme: "default".to_string(),
         }
     }
 }
@@ -489,6 +486,20 @@ impl Default for ContextTrackerSettings {
         Self {
             warning_threshold: 0.75,
             critical_threshold: 0.90,
+        }
+    }
+}
+
+impl ContextTrackerSettings {
+    /// Clamp thresholds to valid range and ensure warning < critical.
+    ///
+    /// Called after deserialization to guard against misconfigured values.
+    pub fn sanitize(&mut self) {
+        self.warning_threshold = self.warning_threshold.clamp(0.0, 1.0);
+        self.critical_threshold = self.critical_threshold.clamp(0.0, 1.0);
+        // Ensure warning is always strictly below critical
+        if self.warning_threshold >= self.critical_threshold {
+            self.warning_threshold = (self.critical_threshold - 0.05).max(0.0);
         }
     }
 }

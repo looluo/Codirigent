@@ -41,7 +41,7 @@
 //!
 //! // When a session becomes idle, check for assignment
 //! let session = Session::new(SessionId(1), "Session 1".to_string(), PathBuf::from("/tmp"));
-//! let action = manager.on_session_idle(&session, &mut queue, &[]);
+//! let action = manager.on_session_idle(&session, &mut queue);
 //!
 //! match action {
 //!     Some(AssignmentAction::AssignNow { task_id, prompt, .. }) => {
@@ -59,13 +59,19 @@
 //! }
 //! ```
 
+/// Maximum number of pending assignments. Prevents unbounded growth when
+/// many sessions become idle simultaneously or confirmation is slow.
+const MAX_PENDING_ASSIGNMENTS: usize = 100;
+
 use crate::events::CodirigentEvent;
 use crate::scheduler::TaskQueue;
 use crate::traits::EventBus;
 use crate::types::*;
 use anyhow::{anyhow, Result};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use std::sync::Arc;
+use std::time::Instant;
 
 /// Default prompt template for task assignment.
 ///
@@ -266,6 +272,11 @@ pub struct AssignmentManager {
     /// Pending assignments awaiting confirmation.
     pending: Vec<PendingAssignment>,
 
+    /// Tracks when each session first became idle (wall-clock time).
+    /// Entries are inserted on the first idle call and removed once the
+    /// session is no longer idle or a task is assigned.
+    idle_since: HashMap<SessionId, Instant>,
+
     /// Event bus for publishing events.
     event_bus: Arc<dyn EventBus>,
 }
@@ -291,6 +302,7 @@ impl AssignmentManager {
         Self {
             config,
             pending: Vec::new(),
+            idle_since: HashMap::new(),
             event_bus,
         }
     }
@@ -497,7 +509,8 @@ impl AssignmentManager {
     /// use std::path::PathBuf;
     ///
     /// let event_bus = Arc::new(DefaultEventBus::new(16));
-    /// let mut manager = AssignmentManager::new(AssignmentConfig::default(), event_bus.clone());
+    /// let config = AssignmentConfig { idle_threshold_seconds: 0, ..Default::default() };
+    /// let mut manager = AssignmentManager::new(config, event_bus.clone());
     /// let mut queue = TaskQueue::new(SchedulerConfig::default(), event_bus);
     ///
     /// // Add a task
@@ -506,7 +519,7 @@ impl AssignmentManager {
     ///
     /// // Session becomes idle
     /// let session = Session::new(SessionId(1), "Session".to_string(), PathBuf::from("/tmp"));
-    /// let action = manager.on_session_idle(&session, &mut queue, &[]);
+    /// let action = manager.on_session_idle(&session, &mut queue);
     ///
     /// assert!(matches!(action, Some(AssignmentAction::AssignNow { .. })));
     /// ```
@@ -514,20 +527,33 @@ impl AssignmentManager {
         &mut self,
         session: &Session,
         queue: &mut TaskQueue,
-        completed_tasks: &[TaskId],
     ) -> Option<AssignmentAction> {
         // Check if auto-assign is enabled
         if !self.config.auto_assign {
+            self.idle_since.remove(&session.id);
             return Some(AssignmentAction::NoTask);
         }
 
         // Check if session already has a task
         if session.current_task.is_some() {
+            self.idle_since.remove(&session.id);
+            return None;
+        }
+
+        // Enforce idle_threshold_seconds: don't assign on the first idle poll —
+        // wait until the session has been idle for the configured duration.
+        let idle_threshold =
+            std::time::Duration::from_secs(self.config.idle_threshold_seconds as u64);
+        let idle_start = self
+            .idle_since
+            .entry(session.id)
+            .or_insert_with(Instant::now);
+        if idle_start.elapsed() < idle_threshold {
             return None;
         }
 
         // Get next task for this session
-        let task = match queue.next_task_for_session(session, completed_tasks) {
+        let task = match queue.next_task_for_session(session) {
             Some(t) => t,
             None => return Some(AssignmentAction::NoTask),
         };
@@ -550,6 +576,14 @@ impl AssignmentManager {
                 });
             }
 
+            // Guard against unbounded pending growth
+            if self.pending.len() >= MAX_PENDING_ASSIGNMENTS {
+                tracing::warn!(
+                    "Pending assignment queue full ({MAX_PENDING_ASSIGNMENTS}); skipping proposal"
+                );
+                return Some(AssignmentAction::NoTask);
+            }
+
             // Add to pending and wait for confirmation
             let pending = PendingAssignment {
                 task_id: task_id.clone(),
@@ -559,8 +593,8 @@ impl AssignmentManager {
             };
             self.pending.push(pending);
 
-            // Publish proposal event
-            self.event_bus.publish(CodirigentEvent::TaskAssigned {
+            // Publish proposal event (NOT TaskAssigned — task is not yet assigned)
+            self.event_bus.publish(CodirigentEvent::TaskProposed {
                 task_id: task_id.clone(),
                 session_id: session.id,
             });
@@ -706,12 +740,7 @@ impl std::fmt::Debug for AssignmentManager {
 /// allowing for different implementations and easier testing.
 pub trait AssignmentService: Send + Sync {
     /// Handle session becoming idle.
-    fn on_idle(
-        &mut self,
-        session: &Session,
-        queue: &mut TaskQueue,
-        completed: &[TaskId],
-    ) -> Option<AssignmentAction>;
+    fn on_idle(&mut self, session: &Session, queue: &mut TaskQueue) -> Option<AssignmentAction>;
 
     /// Confirm assignment and get the prompt.
     fn confirm(&mut self, task_id: &TaskId) -> Result<String>;
@@ -724,13 +753,8 @@ pub trait AssignmentService: Send + Sync {
 }
 
 impl AssignmentService for AssignmentManager {
-    fn on_idle(
-        &mut self,
-        session: &Session,
-        queue: &mut TaskQueue,
-        completed: &[TaskId],
-    ) -> Option<AssignmentAction> {
-        self.on_session_idle(session, queue, completed)
+    fn on_idle(&mut self, session: &Session, queue: &mut TaskQueue) -> Option<AssignmentAction> {
+        self.on_session_idle(session, queue)
     }
 
     fn confirm(&mut self, task_id: &TaskId) -> Result<String> {
@@ -756,13 +780,18 @@ mod tests {
 
     fn create_manager() -> AssignmentManager {
         let event_bus = Arc::new(DefaultEventBus::new(16));
-        AssignmentManager::new(AssignmentConfig::default(), event_bus)
+        let config = AssignmentConfig {
+            idle_threshold_seconds: 0,
+            ..Default::default()
+        };
+        AssignmentManager::new(config, event_bus)
     }
 
     fn create_manager_with_confirmation() -> AssignmentManager {
         let event_bus = Arc::new(DefaultEventBus::new(16));
         let config = AssignmentConfig {
             confirm_before_assign: true,
+            idle_threshold_seconds: 0,
             ..Default::default()
         };
         AssignmentManager::new(config, event_bus)
@@ -770,7 +799,11 @@ mod tests {
 
     fn create_test_setup() -> (AssignmentManager, TaskQueue, Session) {
         let event_bus = Arc::new(DefaultEventBus::new(16));
-        let manager = AssignmentManager::new(AssignmentConfig::default(), event_bus.clone());
+        let config = AssignmentConfig {
+            idle_threshold_seconds: 0,
+            ..Default::default()
+        };
+        let manager = AssignmentManager::new(config, event_bus.clone());
 
         let queue = TaskQueue::new(SchedulerConfig::default(), event_bus);
 
@@ -1041,7 +1074,7 @@ mod tests {
     fn test_on_session_idle_no_tasks() {
         let (mut manager, mut queue, session) = create_test_setup();
 
-        let action = manager.on_session_idle(&session, &mut queue, &[]);
+        let action = manager.on_session_idle(&session, &mut queue);
         assert!(matches!(action, Some(AssignmentAction::NoTask)));
     }
 
@@ -1057,7 +1090,7 @@ mod tests {
         );
         queue.enqueue(task).unwrap();
 
-        let action = manager.on_session_idle(&session, &mut queue, &[]);
+        let action = manager.on_session_idle(&session, &mut queue);
 
         match action {
             Some(AssignmentAction::AssignNow {
@@ -1078,6 +1111,7 @@ mod tests {
         let event_bus = Arc::new(DefaultEventBus::new(16));
         let config = AssignmentConfig {
             confirm_before_assign: true,
+            idle_threshold_seconds: 0,
             ..Default::default()
         };
         let mut manager = AssignmentManager::new(config, event_bus.clone());
@@ -1089,7 +1123,7 @@ mod tests {
         let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         queue.enqueue(task).unwrap();
 
-        let action = manager.on_session_idle(&session, &mut queue, &[]);
+        let action = manager.on_session_idle(&session, &mut queue);
 
         assert!(matches!(
             action,
@@ -1103,6 +1137,7 @@ mod tests {
         let event_bus = Arc::new(DefaultEventBus::new(16));
         let config = AssignmentConfig {
             auto_assign: false,
+            idle_threshold_seconds: 0,
             ..Default::default()
         };
         let mut manager = AssignmentManager::new(config, event_bus.clone());
@@ -1114,7 +1149,7 @@ mod tests {
         let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         queue.enqueue(task).unwrap();
 
-        let action = manager.on_session_idle(&session, &mut queue, &[]);
+        let action = manager.on_session_idle(&session, &mut queue);
 
         assert!(matches!(action, Some(AssignmentAction::NoTask)));
     }
@@ -1130,7 +1165,7 @@ mod tests {
         let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         queue.enqueue(task).unwrap();
 
-        let action = manager.on_session_idle(&session, &mut queue, &[]);
+        let action = manager.on_session_idle(&session, &mut queue);
 
         // Should return None because session is not available
         assert!(action.is_none());
@@ -1392,7 +1427,7 @@ mod tests {
         let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         queue.enqueue(task).unwrap();
 
-        let action = AssignmentService::on_idle(&mut manager, &session, &mut queue, &[]);
+        let action = AssignmentService::on_idle(&mut manager, &session, &mut queue);
         assert!(matches!(action, Some(AssignmentAction::AssignNow { .. })));
     }
 
@@ -1446,7 +1481,11 @@ mod tests {
     #[test]
     fn test_full_assignment_workflow_immediate() {
         let event_bus = Arc::new(DefaultEventBus::new(16));
-        let mut manager = AssignmentManager::new(AssignmentConfig::default(), event_bus.clone());
+        let config = AssignmentConfig {
+            idle_threshold_seconds: 0,
+            ..Default::default()
+        };
+        let mut manager = AssignmentManager::new(config, event_bus.clone());
         let mut queue = TaskQueue::new(SchedulerConfig::default(), event_bus);
 
         // Create a task
@@ -1471,7 +1510,7 @@ mod tests {
         );
 
         // Get assignment
-        let action = manager.on_session_idle(&session, &mut queue, &[]);
+        let action = manager.on_session_idle(&session, &mut queue);
 
         match action {
             Some(AssignmentAction::AssignNow {
@@ -1494,6 +1533,7 @@ mod tests {
         let event_bus = Arc::new(DefaultEventBus::new(16));
         let config = AssignmentConfig {
             confirm_before_assign: true,
+            idle_threshold_seconds: 0,
             ..Default::default()
         };
         let mut manager = AssignmentManager::new(config, event_bus.clone());
@@ -1511,7 +1551,7 @@ mod tests {
         let session = Session::new(SessionId(1), "Session".to_string(), PathBuf::from("/tmp"));
 
         // Get assignment - should require confirmation
-        let action = manager.on_session_idle(&session, &mut queue, &[]);
+        let action = manager.on_session_idle(&session, &mut queue);
         assert!(matches!(
             action,
             Some(AssignmentAction::AwaitConfirmation { .. })

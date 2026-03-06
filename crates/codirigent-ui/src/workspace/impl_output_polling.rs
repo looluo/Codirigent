@@ -534,13 +534,16 @@ impl WorkspaceView {
     /// - Phase 2: remove the entry after a 500 ms grace period so auto-assign
     ///   does not consider the session available while the CLI processes the command.
     fn process_deferred_enters(&mut self) {
-        let need_enter: Vec<SessionId> = self
-            .polling
-            .pending_enters
-            .iter()
-            .filter(|(_, (when, sent))| !sent && when.elapsed() >= Self::PENDING_ENTER_DELAY)
-            .map(|(id, _)| *id)
-            .collect();
+        // Collect both phases in one pass to avoid iterating pending_enters twice.
+        let mut need_enter: Vec<SessionId> = Vec::new();
+        let mut expired: Vec<SessionId> = Vec::new();
+        for (&session_id, &(when, sent)) in &self.polling.pending_enters {
+            if !sent && when.elapsed() >= Self::PENDING_ENTER_DELAY {
+                need_enter.push(session_id);
+            } else if sent && when.elapsed() >= Duration::from_millis(500) {
+                expired.push(session_id);
+            }
+        }
         for session_id in need_enter {
             if let Ok(mgr) = self.session_manager.lock() {
                 let _ = mgr.send_input(session_id, b"\r");
@@ -551,13 +554,6 @@ impl WorkspaceView {
                 .pending_enters
                 .insert(session_id, (Instant::now(), true));
         }
-        let expired: Vec<SessionId> = self
-            .polling
-            .pending_enters
-            .iter()
-            .filter(|(_, (when, sent))| *sent && when.elapsed() >= Duration::from_millis(500))
-            .map(|(id, _)| *id)
-            .collect();
         for session_id in expired {
             self.polling.pending_enters.remove(&session_id);
         }

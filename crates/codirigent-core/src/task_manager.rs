@@ -380,9 +380,7 @@ impl TaskManager {
     ///
     /// An assignment action indicating what should be done.
     pub fn on_session_idle(&mut self, session: &Session) -> Option<AssignmentAction> {
-        let done = self.done_ids();
-        self.assignment
-            .on_session_idle(session, &mut self.queue, &done)
+        self.assignment.on_session_idle(session, &mut self.queue)
     }
 
     /// Confirm a pending assignment.
@@ -461,11 +459,25 @@ impl TaskManager {
             .ok_or_else(|| anyhow!("Task {} not found", task_id))?;
 
         match task.status {
+            // Queued/Blocked: bypass assignment step (e.g. manual start)
             TaskStatus::Queued | TaskStatus::Blocked => {
                 task.status = TaskStatus::Working;
                 task.started_at.get_or_insert_with(chrono::Utc::now);
             }
-            _ => {}
+            // Assigned: normal flow — session has taken ownership, now working
+            TaskStatus::Assigned => {
+                task.status = TaskStatus::Working;
+                task.started_at.get_or_insert_with(chrono::Utc::now);
+            }
+            // Already working or in review — no-op is fine
+            TaskStatus::Working | TaskStatus::Verifying | TaskStatus::Review => {}
+            other => {
+                return Err(anyhow!(
+                    "Task {} cannot be started from {:?} state",
+                    task_id,
+                    other
+                ));
+            }
         }
 
         if let Some(task_ref) = self.queue.get_task(task_id) {
@@ -537,17 +549,21 @@ impl TaskManager {
                 result,
             })
         } else if task.can_retry() {
-            // Generate retry message
-            let message = self.verification.format_failure(
-                &result,
-                task.retry.retry_count + 1,
-                task.retry.max_retries,
-            );
+            let max_retries = task.retry.max_retries;
 
-            // Requeue task
+            // Requeue first so the actual post-increment count is available.
             self.queue.requeue_task(task_id)?;
 
-            let retry_count = task.retry.retry_count + 1;
+            // Read the authoritative retry count from the queue after increment.
+            let retry_count = self
+                .queue
+                .get_task(task_id)
+                .map(|t| t.retry.retry_count)
+                .unwrap_or(0);
+
+            let message = self
+                .verification
+                .format_failure(&result, retry_count, max_retries);
 
             Ok(TaskCompletionResult::NeedsRetry {
                 task_id: task_id.clone(),
@@ -985,7 +1001,13 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let storage = Arc::new(FileStorageService::new(temp.path()).unwrap());
         let event_bus = Arc::new(DefaultEventBus::new(16));
-        let config = TaskManagerConfig::default();
+        let config = TaskManagerConfig {
+            assignment: AssignmentConfig {
+                idle_threshold_seconds: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
 
         let manager = TaskManager::new(config, storage, event_bus);
         (manager, temp)

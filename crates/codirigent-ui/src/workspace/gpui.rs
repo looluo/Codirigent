@@ -708,10 +708,31 @@ impl WorkspaceView {
     pub(super) fn apply_terminal_font_size(&mut self, window: &mut Window, size: f32) {
         self.workspace.theme_mut().terminal_font_size = size;
         let family = self.workspace.theme().terminal_font_family.clone();
-        let (w, h) =
-            crate::terminal_view::compute_cell_dimensions(window.text_system(), &family, size);
+        let line_height = self.workspace.theme().terminal_line_height;
+        let (w, h) = crate::terminal_view::compute_cell_dimensions(
+            window.text_system(),
+            &family,
+            size,
+            line_height,
+        );
         for tv in self.terminals_mut().values_mut() {
             tv.set_font_size(size);
+            tv.set_cell_dimensions(w, h);
+        }
+    }
+
+    /// Apply a new terminal line height and propagate to all terminal views.
+    pub(super) fn apply_terminal_line_height(&mut self, window: &mut Window, line_height: f32) {
+        self.workspace.theme_mut().terminal_line_height = line_height;
+        let family = self.workspace.theme().terminal_font_family.clone();
+        let size = self.workspace.theme().terminal_font_size;
+        let (w, h) = crate::terminal_view::compute_cell_dimensions(
+            window.text_system(),
+            &family,
+            size,
+            line_height,
+        );
+        for tv in self.terminals_mut().values_mut() {
             tv.set_cell_dimensions(w, h);
         }
     }
@@ -723,8 +744,13 @@ impl WorkspaceView {
     pub(super) fn apply_terminal_font_family(&mut self, window: &mut Window, family: String) {
         self.workspace.theme_mut().terminal_font_family = family.clone();
         let size = self.workspace.theme().terminal_font_size;
-        let (w, h) =
-            crate::terminal_view::compute_cell_dimensions(window.text_system(), &family, size);
+        let line_height = self.workspace.theme().terminal_line_height;
+        let (w, h) = crate::terminal_view::compute_cell_dimensions(
+            window.text_system(),
+            &family,
+            size,
+            line_height,
+        );
         for tv in self.terminals_mut().values_mut() {
             tv.set_font_family(family.clone());
             tv.set_cell_dimensions(w, h);
@@ -874,7 +900,20 @@ impl WorkspaceView {
                     return;
                 }
                 "b" => {
+                    self.toggle_task_board(cx);
+                    return;
+                }
+                "e" => {
                     self.toggle_sidebar(cx);
+                    return;
+                }
+                "k" => {
+                    self.toggle_sidebar(cx);
+                    return;
+                }
+                "p" if event.keystroke.modifiers.shift => {
+                    self.open_task_creation_modal();
+                    cx.notify();
                     return;
                 }
                 "\\" => {
@@ -1498,10 +1537,12 @@ impl WorkspaceView {
     fn sync_terminal_dimensions_and_resize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
         let font_family = &self.workspace.theme().terminal_font_family;
         let font_size = self.workspace.theme().terminal_font_size;
+        let line_height = self.workspace.theme().terminal_line_height;
         let (real_w, real_h) = match &self.cache.cached_cell_dims {
             Some(cached)
                 if cached.font_family == *font_family
-                    && (cached.font_size - font_size).abs() < 0.01 =>
+                    && (cached.font_size - font_size).abs() < 0.01
+                    && (cached.line_height - line_height).abs() < 0.001 =>
             {
                 (cached.cell_width, cached.cell_height)
             }
@@ -1510,10 +1551,12 @@ impl WorkspaceView {
                     window.text_system(),
                     font_family,
                     font_size,
+                    line_height,
                 );
                 self.cache.cached_cell_dims = Some(super::types::CachedCellDims {
                     font_family: font_family.clone(),
                     font_size,
+                    line_height,
                     cell_width: w,
                     cell_height: h,
                 });

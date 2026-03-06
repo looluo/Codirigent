@@ -64,6 +64,7 @@ impl WorkspaceView {
         let fallback_cell_width = terminal_view.cell_width();
         let fallback_cell_height = terminal_view.cell_height();
         let font_size = terminal_view.font_size();
+        let line_height = theme.terminal_line_height;
         let font_family_str = terminal_view.font_family().to_owned();
         let cursor_rect = terminal_view.cursor_rect();
         let needs_dimension_init = !terminal_view.dimensions_initialized();
@@ -108,6 +109,7 @@ impl WorkspaceView {
                         window.text_system(),
                         &font_family,
                         font_size,
+                        line_height,
                     )
                 } else {
                     (fallback_cell_width, fallback_cell_height)

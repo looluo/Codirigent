@@ -51,6 +51,7 @@ impl WorkspaceView {
             user_settings.appearance.font_size = theme.font_size_base;
             user_settings.appearance.grid_gap = theme.grid_gap as u32;
             user_settings.terminal.font_size = theme.terminal_font_size;
+            user_settings.terminal.line_height = theme.terminal_line_height;
 
             // Use pre-cached results from background detection (started at init).
             // Falls back to synchronous detection if background task hasn't finished yet.

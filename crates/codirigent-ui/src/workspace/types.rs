@@ -429,6 +429,7 @@ impl CacheState {
 pub(super) struct CachedCellDims {
     pub font_family: String,
     pub font_size: f32,
+    pub line_height: f32,
     pub cell_width: f32,
     pub cell_height: f32,
 }

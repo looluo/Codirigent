@@ -139,6 +139,17 @@ pub enum CodirigentEvent {
         id: TaskId,
     },
 
+    /// A task assignment was proposed, pending user confirmation.
+    ///
+    /// Only published when `confirm_before_assign` is enabled.
+    /// `TaskAssigned` is published only after confirmation.
+    TaskProposed {
+        /// The task ID.
+        task_id: TaskId,
+        /// The session ID.
+        session_id: SessionId,
+    },
+
     /// A task was assigned to a session.
     TaskAssigned {
         /// The task ID.

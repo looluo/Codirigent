@@ -1,52 +1,62 @@
 # Codirigent Fix Tasks
 
-## Fix --all-features Build Errors (19 errors in codirigent-ui)
-- [x] Fix `font_size` field missing on `AppearanceSettings` (9x E0609)
-- [x] Fix borrow checker in `impl_task_board.rs` (4x E0502)
-- [x] Fix `sync_terminal_dimensions_and_resize` in wrong impl block (2x E0407/E0599)
-- [x] Fix `Fill: From<Hsla>` trait bound (1x E0277)
-- [x] Fix `Arc<Vec<...>>` not an iterator (2x E0277)
-- [x] Fix mismatched types (1x E0308)
+## Rounds 1-4: All Complete
 
-## Round 1 Passes (all committed)
-- [x] Pass 1: Dead code removal (handle_worktree_event, setting_dropdown/number/text/path, cursor_position cfg(test), etc.)
-- [x] Pass 2: One-line fixes (is_ascii, div_ceil, redundant cast, is_some_and, wrapping_add, min(255))
-- [x] Pass 3: Pattern modernisation (collapsed if-let, is_some_and, to_path_buf)
-- [x] Pass 4: Type aliases (SplashCallback, JsonlStatusResult, remove terminal paint type annotation)
-- [x] Pass 5: Parameter reduction (render_session_cell_with_terminal: 9→5 params, remove render_split_node cell_height, clippy allows)
+## Round 5: 29 Findings
 
-## Round 2: 25 Findings
+### CRITICAL
+- [x] C1: requeue_task has no status guard (queue.rs)
+- [x] C2: start_task silently ignores Assigned→Working transition (task_manager.rs)
 
 ### HIGH
-- [ ] H-1: gpui.rs ~sync_ui_state — O(4n) four-pass task counting → single fold
-- [ ] H-2: terminal_view.rs — CachedTerminalContent stores raw `background_rects`+`text_runs` never read after build → remove raw fields, use into_iter
-- [ ] H-3: impl_task_board.rs:233 — find_assignable_session_for_task clones all sessions → return reference
-- [ ] H-4: grid_render.rs — render_split_node re-converts theme colors on every recursive call → pre-compute once
-- [ ] H-5: gpui.rs:741 — apply_terminal_font_family clones String per terminal → SharedString or final move
+- [x] H1: on_task_complete uses stale clone for retry count (task_manager.rs)
+- [x] H2: ContextTrackerSettings thresholds not validated (config.rs)
+- [x] H3: idle_threshold_seconds ignored in on_session_idle (assignment.rs)
+- [x] H4: pending Vec unbounded in AssignmentManager (assignment.rs)
+- [x] H5: TaskAssigned event published before confirmation (assignment.rs)
+- [x] H6: update_blocked_status redundant full rescan (queue.rs)
 
 ### MEDIUM
-- [ ] M-1: terminal_view.rs:455 — visible_cells() Vec without capacity hint
-- [ ] M-2: render.rs:282 — render_session_menu clones sessions to find index → direct .position()
-- [ ] M-3: terminal_view.rs:780 — build_cached_content clones TextRunSegment → into_iter after H-2
-- [ ] M-4: gpui.rs:447 — sync_ui_state clones session.name/group every 100ms → dirty check
-- [ ] M-5: terminal_view.rs:128+ — broad pub visibility on TerminalView methods → pub(crate)
-- [ ] M-6: terminal_view.rs:57 — TextRunSegment fields pub → pub(crate)
-- [ ] M-7: impl_session_lifecycle.rs:56 — configured_shell() reads disk on each session create → cache
-- [ ] M-8: terminal_view.rs:628 — end_selection() is no-op → remove or document
-- [ ] M-9: terminal_view.rs:83 — CachedTerminalContent derives Clone unnecessarily → remove
-- [ ] M-10: impl_output_polling.rs:104 — multiple sequential mutex acquisitions → combine
+- [ ] M1: done_ids() allocates Vec per idle poll — remove completed_tasks param, build done set internally in next_task
+- [x] M2: FIFO scoring O(n²) in selection.rs
+- [x] M3: age_score hard cap at 60 minutes
+- [x] M4: Ctrl+B maps to toggle_sidebar instead of toggle_task_board (gpui.rs)
+- [ ] M5: Ctrl+K / Ctrl+Shift+P shortcuts unhandled (gpui.rs) — add handlers
+- [ ] M6: line_height setting not applied — add terminal_line_height to theme, pass to compute_cell_dimensions
+- [ ] M7: color_scheme setting dead config field — remove from TerminalSettings
+- [x] M8: format_binding always shows "Cmd" on non-macOS (keybindings.rs)
+- [ ] M9: Hardcoded 36px row height in render_session_menu (render.rs) — extract to constant
+- [x] M10: from_config silently drops invalid bindings (keybindings.rs)
+- [x] M11: ToggleSidebar has no default keybinding
 
 ### LOW
-- [ ] L-1: terminal_view.rs:54 — TERMINAL_LINE_HEIGHT_FACTOR=1.0 multiplication redundant → remove
-- [ ] L-2: workspace/types.rs:241+ — pub fields in pub(super) structs → pub(super)
-- [ ] L-3: gpui.rs:1306 — selected_text_range clones Copy type → remove .clone()
-- [ ] L-4: gpui.rs:1324 — marked_text_range clones Copy type → remove .clone()
-- [ ] L-5: terminal_view.rs:126 — Selection::new() duplicates Default → remove, use default()
-- [ ] L-6: drawer_render.rs:75 + render.rs:293 — magic number 40.0 → DRAWER_HEADER_HEIGHT const
-- [ ] L-7: gpui.rs:1386 — _element_bounds underscore misleading → remove underscore
-- [ ] L-8: gpui.rs:1396 — character_index_for_point always returns Some(0) → add TODO comment
-- [ ] L-9: impl_task_board.rs:10 — Session import may become unused after H-3
-- [ ] L-10: terminal_view.rs:867 — CursorRect width/height duplicate cell dims → consider removing
+- [x] L1: action_from_name missing set_layout/send_input round-trip (keybindings.rs)
+- [x] L2: TerminalView::new rebinds terminal unnecessarily
+- [ ] L3: DefaultEventBus::new(0) has no explicit assert — add assert!(capacity > 0)
+- [ ] L4: max_concurrent u32 vs usize inconsistency — SKIP (low benefit, high change cost)
+- [ ] L5: Dropdown backdrop hardcoded 9999px (settings_panels.rs) — replace with inset_0()
+- [ ] L6: default_shell empty string sentinel — SKIP (well-documented pattern, filter() handles it)
+- [x] L7: sync_ui_state always runs — already throttled at 100ms (line 1414 in gpui.rs)
+- [ ] L8: process_deferred_enters creates two Vecs — combine into single pass
+- [x] L9: _completed_tasks dead parameter in calculate_score
+
+---
+## Remaining Round 5 Work
+
+### In progress batch (not yet committed):
+All C/H/M2-M4/M8/M10-M11/L1-L2/L7/L9 items applied to files but not committed.
+
+### Still to implement:
+1. L3 - event_bus.rs: assert!(capacity > 0)
+2. L5 - settings_panels.rs: replace 9999px backdrop with inset_0()
+3. M9 - render.rs: extract 36px to SESSION_ROW_HEIGHT constant
+4. L8 - impl_output_polling.rs: single-pass process_deferred_enters
+5. M5 - gpui.rs: Ctrl+K → toggle_drawer; Ctrl+Shift+P → open_task_creation_modal
+6. M6 - theme.rs + terminal_view.rs + gpui.rs: apply line_height to cell height
+7. M7 - config.rs: remove dead color_scheme field from TerminalSettings
+8. M1 - selection.rs + assignment.rs + task_manager.rs: remove completed_tasks param
+
+### After all fixes: cargo fmt, cargo check, cargo test, commit, start Round 6 review
 
 ---
 Legend: [ ] pending, [x] done

@@ -267,7 +267,8 @@ impl ConfigService for DefaultConfigService {
         let path = self.user_settings_path();
         if path.exists() {
             let content = fs::read_to_string(&path)?;
-            let settings: UserSettings = serde_json::from_str(&content)?;
+            let mut settings: UserSettings = serde_json::from_str(&content)?;
+            settings.modules.context_tracker.sanitize();
             Ok(settings)
         } else {
             Ok(UserSettings::default())

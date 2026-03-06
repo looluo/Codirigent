@@ -293,10 +293,7 @@ impl super::gpui::WorkspaceView {
                 .id(SharedString::from(format!("{}-backdrop", dd_id)))
                 .occlude()
                 .absolute()
-                .top(px(0.0))
-                .left(px(0.0))
-                .w(px(9999.0))
-                .h(px(9999.0))
+                .inset_0()
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _, _, cx| {
@@ -834,23 +831,27 @@ impl super::gpui::WorkspaceView {
                     "num-line-height",
                     &format!("{:.1}", line_height),
                     cx,
-                    |this, _, cx| {
+                    |this, window, cx| {
                         if let Some(page) = this.settings.page.as_mut() {
                             page.user_settings.terminal.line_height =
                                 (page.user_settings.terminal.line_height - 0.1).max(1.0);
                             page.user_settings.terminal.line_height =
                                 (page.user_settings.terminal.line_height * 10.0).round() / 10.0;
                             page.user_save_pending = true;
+                            let lh = page.user_settings.terminal.line_height;
+                            this.apply_terminal_line_height(window, lh);
                         }
                         cx.notify();
                     },
-                    |this, _, cx| {
+                    |this, window, cx| {
                         if let Some(page) = this.settings.page.as_mut() {
                             page.user_settings.terminal.line_height =
                                 (page.user_settings.terminal.line_height + 0.1).min(2.5);
                             page.user_settings.terminal.line_height =
                                 (page.user_settings.terminal.line_height * 10.0).round() / 10.0;
                             page.user_save_pending = true;
+                            let lh = page.user_settings.terminal.line_height;
+                            this.apply_terminal_line_height(window, lh);
                         }
                         cx.notify();
                     },

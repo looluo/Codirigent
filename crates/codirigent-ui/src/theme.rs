@@ -350,6 +350,8 @@ pub struct CodirigentTheme {
     pub font_size_large: f32,
     /// Terminal font size (separate from UI font size).
     pub terminal_font_size: f32,
+    /// Terminal line height multiplier (1.0 = natural font height).
+    pub terminal_line_height: f32,
     /// Terminal font family (separate from UI font family).
     pub terminal_font_family: String,
 
@@ -451,6 +453,7 @@ impl CodirigentTheme {
             font_size_small: 11.0,
             font_size_large: 15.0,
             terminal_font_size: 13.0,
+            terminal_line_height: 1.0,
             terminal_font_family: default_terminal_font_family().to_string(),
 
             // === Spacing ===
@@ -546,6 +549,7 @@ impl CodirigentTheme {
             font_size_small: 11.0,
             font_size_large: 15.0,
             terminal_font_size: 13.0,
+            terminal_line_height: 1.0,
             terminal_font_family: default_terminal_font_family().to_string(),
 
             // === Spacing ===
