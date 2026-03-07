@@ -26,12 +26,7 @@ struct HookPayload {
     hook_event_name: Option<String>,
     #[serde(default)]
     notification_type: Option<String>,
-    #[serde(
-        rename = "type",
-        alias = "event",
-        alias = "event_type",
-        default
-    )]
+    #[serde(rename = "type", alias = "event", alias = "event_type", default)]
     event_type: Option<String>,
     #[serde(default)]
     cli_type: Option<String>,
@@ -67,7 +62,11 @@ fn handle_payload(payload: HookPayload) {
         .session_id
         .as_deref()
         .filter(|id| is_safe_filename(id))
-        .or_else(|| codirigent_session_id.as_deref().filter(|id| is_safe_filename(id)))
+        .or_else(|| {
+            codirigent_session_id
+                .as_deref()
+                .filter(|id| is_safe_filename(id))
+        })
         .unwrap_or_default()
         .to_owned(); // owned String releases the borrow on codirigent_session_id
     if filename_session_id.is_empty() {
@@ -240,7 +239,11 @@ fn signals_dir() -> Option<PathBuf> {
         let config_home = std::env::var("XDG_CONFIG_HOME")
             .ok()
             .map(PathBuf::from)
-            .or_else(|| std::env::var("HOME").ok().map(|h| PathBuf::from(h).join(".config")))?;
+            .or_else(|| {
+                std::env::var("HOME")
+                    .ok()
+                    .map(|h| PathBuf::from(h).join(".config"))
+            })?;
         Some(config_home.join("codirigent").join("signals"))
     }
 }
@@ -251,7 +254,10 @@ mod tests {
 
     #[test]
     fn map_status_user_prompt_submit_is_working() {
-        assert_eq!(map_status(Some("UserPromptSubmit"), None, None, None), "working");
+        assert_eq!(
+            map_status(Some("UserPromptSubmit"), None, None, None),
+            "working"
+        );
     }
 
     #[test]
@@ -269,7 +275,10 @@ mod tests {
 
     #[test]
     fn map_status_notification_other_is_idle() {
-        assert_eq!(map_status(Some("Notification"), Some("idle_prompt"), None, None), "idle");
+        assert_eq!(
+            map_status(Some("Notification"), Some("idle_prompt"), None, None),
+            "idle"
+        );
         assert_eq!(map_status(Some("Notification"), None, None, None), "idle");
     }
 
@@ -280,7 +289,10 @@ mod tests {
 
     #[test]
     fn map_codex_status_turn_complete_is_response_ready() {
-        assert_eq!(map_codex_status(Some("agent-turn-complete")), "response_ready");
+        assert_eq!(
+            map_codex_status(Some("agent-turn-complete")),
+            "response_ready"
+        );
     }
 
     #[test]
@@ -291,7 +303,10 @@ mod tests {
 
     #[test]
     fn map_codex_status_permission_events_need_attention() {
-        assert_eq!(map_codex_status(Some("permission_prompt")), "needs_attention");
+        assert_eq!(
+            map_codex_status(Some("permission_prompt")),
+            "needs_attention"
+        );
     }
 
     #[test]

@@ -22,8 +22,8 @@
 
 use anyhow::{Context, Result};
 use serde_json::{json, Value as JsonValue};
-use toml::Value as TomlValue;
 use std::path::{Path, PathBuf};
+use toml::Value as TomlValue;
 use tracing::{debug, info};
 
 /// Substring that identifies a Codirigent hook command, used to detect and
@@ -186,7 +186,8 @@ fn read_toml_settings(path: &Path) -> Result<TomlValue> {
     }
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read {}", path.display()))?;
-    let settings = toml::from_str(&content).with_context(|| format!("Failed to parse {}", path.display()))?;
+    let settings =
+        toml::from_str(&content).with_context(|| format!("Failed to parse {}", path.display()))?;
     Ok(settings)
 }
 

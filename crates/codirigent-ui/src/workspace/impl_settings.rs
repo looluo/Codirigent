@@ -161,7 +161,9 @@ impl WorkspaceView {
                     };
                     let project_error = if project_save_pending {
                         if let Some(ref dir) = project_dir {
-                            config_service.save_project_config(dir, &project_config).err()
+                            config_service
+                                .save_project_config(dir, &project_config)
+                                .err()
                         } else {
                             None
                         }
@@ -295,7 +297,8 @@ impl WorkspaceView {
                 this.settings.current_working_dir = loaded.2;
                 this.notification_manager
                     .update_settings(loaded.0.notifications.clone());
-                this.top_bar.load_saved_profiles(loaded.0.saved_layouts.clone());
+                this.top_bar
+                    .load_saved_profiles(loaded.0.saved_layouts.clone());
 
                 if let Some(existing_page) = this.settings.page.as_ref() {
                     if !existing_page.user_save_pending && !existing_page.project_save_pending {
@@ -326,7 +329,9 @@ impl WorkspaceView {
     }
 
     pub(super) fn open_settings(&mut self) {
-        if self.settings.page.is_none() && (self.settings.loaded_once || self.settings.load_task.is_none()) {
+        if self.settings.page.is_none()
+            && (self.settings.loaded_once || self.settings.load_task.is_none())
+        {
             self.settings.page = Some(self.build_settings_page());
         }
         self.settings.open = true;

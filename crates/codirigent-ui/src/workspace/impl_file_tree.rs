@@ -54,7 +54,9 @@ impl WorkspaceView {
         self.project.file_tree_model = None;
         self.project.worktree_manager = None;
         self.project.worktree_panel.set_worktrees(Vec::new());
-        self.project.worktree_panel.set_available_branches(Vec::new());
+        self.project
+            .worktree_panel
+            .set_available_branches(Vec::new());
         self.refresh_file_tree_panel();
     }
 
@@ -182,7 +184,9 @@ impl WorkspaceView {
                         if is_current {
                             this.project.worktree_manager = None;
                             this.project.worktree_panel.set_worktrees(Vec::new());
-                            this.project.worktree_panel.set_available_branches(Vec::new());
+                            this.project
+                                .worktree_panel
+                                .set_available_branches(Vec::new());
                             cx.notify();
                         } else {
                             let cached = this.cached_project_root_state_mut(&path);

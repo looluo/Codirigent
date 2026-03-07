@@ -105,10 +105,12 @@ impl WorkspaceView {
                     }),
                     strikethrough: None,
                 };
-                let shaped =
-                    window
-                        .text_system()
-                        .shape_line(preedit_text, font_size_px, &[preedit_run], None);
+                let shaped = window.text_system().shape_line(
+                    preedit_text,
+                    font_size_px,
+                    &[preedit_run],
+                    None,
+                );
                 Some((cursor.x, cursor.y, shaped))
             }
         } else {

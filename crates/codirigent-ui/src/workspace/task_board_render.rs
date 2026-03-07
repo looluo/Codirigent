@@ -982,125 +982,113 @@ impl WorkspaceView {
                     ),
             )
             // Pending assignment confirmation banners
-            .children(
-                pending_assignments
-                    .into_iter()
-                    .map(|pending| {
-                        let confirm_task_id = pending.task_id.clone();
-                        let reject_task_id = pending.task_id.clone();
-                        let amber_bg: gpui::Hsla = AMBER_BG;
-                        let amber_border: gpui::Hsla = AMBER_BORDER;
-                        let amber_text: gpui::Hsla = AMBER_TEXT;
-                        let green_bg: gpui::Hsla = GREEN_BG;
-                        let green_fg: gpui::Hsla = GREEN_FG;
+            .children(pending_assignments.into_iter().map(|pending| {
+                let confirm_task_id = pending.task_id.clone();
+                let reject_task_id = pending.task_id.clone();
+                let amber_bg: gpui::Hsla = AMBER_BG;
+                let amber_border: gpui::Hsla = AMBER_BORDER;
+                let amber_text: gpui::Hsla = AMBER_TEXT;
+                let green_bg: gpui::Hsla = GREEN_BG;
+                let green_fg: gpui::Hsla = GREEN_FG;
 
+                div()
+                    .id(SharedString::from(format!(
+                        "pending-confirm-{}",
+                        pending.task_id
+                    )))
+                    .mx_2()
+                    .mt_2()
+                    .p_2()
+                    .rounded_md()
+                    .bg(amber_bg)
+                    .border_1()
+                    .border_color(amber_border)
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    // Row 1: pause icon + task title + "Proposed for Session N"
+                    .child(
                         div()
-                            .id(SharedString::from(format!(
-                                "pending-confirm-{}",
-                                pending.task_id
-                            )))
-                            .mx_2()
-                            .mt_2()
-                            .p_2()
-                            .rounded_md()
-                            .bg(amber_bg)
-                            .border_1()
-                            .border_color(amber_border)
                             .flex()
-                            .flex_col()
+                            .items_center()
                             .gap(px(6.0))
-                            // Row 1: pause icon + task title + "Proposed for Session N"
+                            .child(div().text_size(px(11.0)).text_color(amber_text).child("⏸"))
+                            .child(
+                                div().flex_1().overflow_hidden().child(
+                                    div()
+                                        .text_size(px(12.0))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(amber_text)
+                                        .child(pending.task_title),
+                                ),
+                            )
                             .child(
                                 div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.0))
-                                    .child(
-                                        div().text_size(px(11.0)).text_color(amber_text).child("⏸"),
-                                    )
-                                    .child(
-                                        div().flex_1().overflow_hidden().child(
-                                            div()
-                                                .text_size(px(12.0))
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .text_color(amber_text)
-                                                .child(pending.task_title),
-                                        ),
-                                    )
+                                    .text_size(px(10.0))
+                                    .text_color(muted.opacity(0.7))
+                                    .child(format!("→ Session {}", pending.session_number)),
+                            ),
+                    )
+                    // Row 2: Send + Skip buttons
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "confirm-send-{}",
+                                        confirm_task_id
+                                    )))
+                                    .px(px(10.0))
+                                    .py(px(3.0))
+                                    .rounded(px(4.0))
+                                    .bg(green_bg)
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(GREEN_BG_HOVER))
+                                    .on_click(cx.listener(
+                                        move |this, _: &ClickEvent, _window, _cx| {
+                                            this.task_board.confirm_pending_assignment(
+                                                confirm_task_id.clone(),
+                                            );
+                                        },
+                                    ))
                                     .child(
                                         div()
-                                            .text_size(px(10.0))
+                                            .text_size(px(11.0))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(green_fg)
+                                            .child("Send"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "confirm-skip-{}",
+                                        reject_task_id
+                                    )))
+                                    .px(px(10.0))
+                                    .py(px(3.0))
+                                    .rounded(px(4.0))
+                                    .bg(active_bg.opacity(0.4))
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(gpui::hsla(0.0, 0.0, 0.5, 0.15)))
+                                    .on_click(cx.listener(
+                                        move |this, _: &ClickEvent, _window, _cx| {
+                                            this.task_board
+                                                .reject_pending_assignment(reject_task_id.clone());
+                                        },
+                                    ))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.0))
                                             .text_color(muted.opacity(0.7))
-                                            .child(format!(
-                                                "→ Session {}",
-                                                pending.session_number
-                                            )),
+                                            .child("Skip"),
                                     ),
-                            )
-                            // Row 2: Send + Skip buttons
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.0))
-                                    .child(
-                                        div()
-                                            .id(SharedString::from(format!(
-                                                "confirm-send-{}",
-                                                confirm_task_id
-                                            )))
-                                            .px(px(10.0))
-                                            .py(px(3.0))
-                                            .rounded(px(4.0))
-                                            .bg(green_bg)
-                                            .cursor_pointer()
-                                            .hover(|style| style.bg(GREEN_BG_HOVER))
-                                            .on_click(cx.listener(
-                                                move |this, _: &ClickEvent, _window, _cx| {
-                                                    this.task_board.confirm_pending_assignment(
-                                                        confirm_task_id.clone(),
-                                                    );
-                                                },
-                                            ))
-                                            .child(
-                                                div()
-                                                    .text_size(px(11.0))
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(green_fg)
-                                                    .child("Send"),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .id(SharedString::from(format!(
-                                                "confirm-skip-{}",
-                                                reject_task_id
-                                            )))
-                                            .px(px(10.0))
-                                            .py(px(3.0))
-                                            .rounded(px(4.0))
-                                            .bg(active_bg.opacity(0.4))
-                                            .cursor_pointer()
-                                            .hover(|style| {
-                                                style.bg(gpui::hsla(0.0, 0.0, 0.5, 0.15))
-                                            })
-                                            .on_click(cx.listener(
-                                                move |this, _: &ClickEvent, _window, _cx| {
-                                                    this.task_board.reject_pending_assignment(
-                                                        reject_task_id.clone(),
-                                                    );
-                                                },
-                                            ))
-                                            .child(
-                                                div()
-                                                    .text_size(px(11.0))
-                                                    .text_color(muted.opacity(0.7))
-                                                    .child("Skip"),
-                                            ),
-                                    ),
-                            )
-                    }),
-            )
+                            ),
+                    )
+            }))
             // Scrollable content - Running + Queue sections
             .child(
                 div()

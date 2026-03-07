@@ -737,7 +737,10 @@ mod tests {
 
         detector.process_output(SessionId(1), b"streaming output");
 
-        assert_eq!(detector.get_status(SessionId(1)), Some(SessionStatus::Working));
+        assert_eq!(
+            detector.get_status(SessionId(1)),
+            Some(SessionStatus::Working)
+        );
     }
 
     #[test]

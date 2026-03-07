@@ -99,7 +99,10 @@ impl WorkspaceView {
             .map(|tv| tv.terminal().bracketed_paste_mode())
             .unwrap_or(false);
         let clipboard = self.clipboard.smart_clipboard.clone();
-        let cli_type = self.clipboard.clipboard_service.get_session_cli_type(session_id);
+        let cli_type = self
+            .clipboard
+            .clipboard_service
+            .get_session_cli_type(session_id);
         let base_dir = self
             .clipboard
             .clipboard_service
@@ -113,8 +116,12 @@ impl WorkspaceView {
                 .background_executor()
                 .spawn(async move {
                     match clipboard.read_content() {
-                        Ok(ClipboardContent::Text(text)) => Ok(Some(PreparedClipboardPaste::Text(text))),
-                        Ok(ClipboardContent::Files(paths)) => Ok(Some(PreparedClipboardPaste::Files(paths))),
+                        Ok(ClipboardContent::Text(text)) => {
+                            Ok(Some(PreparedClipboardPaste::Text(text)))
+                        }
+                        Ok(ClipboardContent::Files(paths)) => {
+                            Ok(Some(PreparedClipboardPaste::Files(paths)))
+                        }
                         Ok(ClipboardContent::Image(image_data)) => {
                             let content_for_bg = ClipboardContent::Image(image_data);
                             let service =

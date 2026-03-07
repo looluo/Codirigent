@@ -630,7 +630,11 @@ impl TerminalView {
             }
         }
 
-        self.cached_rows = Some((0..rows).map(|row| self.build_row_cache(row, cols)).collect());
+        self.cached_rows = Some(
+            (0..rows)
+                .map(|row| self.build_row_cache(row, cols))
+                .collect(),
+        );
         self.cached_content = None;
         self.cached_shaped_font_family = None;
         self.cached_shaped_font_size = None;

@@ -257,7 +257,10 @@ impl WorkspaceView {
             let codex_resume = saved.codex_session_id.as_ref().map(|codex_id| {
                 let permission_mode = read_codex_permission_mode(&working_dir, codex_id);
                 let mut cmd = format!("codex --session {}", codex_id);
-                if permission_mode.as_deref().is_some_and(is_codex_full_auto_mode) {
+                if permission_mode
+                    .as_deref()
+                    .is_some_and(is_codex_full_auto_mode)
+                {
                     cmd.push_str(" --full-auto");
                 }
                 cmd.push('\r');
@@ -356,11 +359,7 @@ impl WorkspaceView {
         .detach();
     }
 
-    fn restore_session_from_plan(
-        &mut self,
-        plan: RestoreSessionPlan,
-        shell: Option<String>,
-    ) {
+    fn restore_session_from_plan(&mut self, plan: RestoreSessionPlan, shell: Option<String>) {
         let session_id = self.with_session_manager(|manager| {
             match manager.create_session(
                 plan.session_name.clone(),
@@ -396,7 +395,8 @@ impl WorkspaceView {
 
         if plan.group.is_some() || plan.color.is_some() {
             self.with_session_manager(|manager| {
-                let _ = manager.set_session_group(session_id, plan.group.clone(), plan.color.clone());
+                let _ =
+                    manager.set_session_group(session_id, plan.group.clone(), plan.color.clone());
             });
         }
 
