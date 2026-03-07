@@ -118,6 +118,15 @@ fn normalize_hook_status_for_codex_mode(
     }
 }
 
+fn cli_type_from_hook_signal_name(cli_type_name: &str) -> Option<CliType> {
+    match cli_type_name {
+        CLI_TYPE_CLAUDE => Some(CliType::ClaudeCode),
+        CLI_TYPE_GEMINI => Some(CliType::GeminiCli),
+        CLI_TYPE_CODEX => Some(CliType::CodexCli),
+        _ => None,
+    }
+}
+
 #[derive(Debug)]
 struct PreparedSessionOutput {
     session_id: SessionId,
@@ -1436,6 +1445,11 @@ impl WorkspaceView {
 
         let mut id_changed = false;
         let cli_type_name = cli_type.as_deref().unwrap_or(CLI_TYPE_CLAUDE);
+        if let Some(cli_type) = cli_type_from_hook_signal_name(cli_type_name) {
+            self.clipboard
+                .clipboard_service
+                .set_session_cli_type(session_id, cli_type);
+        }
         let resolved_cli_session_id =
             resolve_hook_cli_session_id(&signal_file_id, cli_session_id.as_deref(), session_id);
         if let Some(cli_session_id) = resolved_cli_session_id.as_deref() {
@@ -1701,6 +1715,11 @@ impl WorkspaceView {
             let mut id_changed = false;
 
             let cli_type = signal.cli_type.as_deref().unwrap_or(CLI_TYPE_CLAUDE);
+            if let Some(cli_type) = cli_type_from_hook_signal_name(cli_type) {
+                self.clipboard
+                    .clipboard_service
+                    .set_session_cli_type(session_id, cli_type);
+            }
             match cli_type {
                 CLI_TYPE_CLAUDE => {
                     id_changed = self
@@ -2146,6 +2165,26 @@ mod tests {
                 None,
             ),
             SessionStatus::NeedsAttention,
+        );
+    }
+
+    #[test]
+    fn hook_signal_cli_type_maps_to_codex() {
+        assert_eq!(
+            cli_type_from_hook_signal_name(CLI_TYPE_CODEX),
+            Some(CliType::CodexCli)
+        );
+    }
+
+    #[test]
+    fn hook_signal_cli_type_maps_to_claude_and_gemini() {
+        assert_eq!(
+            cli_type_from_hook_signal_name(CLI_TYPE_CLAUDE),
+            Some(CliType::ClaudeCode)
+        );
+        assert_eq!(
+            cli_type_from_hook_signal_name(CLI_TYPE_GEMINI),
+            Some(CliType::GeminiCli)
         );
     }
 
