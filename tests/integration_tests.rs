@@ -675,6 +675,8 @@ fn test_session_idle_to_working() {
         git_info: None,
         claude_session_id: None,
         codex_session_id: None,
+        codex_execution_mode: None,
+        codex_started_at: None,
         gemini_session_id: None,
     };
 
@@ -707,6 +709,8 @@ fn test_session_working_to_needs_attention() {
         git_info: None,
         claude_session_id: None,
         codex_session_id: None,
+        codex_execution_mode: None,
+        codex_started_at: None,
         gemini_session_id: None,
     };
 
@@ -739,6 +743,8 @@ fn test_session_needs_attention_to_idle() {
         git_info: None,
         claude_session_id: None,
         codex_session_id: None,
+        codex_execution_mode: None,
+        codex_started_at: None,
         gemini_session_id: None,
     };
 
@@ -771,6 +777,8 @@ fn test_session_to_error_state() {
         git_info: None,
         claude_session_id: None,
         codex_session_id: None,
+        codex_execution_mode: None,
+        codex_started_at: None,
         gemini_session_id: None,
     };
 
@@ -800,6 +808,8 @@ fn test_session_state_invariants() {
         git_info: None,
         claude_session_id: None,
         codex_session_id: None,
+        codex_execution_mode: None,
+        codex_started_at: None,
         gemini_session_id: None,
     };
 

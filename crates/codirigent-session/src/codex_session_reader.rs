@@ -489,10 +489,8 @@ impl CodexSessionReader {
                         } else if matches!(
                             item_type,
                             "reasoning" | "custom_tool_call" | "custom_tool_call_output"
-                        ) {
-                            last_activity = Some(LastActivity::Progress);
-                        } else if item_type == "message"
-                            && payload.get("role").and_then(|v| v.as_str()) == Some("assistant")
+                        ) || (item_type == "message"
+                            && payload.get("role").and_then(|v| v.as_str()) == Some("assistant"))
                         {
                             last_activity = Some(LastActivity::Progress);
                         }

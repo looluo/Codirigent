@@ -2,7 +2,7 @@
 //!
 //! On first launch (and on updates), Codirigent merges its required hooks into
 //! Claude Code's settings file so the user never has to run a manual setup
-//! command. The merge is additive and idempotent — existing hooks from other
+//! command. The merge is additive and idempotent - existing hooks from other
 //! plugins are preserved.
 //!
 //! # Hooks registered
@@ -36,7 +36,7 @@ const HOOK_MARKER: &str = "codirigent-hook";
 /// Using the full path avoids relying on PATH, which may not include the
 /// binary's directory during Claude Code's hook execution.
 ///
-/// Safe to call on every launch — the function is idempotent.
+/// Safe to call on every launch - the function is idempotent.
 /// Returns `Ok(true)` if the file was modified, `Ok(false)` if already up to date.
 pub fn ensure_hooks_installed(hook_binary: &Path) -> Result<bool> {
     let settings_path =
@@ -157,7 +157,7 @@ fn shell_escaped_hook_command(hook_binary: &Path) -> String {
 /// | Linux/macOS | `$XDG_CONFIG_HOME/codirigent/signals` (falls back to `~/.config/codirigent/signals`) |
 ///
 /// Note: `%APPDATA%` (roaming app data) is distinct from `%USERPROFILE%` used for
-/// `~/.claude`. This is intentional — signal files are transient runtime data that
+/// `~/.claude`. This is intentional - signal files are transient runtime data that
 /// belongs in the per-machine config location, not in the user's profile root.
 pub fn hook_signals_dir() -> Option<PathBuf> {
     #[cfg(target_os = "windows")]
@@ -417,10 +417,12 @@ mod tests {
     #[test]
     fn fresh_install_adds_three_hooks() {
         let mut settings = json!({});
-        let modified = merge_hooks(&mut settings, CMD).unwrap();
+        let modified = merge_hooks(&mut settings, CMD).expect("hook installer test should succeed");
         assert!(modified);
 
-        let hooks = settings["hooks"].as_object().unwrap();
+        let hooks = settings["hooks"]
+            .as_object()
+            .expect("hook installer test should succeed");
         assert!(hooks.contains_key("UserPromptSubmit"));
         assert!(hooks.contains_key("Notification"));
         assert!(hooks.contains_key("Stop"));
@@ -429,18 +431,18 @@ mod tests {
     #[test]
     fn fresh_install_uses_provided_command() {
         let mut settings = json!({});
-        merge_hooks(&mut settings, CMD).unwrap();
+        merge_hooks(&mut settings, CMD).expect("hook installer test should succeed");
         let cmd = settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
             .as_str()
-            .unwrap();
+            .expect("hook installer test should succeed");
         assert_eq!(cmd, CMD);
     }
 
     #[test]
     fn idempotent_second_call() {
         let mut settings = json!({});
-        merge_hooks(&mut settings, CMD).unwrap();
-        let modified = merge_hooks(&mut settings, CMD).unwrap();
+        merge_hooks(&mut settings, CMD).expect("hook installer test should succeed");
+        let modified = merge_hooks(&mut settings, CMD).expect("hook installer test should succeed");
         assert!(!modified, "second call should not modify");
     }
 
@@ -453,9 +455,11 @@ mod tests {
                 ]
             }
         });
-        merge_hooks(&mut settings, CMD).unwrap();
+        merge_hooks(&mut settings, CMD).expect("hook installer test should succeed");
 
-        let arr = settings["hooks"]["UserPromptSubmit"].as_array().unwrap();
+        let arr = settings["hooks"]["UserPromptSubmit"]
+            .as_array()
+            .expect("hook installer test should succeed");
         assert_eq!(arr.len(), 2, "existing hook must be preserved");
     }
 
@@ -474,11 +478,13 @@ mod tests {
                 ]
             }
         });
-        let modified = merge_hooks(&mut settings, CMD).unwrap();
+        let modified = merge_hooks(&mut settings, CMD).expect("hook installer test should succeed");
         assert!(!modified);
 
         for event in &["UserPromptSubmit", "Notification", "Stop"] {
-            let arr = settings["hooks"][event].as_array().unwrap();
+            let arr = settings["hooks"][event]
+                .as_array()
+                .expect("hook installer test should succeed");
             assert_eq!(arr.len(), 1, "{event} must not be duplicated");
         }
     }
@@ -499,14 +505,18 @@ mod tests {
                 ]
             }
         });
-        let modified = merge_hooks(&mut settings, CMD).unwrap();
+        let modified = merge_hooks(&mut settings, CMD).expect("hook installer test should succeed");
         assert!(modified, "legacy entry must be upgraded");
 
         for event in &["UserPromptSubmit", "Notification", "Stop"] {
-            let arr = settings["hooks"][event].as_array().unwrap();
-            // No duplicate added — the existing entry was upgraded in place.
+            let arr = settings["hooks"][event]
+                .as_array()
+                .expect("hook installer test should succeed");
+            // No duplicate added - the existing entry was upgraded in place.
             assert_eq!(arr.len(), 1, "{event} must not grow");
-            let cmd = arr[0]["hooks"][0]["command"].as_str().unwrap();
+            let cmd = arr[0]["hooks"][0]["command"]
+                .as_str()
+                .expect("hook installer test should succeed");
             assert_eq!(cmd, CMD, "{event} command must be updated to full path");
         }
     }
@@ -526,9 +536,9 @@ mod tests {
                 ]
             }
         });
-        merge_hooks(&mut settings, CMD).unwrap();
+        merge_hooks(&mut settings, CMD).expect("hook installer test should succeed");
         // Second call with same command must be a no-op.
-        let modified = merge_hooks(&mut settings, CMD).unwrap();
+        let modified = merge_hooks(&mut settings, CMD).expect("hook installer test should succeed");
         assert!(!modified, "second call after upgrade must be idempotent");
     }
 
@@ -548,13 +558,18 @@ mod tests {
                 ]
             }
         });
-        let modified = merge_hooks(&mut settings, CMD2).unwrap();
+        let modified =
+            merge_hooks(&mut settings, CMD2).expect("hook installer test should succeed");
         assert!(modified, "changed path must trigger upgrade");
 
         for event in &["UserPromptSubmit", "Notification", "Stop"] {
-            let arr = settings["hooks"][event].as_array().unwrap();
+            let arr = settings["hooks"][event]
+                .as_array()
+                .expect("hook installer test should succeed");
             assert_eq!(arr.len(), 1, "{event} must not grow");
-            let cmd = arr[0]["hooks"][0]["command"].as_str().unwrap();
+            let cmd = arr[0]["hooks"][0]["command"]
+                .as_str()
+                .expect("hook installer test should succeed");
             assert_eq!(cmd, CMD2);
         }
     }
@@ -564,10 +579,10 @@ mod tests {
         // CMD_SPACES is the already-quoted form; verify merge_hooks stores it as-is
         // and that the quote is detectable (contains the marker).
         let mut settings = json!({});
-        merge_hooks(&mut settings, CMD_SPACES).unwrap();
+        merge_hooks(&mut settings, CMD_SPACES).expect("hook installer test should succeed");
         let cmd = settings["hooks"]["UserPromptSubmit"][0]["hooks"][0]["command"]
             .as_str()
-            .unwrap();
+            .expect("hook installer test should succeed");
         assert_eq!(cmd, CMD_SPACES);
         assert!(cmd.contains(HOOK_MARKER));
     }
@@ -588,24 +603,35 @@ mod tests {
                 ]
             }
         });
-        let modified = merge_hooks(&mut settings, CMD_SPACES).unwrap();
+        let modified =
+            merge_hooks(&mut settings, CMD_SPACES).expect("hook installer test should succeed");
         assert!(modified, "unquoted path must be upgraded to quoted form");
 
         for event in &["UserPromptSubmit", "Notification", "Stop"] {
-            let arr = settings["hooks"][event].as_array().unwrap();
+            let arr = settings["hooks"][event]
+                .as_array()
+                .expect("hook installer test should succeed");
             assert_eq!(arr.len(), 1, "{event} must not grow");
-            let cmd = arr[0]["hooks"][0]["command"].as_str().unwrap();
+            let cmd = arr[0]["hooks"][0]["command"]
+                .as_str()
+                .expect("hook installer test should succeed");
             assert_eq!(cmd, CMD_SPACES, "{event} must be quoted now");
         }
     }
 
     #[test]
     fn codex_config_adds_notify() {
-        let mut settings: TomlValue = toml::from_str("").unwrap();
-        let modified = merge_codex_notify(&mut settings, CMD).unwrap();
+        let mut settings: TomlValue =
+            toml::from_str("").expect("hook installer test should succeed");
+        let modified =
+            merge_codex_notify(&mut settings, CMD).expect("hook installer test should succeed");
         assert!(modified);
         assert_eq!(
-            settings["notify"].as_array().unwrap()[0].as_str().unwrap(),
+            settings["notify"]
+                .as_array()
+                .expect("hook installer test should succeed")[0]
+                .as_str()
+                .expect("hook installer test should succeed"),
             CMD
         );
     }
@@ -617,30 +643,54 @@ mod tests {
             notify = ["/usr/local/bin/codirigent-hook", "notify-send"]
             "#,
         )
-        .unwrap();
-        let modified = merge_codex_notify(&mut settings, CMD).unwrap();
+        .expect("hook installer test should succeed");
+        let modified =
+            merge_codex_notify(&mut settings, CMD).expect("hook installer test should succeed");
         assert!(!modified);
-        assert_eq!(settings["notify"].as_array().unwrap().len(), 2);
+        assert_eq!(
+            settings["notify"]
+                .as_array()
+                .expect("hook installer test should succeed")
+                .len(),
+            2
+        );
     }
 
     #[test]
     fn codex_config_upgrades_string_notify_to_array() {
-        let mut settings: TomlValue = toml::from_str(r#"notify = "/usr/bin/old""#).unwrap();
-        let modified = merge_codex_notify(&mut settings, CMD).unwrap();
+        let mut settings: TomlValue = toml::from_str(r#"notify = "/usr/bin/old""#)
+            .expect("hook installer test should succeed");
+        let modified =
+            merge_codex_notify(&mut settings, CMD).expect("hook installer test should succeed");
         assert!(modified);
-        let notify = settings["notify"].as_array().unwrap();
+        let notify = settings["notify"]
+            .as_array()
+            .expect("hook installer test should succeed");
         assert_eq!(notify.len(), 2);
-        assert_eq!(notify[0].as_str().unwrap(), "/usr/bin/old");
-        assert_eq!(notify[1].as_str().unwrap(), CMD);
+        assert_eq!(
+            notify[0]
+                .as_str()
+                .expect("hook installer test should succeed"),
+            "/usr/bin/old"
+        );
+        assert_eq!(
+            notify[1]
+                .as_str()
+                .expect("hook installer test should succeed"),
+            CMD
+        );
     }
 
     #[test]
     fn fresh_gemini_install_adds_expected_hooks() {
         let mut settings = json!({});
-        let modified = merge_gemini_hooks(&mut settings, CMD).unwrap();
+        let modified =
+            merge_gemini_hooks(&mut settings, CMD).expect("hook installer test should succeed");
         assert!(modified);
 
-        let hooks = settings["hooks"].as_object().unwrap();
+        let hooks = settings["hooks"]
+            .as_object()
+            .expect("hook installer test should succeed");
         assert!(hooks.contains_key("BeforeAgent"));
         assert!(hooks.contains_key("AfterAgent"));
         assert!(hooks.contains_key("Notification"));
@@ -649,8 +699,9 @@ mod tests {
     #[test]
     fn gemini_install_is_idempotent() {
         let mut settings = json!({});
-        merge_gemini_hooks(&mut settings, CMD).unwrap();
-        let modified = merge_gemini_hooks(&mut settings, CMD).unwrap();
+        merge_gemini_hooks(&mut settings, CMD).expect("hook installer test should succeed");
+        let modified =
+            merge_gemini_hooks(&mut settings, CMD).expect("hook installer test should succeed");
         assert!(!modified, "second Gemini install should not modify");
     }
 
@@ -669,13 +720,18 @@ mod tests {
                 ]
             }
         });
-        let modified = merge_gemini_hooks(&mut settings, CMD).unwrap();
+        let modified =
+            merge_gemini_hooks(&mut settings, CMD).expect("hook installer test should succeed");
         assert!(modified, "legacy Gemini entries must be upgraded");
 
         for event in &["BeforeAgent", "AfterAgent", "Notification"] {
-            let arr = settings["hooks"][event].as_array().unwrap();
+            let arr = settings["hooks"][event]
+                .as_array()
+                .expect("hook installer test should succeed");
             assert_eq!(arr.len(), 1, "{event} must not grow");
-            let cmd = arr[0]["hooks"][0]["command"].as_str().unwrap();
+            let cmd = arr[0]["hooks"][0]["command"]
+                .as_str()
+                .expect("hook installer test should succeed");
             assert_eq!(cmd, CMD);
         }
     }
