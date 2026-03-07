@@ -77,7 +77,7 @@ Download the `.msi` installer from the [latest release](https://github.com/oso95
 
 Download the `.dmg` from the [latest release](https://github.com/oso95/Codirigent/releases/latest).
 
-> **Gatekeeper warning:** macOS code signing is pending Apple Developer approval. To open: right-click the app → **Open** → **Open** again.
+> The app is signed and notarized — it should open without Gatekeeper warnings.
 
 ## Hook Setup (Recommended)
 
