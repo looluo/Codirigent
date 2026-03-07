@@ -44,7 +44,7 @@ use codirigent_core::{
 };
 use codirigent_detector::{InputDetector, NotificationManager};
 use codirigent_filetree::FileTree;
-use codirigent_session::clipboard_service::DefaultClipboardService;
+use codirigent_session::clipboard_service::{ClipboardService, DefaultClipboardService};
 use codirigent_session::DefaultSessionManager;
 use gpui::{
     div, px, App, AppContext, Bounds, ClickEvent, Context, Entity, EntityInputHandler, FocusHandle,
@@ -207,6 +207,38 @@ impl WorkspaceView {
         None
     }
 
+    fn keystroke_is_text_input(event: &KeyDownEvent) -> bool {
+        if event.keystroke.modifiers.control
+            || event.keystroke.modifiers.alt
+            || event.keystroke.modifiers.platform
+            || event.keystroke.modifiers.function
+        {
+            return false;
+        }
+
+        let key: &str = event.keystroke.key.as_ref();
+        let is_plain_space = key == " " || key.eq_ignore_ascii_case("space");
+        if is_plain_space {
+            return true;
+        }
+
+        if event
+            .keystroke
+            .key_char
+            .as_deref()
+            .is_some_and(|text| !text.is_empty())
+        {
+            return true;
+        }
+
+        // On Windows IME layouts, pre-composition keystrokes can arrive with an
+        // empty `key_char` before GPUI dispatches the eventual composition or
+        // committed text via the input handler. Treat any plain printable key as
+        // text input so it does not leak directly into the PTY and suppress the
+        // IME preedit overlay.
+        key.chars().count() == 1
+    }
+
     pub(super) fn set_session_codex_execution_mode(
         &mut self,
         session_id: SessionId,
@@ -248,6 +280,13 @@ impl WorkspaceView {
     ) {
         let mut changed = false;
         let started_at = chrono::Utc::now();
+
+        // Mark the pane as Codex immediately when the shell command is
+        // submitted so background JSONL polling can report Working on the
+        // same turn, even before the first hook signal arrives.
+        self.clipboard
+            .clipboard_service
+            .set_session_cli_type(session_id, codirigent_core::CliType::CodexCli);
 
         if let Ok(mgr) = self.session_manager.lock() {
             changed |= mgr
@@ -1323,19 +1362,11 @@ impl WorkspaceView {
         // send printable keys from keydown, characters are duplicated.
         // GPUI can report plain Space with an empty key_char, so treat it
         // as text input as well to avoid inserting two spaces.
-        let key: &str = event.keystroke.key.as_ref();
-        let is_plain_space = key == " " || key.eq_ignore_ascii_case("space");
-        if !event.keystroke.modifiers.control
-            && !event.keystroke.modifiers.alt
-            && (event
-                .keystroke
-                .key_char
-                .as_deref()
-                .is_some_and(|s| !s.is_empty())
-                || is_plain_space)
-        {
+        if Self::keystroke_is_text_input(event) {
             return;
         }
+
+        let key: &str = event.keystroke.key.as_ref();
 
         // Get focused session
         let Some(session_id) = self.workspace.focused_session_id() else {
@@ -2193,5 +2224,33 @@ mod tests {
             ),
             Some(codirigent_core::CodexExecutionMode::Bypass)
         );
+    }
+
+    #[test]
+    fn test_keystroke_is_text_input_for_plain_printable_without_key_char() {
+        let event = gpui::KeyDownEvent {
+            keystroke: gpui::Keystroke {
+                modifiers: gpui::Modifiers::default(),
+                key: "a".to_string(),
+                key_char: None,
+            },
+            is_held: false,
+        };
+
+        assert!(super::WorkspaceView::keystroke_is_text_input(&event));
+    }
+
+    #[test]
+    fn test_keystroke_is_not_text_input_for_named_terminal_key() {
+        let event = gpui::KeyDownEvent {
+            keystroke: gpui::Keystroke {
+                modifiers: gpui::Modifiers::default(),
+                key: "enter".to_string(),
+                key_char: None,
+            },
+            is_held: false,
+        };
+
+        assert!(!super::WorkspaceView::keystroke_is_text_input(&event));
     }
 }
