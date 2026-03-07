@@ -33,6 +33,21 @@ const CLI_TYPE_CLAUDE: &str = "claude";
 const CLI_TYPE_GEMINI: &str = "gemini";
 const CLI_TYPE_CODEX: &str = "codex";
 
+/// Unix timestamp (seconds) recorded the first time it is read, acting as a
+/// per-process "run epoch".  Hook signals written before this moment belong to
+/// a previous Codirigent run and must be ignored, regardless of the 600-second
+/// recency window, to prevent stale signals from routing to re-used session IDs.
+static APP_START_TS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
+fn app_start_ts() -> u64 {
+    *APP_START_TS.get_or_init(|| {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map(|d| d.as_secs())
+            .unwrap_or(0)
+    })
+}
+
 /// Session status result from a background JSONL read: (status, optional detail string).
 type JsonlStatusResult = Option<(SessionStatus, Option<String>)>;
 
@@ -274,6 +289,14 @@ fn read_recent_hook_signal_updates() -> Vec<HookSignalUpdate> {
         };
 
         if now_ts.saturating_sub(signal.ts) > 600 {
+            continue;
+        }
+
+        // Reject signals written before this process started.  Session IDs
+        // (1, 2, 3 …) reset on every restart, so a signal from a previous run
+        // that shares an ID with a newly-created session would route to the
+        // wrong session and corrupt its claude_session_id.
+        if signal.ts < app_start_ts() {
             continue;
         }
 
