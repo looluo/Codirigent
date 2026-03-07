@@ -200,7 +200,10 @@ mod tests {
     fn test_settings_category_all() {
         assert_eq!(SettingsCategory::ALL.len(), 4);
         assert_eq!(SettingsCategory::ALL[0], SettingsCategory::General);
-        assert_eq!(SettingsCategory::ALL[3], SettingsCategory::KeyboardShortcuts);
+        assert_eq!(
+            SettingsCategory::ALL[3],
+            SettingsCategory::KeyboardShortcuts
+        );
     }
 
     #[test]
