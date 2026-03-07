@@ -82,7 +82,10 @@ const GREEN_BG_HOVER: gpui::Hsla = gpui::Hsla {
 
 impl WorkspaceView {
     /// Convert core Task to UI TaskItem with status mapping.
-    fn core_task_to_ui_item(&self, task: &codirigent_core::Task) -> crate::task_board::TaskItem {
+    pub(super) fn core_task_to_ui_item(
+        &self,
+        task: &codirigent_core::Task,
+    ) -> crate::task_board::TaskItem {
         use crate::task_board::{TaskItem, TaskPriority as UIPriority, TaskStatus as UIStatus};
         use codirigent_core::{TaskPriority as CorePriority, TaskStatus as CoreStatus};
 
@@ -846,87 +849,13 @@ impl WorkspaceView {
         let panel_label_row_height = 14.0;
         let panel_icon_y_offset = 1.0;
 
-        // Fetch real task data from TaskManager
-        let (
-            running_items,
-            queued_items,
-            review_items,
-            done_items,
-            auto_assign_mode,
-            pending_assignments,
-        ) = if let Ok(manager) = self.task_manager.lock() {
-            let all_tasks = manager.list_tasks();
-
-            let running: Vec<_> = all_tasks
-                .iter()
-                .filter(|t| {
-                    matches!(
-                        t.status,
-                        codirigent_core::TaskStatus::Assigned
-                            | codirigent_core::TaskStatus::Working
-                    )
-                })
-                .map(|t| self.core_task_to_ui_item(t))
-                .collect();
-            let queued: Vec<_> = all_tasks
-                .iter()
-                .filter(|t| {
-                    matches!(
-                        t.status,
-                        codirigent_core::TaskStatus::Queued | codirigent_core::TaskStatus::Blocked
-                    )
-                })
-                .map(|t| self.core_task_to_ui_item(t))
-                .collect();
-            let review: Vec<_> = all_tasks
-                .iter()
-                .filter(|t| {
-                    matches!(
-                        t.status,
-                        codirigent_core::TaskStatus::Verifying
-                            | codirigent_core::TaskStatus::Review
-                    )
-                })
-                .map(|t| self.core_task_to_ui_item(t))
-                .collect();
-            let done: Vec<_> = all_tasks
-                .iter()
-                .filter(|t| t.status == codirigent_core::TaskStatus::Done)
-                .map(|t| self.core_task_to_ui_item(t))
-                .collect();
-            let config = manager.assignment().config();
-            let mode = crate::task_board::AutoAssignMode::from_config(
-                config.auto_assign,
-                config.confirm_before_assign,
-            );
-
-            // Collect pending assignments for the confirmation banner
-            let pending: Vec<_> = manager
-                .assignment()
-                .pending_assignments()
-                .iter()
-                .map(|p| {
-                    let task_title = all_tasks
-                        .iter()
-                        .find(|t| t.id == p.task_id)
-                        .map(|t| t.title.clone())
-                        .unwrap_or_else(|| p.task_id.to_string());
-                    (p.task_id.to_string(), p.session_id.0, task_title)
-                })
-                .collect();
-
-            drop(manager);
-            (running, queued, review, done, mode, pending)
-        } else {
-            (
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                crate::task_board::AutoAssignMode::Off,
-                Vec::new(),
-            )
-        };
+        let snapshot = self.task_board.snapshot().clone();
+        let running_items = snapshot.running_items;
+        let queued_items = snapshot.queued_items;
+        let review_items = snapshot.review_items;
+        let done_items = snapshot.done_items;
+        let auto_assign_mode = snapshot.auto_assign_mode;
+        let pending_assignments = snapshot.pending_assignments;
 
         let running_count = running_items.len();
         let queued_count = queued_items.len();
@@ -1056,9 +985,9 @@ impl WorkspaceView {
             .children(
                 pending_assignments
                     .into_iter()
-                    .map(|(task_id, session_num, task_title)| {
-                        let confirm_task_id = task_id.clone();
-                        let reject_task_id = task_id.clone();
+                    .map(|pending| {
+                        let confirm_task_id = pending.task_id.clone();
+                        let reject_task_id = pending.task_id.clone();
                         let amber_bg: gpui::Hsla = AMBER_BG;
                         let amber_border: gpui::Hsla = AMBER_BORDER;
                         let amber_text: gpui::Hsla = AMBER_TEXT;
@@ -1066,7 +995,10 @@ impl WorkspaceView {
                         let green_fg: gpui::Hsla = GREEN_FG;
 
                         div()
-                            .id(SharedString::from(format!("pending-confirm-{}", task_id)))
+                            .id(SharedString::from(format!(
+                                "pending-confirm-{}",
+                                pending.task_id
+                            )))
                             .mx_2()
                             .mt_2()
                             .p_2()
@@ -1092,14 +1024,17 @@ impl WorkspaceView {
                                                 .text_size(px(12.0))
                                                 .font_weight(FontWeight::MEDIUM)
                                                 .text_color(amber_text)
-                                                .child(task_title),
+                                                .child(pending.task_title),
                                         ),
                                     )
                                     .child(
                                         div()
                                             .text_size(px(10.0))
                                             .text_color(muted.opacity(0.7))
-                                            .child(format!("→ Session {}", session_num)),
+                                            .child(format!(
+                                                "→ Session {}",
+                                                pending.session_number
+                                            )),
                                     ),
                             )
                             // Row 2: Send + Skip buttons

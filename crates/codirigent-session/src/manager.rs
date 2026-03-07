@@ -200,7 +200,7 @@ impl DefaultSessionManager {
         } else {
             Some(DrainedOutput {
                 data: output,
-                has_more: hit_budget || state.output_rx.len() > 0,
+                has_more: hit_budget || !state.output_rx.is_empty(),
             })
         }
     }

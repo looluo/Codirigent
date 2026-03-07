@@ -337,11 +337,11 @@ fn test_workspace_cell_info() {
     assert_eq!(cells.len(), 2);
 
     assert_eq!(cells[0].session_id, SessionId(1));
-    assert!(cells[0].is_focused);
-    assert_eq!(cells[0].name, "Session 1");
+    assert_eq!(ws.focused_session_id(), Some(SessionId(1)));
+    assert_eq!(ws.session(cells[0].session_id).unwrap().name, "Session 1");
 
     assert_eq!(cells[1].session_id, SessionId(2));
-    assert!(!cells[1].is_focused);
+    assert_ne!(ws.focused_session_id(), Some(SessionId(2)));
 }
 
 #[test]
@@ -350,16 +350,12 @@ fn test_cell_info_fields() {
         session_id: SessionId(1),
         index: 0,
         bounds: Bounds::from_size(100.0, 100.0),
-        name: "Test".to_string(),
-        status: SessionStatus::Working,
-        is_focused: true,
     };
 
     assert_eq!(info.session_id, SessionId(1));
     assert_eq!(info.index, 0);
-    assert_eq!(info.name, "Test");
-    assert_eq!(info.status, SessionStatus::Working);
-    assert!(info.is_focused);
+    assert_eq!(info.bounds.size.width, 100.0);
+    assert_eq!(info.bounds.size.height, 100.0);
 }
 
 #[test]
@@ -396,8 +392,8 @@ fn test_workspace_single_layout_shows_focused_session() {
     let cells = ws.cell_info();
     assert_eq!(cells.len(), 1);
     assert_eq!(cells[0].session_id, SessionId(2));
-    assert!(cells[0].is_focused);
-    assert_eq!(cells[0].name, "Session 2");
+    assert_eq!(ws.focused_session_id(), Some(SessionId(2)));
+    assert_eq!(ws.session(cells[0].session_id).unwrap().name, "Session 2");
 }
 
 #[test]
@@ -420,7 +416,7 @@ fn test_workspace_single_layout_focused_session_already_first() {
     let cells = ws.cell_info();
     assert_eq!(cells.len(), 1);
     assert_eq!(cells[0].session_id, SessionId(1));
-    assert!(cells[0].is_focused);
+    assert_eq!(ws.focused_session_id(), Some(SessionId(1)));
 }
 
 #[test]
@@ -457,10 +453,6 @@ fn test_workspace_single_layout_preserves_order_on_exit() {
 
     // Session 3 should still be focused
     assert_eq!(ws.focused_session_id(), Some(SessionId(3)));
-    assert!(!cells[0].is_focused);
-    assert!(!cells[1].is_focused);
-    assert!(cells[2].is_focused);
-    assert!(!cells[3].is_focused);
 }
 
 // --- set_split_tree tests ---

@@ -23,6 +23,10 @@ pub(super) struct SettingsState {
     pub(super) cached_project_config: ProjectConfig,
     /// Working directory used for project-scoped settings.
     pub(super) current_working_dir: Option<PathBuf>,
+    /// Whether settings have been loaded from disk at least once.
+    pub(super) loaded_once: bool,
+    /// Whether session restore should run after the next successful settings load.
+    pub(super) restore_after_load: bool,
 }
 
 impl SettingsState {
@@ -36,6 +40,8 @@ impl SettingsState {
             cached_user_settings: UserSettings::default(),
             cached_project_config: ProjectConfig::default(),
             current_working_dir: std::env::current_dir().ok(),
+            loaded_once: false,
+            restore_after_load: false,
         }
     }
 }

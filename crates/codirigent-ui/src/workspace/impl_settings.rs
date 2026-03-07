@@ -246,14 +246,31 @@ impl WorkspaceView {
         restore_after_load: bool,
         cx: &mut Context<Self>,
     ) {
+        self.settings.restore_after_load |= restore_after_load;
         let Some(config_service) = self.settings.config_service.clone() else {
-            if restore_after_load {
+            if self.settings.restore_after_load {
+                self.settings.restore_after_load = false;
                 self.spawn_restore_sessions_from_disk(cx);
             }
             return;
         };
 
         let project_dir = self.settings_project_dir();
+        if self.settings.current_working_dir == project_dir {
+            if self.settings.load_task.is_some() {
+                return;
+            }
+            if self.settings.loaded_once {
+                if self.settings.restore_after_load
+                    && self.workspace.sessions().is_empty()
+                    && !self.polling.restore_in_flight
+                {
+                    self.settings.restore_after_load = false;
+                    self.spawn_restore_sessions_from_disk(cx);
+                }
+                return;
+            }
+        }
         self.settings.current_working_dir = project_dir.clone();
         self.settings.load_task = None;
         self.settings.load_task = Some(cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
@@ -270,7 +287,9 @@ impl WorkspaceView {
                 .await;
 
             let _ = this.update(cx, |this, cx| {
+                let restore_after_load = std::mem::take(&mut this.settings.restore_after_load);
                 this.settings.load_task = None;
+                this.settings.loaded_once = true;
                 this.settings.cached_user_settings = loaded.0.clone();
                 this.settings.cached_project_config = loaded.1.clone();
                 this.settings.current_working_dir = loaded.2;
@@ -292,6 +311,8 @@ impl WorkspaceView {
                         page.recording_shortcut = recording_shortcut;
                         this.settings.page = Some(page);
                     }
+                } else if this.settings.open {
+                    this.settings.page = Some(this.build_settings_page());
                 }
 
                 if restore_after_load
@@ -305,7 +326,7 @@ impl WorkspaceView {
     }
 
     pub(super) fn open_settings(&mut self) {
-        if self.settings.page.is_none() {
+        if self.settings.page.is_none() && (self.settings.loaded_once || self.settings.load_task.is_none()) {
             self.settings.page = Some(self.build_settings_page());
         }
         self.settings.open = true;

@@ -97,21 +97,12 @@ pub struct CachedTerminalContent {
 
 /// Cached content for a single visible terminal row.
 #[derive(Debug, Clone, Default)]
-struct CachedTerminalRow {
-    bg_rects_hsla: Vec<(usize, usize, usize, gpui::Hsla)>,
-    text_runs_hsla: Vec<(TextRunSegment, gpui::Hsla)>,
+pub(crate) struct CachedTerminalRow {
+    pub(crate) bg_rects_hsla: Arc<Vec<(usize, usize, usize, gpui::Hsla)>>,
+    pub(crate) text_runs_hsla: Arc<Vec<(TextRunSegment, gpui::Hsla)>>,
 }
 
-/// Pre-shaped terminal text keyed by terminal content + font settings.
-#[derive(Debug)]
-pub struct CachedShapedTerminalContent {
-    /// Shaped text runs ready for painting.
-    pub shaped_runs: Arc<Vec<(usize, usize, gpui::ShapedLine)>>,
-    /// Font family used to build the shaped runs.
-    pub font_family: String,
-    /// Font size used to build the shaped runs.
-    pub font_size: f32,
-}
+type ShapedTerminalRow = Arc<Vec<(usize, usize, gpui::ShapedLine)>>;
 
 /// Cursor shape for rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -230,10 +221,12 @@ pub struct TerminalView {
     cached_content: Option<CachedTerminalContent>,
     /// Per-row cached terminal content used for partial viewport rebuilds.
     cached_rows: Option<Vec<CachedTerminalRow>>,
-    /// Cached shaped lines derived from `cached_content`.
-    cached_shaped_content: Option<CachedShapedTerminalContent>,
+    /// Font family used to build `cached_shaped_rows`.
+    cached_shaped_font_family: Option<String>,
+    /// Font size used to build `cached_shaped_rows`.
+    cached_shaped_font_size: Option<f32>,
     /// Per-row shaped text derived from `cached_rows`.
-    cached_shaped_rows: Option<Vec<Arc<Vec<(usize, usize, gpui::ShapedLine)>>>>,
+    cached_shaped_rows: Option<Vec<ShapedTerminalRow>>,
     /// Whether the content needs to be recomputed.
     content_dirty: bool,
     /// Dirty viewport rows after a partial content rebuild.
@@ -281,7 +274,8 @@ impl TerminalView {
             focused: true,
             cached_content: None,
             cached_rows: None,
-            cached_shaped_content: None,
+            cached_shaped_font_family: None,
+            cached_shaped_font_size: None,
             cached_shaped_rows: None,
             content_dirty: true,
             dirty_rows: None,
@@ -358,7 +352,7 @@ impl TerminalView {
     /// Set the font size.
     pub fn set_font_size(&mut self, size: f32) {
         self.font_size = size;
-        self.cached_shaped_content = None;
+        self.cached_shaped_font_size = None;
     }
 
     /// Get the font family.
@@ -379,7 +373,7 @@ impl TerminalView {
     /// Set the font family.
     pub fn set_font_family(&mut self, family: String) {
         self.font_family = family;
-        self.cached_shaped_content = None;
+        self.cached_shaped_font_family = None;
     }
 
     /// Get the current selection.
@@ -571,7 +565,7 @@ impl TerminalView {
     /// terminal grid between the normalized selection start and end.
     pub fn get_selected_text(&self) -> Option<String> {
         let (start, end) = self.selection.normalized()?;
-        let display_offset = self.terminal.term().renderable_content().display_offset as usize;
+        let display_offset = self.terminal.term().renderable_content().display_offset;
         let text =
             crate::clipboard::copy_selection(self.terminal.term(), start, end, display_offset);
         if text.is_empty() {
@@ -591,96 +585,11 @@ impl TerminalView {
         self.content_dirty
     }
 
-    /// Get cached terminal content, recomputing only if dirty.
-    ///
-    /// Returns pre-computed text runs and background rects for efficient
-    /// canvas-based rendering.
-    pub fn cached_content(&mut self) -> &CachedTerminalContent {
-        if self.content_dirty || self.cached_content.is_none() {
-            let content = self.build_cached_content();
-            self.cached_content = Some(content);
-            self.content_dirty = false;
-            self.partial_rebuild_allowed = false;
-        }
-        self.cached_content
-            .as_ref()
-            .expect("BUG: cached_content must be Some after rebuild")
-    }
-
-    /// Get shaped text runs, rebuilding only when content or font settings change.
-    pub fn shaped_content(
-        &mut self,
-        text_system: &gpui::WindowTextSystem,
-    ) -> Arc<Vec<(usize, usize, gpui::ShapedLine)>> {
-        let font_family = self.font_family.clone();
-        let font_size = self.font_size;
-        let font_changed = self.cached_shaped_content.as_ref().is_none_or(|cached| {
-            cached.font_family != font_family || (cached.font_size - font_size).abs() > 0.01
-        });
-
-        self.cached_content();
-
-        if font_changed || self.cached_shaped_rows.is_none() {
-            let row_shapes = self
-                .cached_rows
-                .as_ref()
-                .map(|rows| {
-                    rows.iter()
-                        .map(|row| {
-                            shape_text_runs(
-                                text_system,
-                                &row.text_runs_hsla,
-                                &font_family,
-                                font_size,
-                            )
-                        })
-                        .collect::<Vec<_>>()
-                })
-                .unwrap_or_default();
-            let shaped_runs = Self::flatten_shaped_rows(&row_shapes);
-            self.cached_shaped_rows = Some(row_shapes);
-            self.cached_shaped_content = Some(CachedShapedTerminalContent {
-                shaped_runs,
-                font_family,
-                font_size,
-            });
-            self.dirty_rows = None;
-        } else if let Some(dirty_rows) = self.dirty_rows.take() {
-            if let Some(row_shapes) = self.cached_shaped_rows.as_mut() {
-                if let Some(rows) = self.cached_rows.as_ref() {
-                    for row in dirty_rows {
-                        if row >= rows.len() || row >= row_shapes.len() {
-                            continue;
-                        }
-                        row_shapes[row] = shape_text_runs(
-                            text_system,
-                            &rows[row].text_runs_hsla,
-                            &font_family,
-                            font_size,
-                        );
-                    }
-                }
-                let shaped_runs = Self::flatten_shaped_rows(row_shapes);
-                self.cached_shaped_content = Some(CachedShapedTerminalContent {
-                    shaped_runs,
-                    font_family,
-                    font_size,
-                });
-            }
+    fn ensure_row_caches(&mut self) {
+        if !self.content_dirty && self.cached_rows.is_some() {
+            return;
         }
 
-        self.cached_shaped_content
-            .as_ref()
-            .expect("BUG: shaped_content must be Some after rebuild")
-            .shaped_runs
-            .clone()
-    }
-
-    /// Build cached content by streaming directly from alacritty's display_iter.
-    ///
-    /// `display_iter` yields cells in row-major, column-ascending order, so no
-    /// intermediate Vec or per-row sort is needed.
-    fn build_cached_content(&mut self) -> CachedTerminalContent {
         let rows = self.terminal.rows() as usize;
         let cols = self.terminal.cols() as usize;
         let damage = if self.partial_rebuild_allowed
@@ -715,19 +624,114 @@ impl TerminalView {
                     cached_rows[row] = rebuilt_row;
                 }
                 self.dirty_rows = Some(dirty_rows);
-                return Self::flatten_cached_rows(cached_rows, rows, cols);
+                self.cached_content = None;
+                self.content_dirty = false;
+                return;
             }
         }
 
-        let rebuilt_rows = (0..rows)
-            .map(|row| self.build_row_cache(row, cols))
-            .collect::<Vec<_>>();
-        let content = Self::flatten_cached_rows(&rebuilt_rows, rows, cols);
-        self.cached_rows = Some(rebuilt_rows);
+        self.cached_rows = Some((0..rows).map(|row| self.build_row_cache(row, cols)).collect());
+        self.cached_content = None;
+        self.cached_shaped_font_family = None;
+        self.cached_shaped_font_size = None;
         self.cached_shaped_rows = None;
-        self.cached_shaped_content = None;
         self.dirty_rows = None;
-        content
+        self.content_dirty = false;
+        self.partial_rebuild_allowed = false;
+    }
+
+    /// Get cached terminal content, flattening row caches only when requested.
+    ///
+    /// Rendering uses row caches directly; this flattened view is retained for
+    /// tests and any future callers that need a contiguous snapshot.
+    pub fn cached_content(&mut self) -> &CachedTerminalContent {
+        self.ensure_row_caches();
+        if self.cached_content.is_none() {
+            let rows = self.terminal.rows() as usize;
+            let cols = self.terminal.cols() as usize;
+            let content = self
+                .cached_rows
+                .as_ref()
+                .map(|cached_rows| Self::flatten_cached_rows(cached_rows, rows, cols))
+                .unwrap_or_else(|| CachedTerminalContent {
+                    bg_rects_hsla: Arc::default(),
+                    text_runs_hsla: Arc::default(),
+                    rows,
+                    cols,
+                });
+            self.cached_content = Some(content);
+        }
+        self.cached_content
+            .as_ref()
+            .expect("BUG: cached_content must be Some after rebuild")
+    }
+
+    /// Get per-row cached terminal content for rendering.
+    pub(crate) fn render_rows(&mut self) -> Vec<CachedTerminalRow> {
+        self.ensure_row_caches();
+        self.cached_rows.clone().unwrap_or_default()
+    }
+
+    /// Get per-row shaped text, rebuilding only dirty rows when content changes.
+    pub(crate) fn shaped_rows(
+        &mut self,
+        text_system: &gpui::WindowTextSystem,
+    ) -> Vec<ShapedTerminalRow> {
+        let font_family = self.font_family.clone();
+        let font_size = self.font_size;
+        self.ensure_row_caches();
+
+        let font_changed = self.cached_shaped_font_family.as_ref() != Some(&font_family)
+            || self
+                .cached_shaped_font_size
+                .map_or(true, |size| (size - font_size).abs() > 0.01);
+        let row_shapes_need_full_rebuild = font_changed
+            || self.cached_shaped_rows.is_none()
+            || self
+                .cached_rows
+                .as_ref()
+                .zip(self.cached_shaped_rows.as_ref())
+                .map_or(true, |(rows, row_shapes)| rows.len() != row_shapes.len());
+
+        if row_shapes_need_full_rebuild {
+            let row_shapes = self
+                .cached_rows
+                .as_ref()
+                .map(|rows| {
+                    rows.iter()
+                        .map(|row| {
+                            shape_text_runs(
+                                text_system,
+                                row.text_runs_hsla.as_ref(),
+                                &font_family,
+                                font_size,
+                            )
+                        })
+                        .collect::<Vec<_>>()
+                })
+                .unwrap_or_default();
+            self.cached_shaped_font_family = Some(font_family);
+            self.cached_shaped_font_size = Some(font_size);
+            self.cached_shaped_rows = Some(row_shapes);
+            self.dirty_rows = None;
+        } else if let Some(dirty_rows) = self.dirty_rows.take() {
+            if let Some(row_shapes) = self.cached_shaped_rows.as_mut() {
+                if let Some(rows) = self.cached_rows.as_ref() {
+                    for row in dirty_rows {
+                        if row >= rows.len() || row >= row_shapes.len() {
+                            continue;
+                        }
+                        row_shapes[row] = shape_text_runs(
+                            text_system,
+                            rows[row].text_runs_hsla.as_ref(),
+                            &font_family,
+                            font_size,
+                        );
+                    }
+                }
+            }
+        }
+        self.cached_shaped_rows.clone().unwrap_or_default()
     }
 
     fn build_row_cache(&self, row: usize, cols: usize) -> CachedTerminalRow {
@@ -836,17 +840,21 @@ impl TerminalView {
         }
 
         CachedTerminalRow {
-            bg_rects_hsla: background_rects
-                .into_iter()
-                .map(|(r, start, end, color)| (r, start, end, color.into()))
-                .collect(),
-            text_runs_hsla: text_runs
-                .into_iter()
-                .map(|run| {
-                    let fg: gpui::Hsla = run.foreground.into();
-                    (run, fg)
-                })
-                .collect(),
+            bg_rects_hsla: Arc::new(
+                background_rects
+                    .into_iter()
+                    .map(|(r, start, end, color)| (r, start, end, color.into()))
+                    .collect(),
+            ),
+            text_runs_hsla: Arc::new(
+                text_runs
+                    .into_iter()
+                    .map(|run| {
+                        let fg: gpui::Hsla = run.foreground.into();
+                        (run, fg)
+                    })
+                    .collect(),
+            ),
         }
     }
 
@@ -873,17 +881,6 @@ impl TerminalView {
         }
     }
 
-    fn flatten_shaped_rows(
-        shaped_rows: &[Arc<Vec<(usize, usize, gpui::ShapedLine)>>],
-    ) -> Arc<Vec<(usize, usize, gpui::ShapedLine)>> {
-        let capacity = shaped_rows.iter().map(|row| row.len()).sum();
-        let mut shaped_runs = Vec::with_capacity(capacity);
-        for row in shaped_rows {
-            shaped_runs.extend(row.iter().cloned());
-        }
-        Arc::new(shaped_runs)
-    }
-
     /// Convert pixel coordinates to terminal cell position.
     pub fn pixel_to_cell(&self, x: f32, y: f32) -> Option<(usize, usize)> {
         if x < 0.0 || y < 0.0 {
@@ -907,7 +904,6 @@ impl TerminalView {
         self.content_dirty = true;
         self.partial_rebuild_allowed = self.cached_rows.is_some();
         self.cached_content = None;
-        self.cached_shaped_content = None;
     }
 
     fn invalidate_content_cache(&mut self) {
@@ -915,7 +911,8 @@ impl TerminalView {
         self.partial_rebuild_allowed = false;
         self.cached_content = None;
         self.cached_rows = None;
-        self.cached_shaped_content = None;
+        self.cached_shaped_font_family = None;
+        self.cached_shaped_font_size = None;
         self.cached_shaped_rows = None;
         self.dirty_rows = None;
     }

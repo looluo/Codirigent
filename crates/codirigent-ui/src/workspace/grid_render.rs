@@ -43,8 +43,6 @@ impl WorkspaceView {
         let muted: gpui::Hsla = theme.muted.into();
         let grid_gap = theme.grid_gap;
 
-        // Clone cell info and layout dimensions
-        let cells = self.cache.render_cell_info.clone();
         let profile = self.workspace().layout_profile();
         let (rows, cols) = profile.dimensions();
 
@@ -65,16 +63,31 @@ impl WorkspaceView {
                 let index = (row * cols + col) as usize;
                 let position = codirigent_core::GridPosition { row, col };
 
-                let cell_div = if let Some(info) = cells.get(index) {
+                let cell_div = if let Some(info) = self.cache.render_cell_info.get(index).copied() {
                     // Get or create terminal header hints
                     let header_hints =
                         if let Some(header) = self.get_terminal_header(info.session_id) {
                             header.render_hints()
                         } else {
-                            // Create default hints from cell info
-                            crate::terminal_header::TerminalHeader::new(&info.name, info.status)
-                                .with_focused(info.is_focused)
-                                .render_hints()
+                            let focused = self.workspace().focused_session_id() == Some(info.session_id);
+                            self.workspace()
+                                .session(info.session_id)
+                                .map(|session| {
+                                    crate::terminal_header::TerminalHeader::new(
+                                        &session.name,
+                                        session.status,
+                                    )
+                                    .with_focused(focused)
+                                    .render_hints()
+                                })
+                                .unwrap_or_else(|| {
+                                    crate::terminal_header::TerminalHeader::new(
+                                        "Session",
+                                        codirigent_core::SessionStatus::Idle,
+                                    )
+                                    .with_focused(focused)
+                                    .render_hints()
+                                })
                         };
 
                     // Render session cell with actual terminal content

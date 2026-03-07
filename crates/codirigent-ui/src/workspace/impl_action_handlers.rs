@@ -44,6 +44,7 @@ impl WorkspaceView {
         info!("SplitHorizontal action triggered");
         if let Some(slot) = self.workspace.split_pane(SplitDirection::Horizontal, 0.5) {
             info!(?slot, "Split pane horizontally, new slot created");
+            self.mark_layout_cache_dirty();
             cx.notify();
         }
     }
@@ -58,6 +59,7 @@ impl WorkspaceView {
         info!("SplitVertical action triggered");
         if let Some(slot) = self.workspace.split_pane(SplitDirection::Vertical, 0.5) {
             info!(?slot, "Split pane vertically, new slot created");
+            self.mark_layout_cache_dirty();
             cx.notify();
         }
     }
@@ -79,6 +81,7 @@ impl WorkspaceView {
             if let Some(id) = session_to_close {
                 self.close_session(id, cx);
             } else {
+                self.mark_layout_cache_dirty();
                 cx.notify();
             }
         }

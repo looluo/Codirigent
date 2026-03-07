@@ -26,7 +26,11 @@ impl super::gpui::WorkspaceView {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child("Settings not available")
+                .child(if self.settings.load_task.is_some() {
+                    "Loading settings..."
+                } else {
+                    "Settings not available"
+                })
                 .into_any_element();
         };
         let theme = self.workspace.theme();

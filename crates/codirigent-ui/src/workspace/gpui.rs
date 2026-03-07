@@ -22,8 +22,9 @@
 use super::core::Workspace;
 use super::editor_detection::detect_monospace_fonts;
 use super::types::{
-    CacheState, CliReaders, ModalState, PollingState, SelectionState, CELL_BORDER_WIDTH,
-    FONT_SIZE_BASE_DEFAULT, HEADER_HEIGHT, REM_BASE, TERMINAL_CONTENT_PADDING,
+    CacheState, CliReaders, ModalState, PollingState, RenderLayoutSignature, SelectionState,
+    TerminalResizeSignature, CELL_BORDER_WIDTH, FONT_SIZE_BASE_DEFAULT, HEADER_HEIGHT, REM_BASE,
+    TERMINAL_CONTENT_PADDING,
 };
 use crate::app::{Copy, Paste};
 use crate::clipboard_preview::ClipboardPreview;
@@ -420,6 +421,27 @@ impl WorkspaceView {
         self.polling.ui_sync_dirty = true;
     }
 
+    /// Mark layout-derived render caches as dirty after structural changes.
+    pub(super) fn mark_layout_cache_dirty(&mut self) {
+        self.cache.render_cell_info_dirty = true;
+        self.cache.layout_generation = self.cache.layout_generation.saturating_add(1);
+        self.cache.last_resize_signature = None;
+        self.cache.pending_resize_signature = None;
+    }
+
+    fn current_resize_signature(
+        &self,
+        cell_width: f32,
+        cell_height: f32,
+    ) -> Option<TerminalResizeSignature> {
+        Some(TerminalResizeSignature {
+            layout_generation: self.cache.layout_generation,
+            layout: self.cache.render_layout_signature?,
+            cell_width,
+            cell_height,
+        })
+    }
+
     /// Debounce persisted session/layout state writes off the UI thread.
     pub(super) fn save_state_to_disk(&mut self, cx: &mut Context<Self>) {
         self.polling.state_save_generation = self.polling.state_save_generation.saturating_add(1);
@@ -476,6 +498,7 @@ impl WorkspaceView {
     /// Cycle to next layout.
     pub fn next_layout(&mut self, cx: &mut Context<Self>) {
         self.workspace.next_layout();
+        self.mark_layout_cache_dirty();
         self.mark_ui_sync_dirty();
         self.event_bus.publish(CodirigentEvent::LayoutChanged {
             mode: self.workspace.layout_profile().to_mode(),
@@ -486,6 +509,7 @@ impl WorkspaceView {
     /// Toggle sidebar visibility.
     pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.workspace.toggle_sidebar();
+        self.mark_layout_cache_dirty();
         self.mark_ui_sync_dirty();
         cx.notify();
     }
@@ -508,9 +532,10 @@ impl WorkspaceView {
     /// This should be called before rendering to ensure all UI components
     /// reflect the current workspace state.
     fn sync_ui_state(&mut self) {
-        let (task_titles, task_counts) = if let Ok(manager) = self.task_manager.lock() {
+        let (task_titles, task_counts, task_snapshot) = if let Ok(manager) = self.task_manager.lock() {
             let mut titles = HashMap::new();
-            let counts = manager.list_tasks().iter().fold(
+            let all_tasks = manager.list_tasks();
+            let counts = all_tasks.iter().fold(
                 (0usize, 0usize, 0usize, 0usize),
                 |(q, ip, r, d), task| {
                     titles.insert(task.id.clone(), task.title.clone());
@@ -525,9 +550,76 @@ impl WorkspaceView {
                     }
                 },
             );
-            (titles, Some(counts))
+            let running_items = all_tasks
+                .iter()
+                .filter(|t| {
+                    matches!(
+                        t.status,
+                        codirigent_core::TaskStatus::Assigned
+                            | codirigent_core::TaskStatus::Working
+                    )
+                })
+                .map(|t| self.core_task_to_ui_item(t))
+                .collect();
+            let queued_items = all_tasks
+                .iter()
+                .filter(|t| {
+                    matches!(
+                        t.status,
+                        codirigent_core::TaskStatus::Queued | codirigent_core::TaskStatus::Blocked
+                    )
+                })
+                .map(|t| self.core_task_to_ui_item(t))
+                .collect();
+            let review_items = all_tasks
+                .iter()
+                .filter(|t| {
+                    matches!(
+                        t.status,
+                        codirigent_core::TaskStatus::Verifying
+                            | codirigent_core::TaskStatus::Review
+                    )
+                })
+                .map(|t| self.core_task_to_ui_item(t))
+                .collect();
+            let done_items = all_tasks
+                .iter()
+                .filter(|t| t.status == codirigent_core::TaskStatus::Done)
+                .map(|t| self.core_task_to_ui_item(t))
+                .collect();
+            let config = manager.assignment().config();
+            let auto_assign_mode = crate::task_board::AutoAssignMode::from_config(
+                config.auto_assign,
+                config.confirm_before_assign,
+            );
+            let pending_assignments = manager
+                .assignment()
+                .pending_assignments()
+                .iter()
+                .map(|p| crate::task_board::PendingAssignmentSummary {
+                    task_id: p.task_id.to_string(),
+                    session_number: p.session_id.0,
+                    task_title: all_tasks
+                        .iter()
+                        .find(|t| t.id == p.task_id)
+                        .map(|t| t.title.clone())
+                        .unwrap_or_else(|| p.task_id.to_string()),
+                })
+                .collect();
+            (
+                titles,
+                Some(counts),
+                Some(crate::task_board::TaskBoardSnapshot {
+                    running_items,
+                    queued_items,
+                    review_items,
+                    done_items,
+                    auto_assign_mode,
+                    pending_assignments,
+                }),
+            )
         } else {
-            (HashMap::new(), None)
+            (HashMap::new(), None, None)
         };
 
         // Update terminal headers from sessions
@@ -601,6 +693,9 @@ impl WorkspaceView {
                 done_count,
             );
         }
+        if let Some(snapshot) = task_snapshot {
+            self.task_board.set_snapshot(snapshot);
+        }
     }
 
     /// Get a terminal header for a session.
@@ -652,6 +747,7 @@ impl WorkspaceView {
                             // Custom positional layouts not used from tabs
                         }
                     }
+                    self.mark_layout_cache_dirty();
                     self.mark_ui_sync_dirty();
                 }
                 crate::top_bar::TopBarEvent::RightPanelToggled => {
@@ -870,7 +966,7 @@ impl WorkspaceView {
         // Layout constants from types.rs: HEADER_HEIGHT, TERMINAL_CONTENT_PADDING, CELL_BORDER_WIDTH
         let mut resized_any = false;
 
-        for info in self.cache.render_cell_info.clone() {
+        for &info in &self.cache.render_cell_info {
             if let Some(terminal_view) = self.terminals.get_mut(&info.session_id) {
                 // Subtract all chrome between the grid cell bounds and the
                 // actual terminal canvas drawing area:
@@ -1556,7 +1652,19 @@ impl Render for WorkspaceView {
             0.0
         };
         self.workspace.set_right_panel_width(right_panel_w);
-        self.cache.render_cell_info = self.workspace.cell_info();
+        let layout_signature = RenderLayoutSignature {
+            bounds: window_bounds,
+            sidebar_width: actual_sidebar_width,
+            right_panel_width: right_panel_w,
+            grid_gap: self.workspace.theme().grid_gap,
+        };
+        if self.cache.render_cell_info_dirty
+            || self.cache.render_layout_signature != Some(layout_signature)
+        {
+            self.cache.render_cell_info = self.workspace.cell_info();
+            self.cache.render_cell_info_dirty = false;
+            self.cache.render_layout_signature = Some(layout_signature);
+        }
 
         self.sync_terminal_dimensions_and_resize(window, cx);
 
@@ -1651,19 +1759,37 @@ impl WorkspaceView {
             }
         }
 
+        let Some(resize_signature) = self.current_resize_signature(real_w, real_h) else {
+            return;
+        };
+        if self.cache.last_resize_signature == Some(resize_signature) {
+            return;
+        }
+
         let now = Instant::now();
         if now.duration_since(self.polling.last_resize_time) > Duration::from_millis(100) {
             self.resize_terminals_to_grid();
+            self.cache.last_resize_signature = Some(resize_signature);
+            self.cache.pending_resize_signature = None;
             self.polling.last_resize_time = now;
             self.polling.pending_resize = false;
-        } else if !self.polling.pending_resize {
+        } else {
+            self.cache.pending_resize_signature = Some(resize_signature);
+            if self.polling.pending_resize {
+                return;
+            }
             self.polling.pending_resize = true;
             cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
                 cx.background_executor()
                     .timer(Duration::from_millis(100))
                     .await;
                 let _ = this.update(cx, |this, cx| {
+                    let Some(signature) = this.cache.pending_resize_signature.take() else {
+                        this.polling.pending_resize = false;
+                        return;
+                    };
                     let resized = this.resize_terminals_to_grid();
+                    this.cache.last_resize_signature = Some(signature);
                     this.polling.last_resize_time = Instant::now();
                     this.polling.pending_resize = false;
                     if resized {

@@ -38,6 +38,7 @@ impl WorkspaceView {
                             self.custom_picker.close();
                             let profile = crate::layout::LayoutProfile::Custom { rows, cols };
                             self.workspace.set_layout(profile);
+                            self.mark_layout_cache_dirty();
                             let id = format!("custom-{}x{}", rows, cols);
                             let name = format!("{}x{}", rows, cols);
                             let saved = crate::layout_profile::SavedLayoutProfile::new(
@@ -62,6 +63,7 @@ impl WorkspaceView {
                                 codirigent_core::LayoutMode::SplitTree { root: tree.clone() },
                             );
                             self.workspace.set_split_tree(tree);
+                            self.mark_layout_cache_dirty();
                             self.top_bar.profile_manager.add_profile(saved);
                             self.top_bar.set_active_profile_id(&id);
                             self.save_layout_profiles_to_settings(cx);

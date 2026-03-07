@@ -124,12 +124,14 @@ impl WorkspaceView {
                             this.custom_picker.close();
                             let profile = crate::layout::LayoutProfile::Custom { rows, cols };
                             this.workspace.set_layout(profile);
+                            this.mark_layout_cache_dirty();
                         }
                     }
                     CustomLayoutMode::Split => {
                         if let Some(tree) = this.custom_picker.validate_split() {
                             this.custom_picker.close();
                             this.workspace.set_split_tree(tree);
+                            this.mark_layout_cache_dirty();
                         }
                     }
                 }

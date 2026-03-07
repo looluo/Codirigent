@@ -20,7 +20,7 @@ use serde::Deserialize;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime};
 use tracing::{info, warn};
 
 #[derive(Debug)]
@@ -257,10 +257,7 @@ impl WorkspaceView {
             let codex_resume = saved.codex_session_id.as_ref().map(|codex_id| {
                 let permission_mode = read_codex_permission_mode(&working_dir, codex_id);
                 let mut cmd = format!("codex --session {}", codex_id);
-                if permission_mode
-                    .as_deref()
-                    .is_some_and(|mode| is_codex_full_auto_mode(mode))
-                {
+                if permission_mode.as_deref().is_some_and(is_codex_full_auto_mode) {
                     cmd.push_str(" --full-auto");
                 }
                 cmd.push('\r');
@@ -322,98 +319,125 @@ impl WorkspaceView {
                 session_count
             );
             self.workspace.set_layout(new_profile);
+            self.mark_layout_cache_dirty();
         }
 
-        for plan in plan.sessions {
-            let session_id = self.with_session_manager(|manager| {
-                match manager.create_session(
+        let restore_sessions = plan.sessions;
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+            let mut remaining = restore_sessions.into_iter().peekable();
+            while remaining.peek().is_some() {
+                let batch = remaining.by_ref().take(2).collect::<Vec<_>>();
+                let is_last_batch = remaining.peek().is_none();
+                let shell = shell.clone();
+
+                let _ = this.update(cx, |this, cx| {
+                    for plan in batch {
+                        this.restore_session_from_plan(plan, shell.clone());
+                    }
+
+                    if is_last_batch {
+                        if let Some(first_id) = this.workspace.sessions().first().map(|s| s.id) {
+                            this.select_session_with_cx(first_id, cx);
+                        }
+                        info!("Session restoration complete");
+                    }
+
+                    this.mark_ui_sync_dirty();
+                    cx.notify();
+                });
+
+                if !is_last_batch {
+                    cx.background_executor()
+                        .timer(Duration::from_millis(1))
+                        .await;
+                }
+            }
+        })
+        .detach();
+    }
+
+    fn restore_session_from_plan(
+        &mut self,
+        plan: RestoreSessionPlan,
+        shell: Option<String>,
+    ) {
+        let session_id = self.with_session_manager(|manager| {
+            match manager.create_session(
+                plan.session_name.clone(),
+                plan.working_dir.clone(),
+                shell.clone(),
+            ) {
+                Ok(id) => Some(id),
+                Err(e) => {
+                    warn!(name = %plan.session_name, "Failed to restore session: {}", e);
+                    None
+                }
+            }
+        });
+        let session_id = match session_id {
+            Some(id) => id,
+            None => return,
+        };
+
+        for cmd in [
+            plan.claude_resume.as_deref(),
+            plan.codex_resume.as_deref(),
+            plan.gemini_resume.as_deref(),
+        ]
+        .into_iter()
+        .flatten()
+        {
+            if let Ok(mgr) = self.session_manager.lock() {
+                if let Err(e) = mgr.send_input(session_id, cmd.as_bytes()) {
+                    warn!(?session_id, error = %e, "Failed to send resume command");
+                }
+            }
+        }
+
+        if plan.group.is_some() || plan.color.is_some() {
+            self.with_session_manager(|manager| {
+                let _ = manager.set_session_group(session_id, plan.group.clone(), plan.color.clone());
+            });
+        }
+
+        let child_pid = self.with_session_manager(|manager| manager.get_child_pid(session_id));
+        if let Some(pid) = child_pid {
+            self.with_detector(|detector| {
+                let _ = detector.start_monitoring(session_id, pid);
+            });
+        }
+
+        let (pty_tx, pty_rx) = tokio::sync::mpsc::unbounded_channel();
+        let terminal = Terminal::new(24, 80, session_id, pty_tx);
+        let theme = self.workspace.theme();
+        let terminal_view = TerminalView::new(terminal, theme.clone());
+        self.terminals.insert(session_id, terminal_view);
+        self.pty_write_receivers.insert(session_id, pty_rx);
+
+        let session = self.with_session_manager(|manager| {
+            manager.get_session(session_id).unwrap_or_else(|| {
+                Session::new(
+                    session_id,
                     plan.session_name.clone(),
                     plan.working_dir.clone(),
-                    shell.clone(),
-                ) {
-                    Ok(id) => Some(id),
-                    Err(e) => {
-                        warn!(name = %plan.session_name, "Failed to restore session: {}", e);
-                        None
-                    }
-                }
-            });
-            let session_id = match session_id {
-                Some(id) => id,
-                None => continue,
-            };
+                )
+            })
+        });
 
-            for cmd in [
-                plan.claude_resume.as_deref(),
-                plan.codex_resume.as_deref(),
-                plan.gemini_resume.as_deref(),
-            ]
-            .into_iter()
-            .flatten()
-            {
-                if let Ok(mgr) = self.session_manager.lock() {
-                    if let Err(e) = mgr.send_input(session_id, cmd.as_bytes()) {
-                        warn!(?session_id, error = %e, "Failed to send resume command");
-                    }
-                }
+        if self.workspace.add_session(session.clone()) {
+            self.mark_layout_cache_dirty();
+            let mut header = TerminalHeader::new(&plan.session_name, SessionStatus::Idle);
+            if let Some(ref gi) = session.git_info {
+                header = header.with_git_info(gi.branch.clone(), gi.dirty_count);
             }
-
-            if plan.group.is_some() || plan.color.is_some() {
-                self.with_session_manager(|manager| {
-                    let _ = manager.set_session_group(
-                        session_id,
-                        plan.group.clone(),
-                        plan.color.clone(),
-                    );
-                });
+            if let Some(ref group) = plan.group {
+                header.group_name = Some(group.clone());
             }
-
-            let child_pid = self.with_session_manager(|manager| manager.get_child_pid(session_id));
-            if let Some(pid) = child_pid {
-                self.with_detector(|detector| {
-                    let _ = detector.start_monitoring(session_id, pid);
-                });
+            if let Some(ref color) = plan.color {
+                header.session_color = crate::sidebar::Color::from_hex(color);
             }
-
-            let (pty_tx, pty_rx) = tokio::sync::mpsc::unbounded_channel();
-            let terminal = Terminal::new(24, 80, session_id, pty_tx);
-            let theme = self.workspace.theme();
-            let terminal_view = TerminalView::new(terminal, theme.clone());
-            self.terminals.insert(session_id, terminal_view);
-            self.pty_write_receivers.insert(session_id, pty_rx);
-
-            let session = self.with_session_manager(|manager| {
-                manager.get_session(session_id).unwrap_or_else(|| {
-                    Session::new(
-                        session_id,
-                        plan.session_name.clone(),
-                        plan.working_dir.clone(),
-                    )
-                })
-            });
-
-            if self.workspace.add_session(session.clone()) {
-                let mut header = TerminalHeader::new(&plan.session_name, SessionStatus::Idle);
-                if let Some(ref gi) = session.git_info {
-                    header = header.with_git_info(gi.branch.clone(), gi.dirty_count);
-                }
-                if let Some(ref group) = plan.group {
-                    header.group_name = Some(group.clone());
-                }
-                if let Some(ref color) = plan.color {
-                    header.session_color = crate::sidebar::Color::from_hex(color);
-                }
-                self.terminal_headers.insert(session_id, header);
-            }
+            self.terminal_headers.insert(session_id, header);
         }
-
-        if let Some(first_id) = self.workspace.sessions().first().map(|s| s.id) {
-            self.select_session_with_cx(first_id, cx);
-        }
-
-        info!("Session restoration complete");
-        self.mark_ui_sync_dirty();
-        cx.notify();
     }
 
     /// Create a new terminal session in the focused pane.
@@ -510,6 +534,7 @@ impl WorkspaceView {
         };
 
         if added {
+            self.mark_layout_cache_dirty();
             let mut header = TerminalHeader::new(&name, SessionStatus::Idle);
 
             // Populate git info on header if available from session manager
@@ -633,6 +658,7 @@ impl WorkspaceView {
 
         // Remove from workspace
         self.workspace.remove_session(id);
+        self.mark_layout_cache_dirty();
         self.event_bus
             .publish(CodirigentEvent::SessionClosed { id });
         info!(?id, "Closed session");

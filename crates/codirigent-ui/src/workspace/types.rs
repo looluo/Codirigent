@@ -429,8 +429,18 @@ pub(super) struct CacheState {
     /// Cached result of font metric computation, keyed by font settings.
     /// Avoids repeated font system calls when settings haven't changed.
     pub cached_cell_dims: Option<CachedCellDims>,
-    /// Per-render snapshot of cell layout info reused by resize and paint passes.
+    /// Cached cell layout info reused by resize and paint passes.
     pub render_cell_info: Vec<super::core::CellInfo>,
+    /// Whether `render_cell_info` must be recomputed before use.
+    pub render_cell_info_dirty: bool,
+    /// Last geometry signature used to build `render_cell_info`.
+    pub render_layout_signature: Option<RenderLayoutSignature>,
+    /// Monotonic generation for layout/session arrangement changes.
+    pub layout_generation: u64,
+    /// Last signature applied to terminal resize sync.
+    pub last_resize_signature: Option<TerminalResizeSignature>,
+    /// Latest pending resize signature queued for the deferred resize path.
+    pub pending_resize_signature: Option<TerminalResizeSignature>,
 }
 
 impl CacheState {
@@ -445,6 +455,11 @@ impl CacheState {
             drawer_group_expanded: HashMap::new(),
             cached_cell_dims: None,
             render_cell_info: Vec::new(),
+            render_cell_info_dirty: true,
+            render_layout_signature: None,
+            layout_generation: 0,
+            last_resize_signature: None,
+            pending_resize_signature: None,
         }
     }
 }
@@ -455,6 +470,22 @@ pub(super) struct CachedCellDims {
     pub font_family: String,
     pub font_size: f32,
     pub line_height: f32,
+    pub cell_width: f32,
+    pub cell_height: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct RenderLayoutSignature {
+    pub bounds: crate::layout::Bounds,
+    pub sidebar_width: f32,
+    pub right_panel_width: f32,
+    pub grid_gap: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct TerminalResizeSignature {
+    pub layout_generation: u64,
+    pub layout: RenderLayoutSignature,
     pub cell_width: f32,
     pub cell_height: f32,
 }

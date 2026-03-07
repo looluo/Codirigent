@@ -664,21 +664,16 @@ impl Workspace {
 
     fn grid_cell_info(&self, state: &LayoutState) -> Vec<CellInfo> {
         let layout = self.grid_layout();
-        let focused_id = state.focused_session();
 
         // Special handling for Single layout: only show the focused session
         if state.profile() == LayoutProfile::Single {
-            if let Some(focused_session_id) = focused_id {
-                if let Some(session) = self.session(focused_session_id) {
-                    // Get bounds for the single cell (index 0)
+            if let Some(focused_session_id) = state.focused_session() {
+                if self.session(focused_session_id).is_some() {
                     if let Some(bounds) = layout.cell_bounds_for_index(0) {
                         return vec![CellInfo {
                             session_id: focused_session_id,
                             index: 0,
                             bounds,
-                            name: session.name.clone(),
-                            status: session.status,
-                            is_focused: true,
                         }];
                     }
                 }
@@ -694,15 +689,11 @@ impl Workspace {
             .enumerate()
             .filter_map(|(index, &session_id)| {
                 let bounds = layout.cell_bounds_for_index(index)?;
-                let session = self.session(session_id)?;
-
+                self.session(session_id)?;
                 Some(CellInfo {
                     session_id,
                     index,
                     bounds,
-                    name: session.name.clone(),
-                    status: session.status,
-                    is_focused: focused_id == Some(session_id),
                 })
             })
             .collect()
@@ -712,7 +703,6 @@ impl Workspace {
         let Some(layout) = self.split_layout() else {
             return vec![];
         };
-        let focused_id = state.focused_session();
         let leaf_bounds = layout.leaf_bounds();
 
         leaf_bounds
@@ -720,15 +710,11 @@ impl Workspace {
             .enumerate()
             .filter_map(|(index, (slot, bounds))| {
                 let session_id = state.session_at_slot(slot)?;
-                let session = self.session(session_id)?;
-
+                self.session(session_id)?;
                 Some(CellInfo {
                     session_id,
                     index,
                     bounds,
-                    name: session.name.clone(),
-                    status: session.status,
-                    is_focused: focused_id == Some(session_id),
                 })
             })
             .collect()
@@ -736,7 +722,7 @@ impl Workspace {
 }
 
 /// Information about a grid cell for rendering.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct CellInfo {
     /// Session ID.
     pub session_id: SessionId,
@@ -744,10 +730,4 @@ pub struct CellInfo {
     pub index: usize,
     /// Cell bounds.
     pub bounds: Bounds,
-    /// Session name.
-    pub name: String,
-    /// Session status.
-    pub status: SessionStatus,
-    /// Whether this cell is focused.
-    pub is_focused: bool,
 }

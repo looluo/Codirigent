@@ -66,10 +66,9 @@ impl WorkspaceView {
         let font_family_str = terminal_view.font_family().to_owned();
         let cursor_rect = terminal_view.cursor_rect();
 
-        // Terminal runs/backgrounds are cached in TerminalView and only rebuilt when dirty.
-        let content = terminal_view.cached_content();
-        let bg_rects = content.bg_rects_hsla.clone();
-        let shaped_runs = terminal_view.shaped_content(window.text_system());
+        // Terminal runs/backgrounds are cached per row and only rebuilt when dirty.
+        let cached_rows = terminal_view.render_rows();
+        let shaped_rows = terminal_view.shaped_rows(window.text_system());
 
         // Pre-convert cursor color (cursor position changes per-frame so not cacheable in content)
         let cursor_data = cursor_rect.map(|c| {
@@ -139,8 +138,8 @@ impl WorkspaceView {
                 (
                     ox,
                     oy,
-                    bg_rects,
-                    shaped_runs,
+                    cached_rows,
+                    shaped_rows,
                     ime_preedit,
                     cursor_data,
                     cell_width,
@@ -152,7 +151,7 @@ impl WorkspaceView {
                   prepaint_data,
                   window: &mut gpui::Window,
                   cx: &mut gpui::App| {
-                let (ox, oy, bg_rects, shaped_runs, ime_preedit, cursor_data, cell_w, cell_h) =
+                let (ox, oy, cached_rows, shaped_rows, ime_preedit, cursor_data, cell_w, cell_h) =
                     prepaint_data;
 
                 // Register input handler for IME if context is provided and it's the focused pane
@@ -169,32 +168,36 @@ impl WorkspaceView {
                 }
 
                 // 1. Paint background rectangles
-                for (row, start_col, end_col, bg_color) in bg_rects.iter() {
-                    let rect_x = ox + *start_col as f32 * cell_w;
-                    let rect_y = oy + *row as f32 * cell_h;
-                    let rect_w = (*end_col - *start_col) as f32 * cell_w;
-                    let rect_bounds = gpui::Bounds {
-                        origin: gpui::Point {
-                            x: px(rect_x),
-                            y: px(rect_y),
-                        },
-                        size: gpui::Size {
-                            width: px(rect_w),
-                            height: px(cell_h),
-                        },
-                    };
-                    window.paint_quad(gpui::fill(rect_bounds, *bg_color));
+                for row in &cached_rows {
+                    for (rect_row, start_col, end_col, bg_color) in row.bg_rects_hsla.iter() {
+                        let rect_x = ox + *start_col as f32 * cell_w;
+                        let rect_y = oy + *rect_row as f32 * cell_h;
+                        let rect_w = (*end_col - *start_col) as f32 * cell_w;
+                        let rect_bounds = gpui::Bounds {
+                            origin: gpui::Point {
+                                x: px(rect_x),
+                                y: px(rect_y),
+                            },
+                            size: gpui::Size {
+                                width: px(rect_w),
+                                height: px(cell_h),
+                            },
+                        };
+                        window.paint_quad(gpui::fill(rect_bounds, *bg_color));
+                    }
                 }
 
                 // 2. Paint shaped text runs
-                for (row, start_col, shaped_line) in shaped_runs.iter() {
-                    let text_x = ox + *start_col as f32 * cell_w;
-                    let text_y = oy + *row as f32 * cell_h;
-                    let text_origin = gpui::Point {
-                        x: px(text_x),
-                        y: px(text_y),
-                    };
-                    let _ = shaped_line.paint(text_origin, px(cell_h), window, cx);
+                for row in &shaped_rows {
+                    for (line_row, start_col, shaped_line) in row.iter() {
+                        let text_x = ox + *start_col as f32 * cell_w;
+                        let text_y = oy + *line_row as f32 * cell_h;
+                        let text_origin = gpui::Point {
+                            x: px(text_x),
+                            y: px(text_y),
+                        };
+                        let _ = shaped_line.paint(text_origin, px(cell_h), window, cx);
+                    }
                 }
 
                 // 3. Paint IME pre-edit text at the cursor position.
