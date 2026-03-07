@@ -119,6 +119,6 @@ chrono.workspace = true
 [profile.dist]
 inherits = "release"
 lto = "thin"
-codegen-units = 1
+codegen-units = 8
 strip = true
 
