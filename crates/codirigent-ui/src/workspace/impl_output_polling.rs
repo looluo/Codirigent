@@ -100,24 +100,6 @@ fn should_defer_ambiguous_codex_probe(
             > 1
 }
 
-fn normalize_hook_status_for_codex_mode(
-    cli_type_name: &str,
-    status: SessionStatus,
-    codex_execution_mode: Option<CodexExecutionMode>,
-) -> SessionStatus {
-    if cli_type_name == CLI_TYPE_CODEX
-        && status == SessionStatus::NeedsAttention
-        && matches!(
-            codex_execution_mode,
-            Some(CodexExecutionMode::Bypass | CodexExecutionMode::FullAuto)
-        )
-    {
-        SessionStatus::Working
-    } else {
-        status
-    }
-}
-
 fn cli_type_from_hook_signal_name(cli_type_name: &str) -> Option<CliType> {
     match cli_type_name {
         CLI_TYPE_CLAUDE => Some(CliType::ClaudeCode),
@@ -177,6 +159,10 @@ struct HookSignal {
     cli_type: Option<String>,
     #[serde(default)]
     cli_session_id: Option<String>,
+    #[serde(default)]
+    approval_policy: Option<String>,
+    #[serde(default)]
+    sandbox_policy_type: Option<String>,
     /// Codirigent session ID, present only when Claude Code was spawned by Codirigent
     /// (via the `CODIRIGENT_SESSION_ID` environment variable).
     codirigent_session_id: Option<String>,
@@ -188,6 +174,7 @@ struct HookSignalUpdate {
     session_id: SessionId,
     signal_file_id: String,
     cli_session_id: Option<String>,
+    codex_execution_mode: Option<CodexExecutionMode>,
     status: String,
     cli_type: Option<String>,
     ts: u64,
@@ -224,6 +211,28 @@ fn resolve_hook_cli_session_id(
                 Some(fallback.to_owned())
             }
         })
+}
+
+fn codex_execution_mode_from_approval_and_sandbox(
+    approval_policy: Option<&str>,
+    sandbox_policy_type: Option<&str>,
+) -> Option<CodexExecutionMode> {
+    if !approval_policy.is_some_and(|value| value.eq_ignore_ascii_case("never")) {
+        return None;
+    }
+
+    match sandbox_policy_type {
+        Some(value) if value.eq_ignore_ascii_case("danger-full-access") => {
+            Some(CodexExecutionMode::Bypass)
+        }
+        Some(value)
+            if value.eq_ignore_ascii_case("workspace-write")
+                || value.eq_ignore_ascii_case("workspace_write") =>
+        {
+            Some(CodexExecutionMode::FullAuto)
+        }
+        _ => None,
+    }
 }
 
 fn read_recent_hook_signal_updates() -> Vec<HookSignalUpdate> {
@@ -281,6 +290,10 @@ fn read_recent_hook_signal_updates() -> Vec<HookSignalUpdate> {
             session_id,
             signal_file_id,
             cli_session_id: signal.cli_session_id,
+            codex_execution_mode: codex_execution_mode_from_approval_and_sandbox(
+                signal.approval_policy.as_deref(),
+                signal.sandbox_policy_type.as_deref(),
+            ),
             status: signal.status,
             cli_type: signal.cli_type,
             ts: signal.ts,
@@ -797,9 +810,11 @@ impl WorkspaceView {
                                                 (
                                                     Some(snapshot.status),
                                                     snapshot.session_id,
-                                                    snapshot.approval_mode.as_deref().and_then(
-                                                        codex_execution_mode_from_rollout_mode,
-                                                    ),
+                                                    snapshot.execution_mode.or_else(|| {
+                                                        snapshot.approval_mode.as_deref().and_then(
+                                                            codex_execution_mode_from_rollout_mode,
+                                                        )
+                                                    }),
                                                 )
                                             })
                                             .unwrap_or((None, None, None))
@@ -937,19 +952,6 @@ impl WorkspaceView {
                     }
 
                     if let Some((new_status, tool_name)) = &result.status {
-                        let suppress_needs_attention = *new_status == SessionStatus::NeedsAttention
-                            && cached_status
-                                .as_ref()
-                                .and_then(|readers| readers.cached_status.get(&result.session_id))
-                                .is_some_and(|cached| {
-                                    cached.source == CliStatusSource::Hook
-                                        && cached.status == SessionStatus::Working
-                                        && cached.seen_at.elapsed() <= Duration::from_secs(5)
-                                });
-                        if suppress_needs_attention {
-                            continue;
-                        }
-
                         // Cache the JSONL result
                         if let Some(readers) = cached_status.as_mut() {
                             // Preserve status_since if status hasn't changed
@@ -1426,6 +1428,7 @@ impl WorkspaceView {
             session_id,
             signal_file_id,
             cli_session_id,
+            codex_execution_mode,
             status,
             cli_type,
             ts,
@@ -1514,6 +1517,9 @@ impl WorkspaceView {
         }
 
         if cli_type_name == CLI_TYPE_CODEX {
+            if let Some(mode) = codex_execution_mode {
+                self.set_session_codex_execution_mode(session_id, Some(mode), cx);
+            }
             let started_at = chrono::Utc::now();
             let manager_changed = self
                 .session_manager
@@ -1562,19 +1568,7 @@ impl WorkspaceView {
             }
             _ => SessionStatus::Idle,
         };
-        let codex_execution_mode = self
-            .workspace
-            .session(session_id)
-            .and_then(|session| session.codex_execution_mode)
-            .or_else(|| {
-                self.session_manager
-                    .lock()
-                    .ok()
-                    .and_then(|mgr| mgr.get_session(session_id))
-                    .and_then(|session| session.codex_execution_mode)
-            });
-        let new_status =
-            normalize_hook_status_for_codex_mode(cli_type_name, raw_status, codex_execution_mode);
+        let new_status = raw_status;
 
         if let Ok(mut readers) = self.cli_readers.lock() {
             let status_since = readers
@@ -2010,6 +2004,8 @@ mod tests {
             status: status.to_owned(),
             cli_type: None,
             cli_session_id: None,
+            approval_policy: None,
+            sandbox_policy_type: None,
             codirigent_session_id: codirigent_session_id.map(str::to_owned),
             ts,
         }
@@ -2065,6 +2061,25 @@ mod tests {
         let signal: HookSignal = serde_json::from_str(json).unwrap();
         assert!(signal.cli_session_id.is_none());
         assert!(signal.codirigent_session_id.is_none());
+    }
+
+    #[test]
+    fn hook_signal_context_infers_bypass_mode() {
+        assert_eq!(
+            codex_execution_mode_from_approval_and_sandbox(
+                Some("never"),
+                Some("danger-full-access"),
+            ),
+            Some(CodexExecutionMode::Bypass)
+        );
+    }
+
+    #[test]
+    fn hook_signal_context_infers_full_auto_mode() {
+        assert_eq!(
+            codex_execution_mode_from_approval_and_sandbox(Some("never"), Some("workspace-write"),),
+            Some(CodexExecutionMode::FullAuto)
+        );
     }
 
     #[test]
@@ -2142,30 +2157,6 @@ mod tests {
 
         assert!(!should_defer_ambiguous_codex_probe(&inputs[0], &counts));
         assert!(should_defer_ambiguous_codex_probe(&inputs[1], &counts));
-    }
-
-    #[test]
-    fn codex_hook_attention_is_treated_as_working_in_bypass_mode() {
-        assert_eq!(
-            normalize_hook_status_for_codex_mode(
-                CLI_TYPE_CODEX,
-                SessionStatus::NeedsAttention,
-                Some(codirigent_core::CodexExecutionMode::Bypass),
-            ),
-            SessionStatus::Working,
-        );
-    }
-
-    #[test]
-    fn codex_hook_attention_remains_attention_without_bypass_mode() {
-        assert_eq!(
-            normalize_hook_status_for_codex_mode(
-                CLI_TYPE_CODEX,
-                SessionStatus::NeedsAttention,
-                None,
-            ),
-            SessionStatus::NeedsAttention,
-        );
     }
 
     #[test]

@@ -96,6 +96,16 @@ struct CodexSessionMeta {
     cwd: Option<String>,
     #[serde(default)]
     approval_mode: Option<String>,
+    #[serde(default)]
+    sandbox_policy: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Deserialize)]
+struct CodexTurnContext {
+    #[serde(default)]
+    approval_policy: Option<String>,
+    #[serde(default)]
+    sandbox_policy: Option<serde_json::Value>,
 }
 
 fn resolve_codex_home() -> Option<PathBuf> {
@@ -124,6 +134,39 @@ fn read_codex_session_meta(path: &Path) -> Option<CodexSessionMeta> {
     }
     let payload = entry.payload?;
     serde_json::from_value::<CodexSessionMeta>(payload).ok()
+}
+
+fn read_codex_turn_context(path: &Path) -> Option<CodexTurnContext> {
+    let file = fs::File::open(path).ok()?;
+    let reader = BufReader::new(file);
+
+    // Turn context appears near the beginning of each turn, so scanning a
+    // small prefix keeps restore cheap even when rollout logs are long.
+    for line in reader.lines().take(64).flatten() {
+        let trimmed = line.trim();
+        if trimmed.is_empty() {
+            continue;
+        }
+
+        let Ok(entry) = serde_json::from_str::<CodexRolloutEntry>(trimmed) else {
+            continue;
+        };
+        if entry.entry_type != "turn_context" {
+            continue;
+        }
+
+        let Some(payload) = entry.payload else {
+            continue;
+        };
+        let Ok(turn_context) = serde_json::from_value::<CodexTurnContext>(payload) else {
+            continue;
+        };
+        if turn_context.approval_policy.is_some() || turn_context.sandbox_policy.is_some() {
+            return Some(turn_context);
+        }
+    }
+
+    None
 }
 
 fn collect_codex_rollout_files(base: &Path, out: &mut Vec<(PathBuf, SystemTime)>) {
@@ -156,7 +199,53 @@ fn collect_codex_rollout_files(base: &Path, out: &mut Vec<(PathBuf, SystemTime)>
     }
 }
 
-fn read_codex_permission_mode(working_directory: &Path, codex_session_id: &str) -> Option<String> {
+fn codex_execution_mode_from_approval_and_sandbox(
+    approval_policy: Option<&str>,
+    sandbox_policy: Option<&serde_json::Value>,
+) -> Option<CodexExecutionMode> {
+    if !approval_policy.is_some_and(|value| value.eq_ignore_ascii_case("never")) {
+        return None;
+    }
+
+    let sandbox_policy_type = match sandbox_policy? {
+        serde_json::Value::String(value) => Some(value.as_str()),
+        serde_json::Value::Object(map) => map.get("type").and_then(serde_json::Value::as_str),
+        _ => None,
+    }?;
+
+    if sandbox_policy_type.eq_ignore_ascii_case("danger-full-access") {
+        Some(CodexExecutionMode::Bypass)
+    } else if sandbox_policy_type.eq_ignore_ascii_case("workspace-write")
+        || sandbox_policy_type.eq_ignore_ascii_case("workspace_write")
+    {
+        Some(CodexExecutionMode::FullAuto)
+    } else {
+        None
+    }
+}
+
+fn read_codex_execution_mode(path: &Path) -> Option<CodexExecutionMode> {
+    let meta = read_codex_session_meta(path)?;
+
+    meta.approval_mode
+        .as_deref()
+        .and_then(codex_execution_mode_from_str)
+        .or_else(|| {
+            codex_execution_mode_from_approval_and_sandbox(None, meta.sandbox_policy.as_ref())
+        })
+        .or_else(|| {
+            let turn_context = read_codex_turn_context(path)?;
+            codex_execution_mode_from_approval_and_sandbox(
+                turn_context.approval_policy.as_deref(),
+                turn_context.sandbox_policy.as_ref(),
+            )
+        })
+}
+
+fn read_saved_codex_execution_mode(
+    working_directory: &Path,
+    codex_session_id: &str,
+) -> Option<CodexExecutionMode> {
     let codex_home = resolve_codex_home()?;
     let sessions_dir = codex_home.join("sessions");
     if !sessions_dir.is_dir() {
@@ -180,10 +269,8 @@ fn read_codex_permission_mode(working_directory: &Path, codex_session_id: &str) 
             if !file_name.ends_with(&session_suffix) {
                 continue;
             }
-            if let Some(meta) = read_codex_session_meta(path) {
-                if let Some(approval_mode) = meta.approval_mode {
-                    return Some(approval_mode);
-                }
+            if let Some(mode) = read_codex_execution_mode(path) {
+                return Some(mode);
             }
         }
     }
@@ -194,7 +281,7 @@ fn read_codex_permission_mode(working_directory: &Path, codex_session_id: &str) 
             continue;
         };
         if meta.cwd.as_deref() == Some(expected_cwd.as_ref()) {
-            return meta.approval_mode;
+            return read_codex_execution_mode(path);
         }
     }
 
@@ -236,11 +323,7 @@ fn resolve_saved_codex_execution_mode(
     working_dir: &Path,
     codex_session_id: &str,
 ) -> Option<CodexExecutionMode> {
-    saved_mode.or_else(|| {
-        read_codex_permission_mode(working_dir, codex_session_id)
-            .as_deref()
-            .and_then(codex_execution_mode_from_str)
-    })
+    saved_mode.or_else(|| read_saved_codex_execution_mode(working_dir, codex_session_id))
 }
 
 fn build_codex_resume_command(codex_session_id: &str, mode: Option<CodexExecutionMode>) -> String {
@@ -256,6 +339,7 @@ fn build_codex_resume_command(codex_session_id: &str, mode: Option<CodexExecutio
 #[cfg(test)]
 mod tests {
     use super::*;
+    use tempfile::TempDir;
 
     #[test]
     fn codex_resume_command_uses_resume_subcommand() {
@@ -278,6 +362,26 @@ mod tests {
         assert_eq!(
             build_codex_resume_command("session-123", Some(CodexExecutionMode::FullAuto)),
             "codex resume session-123 --full-auto\r"
+        );
+    }
+
+    #[test]
+    fn codex_execution_mode_can_be_inferred_from_turn_context() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("rollout.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                r#"{"type":"session_meta","payload":{"cwd":"/tmp"}}"#,
+                "\n",
+                r#"{"type":"turn_context","payload":{"approval_policy":"never","sandbox_policy":{"type":"danger-full-access"}}}"#
+            ),
+        )
+        .unwrap();
+
+        assert_eq!(
+            read_codex_execution_mode(&path),
+            Some(CodexExecutionMode::Bypass)
         );
     }
 }

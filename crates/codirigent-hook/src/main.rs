@@ -31,6 +31,10 @@ struct HookPayload {
     event_type: Option<String>,
     #[serde(default)]
     cli_type: Option<String>,
+    #[serde(default)]
+    approval_policy: Option<String>,
+    #[serde(default)]
+    sandbox_policy: Option<serde_json::Value>,
 }
 
 /// Signal file format consumed by `check_hook_signals`.
@@ -41,6 +45,10 @@ struct SignalFile {
     cli_type: Option<&'static str>,
     #[serde(skip_serializing_if = "Option::is_none")]
     cli_session_id: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    approval_policy: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    sandbox_policy_type: Option<String>,
     codirigent_session_id: Option<String>,
     ts: u64,
 }
@@ -94,6 +102,8 @@ fn handle_payload(payload: HookPayload) {
         status,
         cli_type: Some(cli_type),
         cli_session_id,
+        approval_policy: payload.approval_policy,
+        sandbox_policy_type: sandbox_policy_type(payload.sandbox_policy.as_ref()),
         codirigent_session_id,
         ts: SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -125,6 +135,17 @@ fn read_payload() -> Option<HookPayload> {
     args.get(1..)
         .and_then(|parts| parts.last())
         .and_then(|last| serde_json::from_str(last).ok())
+}
+
+fn sandbox_policy_type(policy: Option<&serde_json::Value>) -> Option<String> {
+    match policy? {
+        serde_json::Value::String(value) => Some(value.clone()),
+        serde_json::Value::Object(map) => map
+            .get("type")
+            .and_then(serde_json::Value::as_str)
+            .map(str::to_owned),
+        _ => None,
+    }
 }
 
 fn map_status(
@@ -373,6 +394,8 @@ mod tests {
             notification_type: None,
             event_type: None,
             cli_type: None,
+            approval_policy: None,
+            sandbox_policy: None,
         };
         assert_eq!(
             infer_cli_type_with_gemini_env(&payload, false),
@@ -428,6 +451,24 @@ mod tests {
         assert_eq!(
             map_codex_status(Some("permission_prompt")),
             "needs_attention"
+        );
+    }
+
+    #[test]
+    fn sandbox_policy_type_reads_named_object_policy() {
+        let policy = serde_json::json!({ "type": "danger-full-access" });
+        assert_eq!(
+            super::sandbox_policy_type(Some(&policy)),
+            Some("danger-full-access".to_string())
+        );
+    }
+
+    #[test]
+    fn sandbox_policy_type_reads_string_policy() {
+        let policy = serde_json::json!("workspace-write");
+        assert_eq!(
+            super::sandbox_policy_type(Some(&policy)),
+            Some("workspace-write".to_string())
         );
     }
 

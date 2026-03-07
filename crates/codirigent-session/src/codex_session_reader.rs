@@ -17,6 +17,7 @@ use codirigent_core::CodexExecutionMode;
 use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
+use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, trace};
@@ -35,6 +36,8 @@ pub struct CodexStatusSnapshot {
     pub session_id: Option<String>,
     /// Approval mode from `session_meta`, if present.
     pub approval_mode: Option<String>,
+    /// Effective Codex execution mode inferred from rollout metadata, if present.
+    pub execution_mode: Option<CodexExecutionMode>,
 }
 
 /// Reads Codex CLI session data to determine status.
@@ -69,6 +72,16 @@ struct SessionMeta {
     cwd: Option<String>,
     #[serde(default)]
     approval_mode: Option<String>,
+    #[serde(default)]
+    sandbox_policy: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Clone, Deserialize)]
+struct TurnContext {
+    #[serde(default)]
+    approval_policy: Option<String>,
+    #[serde(default)]
+    sandbox_policy: Option<serde_json::Value>,
 }
 
 /// A JSONL entry from a Codex rollout file.
@@ -171,14 +184,21 @@ impl CodexSessionReader {
             return None;
         }
 
-        let approval_mode =
-            Self::resolve_approval_mode(saved_mode, rollout_match.meta.approval_mode.as_deref());
+        let turn_context = Self::read_turn_context(&rollout_match.path);
+        let execution_mode = saved_mode
+            .or_else(|| Self::infer_execution_mode(&rollout_match.path, &rollout_match.meta));
+        let approval_mode = Self::resolve_approval_mode(
+            execution_mode,
+            rollout_match.meta.approval_mode.as_deref(),
+            turn_context.as_ref(),
+        );
 
         let Some(tail) = read_file_tail(&rollout_match.path, 131_072) else {
             return Some(CodexStatusSnapshot {
                 status: CodexSessionStatus::Unknown,
                 session_id: rollout_match.meta.id,
                 approval_mode: rollout_match.meta.approval_mode,
+                execution_mode,
             });
         };
 
@@ -186,6 +206,7 @@ impl CodexSessionReader {
             status: self.determine_status(&tail, &approval_mode),
             session_id: rollout_match.meta.id,
             approval_mode: rollout_match.meta.approval_mode,
+            execution_mode,
         })
     }
 
@@ -391,9 +412,9 @@ impl CodexSessionReader {
 
     fn read_session_meta(path: &Path) -> Option<SessionMeta> {
         let file = fs::File::open(path).ok()?;
-        let mut reader = std::io::BufReader::new(file);
+        let mut reader = BufReader::new(file);
         let mut first_line = String::new();
-        std::io::BufRead::read_line(&mut reader, &mut first_line).ok()?;
+        BufRead::read_line(&mut reader, &mut first_line).ok()?;
 
         let entry: RolloutEntry = serde_json::from_str(first_line.trim()).ok()?;
         if entry.entry_type != "session_meta" {
@@ -404,28 +425,136 @@ impl CodexSessionReader {
         serde_json::from_value(payload).ok()
     }
 
+    fn read_turn_context(path: &Path) -> Option<TurnContext> {
+        let file = fs::File::open(path).ok()?;
+        let reader = BufReader::new(file);
+
+        // Turn context is emitted near the start of a turn, so only scan a
+        // small prefix of the rollout file on each polling pass.
+        for line in reader.lines().take(64).flatten() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+
+            let Ok(entry) = serde_json::from_str::<RolloutEntry>(trimmed) else {
+                continue;
+            };
+            if entry.entry_type != "turn_context" {
+                continue;
+            }
+
+            let Some(payload) = entry.payload else {
+                continue;
+            };
+            let Ok(turn_context) = serde_json::from_value::<TurnContext>(payload) else {
+                continue;
+            };
+            if turn_context.approval_policy.is_some() || turn_context.sandbox_policy.is_some() {
+                return Some(turn_context);
+            }
+        }
+
+        None
+    }
+
     /// Read the CWD from the first line (session_meta) of a rollout file.
     #[cfg(test)]
     fn read_cwd_from_first_line(path: &Path) -> Option<String> {
         Self::read_session_meta(path)?.cwd
     }
 
+    fn infer_execution_mode(path: &Path, meta: &SessionMeta) -> Option<CodexExecutionMode> {
+        meta.approval_mode
+            .as_deref()
+            .and_then(Self::execution_mode_from_rollout_mode)
+            .or_else(|| {
+                Self::execution_mode_from_approval_and_sandbox(None, meta.sandbox_policy.as_ref())
+            })
+            .or_else(|| {
+                let turn_context = Self::read_turn_context(path)?;
+                Self::execution_mode_from_approval_and_sandbox(
+                    turn_context.approval_policy.as_deref(),
+                    turn_context.sandbox_policy.as_ref(),
+                )
+            })
+    }
+
+    fn execution_mode_from_rollout_mode(mode: &str) -> Option<CodexExecutionMode> {
+        if is_bypass_mode(mode) {
+            Some(CodexExecutionMode::Bypass)
+        } else if is_full_auto_mode(mode) {
+            Some(CodexExecutionMode::FullAuto)
+        } else {
+            None
+        }
+    }
+
+    fn execution_mode_from_approval_and_sandbox(
+        approval_policy: Option<&str>,
+        sandbox_policy: Option<&serde_json::Value>,
+    ) -> Option<CodexExecutionMode> {
+        if !approval_policy.is_some_and(|value| value.eq_ignore_ascii_case("never")) {
+            return None;
+        }
+
+        match sandbox_policy.and_then(Self::sandbox_policy_type) {
+            Some(policy) if policy.eq_ignore_ascii_case("danger-full-access") => {
+                Some(CodexExecutionMode::Bypass)
+            }
+            Some(policy)
+                if policy.eq_ignore_ascii_case("workspace-write")
+                    || policy.eq_ignore_ascii_case("workspace_write") =>
+            {
+                Some(CodexExecutionMode::FullAuto)
+            }
+            _ => None,
+        }
+    }
+
+    fn sandbox_policy_type(policy: &serde_json::Value) -> Option<&str> {
+        match policy {
+            serde_json::Value::String(value) => Some(value.as_str()),
+            serde_json::Value::Object(map) => map.get("type").and_then(serde_json::Value::as_str),
+            _ => None,
+        }
+    }
+
     fn resolve_approval_mode(
         saved_mode: Option<CodexExecutionMode>,
         rollout_approval_mode: Option<&str>,
+        turn_context: Option<&TurnContext>,
     ) -> ApprovalMode {
         match saved_mode {
             Some(CodexExecutionMode::FullAuto | CodexExecutionMode::Bypass) => {
                 ApprovalMode::FullAuto
             }
-            None => match rollout_approval_mode {
-                Some(mode) if is_full_auto_mode(mode) || is_bypass_mode(mode) => {
-                    ApprovalMode::FullAuto
-                }
-                Some("auto-edit") => ApprovalMode::AutoEdit,
-                Some(_) => ApprovalMode::Suggest,
-                None => ApprovalMode::Unknown,
-            },
+            None => rollout_approval_mode
+                .map(Self::approval_mode_from_rollout_mode)
+                .or_else(|| {
+                    turn_context
+                        .and_then(|context| context.approval_policy.as_deref())
+                        .map(Self::approval_mode_from_turn_context_policy)
+                })
+                .unwrap_or(ApprovalMode::Unknown),
+        }
+    }
+
+    fn approval_mode_from_rollout_mode(mode: &str) -> ApprovalMode {
+        if is_full_auto_mode(mode) || is_bypass_mode(mode) {
+            ApprovalMode::FullAuto
+        } else if mode.eq_ignore_ascii_case("auto-edit") || mode.eq_ignore_ascii_case("auto_edit") {
+            ApprovalMode::AutoEdit
+        } else {
+            ApprovalMode::Suggest
+        }
+    }
+
+    fn approval_mode_from_turn_context_policy(policy: &str) -> ApprovalMode {
+        if policy.eq_ignore_ascii_case("never") {
+            ApprovalMode::FullAuto
+        } else {
+            ApprovalMode::Suggest
         }
     }
 
@@ -437,7 +566,13 @@ impl CodexSessionReader {
             return ApprovalMode::Unknown;
         };
 
-        Self::resolve_approval_mode(None, meta.approval_mode.as_deref())
+        let execution_mode = Self::infer_execution_mode(path, &meta);
+        let turn_context = Self::read_turn_context(path);
+        Self::resolve_approval_mode(
+            execution_mode,
+            meta.approval_mode.as_deref(),
+            turn_context.as_ref(),
+        )
     }
 
     /// Core status determination algorithm.
@@ -522,7 +657,9 @@ impl CodexSessionReader {
         if let Some((_call_id, tool_name)) = pending_calls.iter().next() {
             return match approval_mode {
                 ApprovalMode::FullAuto => CodexSessionStatus::Working,
-                ApprovalMode::Unknown => CodexSessionStatus::Working,
+                ApprovalMode::Unknown => CodexSessionStatus::NeedsAttention {
+                    detail: Some(tool_name.clone()),
+                },
                 ApprovalMode::AutoEdit => {
                     if Self::is_file_edit_tool(tool_name) {
                         CodexSessionStatus::Working
@@ -724,6 +861,121 @@ mod tests {
 
         assert_eq!(snapshot.status, CodexSessionStatus::Working);
         assert_eq!(snapshot.session_id.as_deref(), Some("codex-session"));
+        assert_eq!(snapshot.execution_mode, Some(CodexExecutionMode::Bypass));
+    }
+
+    #[test]
+    fn test_turn_context_infers_bypass_execution_mode() {
+        let tmp = TempDir::new().unwrap();
+        let sessions_dir = tmp
+            .path()
+            .join("sessions")
+            .join("2026")
+            .join("03")
+            .join("07");
+        fs::create_dir_all(&sessions_dir).unwrap();
+
+        let rollout_path = sessions_dir.join("rollout-123456-codex-session.jsonl");
+        fs::write(
+            &rollout_path,
+            concat!(
+                r#"{"type":"session_meta","payload":{"id":"codex-session","cwd":"/Users/test/project"}}"#,
+                "\n",
+                r#"{"type":"turn_context","payload":{"approval_policy":"never","sandbox_policy":{"type":"danger-full-access"}}}"#,
+                "\n",
+                r#"{"type":"response_item","payload":{"type":"function_call","call_id":"c1","name":"shell"}}"#
+            ),
+        )
+        .unwrap();
+
+        let mut reader = CodexSessionReader {
+            codex_home: tmp.path().to_path_buf(),
+            session_file_cache: HashMap::new(),
+        };
+
+        let snapshot = reader
+            .get_status_snapshot_if_recent(
+                Path::new("/Users/test/project"),
+                Some("codex-session"),
+                None,
+                Duration::from_secs(60),
+                None,
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(snapshot.execution_mode, Some(CodexExecutionMode::Bypass));
+        assert_eq!(snapshot.status, CodexSessionStatus::Working);
+    }
+
+    #[test]
+    fn test_turn_context_infers_full_auto_execution_mode() {
+        let tmp = TempDir::new().unwrap();
+        let path = tmp.path().join("turn_context.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                r#"{"type":"session_meta","payload":{"cwd":"/tmp"}}"#,
+                "\n",
+                r#"{"type":"turn_context","payload":{"approval_policy":"never","sandbox_policy":{"type":"workspace-write"}}}"#
+            ),
+        )
+        .unwrap();
+
+        let meta = CodexSessionReader::read_session_meta(&path).unwrap();
+        assert_eq!(
+            CodexSessionReader::infer_execution_mode(&path, &meta),
+            Some(CodexExecutionMode::FullAuto)
+        );
+    }
+
+    #[test]
+    fn test_turn_context_non_never_policy_requires_attention_for_pending_tool() {
+        let tmp = TempDir::new().unwrap();
+        let sessions_dir = tmp
+            .path()
+            .join("sessions")
+            .join("2026")
+            .join("03")
+            .join("07");
+        fs::create_dir_all(&sessions_dir).unwrap();
+
+        let rollout_path = sessions_dir.join("rollout-123456-codex-session.jsonl");
+        fs::write(
+            &rollout_path,
+            concat!(
+                r#"{"type":"session_meta","payload":{"id":"codex-session","cwd":"/Users/test/project"}}"#,
+                "\n",
+                r#"{"type":"turn_context","payload":{"approval_policy":"on-request","sandbox_policy":{"type":"workspace-write"}}}"#,
+                "\n",
+                r#"{"type":"response_item","payload":{"type":"function_call","call_id":"c1","name":"shell"}}"#
+            ),
+        )
+        .unwrap();
+
+        let mut reader = CodexSessionReader {
+            codex_home: tmp.path().to_path_buf(),
+            session_file_cache: HashMap::new(),
+        };
+
+        let snapshot = reader
+            .get_status_snapshot_if_recent(
+                Path::new("/Users/test/project"),
+                Some("codex-session"),
+                None,
+                Duration::from_secs(60),
+                None,
+                None,
+            )
+            .unwrap();
+
+        assert_eq!(snapshot.execution_mode, None);
+        assert_eq!(
+            snapshot.status,
+            CodexSessionStatus::NeedsAttention {
+                detail: Some("shell".to_string()),
+            }
+        );
     }
 
     #[test]
@@ -737,6 +989,22 @@ mod tests {
         assert_eq!(
             reader.determine_status(tail, &ApprovalMode::FullAuto),
             CodexSessionStatus::Working
+        );
+    }
+
+    #[test]
+    fn test_pending_tool_unknown_mode_needs_attention() {
+        let tail = r#"{"type":"response_item","payload":{"type":"function_call","call_id":"c1","name":"shell"}}"#;
+
+        let reader = CodexSessionReader {
+            codex_home: PathBuf::from("/nonexistent"),
+            session_file_cache: HashMap::new(),
+        };
+        assert_eq!(
+            reader.determine_status(tail, &ApprovalMode::Unknown),
+            CodexSessionStatus::NeedsAttention {
+                detail: Some("shell".to_string()),
+            }
         );
     }
 
@@ -869,6 +1137,32 @@ mod tests {
         fs::write(
             &path,
             r#"{"type":"session_meta","payload":{"cwd":"/tmp","approval_mode":"suggest"}}"#,
+        )
+        .unwrap();
+        assert_eq!(reader.read_approval_mode(&path), ApprovalMode::Suggest);
+
+        // turn_context fallback
+        let path = tmp.path().join("turn_context.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                r#"{"type":"session_meta","payload":{"cwd":"/tmp"}}"#,
+                "\n",
+                r#"{"type":"turn_context","payload":{"approval_policy":"never","sandbox_policy":{"type":"danger-full-access"}}}"#
+            ),
+        )
+        .unwrap();
+        assert_eq!(reader.read_approval_mode(&path), ApprovalMode::FullAuto);
+
+        // non-never turn_context falls back to suggest
+        let path = tmp.path().join("turn_context_on_request.jsonl");
+        fs::write(
+            &path,
+            concat!(
+                r#"{"type":"session_meta","payload":{"cwd":"/tmp"}}"#,
+                "\n",
+                r#"{"type":"turn_context","payload":{"approval_policy":"on-request","sandbox_policy":{"type":"workspace-write"}}}"#
+            ),
         )
         .unwrap();
         assert_eq!(reader.read_approval_mode(&path), ApprovalMode::Suggest);
@@ -1035,6 +1329,7 @@ mod tests {
             timestamp: Some("2026-03-07T05:41:45.500Z".to_string()),
             cwd: None,
             approval_mode: None,
+            sandbox_policy: None,
         })
         .unwrap();
 
