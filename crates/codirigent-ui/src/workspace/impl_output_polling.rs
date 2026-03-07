@@ -13,8 +13,8 @@ use super::cli_helpers::clear_command;
 use super::gpui::WorkspaceView;
 use super::types::CachedCliStatus;
 use codirigent_core::{
-    hook_signals_dir, AssignmentAction, CodirigentEvent, EventBus, ProcessMonitor, SessionId,
-    SessionManager, SessionStatus, TaskStatus,
+    hook_signals_dir, AssignmentAction, CliType, CodirigentEvent, EventBus, ProcessMonitor,
+    Session, SessionId, SessionManager, SessionStatus, TaskStatus,
 };
 use codirigent_detector::NotificationType;
 use codirigent_session::cli_detector::CliDetector;
@@ -32,6 +32,15 @@ const CLI_TYPE_CODEX: &str = "codex";
 
 /// Session status result from a background JSONL read: (status, optional detail string).
 type JsonlStatusResult = Option<(SessionStatus, Option<String>)>;
+
+#[derive(Debug)]
+struct PreparedSessionOutput {
+    session_id: SessionId,
+    data: Vec<u8>,
+    has_more: bool,
+    detected_cli_type: Option<CliType>,
+    cwd_session: Option<Session>,
+}
 
 /// Signal file written by `codirigent-hook` for each hook event.
 #[derive(Deserialize)]
@@ -138,6 +147,8 @@ impl WorkspaceView {
         self.process_deferred_enters();
         self.drain_vte_responses();
 
+        let had_output_activity = self.schedule_output_preparation(cx);
+
         let mut session_ids: Vec<codirigent_core::SessionId> =
             self.terminals.keys().copied().collect();
         if let Some(focused_id) = self.workspace.focused_session_id() {
@@ -146,12 +157,10 @@ impl WorkspaceView {
             }
         }
         let mut any_dirty = false;
-        let mut had_output_activity = false;
 
         for session_id in session_ids {
-            let session_dirty = self.poll_session_output(session_id, cx);
+            let session_dirty = self.sync_session_status(session_id);
             any_dirty |= session_dirty;
-            had_output_activity |= session_dirty;
         }
 
         // Track output activity for adaptive polling
@@ -174,99 +183,156 @@ impl WorkspaceView {
         }
     }
 
-    /// Process output and update status for a single session in the poll loop.
-    ///
-    /// Returns `true` if any UI-visible change was made that requires a repaint.
-    fn poll_session_output(
-        &mut self,
-        session_id: codirigent_core::SessionId,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let mut any_dirty = false;
-        // Try to drain output from the session manager
-        let output = self.with_session_manager(|manager| {
-            manager.try_drain_output_bounded(
-                session_id,
-                Self::MAX_OUTPUT_CHUNKS_PER_POLL,
-                Self::MAX_OUTPUT_BYTES_PER_POLL,
-            )
-        });
-
-        if let Some(drained) = output {
-            let data = drained.data;
-            // Feed output to terminal emulator
-            if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
-                terminal_view.terminal_mut().process_output(&data);
-                any_dirty = true;
-            }
-
-            // Detect CLI type from output banners
-            if let Some(cli_type) = detect_cli_from_output(&data) {
-                let current = self
-                    .clipboard
-                    .clipboard_service
-                    .get_session_cli_type(session_id);
-                if current == codirigent_core::CliType::GenericShell {
-                    self.clipboard
-                        .clipboard_service
-                        .set_session_cli_type(session_id, cli_type);
-                    info!(?session_id, ?cli_type, "Detected CLI type from output");
-                }
-            }
-
-            // Feed output to detector for status detection
-            self.with_detector(|detector| {
-                detector.process_output(session_id, &data);
-
-                // Parse OSC 133 shell state markers for reliable idle detection
-                let shell_events = codirigent_session::extract_osc133_events(&data);
-                for event in shell_events {
-                    detector.set_shell_state(session_id, event);
-                }
-            });
-
-            // Check for OSC 7 (working directory change) sequences
-            if let Some(new_cwd) = codirigent_session::extract_osc7_path(&data) {
-                let mgr_session = self.with_session_manager(|manager| {
-                    let changed = manager.update_working_directory(session_id, new_cwd);
-                    if changed {
-                        manager.invalidate_git_cache(session_id);
-                        manager.get_session(session_id)
-                    } else {
-                        None
-                    }
-                });
-
-                if let Some(mgr_session) = mgr_session {
-                    if let Some(header) = self.terminal_headers.get_mut(&session_id) {
-                        header.git_branch = None;
-                        header.git_dirty_count = None;
-                    }
-
-                    // Sync workspace cache so file tree sees the new CWD.
-                    if let Some(ws_session) = self.workspace.session_mut(session_id) {
-                        ws_session.working_directory = mgr_session.working_directory.clone();
-                        ws_session.group = None;
-                        ws_session.git_info = None;
-                    }
-
-                    // Update file tree panel if this is the focused session.
-                    // Uses sync_file_tree_to_focused_session which guards against
-                    // same-root refreshes (avoids redundant file tree rebuilds).
-                    if self.workspace.focused_session_id() == Some(session_id) {
-                        self.sync_file_tree_to_focused_session(cx);
-                    }
-
-                    self.spawn_session_git_refresh(
-                        session_id,
-                        mgr_session.working_directory.clone(),
-                        cx,
-                    );
-                    self.mark_ui_sync_dirty();
-                    any_dirty = true;
-                }
+    fn schedule_output_preparation(&mut self, cx: &mut Context<Self>) -> bool {
+        let mut session_ids = self.with_session_manager(|manager| manager.sessions_with_pending_output());
+        if let Some(focused_id) = self.workspace.focused_session_id() {
+            if let Some(index) = session_ids.iter().position(|id| *id == focused_id) {
+                session_ids.swap(0, index);
             }
         }
+        session_ids.retain(|id| self.terminals.contains_key(id));
+
+        let had_output_activity =
+            !session_ids.is_empty() || !self.polling.output_prepare_in_flight.is_empty();
+
+        for session_id in session_ids {
+            self.schedule_session_output_preparation(session_id, cx);
+        }
+
+        had_output_activity
+    }
+
+    fn schedule_session_output_preparation(
+        &mut self,
+        session_id: SessionId,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.polling.output_prepare_in_flight.insert(session_id) {
+            return;
+        }
+
+        let session_manager = self.session_manager.clone();
+        let detector = self.detector.clone();
+
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+            let prepared = cx
+                .background_executor()
+                .spawn(async move {
+                    let drained = {
+                        let manager = session_manager.lock().ok()?;
+                        manager.try_drain_output_bounded(
+                            session_id,
+                            Self::MAX_OUTPUT_CHUNKS_PER_POLL,
+                            Self::MAX_OUTPUT_BYTES_PER_POLL,
+                        )
+                    }?;
+
+                    let data = drained.data;
+                    let detected_cli_type = detect_cli_from_output(&data);
+
+                    {
+                        let mut detector = detector.lock().ok()?;
+                        detector.process_output(session_id, &data);
+                        for event in codirigent_session::extract_osc133_events(&data) {
+                            detector.set_shell_state(session_id, event);
+                        }
+                    }
+
+                    let cwd_session = codirigent_session::extract_osc7_path(&data).and_then(|new_cwd| {
+                        let manager = session_manager.lock().ok()?;
+                        let changed = manager.update_working_directory(session_id, new_cwd);
+                        if changed {
+                            manager.invalidate_git_cache(session_id);
+                            manager.get_session(session_id)
+                        } else {
+                            None
+                        }
+                    });
+
+                    Some(PreparedSessionOutput {
+                        session_id,
+                        data,
+                        has_more: drained.has_more,
+                        detected_cli_type,
+                        cwd_session,
+                    })
+                })
+                .await;
+
+            let _ = this.update(cx, |this, cx| {
+                this.polling.output_prepare_in_flight.remove(&session_id);
+                if let Some(prepared) = prepared {
+                    this.apply_prepared_session_output(prepared, cx);
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn apply_prepared_session_output(
+        &mut self,
+        prepared: PreparedSessionOutput,
+        cx: &mut Context<Self>,
+    ) {
+        let PreparedSessionOutput {
+            session_id,
+            data,
+            has_more,
+            detected_cli_type,
+            cwd_session,
+        } = prepared;
+        let mut any_dirty = false;
+
+        if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
+            terminal_view.terminal_mut().process_output(&data);
+            any_dirty = true;
+        }
+
+        if let Some(cli_type) = detected_cli_type {
+            let current = self.clipboard.clipboard_service.get_session_cli_type(session_id);
+            if current == codirigent_core::CliType::GenericShell {
+                self.clipboard
+                    .clipboard_service
+                    .set_session_cli_type(session_id, cli_type);
+                info!(?session_id, ?cli_type, "Detected CLI type from output");
+            }
+        }
+
+        if let Some(mgr_session) = cwd_session {
+            if let Some(header) = self.terminal_headers.get_mut(&session_id) {
+                header.git_branch = None;
+                header.git_dirty_count = None;
+            }
+
+            if let Some(ws_session) = self.workspace.session_mut(session_id) {
+                ws_session.working_directory = mgr_session.working_directory.clone();
+                ws_session.group = None;
+                ws_session.git_info = None;
+            }
+
+            if self.workspace.focused_session_id() == Some(session_id) {
+                self.sync_file_tree_to_focused_session(cx);
+            }
+
+            self.spawn_session_git_refresh(session_id, mgr_session.working_directory.clone(), cx);
+            self.mark_ui_sync_dirty();
+            any_dirty = true;
+        }
+
+        any_dirty |= self.sync_session_status(session_id);
+        if any_dirty {
+            cx.notify();
+        }
+        if has_more {
+            self.schedule_session_output_preparation(session_id, cx);
+        }
+    }
+
+    /// Update session status from detector/cache state.
+    ///
+    /// Returns `true` if any UI-visible change was made that requires a repaint.
+    fn sync_session_status(&mut self, session_id: codirigent_core::SessionId) -> bool {
+        let mut any_dirty = false;
 
         // Update session status from detector
         let (mut status, idle_time) = self.with_detector(|detector| {
@@ -865,8 +931,8 @@ impl WorkspaceView {
     /// Check the clipboard for new image content and start a background
     /// save/thumbnail if found. Auto-dismiss the preview after 4 seconds.
     ///
-    /// Clipboard reads stay on the UI thread (Windows platform requirement);
-    /// image saving and thumbnail generation run on a background thread.
+    /// All clipboard reads and image processing run off the UI thread. The
+    /// platform clipboard providers handle any OS-specific main-thread rules.
     ///
     /// Returns `true` if `any_dirty` should be set (preview was auto-dismissed).
     fn update_clipboard_preview(&mut self, cx: &mut Context<Self>) -> bool {
@@ -875,45 +941,47 @@ impl WorkspaceView {
             && !self.polling.clipboard_load_in_flight
         {
             self.polling.last_clipboard_check = Instant::now();
-            let changed = self.clipboard.smart_clipboard.has_changed();
-            if changed && self.clipboard.smart_clipboard.has_image() {
-                // Read clipboard on UI thread (platform requirement on Windows)
-                if let Ok(codirigent_core::ClipboardContent::Image(image_data)) =
-                    self.clipboard.smart_clipboard.read_content()
-                {
-                    self.polling.clipboard_load_in_flight = true;
-                    let temp_dir = self.clipboard.clipboard_service.temp_dir().to_path_buf();
+            self.polling.clipboard_load_in_flight = true;
+            let clipboard = self.clipboard.smart_clipboard.clone();
+            let temp_dir = self.clipboard.clipboard_service.temp_dir().to_path_buf();
 
-                    cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
-                        // Background: save image to disk + generate thumbnail
-                        let result = cx
-                            .background_executor()
-                            .spawn(async move {
-                                let _ = std::fs::create_dir_all(&temp_dir);
-                                let svc = DefaultClipboardService::new(
-                                    temp_dir.parent().unwrap_or(&temp_dir),
-                                );
-                                let path = svc.save_image(&image_data).unwrap_or_default();
-                                let file_size = image_data.bytes.len() as u64;
-                                crate::clipboard_preview::ClipboardPreview::create_preview(
-                                    &image_data,
-                                    path,
-                                    file_size,
-                                )
-                            })
-                            .await;
+            cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+                let preview = cx
+                    .background_executor()
+                    .spawn(async move {
+                        if !clipboard.has_changed() || !clipboard.has_image() {
+                            return None;
+                        }
+                        let codirigent_core::ClipboardContent::Image(image_data) =
+                            clipboard.read_content().ok()?
+                        else {
+                            return None;
+                        };
 
-                        let _ = this.update(cx, |this, cx| {
-                            this.polling.clipboard_load_in_flight = false;
-                            this.clipboard.clipboard_preview.show(result);
-                            this.clipboard.clipboard_preview_shown_at =
-                                Some(std::time::Instant::now());
-                            cx.notify();
-                        });
+                        let _ = std::fs::create_dir_all(&temp_dir);
+                        let svc =
+                            DefaultClipboardService::new(temp_dir.parent().unwrap_or(&temp_dir));
+                        let path = svc.save_image(&image_data).ok()?;
+                        let file_size = image_data.bytes.len() as u64;
+                        Some(crate::clipboard_preview::ClipboardPreview::create_preview(
+                            &image_data,
+                            path,
+                            file_size,
+                        ))
                     })
-                    .detach();
-                }
-            }
+                    .await;
+
+                let _ = this.update(cx, |this, cx| {
+                    this.polling.clipboard_load_in_flight = false;
+                    if let Some(preview) = preview {
+                        this.clipboard.clipboard_preview.show(preview);
+                        this.clipboard.clipboard_preview_shown_at =
+                            Some(std::time::Instant::now());
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
         }
 
         // Auto-dismiss after 4 seconds (checked every poll, not just the 1-second interval)

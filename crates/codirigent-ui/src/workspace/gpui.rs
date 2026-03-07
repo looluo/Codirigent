@@ -213,6 +213,7 @@ impl WorkspaceView {
                 project_root: project_root.clone(),
                 worktree_panel: WorktreePanel::new(),
                 worktree_manager: None,
+                root_cache: HashMap::new(),
             },
             clipboard: super::clipboard_state::ClipboardState {
                 smart_clipboard: crate::platform::create_clipboard(),

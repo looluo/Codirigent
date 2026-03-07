@@ -8,16 +8,68 @@
 //! - Path insertion and clipboard operations
 
 use super::gpui::WorkspaceView;
+use super::project_state::CachedProjectRootState;
 use super::types::FileTreeContextMenu;
 use crate::sidebar::{FileTreeEntryData, FileTreeEvent};
 use codirigent_core::{SessionId, SessionManager};
 use codirigent_filetree::FileTree;
 use codirigent_session::WorktreeManager;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tracing::{info, warn};
 
 impl WorkspaceView {
+    fn cache_current_project_root_state(&mut self) {
+        let Some(root) = self.project.project_root.clone() else {
+            return;
+        };
+
+        self.project.root_cache.insert(
+            root,
+            CachedProjectRootState {
+                file_tree_model: self.project.file_tree_model.take(),
+                worktree_manager: self.project.worktree_manager.take(),
+                worktrees: self.project.worktree_panel.worktrees().to_vec(),
+                available_branches: self.project.worktree_panel.available_branches().to_vec(),
+            },
+        );
+    }
+
+    fn restore_cached_project_root_state(&mut self, path: &PathBuf) -> bool {
+        let Some(cached) = self.project.root_cache.remove(path) else {
+            return false;
+        };
+
+        self.project.file_tree_model = cached.file_tree_model;
+        self.project.worktree_manager = cached.worktree_manager;
+        self.project.worktree_panel.set_worktrees(cached.worktrees);
+        self.project
+            .worktree_panel
+            .set_available_branches(cached.available_branches);
+        self.refresh_file_tree_panel();
+        true
+    }
+
+    fn clear_project_root_state(&mut self) {
+        self.project.file_tree_model = None;
+        self.project.worktree_manager = None;
+        self.project.worktree_panel.set_worktrees(Vec::new());
+        self.project.worktree_panel.set_available_branches(Vec::new());
+        self.refresh_file_tree_panel();
+    }
+
+    fn cached_project_root_state_mut(&mut self, path: &Path) -> &mut CachedProjectRootState {
+        self.project
+            .root_cache
+            .entry(path.to_path_buf())
+            .or_insert_with(|| CachedProjectRootState {
+                file_tree_model: None,
+                worktree_manager: None,
+                worktrees: Vec::new(),
+                available_branches: Vec::new(),
+            })
+    }
+
     pub(super) fn refresh_file_tree_panel(&mut self) {
         let entries = if let Some(tree) = &self.project.file_tree_model {
             let tree: &FileTree = tree;
@@ -57,23 +109,33 @@ impl WorkspaceView {
                 .await;
 
             let _ = this.update(cx, |this, cx| {
-                if this.polling.project_refresh_generation != generation
-                    || this.project.project_root.as_ref() != Some(&path)
-                {
-                    return;
+                let is_current = this.polling.project_refresh_generation == generation
+                    && this.project.project_root.as_ref() == Some(&path);
+                if is_current {
+                    this.polling.file_tree_rebuild_in_flight = false;
                 }
-                this.polling.file_tree_rebuild_in_flight = false;
+
                 match tree_result {
                     Ok(tree) => {
-                        this.project.file_tree_model = Some(tree);
+                        if is_current {
+                            this.project.file_tree_model = Some(tree);
+                            this.refresh_file_tree_panel();
+                            cx.notify();
+                        } else {
+                            this.cached_project_root_state_mut(&path).file_tree_model = Some(tree);
+                        }
                     }
                     Err(e) => {
                         warn!("Failed to initialize file tree: {}", e);
-                        this.project.file_tree_model = None;
+                        if is_current {
+                            this.project.file_tree_model = None;
+                            this.refresh_file_tree_panel();
+                            cx.notify();
+                        } else {
+                            this.cached_project_root_state_mut(&path).file_tree_model = None;
+                        }
                     }
                 }
-                this.refresh_file_tree_panel();
-                cx.notify();
             });
         })
         .detach();
@@ -96,25 +158,40 @@ impl WorkspaceView {
 
             let result = worktree_result.await;
             let _ = this.update(cx, |this, cx| {
-                if this.polling.project_refresh_generation != generation
-                    || this.project.project_root.as_ref() != Some(&path)
-                {
-                    return;
-                }
+                let is_current = this.polling.project_refresh_generation == generation
+                    && this.project.project_root.as_ref() == Some(&path);
 
                 match result {
                     Ok((manager, worktrees, branches)) => {
-                        this.project.worktree_manager = Some(Arc::new(Mutex::new(manager)));
-                        this.project.worktree_panel.set_worktrees(worktrees);
-                        this.project.worktree_panel.set_available_branches(branches);
+                        let manager = Arc::new(Mutex::new(manager));
+                        if is_current {
+                            this.project.worktree_manager = Some(manager.clone());
+                            this.project.worktree_panel.set_worktrees(worktrees.clone());
+                            this.project
+                                .worktree_panel
+                                .set_available_branches(branches.clone());
+                            cx.notify();
+                        } else {
+                            let cached = this.cached_project_root_state_mut(&path);
+                            cached.worktree_manager = Some(manager);
+                            cached.worktrees = worktrees;
+                            cached.available_branches = branches;
+                        }
                     }
                     Err(_) => {
-                        this.project.worktree_manager = None;
-                        this.project.worktree_panel.set_worktrees(Vec::new());
-                        this.project.worktree_panel.set_available_branches(Vec::new());
+                        if is_current {
+                            this.project.worktree_manager = None;
+                            this.project.worktree_panel.set_worktrees(Vec::new());
+                            this.project.worktree_panel.set_available_branches(Vec::new());
+                            cx.notify();
+                        } else {
+                            let cached = this.cached_project_root_state_mut(&path);
+                            cached.worktree_manager = None;
+                            cached.worktrees.clear();
+                            cached.available_branches.clear();
+                        }
                     }
                 }
-                cx.notify();
             });
         })
         .detach();
@@ -130,13 +207,16 @@ impl WorkspaceView {
             return;
         }
 
+        if !same_root {
+            self.cache_current_project_root_state();
+        }
+
         self.project.project_root = Some(path.clone());
         self.project.file_tree.set_root(path.clone());
-        self.project.file_tree_model = None;
-        self.project.worktree_manager = None;
-        self.project.worktree_panel.set_worktrees(Vec::new());
-        self.project.worktree_panel.set_available_branches(Vec::new());
-        self.refresh_file_tree_panel();
+        let restored_cached_state = self.restore_cached_project_root_state(&path);
+        if !restored_cached_state {
+            self.clear_project_root_state();
+        }
         self.mark_ui_sync_dirty();
 
         self.polling.project_refresh_generation =
@@ -145,6 +225,9 @@ impl WorkspaceView {
         self.spawn_file_tree_refresh(path.clone(), generation, cx);
         self.spawn_worktree_refresh(path, generation, cx);
         self.start_settings_background_load(false, cx);
+        if restored_cached_state {
+            cx.notify();
+        }
     }
 
     /// Sync the file tree panel to show the focused session's working directory.

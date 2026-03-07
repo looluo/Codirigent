@@ -3,11 +3,12 @@
 use crate::clipboard_preview::ClipboardPreview;
 use crate::smart_clipboard::SmartClipboardProvider;
 use codirigent_session::clipboard_service::DefaultClipboardService;
+use std::sync::Arc;
 
 /// Groups all clipboard-related state for the workspace.
 pub(super) struct ClipboardState {
     /// Smart clipboard provider for cross-platform clipboard access.
-    pub(super) smart_clipboard: Box<dyn SmartClipboardProvider>,
+    pub(super) smart_clipboard: Arc<dyn SmartClipboardProvider>,
     /// Clipboard polling service.
     pub(super) clipboard_service: DefaultClipboardService,
     /// Preview panel for clipboard content.

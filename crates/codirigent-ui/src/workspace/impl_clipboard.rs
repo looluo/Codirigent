@@ -10,9 +10,78 @@ use crate::app::{Copy, Paste};
 use codirigent_core::{ClipboardContent, SessionManager};
 use codirigent_session::clipboard_service::ClipboardService;
 use gpui::{Context, Window};
+use std::path::PathBuf;
 use tracing::warn;
 
+enum PreparedClipboardPaste {
+    Text(String),
+    Files(Vec<PathBuf>),
+    ImagePath(String),
+}
+
 impl WorkspaceView {
+    fn apply_prepared_clipboard_paste(
+        &mut self,
+        session_id: codirigent_core::SessionId,
+        bracketed: bool,
+        prepared: PreparedClipboardPaste,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.terminals.contains_key(&session_id) {
+            return;
+        }
+
+        let mut did_change_viewport = false;
+        let mut hide_preview = false;
+        let bytes = match prepared {
+            PreparedClipboardPaste::Text(text) => {
+                if text.is_empty() {
+                    return;
+                }
+                let sanitized = crate::clipboard::sanitize_paste(&text);
+                crate::clipboard::prepare_paste(&sanitized, bracketed)
+            }
+            PreparedClipboardPaste::Files(paths) => {
+                if paths.is_empty() {
+                    return;
+                }
+                let text = paths
+                    .iter()
+                    .map(|p| self.project.format_path_for_terminal(p))
+                    .collect::<Vec<_>>()
+                    .join(" ");
+                crate::clipboard::prepare_paste(&text, bracketed)
+            }
+            PreparedClipboardPaste::ImagePath(formatted_path) => {
+                if formatted_path.is_empty() {
+                    return;
+                }
+                hide_preview = true;
+                let sanitized = crate::clipboard::sanitize_paste(&formatted_path);
+                crate::clipboard::prepare_paste(&sanitized, bracketed)
+            }
+        };
+
+        if let Some(tv) = self.terminals.get_mut(&session_id) {
+            did_change_viewport = tv.scroll_to_bottom_if_needed();
+        }
+
+        self.with_session_manager(|manager| {
+            if let Err(e) = manager.send_input(session_id, &bytes) {
+                warn!("Failed to paste to session {}: {}", session_id, e);
+            }
+        });
+
+        if hide_preview {
+            self.clipboard.clipboard_preview.hide();
+            self.clipboard.clipboard_preview_shown_at = None;
+        }
+
+        if did_change_viewport || hide_preview {
+            cx.notify();
+        }
+    }
+
     pub(super) fn handle_paste(
         &mut self,
         _action: &Paste,
@@ -29,125 +98,51 @@ impl WorkspaceView {
             .get(&session_id)
             .map(|tv| tv.terminal().bracketed_paste_mode())
             .unwrap_or(false);
+        let clipboard = self.clipboard.smart_clipboard.clone();
+        let cli_type = self.clipboard.clipboard_service.get_session_cli_type(session_id);
+        let base_dir = self
+            .clipboard
+            .clipboard_service
+            .temp_dir()
+            .parent()
+            .unwrap_or_else(|| self.clipboard.clipboard_service.temp_dir())
+            .to_path_buf();
 
-        // Read clipboard content
-        let content = match self.clipboard.smart_clipboard.read_content() {
-            Ok(c) => c,
-            Err(e) => {
-                warn!("Failed to read clipboard: {}", e);
-                return;
-            }
-        };
-
-        let mut did_change_viewport = false;
-        match content {
-            ClipboardContent::Text(text) => {
-                if text.is_empty() {
-                    return;
-                }
-                let sanitized = crate::clipboard::sanitize_paste(&text);
-                let bytes = crate::clipboard::prepare_paste(&sanitized, bracketed);
-
-                // Auto-scroll to bottom on paste, but avoid dirtying the
-                // terminal cache when we were already at the live prompt.
-                if let Some(tv) = self.terminals.get_mut(&session_id) {
-                    did_change_viewport = tv.scroll_to_bottom_if_needed();
-                }
-
-                self.with_session_manager(|manager| {
-                    if let Err(e) = manager.send_input(session_id, &bytes) {
-                        warn!("Failed to paste to session {}: {}", session_id, e);
-                    }
-                });
-            }
-            ClipboardContent::Image(image_data) => {
-                // Get the CLI type for the focused session (defaults to ClaudeCode)
-                let cli_type = self
-                    .clipboard
-                    .clipboard_service
-                    .get_session_cli_type(session_id);
-                let base_dir = self
-                    .clipboard
-                    .clipboard_service
-                    .temp_dir()
-                    .parent()
-                    .unwrap_or_else(|| self.clipboard.clipboard_service.temp_dir())
-                    .to_path_buf();
-
-                cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
-                    let content_for_bg = ClipboardContent::Image(image_data);
-                    let result = cx
-                        .background_executor()
-                        .spawn(async move {
-                            let service = codirigent_session::clipboard_service::DefaultClipboardService::new(
-                                &base_dir,
-                            );
-                            service.format_for_cli(&content_for_bg, cli_type)
-                        })
-                        .await;
-
-                    let _ = this.update(cx, |this, cx| {
-                        match result {
-                            Ok(formatted_path) => {
-                                if formatted_path.is_empty() {
-                                    return;
-                                }
-
-                                let sanitized = crate::clipboard::sanitize_paste(&formatted_path);
-                                let bytes = crate::clipboard::prepare_paste(&sanitized, bracketed);
-                                if let Some(tv) = this.terminals.get_mut(&session_id) {
-                                    tv.scroll_to_bottom_if_needed();
-                                }
-
-                                this.with_session_manager(|manager| {
-                                    if let Err(e) = manager.send_input(session_id, &bytes) {
-                                        warn!(
-                                            "Failed to paste image path to session {}: {}",
-                                            session_id, e
-                                        );
-                                    }
-                                });
-
-                                this.clipboard.clipboard_preview.hide();
-                                this.clipboard.clipboard_preview_shown_at = None;
-                                cx.notify();
-                            }
-                            Err(e) => {
-                                warn!("Failed to format image for CLI: {:?}", e);
-                            }
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    match clipboard.read_content() {
+                        Ok(ClipboardContent::Text(text)) => Ok(Some(PreparedClipboardPaste::Text(text))),
+                        Ok(ClipboardContent::Files(paths)) => Ok(Some(PreparedClipboardPaste::Files(paths))),
+                        Ok(ClipboardContent::Image(image_data)) => {
+                            let content_for_bg = ClipboardContent::Image(image_data);
+                            let service =
+                                codirigent_session::clipboard_service::DefaultClipboardService::new(
+                                    &base_dir,
+                                );
+                            service
+                                .format_for_cli(&content_for_bg, cli_type)
+                                .map(PreparedClipboardPaste::ImagePath)
+                                .map(Some)
                         }
-                    });
-                })
-                .detach();
-                return;
-            }
-            ClipboardContent::Files(paths) => {
-                if paths.is_empty() {
-                    return;
-                }
-                let text: String = paths
-                    .iter()
-                    .map(|p| self.project.format_path_for_terminal(p))
-                    .collect::<Vec<_>>()
-                    .join(" ");
-                let bytes = crate::clipboard::prepare_paste(&text, bracketed);
-
-                if let Some(tv) = self.terminals.get_mut(&session_id) {
-                    did_change_viewport = tv.scroll_to_bottom_if_needed();
-                }
-
-                self.with_session_manager(|manager| {
-                    if let Err(e) = manager.send_input(session_id, &bytes) {
-                        warn!("Failed to paste files to session {}: {}", session_id, e);
+                        Ok(ClipboardContent::Empty) => Ok(None),
+                        Err(err) => Err(err),
                     }
-                });
-            }
-            ClipboardContent::Empty => {}
-        }
+                })
+                .await;
 
-        if did_change_viewport {
-            cx.notify();
-        }
+            let _ = this.update(cx, |this, cx| match result {
+                Ok(Some(prepared)) => {
+                    this.apply_prepared_clipboard_paste(session_id, bracketed, prepared, cx);
+                }
+                Ok(None) => {}
+                Err(e) => {
+                    warn!("Failed to read clipboard: {}", e);
+                }
+            });
+        })
+        .detach();
     }
 
     /// Handle Copy action (Cmd+C / Ctrl+C).

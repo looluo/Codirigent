@@ -225,6 +225,14 @@ impl DefaultSessionManager {
         self.lock_sessions().keys().copied().collect()
     }
 
+    /// Get all sessions that currently have unread PTY output queued.
+    pub fn sessions_with_pending_output(&self) -> Vec<SessionId> {
+        self.lock_sessions()
+            .iter()
+            .filter_map(|(id, state)| (!state.output_rx.is_empty()).then_some(*id))
+            .collect()
+    }
+
     /// Get the child PID for a session.
     ///
     /// Returns the process ID of the PTY child process for the given session.

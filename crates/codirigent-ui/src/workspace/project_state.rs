@@ -1,10 +1,25 @@
 //! Project and file tree state for WorkspaceView.
 
+use codirigent_core::Worktree;
+use codirigent_session::WorktreeManager;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 
 use crate::sidebar::{FileTreePanel, WorktreePanel};
 use codirigent_filetree::FileTree;
+
+/// Cached project-root state used for stale-while-revalidate switching between repos.
+pub(super) struct CachedProjectRootState {
+    /// In-memory file tree model for the root.
+    pub(super) file_tree_model: Option<FileTree>,
+    /// Shared worktree manager for git worktree operations.
+    pub(super) worktree_manager: Option<Arc<Mutex<WorktreeManager>>>,
+    /// Cached worktree list for immediate rendering.
+    pub(super) worktrees: Vec<Worktree>,
+    /// Cached branch list for immediate rendering.
+    pub(super) available_branches: Vec<String>,
+}
 
 /// Groups all project/file-tree state for the workspace.
 pub(super) struct ProjectState {
@@ -18,6 +33,8 @@ pub(super) struct ProjectState {
     pub(super) worktree_panel: WorktreePanel,
     /// Shared worktree manager for git worktree operations.
     pub(super) worktree_manager: Option<Arc<Mutex<codirigent_session::WorktreeManager>>>,
+    /// Cached file-tree/worktree state by project root.
+    pub(super) root_cache: HashMap<PathBuf, CachedProjectRootState>,
 }
 
 impl ProjectState {

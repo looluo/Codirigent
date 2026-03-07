@@ -326,6 +326,8 @@ pub(super) struct PollingState {
     pub file_tree_rebuild_in_flight: bool,
     /// Whether a background clipboard image save is currently in-flight.
     pub clipboard_load_in_flight: bool,
+    /// Sessions currently preparing PTY output on a background thread.
+    pub output_prepare_in_flight: HashSet<SessionId>,
     /// Debounced app-state persistence task.
     pub state_save_task: Option<gpui::Task<()>>,
     /// Monotonic generation for debounced app-state persistence.
@@ -357,6 +359,7 @@ impl PollingState {
             hook_signal_check_in_flight: false,
             file_tree_rebuild_in_flight: false,
             clipboard_load_in_flight: false,
+            output_prepare_in_flight: HashSet::new(),
             state_save_task: None,
             state_save_generation: 0,
             last_jsonl_check: Instant::now(),
