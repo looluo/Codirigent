@@ -24,15 +24,24 @@ pub enum SettingsCategory {
 }
 
 impl SettingsCategory {
-    /// All categories in display order.
-    pub const ALL: [SettingsCategory; 6] = [
+    /// Visible categories in display order.
+    pub const ALL: [SettingsCategory; 4] = [
         SettingsCategory::General,
         SettingsCategory::Appearance,
         SettingsCategory::Terminal,
         SettingsCategory::KeyboardShortcuts,
-        SettingsCategory::Sessions,
-        SettingsCategory::Advanced,
     ];
+
+    /// Returns whether this category is currently exposed in the UI.
+    pub fn is_visible(self) -> bool {
+        matches!(
+            self,
+            SettingsCategory::General
+                | SettingsCategory::Appearance
+                | SettingsCategory::Terminal
+                | SettingsCategory::KeyboardShortcuts
+        )
+    }
 
     /// Human-readable label for the category.
     pub fn label(&self) -> &'static str {
@@ -109,7 +118,11 @@ impl SettingsPage {
 
     /// Get the active category.
     pub fn active_category(&self) -> SettingsCategory {
-        self.active_category
+        if self.active_category.is_visible() {
+            self.active_category
+        } else {
+            SettingsCategory::General
+        }
     }
 
     /// Set the active category.
@@ -185,9 +198,9 @@ mod tests {
 
     #[test]
     fn test_settings_category_all() {
-        assert_eq!(SettingsCategory::ALL.len(), 6);
+        assert_eq!(SettingsCategory::ALL.len(), 4);
         assert_eq!(SettingsCategory::ALL[0], SettingsCategory::General);
-        assert_eq!(SettingsCategory::ALL[5], SettingsCategory::Advanced);
+        assert_eq!(SettingsCategory::ALL[3], SettingsCategory::KeyboardShortcuts);
     }
 
     #[test]
@@ -229,6 +242,22 @@ mod tests {
         );
         page.set_category(SettingsCategory::Terminal);
         assert_eq!(page.active_category(), SettingsCategory::Terminal);
+    }
+
+    #[test]
+    fn test_hidden_category_falls_back_to_general() {
+        let mut page = SettingsPage::new(
+            UserSettings::default(),
+            ProjectConfig::default(),
+            vec!["code".to_string()],
+            vec!["bash".to_string(), "zsh".to_string()],
+            vec!["Menlo".to_string(), "Courier New".to_string()],
+        );
+        page.set_category(SettingsCategory::Sessions);
+        assert_eq!(page.active_category(), SettingsCategory::General);
+
+        page.set_category(SettingsCategory::Advanced);
+        assert_eq!(page.active_category(), SettingsCategory::General);
     }
 
     #[test]
