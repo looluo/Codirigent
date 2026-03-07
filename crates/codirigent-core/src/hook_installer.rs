@@ -70,7 +70,10 @@ pub fn ensure_gemini_hooks_installed(hook_binary: &Path) -> Result<bool> {
 
     if modified {
         write_settings(&settings_path, &settings)?;
-        info!("Codirigent Gemini hooks installed in {}", settings_path.display());
+        info!(
+            "Codirigent Gemini hooks installed in {}",
+            settings_path.display()
+        );
     } else {
         debug!("Codirigent Gemini hooks already present, no changes needed");
     }
@@ -355,7 +358,11 @@ fn gemini_hook_definitions() -> &'static [(&'static str, &'static str, &'static 
     &[
         ("BeforeAgent", "", "mark session as working"),
         ("AfterAgent", "", "mark session as response ready"),
-        ("Notification", "", "mark session as needs attention or idle"),
+        (
+            "Notification",
+            "",
+            "mark session as needs attention or idle",
+        ),
     ]
 }
 

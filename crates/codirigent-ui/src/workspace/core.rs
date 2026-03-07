@@ -293,6 +293,11 @@ impl Workspace {
                 dst.group = src.group.clone();
                 dst.color = src.color.clone();
                 dst.git_info = src.git_info.clone();
+                dst.claude_session_id = src.claude_session_id.clone();
+                dst.codex_session_id = src.codex_session_id.clone();
+                dst.codex_execution_mode = src.codex_execution_mode;
+                dst.codex_started_at = src.codex_started_at;
+                dst.gemini_session_id = src.gemini_session_id.clone();
                 // `status` is NOT synced — the detector is the authority.
                 // `id` and `created_at` are immutable.
             }

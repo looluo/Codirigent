@@ -11,10 +11,10 @@
 
 use super::cli_helpers::clear_command;
 use super::gpui::WorkspaceView;
-use super::types::CachedCliStatus;
+use super::types::{CachedCliStatus, CliStatusSource};
 use codirigent_core::{
-    hook_signals_dir, AssignmentAction, CliType, CodirigentEvent, EventBus, ProcessMonitor,
-    Session, SessionId, SessionManager, SessionStatus, TaskStatus,
+    hook_signals_dir, AssignmentAction, CliType, CodexExecutionMode, CodirigentEvent, EventBus,
+    ProcessMonitor, Session, SessionId, SessionManager, SessionStatus, TaskStatus,
 };
 use codirigent_detector::NotificationType;
 use codirigent_session::cli_detector::CliDetector;
@@ -24,6 +24,7 @@ use codirigent_session::CliSessionStatus;
 use gpui::Context;
 use serde::Deserialize;
 use std::collections::hash_map::DefaultHasher;
+use std::collections::HashMap;
 use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
@@ -34,6 +35,88 @@ const CLI_TYPE_CODEX: &str = "codex";
 
 /// Session status result from a background JSONL read: (status, optional detail string).
 type JsonlStatusResult = Option<(SessionStatus, Option<String>)>;
+
+#[derive(Debug, Clone)]
+struct JsonlCheckInput {
+    session_id: SessionId,
+    working_dir: std::path::PathBuf,
+    child_pid: Option<u32>,
+    cli_type: CliType,
+    codex_session_id: Option<String>,
+    codex_execution_mode: Option<CodexExecutionMode>,
+    has_explicit_codex_started_at: bool,
+    current_status: SessionStatus,
+    created_at_millis: i64,
+}
+
+#[derive(Debug)]
+struct JsonlCheckOutput {
+    session_id: SessionId,
+    status: JsonlStatusResult,
+    codex_session_id: Option<String>,
+    codex_execution_mode: Option<CodexExecutionMode>,
+}
+
+fn codex_execution_mode_from_rollout_mode(mode: &str) -> Option<CodexExecutionMode> {
+    if mode.eq_ignore_ascii_case("yolo")
+        || mode.eq_ignore_ascii_case("bypass")
+        || mode.eq_ignore_ascii_case("dangerously-bypass-approvals-and-sandbox")
+        || mode.eq_ignore_ascii_case("dangerously_bypass_approvals_and_sandbox")
+    {
+        Some(CodexExecutionMode::Bypass)
+    } else if mode.eq_ignore_ascii_case("full-auto")
+        || mode.eq_ignore_ascii_case("full_auto")
+        || mode.eq_ignore_ascii_case("fullauto")
+    {
+        Some(CodexExecutionMode::FullAuto)
+    } else {
+        None
+    }
+}
+
+fn count_codex_sessions_without_session_id_per_working_dir(
+    inputs: &[JsonlCheckInput],
+) -> HashMap<std::path::PathBuf, usize> {
+    inputs
+        .iter()
+        .filter(|input| input.cli_type == CliType::CodexCli && input.codex_session_id.is_none())
+        .fold(HashMap::new(), |mut counts, input| {
+            *counts.entry(input.working_dir.clone()).or_default() += 1;
+            counts
+        })
+}
+
+fn should_defer_ambiguous_codex_probe(
+    input: &JsonlCheckInput,
+    no_id_codex_counts: &HashMap<std::path::PathBuf, usize>,
+) -> bool {
+    input.cli_type == CliType::CodexCli
+        && input.codex_session_id.is_none()
+        && !input.has_explicit_codex_started_at
+        && no_id_codex_counts
+            .get(&input.working_dir)
+            .copied()
+            .unwrap_or_default()
+            > 1
+}
+
+fn normalize_hook_status_for_codex_mode(
+    cli_type_name: &str,
+    status: SessionStatus,
+    codex_execution_mode: Option<CodexExecutionMode>,
+) -> SessionStatus {
+    if cli_type_name == CLI_TYPE_CODEX
+        && status == SessionStatus::NeedsAttention
+        && matches!(
+            codex_execution_mode,
+            Some(CodexExecutionMode::Bypass | CodexExecutionMode::FullAuto)
+        )
+    {
+        SessionStatus::Working
+    } else {
+        status
+    }
+}
 
 #[derive(Debug)]
 struct PreparedSessionOutput {
@@ -568,38 +651,47 @@ impl WorkspaceView {
         self.polling.last_jsonl_check = Instant::now();
         self.polling.jsonl_check_in_flight = true;
 
-        // Collect inputs for background JSONL check
-        let jsonl_inputs: Vec<(
-            SessionId,
-            std::path::PathBuf,
-            Option<u32>,
-            codirigent_core::CliType,
-            Option<String>,
-            SessionStatus, // current status for transition detection
-            i64,           // session created_at in unix millis for JSONL file filtering
-        )> = self
-            .workspace
-            .sessions()
-            .iter()
-            .map(|s| {
-                let cli_type = self.clipboard.clipboard_service.get_session_cli_type(s.id);
-                let child_pid = self.with_session_manager(|manager| manager.get_child_pid(s.id));
-                let known_codex_session_id = s
+        // Collect inputs for background JSONL check from the authoritative
+        // SessionManager snapshot so hook-updated Codex ids/modes are visible
+        // immediately to the JSONL matcher.
+        let manager_sessions = self.with_session_manager(|manager| manager.list_sessions());
+        let jsonl_inputs: Vec<JsonlCheckInput> = manager_sessions
+            .into_iter()
+            .map(|session| {
+                let cli_type = self
+                    .clipboard
+                    .clipboard_service
+                    .get_session_cli_type(session.id);
+                let child_pid =
+                    self.with_session_manager(|manager| manager.get_child_pid(session.id));
+                let known_codex_session_id = session
                     .codex_session_id
                     .as_ref()
-                    .filter(|id| *id != &s.id.0.to_string())
+                    .filter(|id| *id != &session.id.0.to_string())
                     .cloned();
-                (
-                    s.id,
-                    s.working_directory.clone(),
+                JsonlCheckInput {
+                    session_id: session.id,
+                    working_dir: session.working_directory,
                     child_pid,
                     cli_type,
-                    known_codex_session_id,
-                    s.status,
-                    s.created_at.timestamp_millis(),
-                )
+                    codex_session_id: known_codex_session_id,
+                    codex_execution_mode: session.codex_execution_mode,
+                    has_explicit_codex_started_at: session.codex_started_at.is_some(),
+                    current_status: self
+                        .workspace
+                        .session(session.id)
+                        .map(|s| s.status)
+                        .unwrap_or(session.status),
+                    created_at_millis: session
+                        .codex_started_at
+                        .unwrap_or(session.created_at)
+                        .timestamp_millis(),
+                }
             })
             .collect();
+
+        let no_id_codex_counts =
+            count_codex_sessions_without_session_id_per_working_dir(&jsonl_inputs);
 
         let cli_readers = self.cli_readers.clone();
         let event_bus = self.event_bus.clone();
@@ -610,19 +702,10 @@ impl WorkspaceView {
             let results = cx
                 .background_executor()
                 .spawn(async move {
-                    let mut out: Vec<(SessionId, JsonlStatusResult)> = Vec::new();
+                    let mut out: Vec<JsonlCheckOutput> = Vec::new();
                     let mut detected_types: Vec<(SessionId, codirigent_core::CliType)> = Vec::new();
                     if let Ok(mut readers) = cli_readers.lock() {
-                        for (
-                            session_id,
-                            working_dir,
-                            child_pid,
-                            cli_type,
-                            codex_session_id,
-                            _current_status,
-                            created_at,
-                        ) in &jsonl_inputs
-                        {
+                        for input in &jsonl_inputs {
                             // For GenericShell sessions, try process-tree detection.
                             // The detector walks the PTY's child processes looking
                             // for known CLI binaries (claude, gemini, codex).
@@ -630,56 +713,102 @@ impl WorkspaceView {
                             // because detection is unreliable (returns GenericShell even when
                             // Claude is running). Banner detection handles initial detection.
                             let effective_type =
-                                if *cli_type == codirigent_core::CliType::GenericShell {
-                                    if let Some(pid) = child_pid {
-                                        let detected = readers.detector.detect_cli_type(*pid);
+                                if input.cli_type == codirigent_core::CliType::GenericShell {
+                                    if let Some(pid) = input.child_pid {
+                                        let detected = readers.detector.detect_cli_type(pid);
                                         if detected != codirigent_core::CliType::GenericShell {
                                             info!(
-                                                ?session_id,
+                                                session_id = ?input.session_id,
                                                 ?detected,
                                                 "Process-tree detected CLI type"
                                             );
-                                            detected_types.push((*session_id, detected));
+                                            detected_types.push((input.session_id, detected));
                                             detected
                                         } else {
-                                            *cli_type
+                                            input.cli_type
                                         }
                                     } else {
-                                        *cli_type
+                                        input.cli_type
                                     }
                                 } else {
-                                    *cli_type
+                                    input.cli_type
                                 };
 
-                            let cli_status: Option<CliSessionStatus> = match effective_type {
+                            let ambiguous_codex_probe = effective_type == CliType::CodexCli
+                                && should_defer_ambiguous_codex_probe(input, &no_id_codex_counts);
+
+                            let (
+                                cli_status,
+                                detected_codex_session_id,
+                                detected_codex_execution_mode,
+                            ): (
+                                Option<CliSessionStatus>,
+                                Option<String>,
+                                Option<CodexExecutionMode>,
+                            ) = match effective_type {
                                 codirigent_core::CliType::ClaudeCode => {
                                     // Claude Code status is handled by hook signal files
                                     // (check_hook_signals) — no JSONL reader needed here.
-                                    None
+                                    (None, None, None)
                                 }
                                 codirigent_core::CliType::CodexCli => {
-                                    readers.codex.as_mut().and_then(|r| {
-                                        let created_after = (*created_at >= 0).then_some(
-                                            UNIX_EPOCH + Duration::from_millis(*created_at as u64),
-                                        );
-                                        r.get_status_if_recent(
-                                            working_dir,
-                                            codex_session_id.as_deref(),
-                                            *child_pid,
-                                            max_age,
-                                            created_after,
-                                        )
-                                    })
+                                    if ambiguous_codex_probe {
+                                        (None, None, None)
+                                    } else {
+                                        readers
+                                            .codex
+                                            .as_mut()
+                                            .and_then(|r| {
+                                                let created_after = (input.created_at_millis >= 0)
+                                                    .then_some(
+                                                        UNIX_EPOCH
+                                                            + Duration::from_millis(
+                                                                input.created_at_millis as u64,
+                                                            ),
+                                                    );
+                                                r.get_status_snapshot_if_recent(
+                                                    &input.working_dir,
+                                                    input.codex_session_id.as_deref(),
+                                                    input.child_pid,
+                                                    max_age,
+                                                    created_after,
+                                                    input.codex_execution_mode,
+                                                )
+                                            })
+                                            .map(|snapshot| {
+                                                (
+                                                    Some(snapshot.status),
+                                                    snapshot.session_id,
+                                                    snapshot.approval_mode.as_deref().and_then(
+                                                        codex_execution_mode_from_rollout_mode,
+                                                    ),
+                                                )
+                                            })
+                                            .unwrap_or((None, None, None))
+                                    }
                                 }
-                                codirigent_core::CliType::GeminiCli => {
+                                codirigent_core::CliType::GeminiCli => (
                                     readers.gemini.as_mut().and_then(|r| {
-                                        r.get_status_if_recent(working_dir, *child_pid, max_age)
-                                    })
-                                }
-                                codirigent_core::CliType::GenericShell => None,
+                                        r.get_status_if_recent(
+                                            &input.working_dir,
+                                            input.child_pid,
+                                            max_age,
+                                        )
+                                    }),
+                                    None,
+                                    None,
+                                ),
+                                codirigent_core::CliType::GenericShell => (None, None, None),
                             };
                             let resolved = cli_status.and_then(|s| s.to_session_status());
-                            out.push((*session_id, resolved));
+                            out.push(JsonlCheckOutput {
+                                session_id: input.session_id,
+                                status: resolved,
+                                codex_session_id: detected_codex_session_id,
+                                codex_execution_mode: input
+                                    .codex_execution_mode
+                                    .or(detected_codex_execution_mode),
+                            });
                         }
                     }
                     (out, jsonl_inputs, detected_types)
@@ -691,41 +820,134 @@ impl WorkspaceView {
                 this.polling.jsonl_check_in_flight = false;
                 let mut changed = false;
                 let (results, inputs, detected_types) = results;
-                let input_statuses: std::collections::HashMap<SessionId, SessionStatus> = inputs
+                let input_statuses: HashMap<SessionId, SessionStatus> = inputs
                     .iter()
-                    .map(|(id, _, _, _, _, status, _)| (*id, *status))
+                    .map(|input| (input.session_id, input.current_status))
+                    .collect();
+                let input_modes: HashMap<SessionId, Option<CodexExecutionMode>> = inputs
+                    .iter()
+                    .map(|input| (input.session_id, input.codex_execution_mode))
                     .collect();
                 let cache_update_time = Instant::now();
                 let mut cached_status = this.cli_readers.lock().ok();
+                let mut should_save_state = false;
+                let mut pending_mode_updates = Vec::new();
 
                 // Apply process-tree CLI type detections on UI thread
                 for (session_id, detected_type) in &detected_types {
                     this.clipboard
                         .clipboard_service
                         .set_session_cli_type(*session_id, *detected_type);
+                    if *detected_type == CliType::CodexCli {
+                        let started_at = chrono::Utc::now();
+                        let manager_changed = this
+                            .session_manager
+                            .lock()
+                            .ok()
+                            .and_then(|mgr| {
+                                mgr.with_session_state_mut(*session_id, |state| {
+                                    if state.session.codex_started_at.is_none() {
+                                        state.session.codex_started_at = Some(started_at);
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                })
+                            })
+                            .unwrap_or(false);
+                        let workspace_changed = this
+                            .workspace
+                            .session_mut(*session_id)
+                            .map(|session| {
+                                if session.codex_started_at.is_none() {
+                                    session.codex_started_at = Some(started_at);
+                                    true
+                                } else {
+                                    false
+                                }
+                            })
+                            .unwrap_or(false);
+                        should_save_state |= manager_changed || workspace_changed;
+                    }
                     info!(
                         ?session_id,
                         ?detected_type,
                         "Applied process-tree CLI type detection"
                     );
                 }
-                for (session_id, cli_status) in &results {
-                    if let Some((new_status, tool_name)) = cli_status {
+                for result in &results {
+                    let session_id = result.session_id;
+                    if let Some(codex_session_id) = result.codex_session_id.as_deref() {
+                        let mut updated = false;
+                        if let Ok(mgr) = this.session_manager.lock() {
+                            updated |= mgr
+                                .with_session_state_mut(session_id, |state| {
+                                    if state.session.codex_session_id.as_deref()
+                                        != Some(codex_session_id)
+                                    {
+                                        state.session.codex_session_id =
+                                            Some(codex_session_id.to_owned());
+                                        true
+                                    } else {
+                                        false
+                                    }
+                                })
+                                .unwrap_or(false);
+                        }
+                        if let Some(session) = this.workspace.session_mut(session_id) {
+                            if session.codex_session_id.as_deref() != Some(codex_session_id) {
+                                session.codex_session_id = Some(codex_session_id.to_owned());
+                                updated = true;
+                            }
+                        }
+                        should_save_state |= updated;
+                    }
+
+                    if let Some(mode) = result.codex_execution_mode {
+                        let current_mode = input_modes
+                            .get(&result.session_id)
+                            .copied()
+                            .flatten()
+                            .or_else(|| {
+                                this.workspace
+                                    .session(result.session_id)
+                                    .and_then(|session| session.codex_execution_mode)
+                            });
+                        if current_mode != Some(mode) {
+                            pending_mode_updates.push((result.session_id, mode));
+                        }
+                    }
+
+                    if let Some((new_status, tool_name)) = &result.status {
+                        let suppress_needs_attention = *new_status == SessionStatus::NeedsAttention
+                            && cached_status
+                                .as_ref()
+                                .and_then(|readers| readers.cached_status.get(&result.session_id))
+                                .is_some_and(|cached| {
+                                    cached.source == CliStatusSource::Hook
+                                        && cached.status == SessionStatus::Working
+                                        && cached.seen_at.elapsed() <= Duration::from_secs(5)
+                                });
+                        if suppress_needs_attention {
+                            continue;
+                        }
+
                         // Cache the JSONL result
                         if let Some(readers) = cached_status.as_mut() {
                             // Preserve status_since if status hasn't changed
                             let status_since = readers
                                 .cached_status
-                                .get(session_id)
+                                .get(&result.session_id)
                                 .filter(|c| c.status == *new_status)
                                 .map(|c| c.status_since)
                                 .unwrap_or(cache_update_time);
                             readers.cached_status.insert(
-                                *session_id,
+                                result.session_id,
                                 CachedCliStatus {
                                     status: *new_status,
                                     tool_name: tool_name.clone(),
                                     seen_at: cache_update_time,
+                                    source: CliStatusSource::Jsonl,
                                     status_since,
                                     ttl: Self::GENERIC_SHELL_JSONL_CACHE_TTL,
                                 },
@@ -733,17 +955,17 @@ impl WorkspaceView {
                         }
                         // Fire AttentionRequired on transition
                         if *new_status == SessionStatus::NeedsAttention {
-                            let current_status = input_statuses.get(session_id).copied();
+                            let current_status = input_statuses.get(&result.session_id).copied();
                             if current_status != Some(SessionStatus::NeedsAttention) {
                                 event_bus.publish(CodirigentEvent::AttentionRequired {
-                                    session_id: *session_id,
+                                    session_id: result.session_id,
                                     detail: tool_name.clone(),
                                 });
                                 let session_name = this
                                     .workspace
-                                    .session(*session_id)
+                                    .session(result.session_id)
                                     .map(|s| s.name.clone())
-                                    .unwrap_or_else(|| format!("Session {}", session_id.0));
+                                    .unwrap_or_else(|| format!("Session {}", result.session_id.0));
                                 let (notif_type, detail) = match tool_name.as_deref() {
                                     Some("question") | None => {
                                         (NotificationType::InputRequired, None)
@@ -752,7 +974,7 @@ impl WorkspaceView {
                                 };
                                 this.notification_manager.notify(
                                     notif_type,
-                                    *session_id,
+                                    result.session_id,
                                     &session_name,
                                     detail,
                                 );
@@ -763,7 +985,7 @@ impl WorkspaceView {
                         // No JSONL result — check if detector says idle and clear stale cache
                         let detector_idle = this.with_detector(|detector| {
                             matches!(
-                                detector.get_status(*session_id),
+                                detector.get_status(result.session_id),
                                 Some(SessionStatus::Idle) | None
                             )
                         });
@@ -771,16 +993,26 @@ impl WorkspaceView {
                             if let Some(readers) = cached_status.as_mut() {
                                 let is_stale = readers
                                     .cached_status
-                                    .get(session_id)
-                                    .map(|c| c.seen_at.elapsed() > c.ttl)
+                                    .get(&result.session_id)
+                                    .map(|c| {
+                                        c.source == CliStatusSource::Jsonl
+                                            && c.seen_at.elapsed() > c.ttl
+                                    })
                                     .unwrap_or(false);
                                 if is_stale {
-                                    readers.cached_status.remove(session_id);
+                                    readers.cached_status.remove(&result.session_id);
                                     changed = true;
                                 }
                             }
                         }
                     }
+                }
+                drop(cached_status);
+                for (session_id, mode) in pending_mode_updates {
+                    this.set_session_codex_execution_mode(session_id, Some(mode), cx);
+                }
+                if should_save_state {
+                    this.save_state_to_disk(cx);
                 }
                 if changed {
                     cx.notify();
@@ -1230,9 +1462,51 @@ impl WorkspaceView {
                             })
                         })
                         .unwrap_or(false);
+                    if let Some(session) = self.workspace.session_mut(session_id) {
+                        if session.codex_session_id.as_deref() != Some(cli_session_id) {
+                            session.codex_session_id = Some(cli_session_id.to_owned());
+                            id_changed = true;
+                        }
+                        if session.codex_started_at.is_none() {
+                            session.codex_started_at = Some(chrono::Utc::now());
+                            id_changed = true;
+                        }
+                    }
                 }
                 _ => {}
             }
+        }
+
+        if cli_type_name == CLI_TYPE_CODEX {
+            let started_at = chrono::Utc::now();
+            let manager_changed = self
+                .session_manager
+                .lock()
+                .ok()
+                .and_then(|mgr| {
+                    mgr.with_session_state_mut(session_id, |state| {
+                        if state.session.codex_started_at.is_none() {
+                            state.session.codex_started_at = Some(started_at);
+                            true
+                        } else {
+                            false
+                        }
+                    })
+                })
+                .unwrap_or(false);
+            let workspace_changed = self
+                .workspace
+                .session_mut(session_id)
+                .map(|session| {
+                    if session.codex_started_at.is_none() {
+                        session.codex_started_at = Some(started_at);
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .unwrap_or(false);
+            id_changed |= manager_changed || workspace_changed;
         }
 
         if id_changed {
@@ -1240,7 +1514,7 @@ impl WorkspaceView {
         }
 
         let focused_id = self.workspace.focused_session_id();
-        let new_status = match status.as_str() {
+        let raw_status = match status.as_str() {
             "working" => SessionStatus::Working,
             "needs_attention" => SessionStatus::NeedsAttention,
             "response_ready" => {
@@ -1252,6 +1526,19 @@ impl WorkspaceView {
             }
             _ => SessionStatus::Idle,
         };
+        let codex_execution_mode = self
+            .workspace
+            .session(session_id)
+            .and_then(|session| session.codex_execution_mode)
+            .or_else(|| {
+                self.session_manager
+                    .lock()
+                    .ok()
+                    .and_then(|mgr| mgr.get_session(session_id))
+                    .and_then(|session| session.codex_execution_mode)
+            });
+        let new_status =
+            normalize_hook_status_for_codex_mode(cli_type_name, raw_status, codex_execution_mode);
 
         if let Ok(mut readers) = self.cli_readers.lock() {
             let status_since = readers
@@ -1266,6 +1553,7 @@ impl WorkspaceView {
                     status: new_status,
                     tool_name: cli_type.clone(),
                     seen_at: Instant::now(),
+                    source: CliStatusSource::Hook,
                     status_since,
                     ttl: Self::HOOK_SIGNAL_CACHE_TTL,
                 },
@@ -1460,6 +1748,7 @@ impl WorkspaceView {
                         status: new_status,
                         tool_name: signal.cli_type.clone(),
                         seen_at: Instant::now(),
+                        source: CliStatusSource::Hook,
                         status_since,
                         ttl: Self::HOOK_SIGNAL_CACHE_TTL,
                     },
@@ -1645,6 +1934,24 @@ mod tests {
     use super::*;
     use codirigent_core::{ImageData, ImageFormat};
 
+    fn codex_input(
+        session_id: u64,
+        working_dir: &str,
+        has_explicit_codex_started_at: bool,
+    ) -> JsonlCheckInput {
+        JsonlCheckInput {
+            session_id: SessionId(session_id),
+            working_dir: std::path::PathBuf::from(working_dir),
+            child_pid: None,
+            cli_type: CliType::CodexCli,
+            codex_session_id: None,
+            codex_execution_mode: None,
+            has_explicit_codex_started_at,
+            current_status: SessionStatus::Idle,
+            created_at_millis: 0,
+        }
+    }
+
     fn sig(status: &str, codirigent_session_id: Option<&str>, ts: u64) -> HookSignal {
         HookSignal {
             status: status.to_owned(),
@@ -1733,6 +2040,66 @@ mod tests {
         assert_eq!(
             resolve_hook_cli_session_id("3", Some("real-codex-id"), SessionId(3)),
             Some("real-codex-id".to_string())
+        );
+    }
+
+    #[test]
+    fn ambiguous_codex_probe_is_deferred_without_explicit_start_time() {
+        let inputs = vec![
+            codex_input(1, "C:/repo", false),
+            codex_input(2, "C:/repo", false),
+        ];
+        let counts = count_codex_sessions_without_session_id_per_working_dir(&inputs);
+
+        assert!(should_defer_ambiguous_codex_probe(&inputs[0], &counts));
+        assert!(should_defer_ambiguous_codex_probe(&inputs[1], &counts));
+    }
+
+    #[test]
+    fn ambiguous_codex_probe_uses_timestamp_when_start_time_is_known() {
+        let inputs = vec![
+            codex_input(1, "C:/repo", true),
+            codex_input(2, "C:/repo", true),
+        ];
+        let counts = count_codex_sessions_without_session_id_per_working_dir(&inputs);
+
+        assert!(!should_defer_ambiguous_codex_probe(&inputs[0], &counts));
+        assert!(!should_defer_ambiguous_codex_probe(&inputs[1], &counts));
+    }
+
+    #[test]
+    fn ambiguous_codex_probe_only_defers_session_missing_start_time() {
+        let inputs = vec![
+            codex_input(1, "C:/repo", true),
+            codex_input(2, "C:/repo", false),
+        ];
+        let counts = count_codex_sessions_without_session_id_per_working_dir(&inputs);
+
+        assert!(!should_defer_ambiguous_codex_probe(&inputs[0], &counts));
+        assert!(should_defer_ambiguous_codex_probe(&inputs[1], &counts));
+    }
+
+    #[test]
+    fn codex_hook_attention_is_treated_as_working_in_bypass_mode() {
+        assert_eq!(
+            normalize_hook_status_for_codex_mode(
+                CLI_TYPE_CODEX,
+                SessionStatus::NeedsAttention,
+                Some(codirigent_core::CodexExecutionMode::Bypass),
+            ),
+            SessionStatus::Working,
+        );
+    }
+
+    #[test]
+    fn codex_hook_attention_remains_attention_without_bypass_mode() {
+        assert_eq!(
+            normalize_hook_status_for_codex_mode(
+                CLI_TYPE_CODEX,
+                SessionStatus::NeedsAttention,
+                None,
+            ),
+            SessionStatus::NeedsAttention,
         );
     }
 

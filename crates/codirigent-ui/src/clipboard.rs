@@ -15,19 +15,13 @@ use alacritty_terminal::term::Term;
 /// # Arguments
 ///
 /// * `term` - The terminal instance to copy from
-/// * `start` - Start position as (viewport_row, col)
-/// * `end` - End position as (viewport_row, col)
-/// * `display_offset` - Current scroll offset (lines scrolled back from bottom)
+/// * `start` - Start position as (grid_line, col)
+/// * `end` - End position as (grid_line, col)
 ///
 /// # Returns
 ///
 /// The selected text as a string, with trailing whitespace trimmed from lines.
-pub fn copy_selection<T>(
-    term: &Term<T>,
-    start: (usize, usize),
-    end: (usize, usize),
-    display_offset: usize,
-) -> String {
+pub fn copy_selection<T>(term: &Term<T>, start: (i32, usize), end: (i32, usize)) -> String {
     let mut text = String::new();
 
     // Normalize selection (ensure start <= end)
@@ -36,21 +30,22 @@ pub fn copy_selection<T>(
     } else {
         (end, start)
     };
-    let (start_row, start_col) = start;
-    let (end_row, end_col) = end;
+    let (start_line, start_col) = start;
+    let (end_line, end_col) = end;
 
     let grid = term.grid();
-    let total_lines = grid.screen_lines();
     let total_cols = grid.columns();
+    let start_line = start_line.max(term.topmost_line().0);
+    let end_line = end_line.min(term.bottommost_line().0);
 
-    for row in start_row..=end_row {
-        if row >= total_lines {
-            break;
-        }
+    if start_line > end_line {
+        return String::new();
+    }
 
-        let line = &grid[Line(row as i32 - display_offset as i32)];
-        let col_start = if row == start_row { start_col } else { 0 };
-        let col_end = if row == end_row {
+    for line_idx in start_line..=end_line {
+        let line = &grid[Line(line_idx)];
+        let col_start = if line_idx == start_line { start_col } else { 0 };
+        let col_end = if line_idx == end_line {
             end_col.min(total_cols.saturating_sub(1))
         } else {
             total_cols.saturating_sub(1)
@@ -71,9 +66,9 @@ pub fn copy_selection<T>(
         text.push_str(trimmed);
 
         // Add newline between lines (but not after the last line)
-        if row < end_row && !trimmed.is_empty() {
+        if line_idx < end_line && !trimmed.is_empty() {
             text.push('\n');
-        } else if row < end_row && trimmed.is_empty() {
+        } else if line_idx < end_line && trimmed.is_empty() {
             // Preserve empty lines in multi-line selections
             text.push('\n');
         }

@@ -393,6 +393,8 @@ pub(super) struct PollingState {
     pub project_refresh_generation: u64,
     /// Whether session restoration from disk is currently in-flight.
     pub restore_in_flight: bool,
+    /// Best-effort shell command line capture per session while the shell is idle.
+    pub shell_input_buffers: HashMap<SessionId, String>,
 }
 
 impl PollingState {
@@ -419,8 +421,15 @@ impl PollingState {
             last_hook_signal_check: Instant::now() - std::time::Duration::from_secs(1),
             project_refresh_generation: 0,
             restore_in_flight: false,
+            shell_input_buffers: HashMap::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CliStatusSource {
+    Hook,
+    Jsonl,
 }
 
 #[derive(Debug, Clone)]
@@ -428,6 +437,7 @@ pub(super) struct CachedCliStatus {
     pub(super) status: SessionStatus,
     pub(super) tool_name: Option<String>,
     pub(super) seen_at: Instant,
+    pub(super) source: CliStatusSource,
     /// When the status last changed (for stale NeedsAttention detection).
     pub(super) status_since: Instant,
     /// How long this entry is valid after `seen_at`.
@@ -497,6 +507,8 @@ pub(super) struct CacheState {
     pub last_resize_signature: Option<TerminalResizeSignature>,
     /// Latest pending resize signature queued for the deferred resize path.
     pub pending_resize_signature: Option<TerminalResizeSignature>,
+    /// Last captured window bounds for persistence and change detection.
+    pub last_window_state: Option<codirigent_core::WindowState>,
 }
 
 impl CacheState {
@@ -516,6 +528,7 @@ impl CacheState {
             layout_generation: 0,
             last_resize_signature: None,
             pending_resize_signature: None,
+            last_window_state: None,
         }
     }
 }

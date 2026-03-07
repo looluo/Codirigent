@@ -33,12 +33,16 @@ impl WorkspaceView {
 
         let mut did_change_viewport = false;
         let mut hide_preview = false;
+        let mut captured_text: Option<String> = None;
         let bytes = match prepared {
             PreparedClipboardPaste::Text(text) => {
                 if text.is_empty() {
                     return;
                 }
                 let sanitized = crate::clipboard::sanitize_paste(&text);
+                if !sanitized.contains(['\r', '\n']) {
+                    captured_text = Some(sanitized.clone());
+                }
                 crate::clipboard::prepare_paste(&sanitized, bracketed)
             }
             PreparedClipboardPaste::Files(paths) => {
@@ -50,6 +54,9 @@ impl WorkspaceView {
                     .map(|p| self.project.format_path_for_terminal(p))
                     .collect::<Vec<_>>()
                     .join(" ");
+                if !text.contains(['\r', '\n']) {
+                    captured_text = Some(text.clone());
+                }
                 crate::clipboard::prepare_paste(&text, bracketed)
             }
             PreparedClipboardPaste::ImagePath(formatted_path) => {
@@ -64,6 +71,10 @@ impl WorkspaceView {
 
         if let Some(tv) = self.terminals.get_mut(&session_id) {
             did_change_viewport = tv.scroll_to_bottom_if_needed();
+        }
+
+        if let Some(text) = captured_text.as_deref() {
+            self.capture_shell_text_input(session_id, text);
         }
 
         self.with_session_manager(|manager| {

@@ -124,10 +124,10 @@ pub enum CursorShape {
 /// if any.
 #[derive(Debug, Clone, Default)]
 pub struct Selection {
-    /// Start position (row, column), if selection is active.
-    pub start: Option<(usize, usize)>,
-    /// End position (row, column), if selection is active.
-    pub end: Option<(usize, usize)>,
+    /// Start position (grid line, column), if selection is active.
+    pub start: Option<(i32, usize)>,
+    /// End position (grid line, column), if selection is active.
+    pub end: Option<(i32, usize)>,
 }
 
 impl Selection {
@@ -143,24 +143,24 @@ impl Selection {
     }
 
     /// Set the selection start position.
-    pub fn set_start(&mut self, row: usize, col: usize) {
-        self.start = Some((row, col));
+    pub fn set_start(&mut self, line: i32, col: usize) {
+        self.start = Some((line, col));
     }
 
     /// Set the selection end position.
-    pub fn set_end(&mut self, row: usize, col: usize) {
-        self.end = Some((row, col));
+    pub fn set_end(&mut self, line: i32, col: usize) {
+        self.end = Some((line, col));
     }
 
     /// Check if a cell position is within the selection.
     ///
-    /// Returns `true` if the given (row, column) is selected.
+    /// Returns `true` if the given (grid line, column) is selected.
     ///
     /// Comparison uses **lexicographic (row-major) order**: `(row, col)` tuples
     /// compare by row first, then column. This means the selection spans full
     /// rows between `start.row` and `end.row`, and only partial rows at the
     /// endpoints — which is standard terminal selection behaviour.
-    pub fn contains(&self, row: usize, col: usize) -> bool {
+    pub fn contains(&self, line: i32, col: usize) -> bool {
         match (self.start, self.end) {
             (Some(start), Some(end)) => {
                 // Normalize so start <= end
@@ -170,7 +170,7 @@ impl Selection {
                     (end, start)
                 };
 
-                let pos = (row, col);
+                let pos = (line, col);
                 pos >= start && pos <= end
             }
             _ => false,
@@ -180,7 +180,7 @@ impl Selection {
     /// Get the normalized selection range (start <= end).
     ///
     /// Returns `None` if selection is not active.
-    pub fn normalized(&self) -> Option<((usize, usize), (usize, usize))> {
+    pub fn normalized(&self) -> Option<((i32, usize), (i32, usize))> {
         match (self.start, self.end) {
             (Some(start), Some(end)) => {
                 if start <= end {
@@ -456,6 +456,10 @@ impl TerminalView {
         self.terminal.term().renderable_content().display_offset != 0
     }
 
+    fn viewport_row_to_grid_line(&self, row: usize) -> i32 {
+        row as i32 - self.terminal.term().grid().display_offset() as i32
+    }
+
     /// Clear the terminal screen while preserving the current line (prompt).
     ///
     /// This clears the scrollback and visible content while keeping
@@ -538,18 +542,22 @@ impl TerminalView {
 
     /// Start a new text selection at the given cell position.
     ///
-    /// Sets the selection start, clears any previous end, and marks dirty.
+    /// Converts the viewport row into a stable grid line, clears any previous
+    /// end, and marks dirty.
     pub fn start_selection(&mut self, row: usize, col: usize) {
-        self.selection.set_start(row, col);
+        self.selection
+            .set_start(self.viewport_row_to_grid_line(row), col);
         self.selection.end = None;
         self.invalidate_content_cache();
     }
 
     /// Update the selection end position during a drag.
     ///
-    /// Sets the selection end and marks dirty for re-rendering.
+    /// Converts the viewport row into a stable grid line and marks dirty for
+    /// re-rendering.
     pub fn update_selection(&mut self, row: usize, col: usize) {
-        self.selection.set_end(row, col);
+        self.selection
+            .set_end(self.viewport_row_to_grid_line(row), col);
         self.invalidate_content_cache();
     }
 
@@ -565,9 +573,7 @@ impl TerminalView {
     /// terminal grid between the normalized selection start and end.
     pub fn get_selected_text(&self) -> Option<String> {
         let (start, end) = self.selection.normalized()?;
-        let display_offset = self.terminal.term().renderable_content().display_offset;
-        let text =
-            crate::clipboard::copy_selection(self.terminal.term(), start, end, display_offset);
+        let text = crate::clipboard::copy_selection(self.terminal.term(), start, end);
         if text.is_empty() {
             None
         } else {
@@ -781,7 +787,7 @@ impl TerminalView {
             if cell.flags.contains(CellFlags::INVERSE) {
                 std::mem::swap(&mut foreground, &mut background);
             }
-            if self.selection.contains(row, col) {
+            if self.selection.contains(grid_line.0, col) {
                 foreground = self.theme.terminal_selection_fg;
                 background = self.theme.terminal_selection_bg;
             }
@@ -902,6 +908,45 @@ impl TerminalView {
         } else {
             None
         }
+    }
+
+    /// Convert pixel coordinates to a clamped terminal cell position.
+    ///
+    /// Unlike `pixel_to_cell`, this never returns `None` — coordinates are
+    /// clamped to the viewport bounds. The returned `scroll_dir` indicates
+    /// whether the position was above (`-1`), within (`0`), or below (`1`)
+    /// the viewport, allowing callers to trigger auto-scroll during selection.
+    pub fn pixel_to_cell_clamped(&self, x: f32, y: f32) -> (usize, usize, i32) {
+        let max_row = self.terminal.rows() as usize;
+        let max_col = self.terminal.cols() as usize;
+
+        if max_row == 0 || max_col == 0 {
+            return (0, 0, 0);
+        }
+
+        let scroll_dir = if y < 0.0 {
+            -1
+        } else if y >= (max_row as f32) * self.cell_height {
+            1
+        } else {
+            0
+        };
+
+        let row = if y < 0.0 {
+            0
+        } else {
+            let r = (y / self.cell_height).floor() as usize;
+            r.min(max_row - 1)
+        };
+
+        let col = if x < 0.0 {
+            0
+        } else {
+            let c = (x / self.cell_width).floor() as usize;
+            c.min(max_col - 1)
+        };
+
+        (row, col, scroll_dir)
     }
 
     fn mark_output_dirty(&mut self) {
@@ -1213,6 +1258,21 @@ mod tests {
     }
 
     #[test]
+    fn test_pixel_to_cell_clamped() {
+        let view = create_test_view();
+        assert_eq!(view.pixel_to_cell_clamped(-1.0, -1.0), (0, 0, -1));
+        assert_eq!(view.pixel_to_cell_clamped(40.0, 32.0), (2, 5, 0));
+        assert_eq!(
+            view.pixel_to_cell_clamped(10_000.0, 10_000.0),
+            (
+                view.terminal().rows() as usize - 1,
+                view.terminal().cols() as usize - 1,
+                1,
+            )
+        );
+    }
+
+    #[test]
     fn test_cursor_rect_unfocused() {
         let mut view = create_test_view();
         view.set_focused(false);
@@ -1324,6 +1384,21 @@ mod tests {
     }
 
     #[test]
+    fn test_start_selection_uses_grid_line_when_scrolled_back() {
+        let mut view = create_test_view();
+
+        let mut output = String::new();
+        for i in 0..40 {
+            output.push_str(&format!("row{i:02}\r\n"));
+        }
+        view.terminal_mut().process_output(output.as_bytes());
+        view.scroll_up(3);
+
+        view.start_selection(0, 1);
+        assert_eq!(view.selection().start.unwrap(), (-3, 1));
+    }
+
+    #[test]
     fn test_update_selection() {
         let mut view = create_test_view();
         view.start_selection(5, 10);
@@ -1378,6 +1453,31 @@ mod tests {
         // Single cell with no content = None (empty string filtered)
         let text = view.get_selected_text();
         assert!(text.is_none());
+    }
+
+    #[test]
+    fn test_get_selected_text_remains_bound_to_buffer_while_scrolling() {
+        let mut view = create_test_view();
+
+        let mut output = String::new();
+        for i in 0..40 {
+            output.push_str(&format!("row{i:02}\r\n"));
+        }
+        view.terminal_mut().process_output(output.as_bytes());
+        view.scroll_up(5);
+
+        view.start_selection(0, 0);
+        view.update_selection(0, 4);
+        let before = view.get_selected_text();
+        assert_eq!(before.as_deref(), Some("row12"));
+
+        view.scroll_up(2);
+        let after_scroll_up = view.get_selected_text();
+        assert_eq!(after_scroll_up, before);
+
+        view.scroll_down(1);
+        let after_scroll_down = view.get_selected_text();
+        assert_eq!(after_scroll_down, before);
     }
 
     #[test]

@@ -38,8 +38,9 @@ use crate::theme::CodirigentTheme;
 use crate::toolbar::CustomLayoutPicker;
 use codirigent_core::compaction::{CompactionConfig, CompactionService};
 use codirigent_core::{
-    CodirigentEvent, DefaultEventBus, EventBus, FileStorageService, GridPosition, SessionId,
-    SessionManager, TaskManager, TaskManagerConfig,
+    CodexExecutionMode, CodirigentEvent, DefaultEventBus, EventBus, FileStorageService,
+    GridPosition, ProcessMonitor, SessionId, SessionManager, SessionStatus, TaskManager,
+    TaskManagerConfig,
 };
 use codirigent_detector::{InputDetector, NotificationManager};
 use codirigent_filetree::FileTree;
@@ -157,6 +158,192 @@ impl WorkspaceView {
         let target_collapsed = target_rows <= 1 || target_cols <= 1;
         let current_usable = current_rows > 1 && current_cols > 1;
         target_collapsed && current_usable
+    }
+
+    fn session_is_shell_idle(&self, session_id: SessionId) -> bool {
+        self.with_detector(|detector| {
+            matches!(
+                detector.get_status(session_id),
+                Some(SessionStatus::Idle) | None
+            )
+        })
+    }
+
+    fn normalize_codex_execution_mode(command: &str) -> Option<CodexExecutionMode> {
+        let tokens: Vec<&str> = command.split_whitespace().collect();
+        let codex_index = tokens.iter().position(|token| *token == "codex")?;
+        let args = &tokens[codex_index + 1..];
+
+        let has_flag = |flag: &str| args.iter().any(|token| token.eq_ignore_ascii_case(flag));
+        let option_value = |short: &str, long: &str| {
+            args.windows(2).find_map(|window| {
+                let [flag, value] = window else {
+                    return None;
+                };
+                if flag.eq_ignore_ascii_case(short) || flag.eq_ignore_ascii_case(long) {
+                    Some(*value)
+                } else {
+                    None
+                }
+            })
+        };
+
+        if has_flag("--dangerously-bypass-approvals-and-sandbox") || has_flag("--yolo") {
+            return Some(CodexExecutionMode::Bypass);
+        }
+
+        if has_flag("--full-auto") {
+            return Some(CodexExecutionMode::FullAuto);
+        }
+
+        let ask_policy = option_value("-a", "--ask-for-approval");
+        let sandbox_mode = option_value("-s", "--sandbox");
+        if ask_policy.is_some_and(|value| value.eq_ignore_ascii_case("never"))
+            && sandbox_mode.is_some_and(|value| value.eq_ignore_ascii_case("danger-full-access"))
+        {
+            return Some(CodexExecutionMode::Bypass);
+        }
+
+        None
+    }
+
+    pub(super) fn set_session_codex_execution_mode(
+        &mut self,
+        session_id: SessionId,
+        mode: Option<CodexExecutionMode>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut changed = false;
+
+        if let Ok(mgr) = self.session_manager.lock() {
+            changed |= mgr
+                .with_session_state_mut(session_id, |state| {
+                    if state.session.codex_execution_mode != mode {
+                        state.session.codex_execution_mode = mode;
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .unwrap_or(false);
+        }
+
+        if let Some(session) = self.workspace.session_mut(session_id) {
+            if session.codex_execution_mode != mode {
+                session.codex_execution_mode = mode;
+                changed = true;
+            }
+        }
+
+        if changed {
+            self.save_state_to_disk(cx);
+        }
+    }
+
+    fn note_codex_command_submission(
+        &mut self,
+        session_id: SessionId,
+        mode: Option<CodexExecutionMode>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut changed = false;
+        let started_at = chrono::Utc::now();
+
+        if let Ok(mgr) = self.session_manager.lock() {
+            changed |= mgr
+                .with_session_state_mut(session_id, |state| {
+                    let mut session_changed = false;
+                    if state.session.codex_execution_mode != mode {
+                        state.session.codex_execution_mode = mode;
+                        session_changed = true;
+                    }
+                    if state.session.codex_started_at != Some(started_at) {
+                        state.session.codex_started_at = Some(started_at);
+                        session_changed = true;
+                    }
+                    if state.session.codex_session_id.take().is_some() {
+                        session_changed = true;
+                    }
+                    session_changed
+                })
+                .unwrap_or(false);
+        }
+
+        if let Some(session) = self.workspace.session_mut(session_id) {
+            if session.codex_execution_mode != mode {
+                session.codex_execution_mode = mode;
+                changed = true;
+            }
+            if session.codex_started_at != Some(started_at) {
+                session.codex_started_at = Some(started_at);
+                changed = true;
+            }
+            if session.codex_session_id.take().is_some() {
+                changed = true;
+            }
+        }
+
+        if changed {
+            self.save_state_to_disk(cx);
+        }
+    }
+
+    pub(super) fn capture_shell_text_input(&mut self, session_id: SessionId, text: &str) {
+        if !self.session_is_shell_idle(session_id) {
+            self.polling.shell_input_buffers.remove(&session_id);
+            return;
+        }
+
+        if text.is_empty() {
+            return;
+        }
+
+        let buffer = self
+            .polling
+            .shell_input_buffers
+            .entry(session_id)
+            .or_default();
+        if buffer.len() >= 1024 {
+            self.polling.shell_input_buffers.remove(&session_id);
+            return;
+        }
+        buffer.push_str(text);
+    }
+
+    fn capture_shell_key_input(
+        &mut self,
+        session_id: SessionId,
+        key: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.session_is_shell_idle(session_id) {
+            self.polling.shell_input_buffers.remove(&session_id);
+            return;
+        }
+
+        match key {
+            "backspace" => {
+                if let Some(buffer) = self.polling.shell_input_buffers.get_mut(&session_id) {
+                    buffer.pop();
+                    if buffer.is_empty() {
+                        self.polling.shell_input_buffers.remove(&session_id);
+                    }
+                }
+            }
+            "enter" => {
+                let command = self.polling.shell_input_buffers.remove(&session_id);
+                if let Some(command) = command {
+                    let mode = Self::normalize_codex_execution_mode(command.trim());
+                    if command.split_whitespace().any(|token| token == "codex") {
+                        self.note_codex_command_submission(session_id, mode, cx);
+                    }
+                }
+            }
+            "escape" => {
+                self.polling.shell_input_buffers.remove(&session_id);
+            }
+            _ => {}
+        }
     }
 
     /// Create a new workspace view.
@@ -464,13 +651,14 @@ impl WorkspaceView {
                         this.persistence.storage.clone(),
                         this.session_manager.clone(),
                         this.persisted_layout_mode(),
+                        this.cache.last_window_state.clone(),
                     ))
                 }) {
                     Ok(Some(inputs)) => inputs,
                     Ok(None) | Err(_) => return,
                 };
 
-                let (storage, session_manager, layout) = save_inputs;
+                let (storage, session_manager, layout, window_state) = save_inputs;
                 let result = cx
                     .background_executor()
                     .spawn(async move {
@@ -482,6 +670,7 @@ impl WorkspaceView {
                             sessions,
                             layout,
                             updated_at: Some(chrono::Utc::now()),
+                            window_bounds: window_state,
                         };
                         storage.save_state(&state)
                     })
@@ -1153,6 +1342,8 @@ impl WorkspaceView {
             return;
         };
 
+        self.capture_shell_key_input(session_id, key, cx);
+
         // Get terminal mode for proper escape sequence generation (immutable borrow)
         let term_mode = {
             let Some(terminal_view) = self.terminals.get(&session_id) else {
@@ -1552,6 +1743,7 @@ impl EntityInputHandler for WorkspaceView {
                 scrolled_to_bottom = terminal_view.scroll_to_bottom_if_needed();
             }
 
+            self.capture_shell_text_input(session_id, text);
             let text_bytes = text.as_bytes().to_vec();
 
             self.with_session_manager(move |sm| {
@@ -1654,6 +1846,39 @@ impl Render for WorkspaceView {
         let window_bounds =
             crate::layout::Bounds::from_size(window_size.width.into(), window_size.height.into());
         self.workspace.set_bounds(window_bounds);
+
+        // Detect window move/resize and persist bounds (debounced)
+        {
+            let wb = window.bounds();
+            let x = f32::from(wb.origin.x);
+            let y = f32::from(wb.origin.y);
+            let w = f32::from(wb.size.width);
+            let h = f32::from(wb.size.height);
+            let maximized = window.is_maximized();
+
+            if w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 {
+                let current = (x, y, w, h, maximized);
+                let prev = self
+                    .cache
+                    .last_window_state
+                    .as_ref()
+                    .map(|s| (s.x, s.y, s.width, s.height, s.is_maximized));
+                let is_initial = prev.is_none();
+
+                if prev != Some(current) {
+                    self.cache.last_window_state = Some(codirigent_core::WindowState {
+                        x,
+                        y,
+                        width: w,
+                        height: h,
+                        is_maximized: maximized,
+                    });
+                    if !is_initial {
+                        self.save_state_to_disk(cx);
+                    }
+                }
+            }
+        }
 
         // Update sidebar width to match actual icon rail + drawer state
         // so grid_bounds() calculates correct cell dimensions
@@ -1942,5 +2167,31 @@ mod tests {
         assert!(!super::WorkspaceView::should_skip_collapsed_resize(
             40, 120, 30, 100
         ));
+    }
+
+    #[test]
+    fn test_normalize_codex_execution_mode_detects_bypass_alias() {
+        assert_eq!(
+            super::WorkspaceView::normalize_codex_execution_mode("codex --yolo"),
+            Some(codirigent_core::CodexExecutionMode::Bypass)
+        );
+    }
+
+    #[test]
+    fn test_normalize_codex_execution_mode_detects_full_auto() {
+        assert_eq!(
+            super::WorkspaceView::normalize_codex_execution_mode("codex resume abc --full-auto"),
+            Some(codirigent_core::CodexExecutionMode::FullAuto)
+        );
+    }
+
+    #[test]
+    fn test_normalize_codex_execution_mode_detects_explicit_never_and_danger() {
+        assert_eq!(
+            super::WorkspaceView::normalize_codex_execution_mode(
+                "codex -a never -s danger-full-access"
+            ),
+            Some(codirigent_core::CodexExecutionMode::Bypass)
+        );
     }
 }

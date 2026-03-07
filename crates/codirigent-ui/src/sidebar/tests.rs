@@ -17,6 +17,8 @@ fn create_test_session(id: u64, name: &str, status: SessionStatus) -> Session {
         git_info: None,
         claude_session_id: None,
         codex_session_id: None,
+        codex_execution_mode: None,
+        codex_started_at: None,
         gemini_session_id: None,
     }
 }
@@ -41,6 +43,8 @@ fn create_grouped_session(
         git_info: None,
         claude_session_id: None,
         codex_session_id: None,
+        codex_execution_mode: None,
+        codex_started_at: None,
         gemini_session_id: None,
     }
 }
@@ -462,6 +466,8 @@ fn create_session_with_context(
         git_info: None,
         claude_session_id: None,
         codex_session_id: None,
+        codex_execution_mode: None,
+        codex_started_at: None,
         gemini_session_id: None,
     }
 }
@@ -481,6 +487,8 @@ fn create_session_with_task(id: u64, name: &str, status: SessionStatus, task: &s
         git_info: None,
         claude_session_id: None,
         codex_session_id: None,
+        codex_execution_mode: None,
+        codex_started_at: None,
         gemini_session_id: None,
     }
 }

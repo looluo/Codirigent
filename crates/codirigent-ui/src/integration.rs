@@ -356,6 +356,7 @@ impl CodirigentIntegration {
                 sessions,
                 layout: codirigent_core::LayoutMode::default(),
                 updated_at: Some(chrono::Utc::now()),
+                window_bounds: None,
             };
 
             if let Err(e) = storage.save_state(&state) {
@@ -562,6 +563,7 @@ impl CodirigentIntegration {
             sessions,
             layout: codirigent_core::LayoutMode::default(),
             updated_at: Some(chrono::Utc::now()),
+            window_bounds: None,
         };
         self.storage.save_state(&state)?;
         Ok(())

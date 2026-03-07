@@ -676,7 +676,7 @@ impl WorkspaceView {
                         }
                     }),
                 )
-                // Mouse move: update selection during drag
+                // Mouse move: update selection during drag (with auto-scroll)
                 .on_mouse_move(
                     cx.listener(move |this, event: &MouseMoveEvent, _window, cx| {
                         // Don't update text selection during drag
@@ -697,11 +697,17 @@ impl WorkspaceView {
                         let rel_y = mouse_y - oy;
 
                         if let Some(tv) = this.terminals_mut().get_mut(&session_id) {
-                            let cell_pos: Option<(usize, usize)> = tv.pixel_to_cell(rel_x, rel_y);
-                            if let Some((row, col)) = cell_pos {
-                                tv.update_selection(row, col);
-                                cx.notify();
+                            let (row, col, scroll_dir) = tv.pixel_to_cell_clamped(rel_x, rel_y);
+
+                            // Auto-scroll when dragging above or below the viewport
+                            if scroll_dir < 0 {
+                                tv.scroll_up(1);
+                            } else if scroll_dir > 0 {
+                                tv.scroll_down(1);
                             }
+
+                            tv.update_selection(row, col);
+                            cx.notify();
                         }
                     }),
                 )

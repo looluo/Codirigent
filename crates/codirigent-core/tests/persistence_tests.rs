@@ -28,6 +28,8 @@ fn test_save_and_load_state() {
         git_info: None,
         claude_session_id: None,
         codex_session_id: None,
+        codex_execution_mode: None,
+        codex_started_at: None,
         gemini_session_id: None,
     };
 
@@ -96,6 +98,8 @@ fn test_overwrite_state() {
         git_info: None,
         claude_session_id: None,
         codex_session_id: None,
+        codex_execution_mode: None,
+        codex_started_at: None,
         gemini_session_id: None,
     };
 
@@ -119,6 +123,8 @@ fn test_overwrite_state() {
         git_info: None,
         claude_session_id: None,
         codex_session_id: None,
+        codex_execution_mode: None,
+        codex_started_at: None,
         gemini_session_id: None,
     };
 
@@ -258,6 +264,8 @@ fn test_multiple_checkpoints_independent() {
         git_info: None,
         claude_session_id: None,
         codex_session_id: None,
+        codex_execution_mode: None,
+        codex_started_at: None,
         gemini_session_id: None,
     };
     state1
@@ -278,6 +286,8 @@ fn test_multiple_checkpoints_independent() {
         git_info: None,
         claude_session_id: None,
         codex_session_id: None,
+        codex_execution_mode: None,
+        codex_started_at: None,
         gemini_session_id: None,
     };
     state2
@@ -368,6 +378,8 @@ fn test_session_to_persistent_conversion() {
         git_info: None,
         claude_session_id: None,
         codex_session_id: None,
+        codex_execution_mode: None,
+        codex_started_at: None,
         gemini_session_id: None,
     };
 

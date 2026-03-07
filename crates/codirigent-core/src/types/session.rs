@@ -7,6 +7,19 @@ use super::git::GitRepoInfo;
 use super::ids::{SessionId, TaskId};
 use super::status::SessionStatus;
 
+/// Effective Codex execution mode for a session.
+///
+/// This is persisted so restored sessions can reuse the same launch flags and
+/// Codex status inference can avoid false approval prompts for bypassed runs.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum CodexExecutionMode {
+    /// Equivalent to `codex --full-auto`.
+    FullAuto,
+    /// Equivalent to `codex --dangerously-bypass-approvals-and-sandbox`.
+    Bypass,
+}
+
 /// Session metadata and state.
 ///
 /// This is the persistent representation of a session,
@@ -37,8 +50,17 @@ pub struct Session {
     /// Used to resume with `claude --resume <id>` on next app startup.
     pub claude_session_id: Option<String>,
     /// Codex session ID for this session, if Codex CLI is running.
-    /// Used to resume with `codex --session <id>` on next app startup.
+    /// Used to resume with `codex resume <id>` on next app startup.
     pub codex_session_id: Option<String>,
+    /// Effective Codex execution mode, if known.
+    #[serde(default)]
+    pub codex_execution_mode: Option<CodexExecutionMode>,
+    /// When the current Codex CLI run was started in this session, if known.
+    ///
+    /// This is separate from `created_at` because a shell pane can live much
+    /// longer than the Codex process it is currently hosting.
+    #[serde(default)]
+    pub codex_started_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Gemini CLI session ID (UUID) for this session, if Gemini CLI is running.
     pub gemini_session_id: Option<String>,
 }
@@ -59,6 +81,8 @@ impl Session {
             git_info: None,
             claude_session_id: None,
             codex_session_id: None,
+            codex_execution_mode: None,
+            codex_started_at: None,
             gemini_session_id: None,
         }
     }

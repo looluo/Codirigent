@@ -7,6 +7,21 @@ use super::ids::TaskId;
 use super::layout::LayoutMode;
 use super::session::Session;
 
+/// Persisted window position and size.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct WindowState {
+    /// Window X position in pixels.
+    pub x: f32,
+    /// Window Y position in pixels.
+    pub y: f32,
+    /// Window width in pixels.
+    pub width: f32,
+    /// Window height in pixels.
+    pub height: f32,
+    /// Whether the window was maximized.
+    pub is_maximized: bool,
+}
+
 /// Application state persisted to disk.
 #[derive(Debug, Clone, Serialize, Deserialize, Default)]
 pub struct AppState {
@@ -16,6 +31,9 @@ pub struct AppState {
     pub layout: LayoutMode,
     /// Last updated timestamp.
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Saved window position and size.
+    #[serde(default)]
+    pub window_bounds: Option<WindowState>,
 }
 
 /// Queue state persisted to queue.json.

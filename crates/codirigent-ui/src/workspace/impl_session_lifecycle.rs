@@ -12,8 +12,8 @@ use crate::terminal::Terminal;
 use crate::terminal_header::TerminalHeader;
 use crate::terminal_view::TerminalView;
 use codirigent_core::{
-    CodirigentEvent, EventBus, ProcessMonitor, Session, SessionId, SessionManager, SessionStatus,
-    SlotId,
+    CodexExecutionMode, CodirigentEvent, EventBus, ProcessMonitor, Session, SessionId,
+    SessionManager, SessionStatus, SlotId,
 };
 use gpui::Context;
 use serde::Deserialize;
@@ -31,6 +31,8 @@ struct RestoreSessionPlan {
     color: Option<String>,
     claude_resume: Option<String>,
     codex_resume: Option<String>,
+    codex_execution_mode: Option<CodexExecutionMode>,
+    codex_started_at: Option<chrono::DateTime<chrono::Utc>>,
     gemini_resume: Option<String>,
 }
 
@@ -203,7 +205,81 @@ fn is_codex_full_auto_mode(mode: &str) -> bool {
     mode.eq_ignore_ascii_case("full-auto")
         || mode.eq_ignore_ascii_case("full_auto")
         || mode.eq_ignore_ascii_case("fullauto")
-        || mode.eq_ignore_ascii_case("yolo")
+}
+
+fn is_codex_bypass_mode(mode: &str) -> bool {
+    mode.eq_ignore_ascii_case("yolo")
+        || mode.eq_ignore_ascii_case("bypass")
+        || mode.eq_ignore_ascii_case("dangerously-bypass-approvals-and-sandbox")
+        || mode.eq_ignore_ascii_case("dangerously_bypass_approvals_and_sandbox")
+}
+
+fn codex_execution_mode_from_str(mode: &str) -> Option<CodexExecutionMode> {
+    if is_codex_bypass_mode(mode) {
+        Some(CodexExecutionMode::Bypass)
+    } else if is_codex_full_auto_mode(mode) {
+        Some(CodexExecutionMode::FullAuto)
+    } else {
+        None
+    }
+}
+
+fn codex_resume_flag(mode: CodexExecutionMode) -> &'static str {
+    match mode {
+        CodexExecutionMode::FullAuto => "--full-auto",
+        CodexExecutionMode::Bypass => "--dangerously-bypass-approvals-and-sandbox",
+    }
+}
+
+fn resolve_saved_codex_execution_mode(
+    saved_mode: Option<CodexExecutionMode>,
+    working_dir: &Path,
+    codex_session_id: &str,
+) -> Option<CodexExecutionMode> {
+    saved_mode.or_else(|| {
+        read_codex_permission_mode(working_dir, codex_session_id)
+            .as_deref()
+            .and_then(codex_execution_mode_from_str)
+    })
+}
+
+fn build_codex_resume_command(codex_session_id: &str, mode: Option<CodexExecutionMode>) -> String {
+    let mut cmd = format!("codex resume {}", codex_session_id);
+    if let Some(mode) = mode {
+        cmd.push(' ');
+        cmd.push_str(codex_resume_flag(mode));
+    }
+    cmd.push('\r');
+    cmd
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn codex_resume_command_uses_resume_subcommand() {
+        assert_eq!(
+            build_codex_resume_command("session-123", None),
+            "codex resume session-123\r"
+        );
+    }
+
+    #[test]
+    fn codex_resume_command_preserves_bypass_mode() {
+        assert_eq!(
+            build_codex_resume_command("session-123", Some(CodexExecutionMode::Bypass)),
+            "codex resume session-123 --dangerously-bypass-approvals-and-sandbox\r"
+        );
+    }
+
+    #[test]
+    fn codex_resume_command_preserves_full_auto_mode() {
+        assert_eq!(
+            build_codex_resume_command("session-123", Some(CodexExecutionMode::FullAuto)),
+            "codex resume session-123 --full-auto\r"
+        );
+    }
 }
 
 impl WorkspaceView {
@@ -255,16 +331,12 @@ impl WorkspaceView {
             });
 
             let codex_resume = saved.codex_session_id.as_ref().map(|codex_id| {
-                let permission_mode = read_codex_permission_mode(&working_dir, codex_id);
-                let mut cmd = format!("codex --session {}", codex_id);
-                if permission_mode
-                    .as_deref()
-                    .is_some_and(is_codex_full_auto_mode)
-                {
-                    cmd.push_str(" --full-auto");
-                }
-                cmd.push('\r');
-                cmd
+                let mode = resolve_saved_codex_execution_mode(
+                    saved.codex_execution_mode,
+                    &working_dir,
+                    codex_id,
+                );
+                build_codex_resume_command(codex_id, mode)
             });
 
             let gemini_resume = saved
@@ -279,6 +351,8 @@ impl WorkspaceView {
                 color: saved.color,
                 claude_resume,
                 codex_resume,
+                codex_execution_mode: saved.codex_execution_mode,
+                codex_started_at: saved.codex_started_at,
                 gemini_resume,
             });
         }
@@ -378,6 +452,17 @@ impl WorkspaceView {
             None => return,
         };
 
+        if plan.codex_execution_mode.is_some() || plan.codex_started_at.is_some() {
+            let codex_execution_mode = plan.codex_execution_mode;
+            let codex_started_at = plan.codex_started_at;
+            if let Ok(mgr) = self.session_manager.lock() {
+                mgr.with_session_state_mut(session_id, |state| {
+                    state.session.codex_execution_mode = codex_execution_mode;
+                    state.session.codex_started_at = codex_started_at;
+                });
+            }
+        }
+
         for cmd in [
             plan.claude_resume.as_deref(),
             plan.codex_resume.as_deref(),
@@ -437,6 +522,11 @@ impl WorkspaceView {
                 header.session_color = crate::sidebar::Color::from_hex(color);
             }
             self.terminal_headers.insert(session_id, header);
+        }
+
+        if let Some(ws_session) = self.workspace.session_mut(session_id) {
+            ws_session.codex_execution_mode = plan.codex_execution_mode;
+            ws_session.codex_started_at = plan.codex_started_at;
         }
     }
 
@@ -652,6 +742,7 @@ impl WorkspaceView {
         if let Ok(mut readers) = self.cli_readers.lock() {
             readers.cached_status.remove(&id);
         }
+        self.polling.shell_input_buffers.remove(&id);
 
         // Remove the terminal header for this session
         self.terminal_headers.remove(&id);
