@@ -389,6 +389,8 @@ pub(super) struct PollingState {
     pub last_jsonl_check: Instant,
     /// Last time hook signal files were scanned (~1/second throttle).
     pub last_hook_signal_check: Instant,
+    /// Latest hook payload timestamp processed per signal file stem.
+    pub last_processed_hook_signal_ts: HashMap<String, u64>,
     /// Generation counter for async project-root refreshes (file tree/worktree).
     pub project_refresh_generation: u64,
     /// Whether session restoration from disk is currently in-flight.
@@ -419,6 +421,7 @@ impl PollingState {
             state_save_generation: 0,
             last_jsonl_check: Instant::now(),
             last_hook_signal_check: Instant::now() - std::time::Duration::from_secs(1),
+            last_processed_hook_signal_ts: HashMap::new(),
             project_refresh_generation: 0,
             restore_in_flight: false,
             shell_input_buffers: HashMap::new(),

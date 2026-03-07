@@ -181,6 +181,7 @@ struct HookSignalUpdate {
     cli_session_id: Option<String>,
     status: String,
     cli_type: Option<String>,
+    ts: u64,
 }
 
 fn prefer_live_working_status(
@@ -189,6 +190,13 @@ fn prefer_live_working_status(
 ) -> bool {
     matches!(detector_status, Some(SessionStatus::Working))
         && cached_status != SessionStatus::Working
+}
+
+fn should_apply_hook_signal(last_seen_ts: Option<u64>, signal_ts: u64) -> bool {
+    match last_seen_ts {
+        Some(last_seen_ts) => signal_ts > last_seen_ts,
+        None => true,
+    }
 }
 
 fn resolve_hook_cli_session_id(
@@ -266,6 +274,7 @@ fn read_recent_hook_signal_updates() -> Vec<HookSignalUpdate> {
             cli_session_id: signal.cli_session_id,
             status: signal.status,
             cli_type: signal.cli_type,
+            ts: signal.ts,
         });
     }
 
@@ -1410,7 +1419,20 @@ impl WorkspaceView {
             cli_session_id,
             status,
             cli_type,
+            ts,
         } = update;
+
+        let last_seen_ts = self
+            .polling
+            .last_processed_hook_signal_ts
+            .get(&signal_file_id)
+            .copied();
+        if !should_apply_hook_signal(last_seen_ts, ts) {
+            return;
+        }
+        self.polling
+            .last_processed_hook_signal_ts
+            .insert(signal_file_id.clone(), ts);
 
         let mut id_changed = false;
         let cli_type_name = cli_type.as_deref().unwrap_or(CLI_TYPE_CLAUDE);
@@ -1660,6 +1682,18 @@ impl WorkspaceView {
                 Ok(n) => SessionId(n),
                 Err(_) => continue,
             };
+
+            let last_seen_ts = self
+                .polling
+                .last_processed_hook_signal_ts
+                .get(&claude_session_id)
+                .copied();
+            if !should_apply_hook_signal(last_seen_ts, signal.ts) {
+                continue;
+            }
+            self.polling
+                .last_processed_hook_signal_ts
+                .insert(claude_session_id.clone(), signal.ts);
 
             // Store the Claude/Gemini/Codex session_id on the Session for resume on next startup.
             // Persist to disk whenever it changes (first assignment or new session
@@ -2020,6 +2054,18 @@ mod tests {
             Some(SessionStatus::Working),
             SessionStatus::ResponseReady,
         ));
+    }
+
+    #[test]
+    fn hook_signal_is_applied_when_timestamp_advances() {
+        assert!(should_apply_hook_signal(None, 100));
+        assert!(should_apply_hook_signal(Some(99), 100));
+    }
+
+    #[test]
+    fn hook_signal_is_ignored_when_timestamp_does_not_advance() {
+        assert!(!should_apply_hook_signal(Some(100), 100));
+        assert!(!should_apply_hook_signal(Some(101), 100));
     }
 
     #[test]
