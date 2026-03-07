@@ -292,6 +292,23 @@ pub struct SplitLayoutState {
 }
 
 impl SplitLayoutState {
+    fn sync_assignment_order(&mut self) {
+        let slot_order = self.tree.slots_in_order();
+        let mut ordered = Vec::with_capacity(slot_order.len());
+
+        for slot in slot_order {
+            if let Some((_, session)) = self
+                .assignments
+                .iter()
+                .find(|(current, _)| *current == slot)
+            {
+                ordered.push((slot, *session));
+            }
+        }
+
+        self.assignments = ordered;
+    }
+
     /// Create from a layout node tree.
     pub fn new(tree: LayoutNode) -> Self {
         let slots = tree.slots_in_order();
@@ -538,6 +555,7 @@ impl SplitLayoutState {
             self.next_slot_id += 1;
             // Add the new slot to assignments (empty)
             self.assignments.push((new_slot, None));
+            self.sync_assignment_order();
             Some(new_slot)
         } else {
             None
@@ -550,6 +568,7 @@ impl SplitLayoutState {
             self.tree = new_tree;
             // Remove the closed slot from assignments
             self.assignments.retain(|(s, _)| *s != target);
+            self.sync_assignment_order();
             // Fix focus if needed
             if self.focused_slot == Some(target) {
                 self.focused_slot = self

@@ -554,33 +554,7 @@ impl WorkspaceView {
                                 event.position.x.into(),
                                 event.position.y.into(),
                             );
-                            drag.current_position = pos;
-
-                            // Activate drag after 5px movement threshold
-                            if !drag.active {
-                                let dx = pos.x - drag.start_position.x;
-                                let dy = pos.y - drag.start_position.y;
-                                if (dx * dx + dy * dy) > 25.0 {
-                                    drag.active = true;
-                                } else {
-                                    return;
-                                }
-                            }
-
-                            // Hit-test: find which cell the cursor is over,
-                            // then map Vec position to CellInfo.index for swap.
-                            let target = this
-                                .cache
-                                .render_cell_info
-                                .iter()
-                                .find(|cell| cell.bounds.contains(pos))
-                                .map(|cell| cell.index);
-
-                            // Update target (exclude source)
-                            if let Some(drag) = &mut this.selection.drag {
-                                drag.target_index = target.filter(|&t| t != logical_index);
-                            }
-
+                            drag.update_pointer(pos, &this.cache.render_cell_info);
                             cx.notify();
                         },
                     ));

@@ -47,8 +47,9 @@ use codirigent_session::clipboard_service::DefaultClipboardService;
 use codirigent_session::DefaultSessionManager;
 use gpui::{
     div, px, App, AppContext, Bounds, ClickEvent, Context, Entity, EntityInputHandler, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseUpEvent,
-    ParentElement, Pixels, Render, StatefulInteractiveElement, Styled, UTF16Selection, Window,
+    Focusable, InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseMoveEvent,
+    MouseUpEvent, ParentElement, Pixels, Render, StatefulInteractiveElement, Styled,
+    UTF16Selection, Window,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -1722,6 +1723,16 @@ impl Render for WorkspaceView {
             // Handle keyboard input for PTY
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.handle_key_down(event, window, cx);
+            }))
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                let Some(drag) = &mut this.selection.drag else {
+                    return;
+                };
+
+                let pos =
+                    crate::layout::Point::new(event.position.x.into(), event.position.y.into());
+                drag.update_pointer(pos, &this.cache.render_cell_info);
+                cx.notify();
             }))
             // Global mouse-up: catch drag releases anywhere in workspace
             .on_mouse_up(

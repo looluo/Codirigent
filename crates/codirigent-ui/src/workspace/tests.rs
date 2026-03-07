@@ -727,3 +727,90 @@ fn test_workspace_swap_sessions_focus_follows_session() {
     // Focus should follow S1 to its new position
     assert_eq!(ws.focused_session_id(), Some(SessionId(1)));
 }
+
+#[test]
+fn test_workspace_swap_sessions_split_tree_after_split_respects_visual_order() {
+    let mut ws = Workspace::new();
+    ws.set_split_tree(LayoutNode::from_grid(1, 2));
+    ws.add_session(make_session(1, "S1"));
+    ws.add_session(make_session(2, "S2"));
+    ws.focus_session(SessionId(1));
+
+    assert!(ws.split_pane(SplitDirection::Horizontal, 0.5).is_some());
+    assert!(ws.add_session(make_session(3, "S3")));
+
+    let before = ws.cell_info();
+    assert_eq!(
+        before
+            .iter()
+            .map(|cell| cell.session_id)
+            .collect::<Vec<_>>(),
+        vec![SessionId(1), SessionId(3), SessionId(2)]
+    );
+
+    assert!(ws.swap_sessions(0, 1));
+
+    let after = ws.cell_info();
+    assert_eq!(
+        after.iter().map(|cell| cell.session_id).collect::<Vec<_>>(),
+        vec![SessionId(3), SessionId(1), SessionId(2)]
+    );
+}
+
+#[cfg(feature = "gpui-full")]
+#[test]
+fn test_drag_state_updates_target_after_leaving_source_header() {
+    let cells = vec![
+        CellInfo {
+            session_id: SessionId(1),
+            index: 0,
+            bounds: Bounds::new(0.0, 0.0, 100.0, 100.0),
+        },
+        CellInfo {
+            session_id: SessionId(2),
+            index: 1,
+            bounds: Bounds::new(120.0, 0.0, 100.0, 100.0),
+        },
+    ];
+    let mut drag = super::types::DragState {
+        source_session_id: SessionId(1),
+        source_index: 0,
+        start_position: Point::new(10.0, 10.0),
+        current_position: Point::new(10.0, 10.0),
+        active: false,
+        target_index: None,
+    };
+
+    drag.update_pointer(Point::new(20.0, 20.0), &cells);
+    assert!(drag.active);
+    assert_eq!(drag.target_index, None);
+
+    drag.update_pointer(Point::new(140.0, 20.0), &cells);
+    assert_eq!(drag.target_index, Some(1));
+}
+
+#[cfg(feature = "gpui-full")]
+#[test]
+fn test_drag_state_does_not_target_source_or_activate_too_early() {
+    let cells = vec![CellInfo {
+        session_id: SessionId(1),
+        index: 0,
+        bounds: Bounds::new(0.0, 0.0, 100.0, 100.0),
+    }];
+    let mut drag = super::types::DragState {
+        source_session_id: SessionId(1),
+        source_index: 0,
+        start_position: Point::new(10.0, 10.0),
+        current_position: Point::new(10.0, 10.0),
+        active: false,
+        target_index: Some(0),
+    };
+
+    drag.update_pointer(Point::new(12.0, 12.0), &cells);
+    assert!(!drag.active);
+    assert_eq!(drag.target_index, None);
+
+    drag.update_pointer(Point::new(20.0, 20.0), &cells);
+    assert!(drag.active);
+    assert_eq!(drag.target_index, None);
+}

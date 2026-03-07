@@ -3,6 +3,7 @@
 //! This module contains struct and enum definitions used throughout the workspace
 //! implementation, including modal states and UI component data.
 
+use super::CellInfo;
 use codirigent_core::{SessionId, SessionStatus, TaskId};
 use codirigent_session::codex_session_reader::CodexSessionReader;
 use codirigent_session::gemini_session_reader::GeminiSessionReader;
@@ -300,6 +301,35 @@ pub(super) struct DragState {
     pub active: bool,
     /// Index of the cell currently under the cursor (drop target), if any.
     pub target_index: Option<usize>,
+}
+
+const DRAG_ACTIVATION_DISTANCE_SQUARED: f32 = 25.0;
+
+impl DragState {
+    /// Update drag activation and drop target from a pointer position.
+    ///
+    /// This is shared between header-local and workspace-global mouse move
+    /// handlers so reordering keeps working after the cursor leaves the
+    /// source header.
+    pub(super) fn update_pointer(&mut self, position: crate::layout::Point, cells: &[CellInfo]) {
+        self.current_position = position;
+
+        if !self.active {
+            let dx = position.x - self.start_position.x;
+            let dy = position.y - self.start_position.y;
+            if (dx * dx + dy * dy) <= DRAG_ACTIVATION_DISTANCE_SQUARED {
+                self.target_index = None;
+                return;
+            }
+            self.active = true;
+        }
+
+        self.target_index = cells
+            .iter()
+            .find(|cell| cell.bounds.contains(position))
+            .map(|cell| cell.index)
+            .filter(|&target| target != self.source_index);
+    }
 }
 
 impl SelectionState {
