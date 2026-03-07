@@ -502,7 +502,11 @@ impl KeybindingManager {
     /// use codirigent_ui::keybindings::{KeybindingManager, KeyBinding, Modifiers};
     ///
     /// let binding = KeyBinding::new("N", Modifiers { cmd: true, shift: true, ..Default::default() });
-    /// assert_eq!(KeybindingManager::format_binding(&binding), "Cmd+Shift+N");
+    /// let result = KeybindingManager::format_binding(&binding);
+    /// #[cfg(target_os = "macos")]
+    /// assert_eq!(result, "Cmd+Shift+N");
+    /// #[cfg(not(target_os = "macos"))]
+    /// assert_eq!(result, "Ctrl+Shift+N");
     /// ```
     pub fn format_binding(binding: &KeyBinding) -> String {
         let mut parts = Vec::new();
