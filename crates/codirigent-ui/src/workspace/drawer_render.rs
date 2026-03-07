@@ -15,8 +15,8 @@ use crate::icons;
 use crate::theme::CodirigentTheme;
 use codirigent_core::{Session, SessionId};
 use gpui::{
-    div, prelude::FluentBuilder, px, ClickEvent, Context, FontWeight, InteractiveElement,
-    IntoElement, MouseButton, MouseDownEvent, ParentElement, SharedString,
+    div, prelude::FluentBuilder, px, ClickEvent, Context, Focusable, FontWeight,
+    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, SharedString,
     StatefulInteractiveElement, Styled,
 };
 
@@ -1064,8 +1064,9 @@ impl WorkspaceView {
             .hover(move |style| style.bg(hover_bg))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
+                cx.listener(move |this, _, window, cx| {
                     this.select_session_with_cx(session_id, cx);
+                    window.focus(&this.focus_handle(cx));
                     cx.notify();
                 }),
             )

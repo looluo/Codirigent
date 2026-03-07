@@ -592,8 +592,9 @@ impl WorkspaceView {
             .cursor_pointer()
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
+                cx.listener(move |this, _, window, cx| {
                     this.select_session_with_cx(session_id, cx);
+                    window.focus(&this.focus_handle(cx));
                     cx.notify();
                 }),
             );
