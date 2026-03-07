@@ -41,7 +41,7 @@ Codirigent is a Tmux-style workspace built for this workflow. Open it once, and 
 
 <video src="website/video/customLayout.mp4" autoplay loop muted playsinline width="100%"></video>
 
-**Custom layouts** — arrange sessions in any grid configuration and save them. Restore your exact setup instantly.
+**Custom layouts** — arrange sessions in any grid configuration and save them. Drag and drop session headers to rearrange positions on the fly.
 
 ---
 
@@ -54,6 +54,14 @@ Codirigent is a Tmux-style workspace built for this workflow. Open it once, and 
 <img src="website/images/gitWorktree.png" alt="Git worktree" width="100%" />
 
 **Git worktree support** — run agents on isolated branches simultaneously without conflicts.
+
+---
+
+**Session resume** — Codirigent detects and resumes previous Claude Code and Codex sessions automatically, so you pick up right where you left off.
+
+---
+
+**Smart clipboard** — paste text, files, or images into any session. File paths are automatically converted to shell-friendly formats for the target CLI.
 
 ## Download
 
@@ -71,6 +79,20 @@ Download the `.dmg` from the [latest release](https://github.com/oso95/Codirigen
 
 > **Gatekeeper warning:** macOS code signing is pending Apple Developer approval. To open: right-click the app → **Open** → **Open** again.
 
+## Hook Setup (Recommended)
+
+Codirigent uses lightweight hooks to track agent status in real time — showing whether each session is Working, Needs Attention, or has a Response Ready. If hooks are unavailable, Codirigent falls back to its reader/detector path, which is less precise.
+
+**Hooks are installed automatically** on first launch for supported CLIs. Codirigent registers its `codirigent-hook` binary into each CLI's configuration:
+
+| CLI | Config file | Auto-installed |
+|-----|-------------|----------------|
+| Claude Code | `~/.claude/settings.json` | Yes |
+| Codex CLI | `~/.codex/config.toml` | Yes |
+| Gemini CLI | `~/.gemini/settings.json` | Yes |
+
+To verify hooks are installed, check that `codirigent-hook` appears in your CLI's config file. If you move or reinstall Codirigent, relaunch it once to re-register the hooks with the updated binary path.
+
 ## Build from Source
 
 **Prerequisites:** Rust 1.75+, Windows or macOS
@@ -78,6 +100,15 @@ Download the `.dmg` from the [latest release](https://github.com/oso95/Codirigen
 ```bash
 git clone https://github.com/oso95/Codirigent.git
 cd Codirigent
+cargo install --path . --all-features
+cargo install --path crates/codirigent-hook
+```
+
+This installs both `codirigent` and `codirigent-hook` to `~/.cargo/bin/`. The hook binary is required for real-time agent status tracking (see [Hook Setup](#hook-setup-recommended)).
+
+To run without installing:
+
+```bash
 cargo run --all-features
 ```
 

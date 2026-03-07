@@ -298,12 +298,11 @@ each of these fields.
 
 ---
 
-## 8. Replicating for Codex CLI / Gemini CLI
+## 8. Replicating for Codex CLI / other CLIs
 
-The hook approach above is Claude Code-specific (it has a native hooks system).
-Codex and Gemini CLI do not have an equivalent hook mechanism today, so status
-detection for them uses a different path: **JSONL log polling** in a background
-thread (`impl_output_polling.rs`, `GENERIC_SHELL_JSONL_CACHE_TTL = 120s`).
+Codirigent now installs native hooks for both Claude Code and Gemini CLI.
+Codex still relies on its notify hook plus JSONL log polling, and Gemini keeps
+its session reader as a higher-fidelity fallback.
 
 To replicate hook-level status precision for another CLI, you need three
 things:
@@ -361,9 +360,9 @@ Decide how each CLI lifecycle event maps to a status string:
 
 ### What to build per CLI
 
-| Component | Claude Code | Codex / Gemini |
+| Component | Claude Code / Gemini CLI | Codex CLI |
 |-----------|-------------|----------------|
-| Hook binary | `codirigent-hook` (registered in `~/.claude/settings.json`) | New binary registered in the CLI's equivalent config |
+| Hook binary | `codirigent-hook` (registered in the CLI config file) | Notify/log bridge registered in the CLI's equivalent config |
 | Session env var | `CODIRIGENT_SESSION_ID` set by Codirigent on PTY spawn | Same env var — no change needed |
 | Signal file location | `%APPDATA%\codirigent\signals\` | Same directory — shared |
 | Consumer (`check_hook_signals`) | Reads all `.json` files | No change needed |
@@ -371,5 +370,5 @@ Decide how each CLI lifecycle event maps to a status string:
 | UI display | Existing header/sidebar/theme | No change needed |
 | Notifications | Existing `NotificationManager` | No change needed |
 
-The only new code required is the CLI-specific hook binary (or log-parsing
-bridge) that writes the signal file.
+The only new code required is the CLI-specific hook or log bridge that writes
+the signal file.

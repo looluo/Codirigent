@@ -408,9 +408,9 @@ pub(super) struct CachedCliStatus {
 
 /// Grouped CLI session reader state for WorkspaceView.
 ///
-/// Contains JSONL session readers for Codex and Gemini (neither has a hooks
-/// API) and the process-tree CLI detector. Claude Code status is handled by
-/// hook signal files via `check_hook_signals` and does not need a reader here.
+/// Contains JSONL/session readers for Codex and Gemini plus the process-tree
+/// CLI detector. Claude Code and Gemini can receive hook-based status updates
+/// via `check_hook_signals`; the readers remain as a higher-fidelity fallback.
 pub(super) struct CliReaders {
     /// Codex CLI JSONL session reader for high-fidelity status detection.
     pub codex: Option<CodexSessionReader>,

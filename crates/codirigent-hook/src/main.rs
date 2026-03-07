@@ -1,6 +1,7 @@
-//! Codirigent hook handler for Claude and Codex CLI.
+//! Codirigent hook handler for Claude, Gemini, and Codex CLI.
 //!
 //! Claude Code passes hook JSON on stdin via `~/.claude/settings.json`.
+//! Gemini CLI passes hook JSON on stdin via `~/.gemini/settings.json`.
 //! Codex executes the command from `~/.codex/config.toml` with JSON as the first
 //! CLI argument.
 //!
@@ -73,28 +74,13 @@ fn handle_payload(payload: HookPayload) {
         return;
     }
 
+    let cli_type = infer_cli_type(&payload);
     let status = map_status(
         payload.hook_event_name.as_deref(),
         payload.notification_type.as_deref(),
         payload.event_type.as_deref(),
-        payload.cli_type.as_deref(),
+        cli_type,
     );
-    // Map the raw cli_type string to a known &'static str so it can be stored
-    // in SignalFile. Unknown values fall through to heuristic detection below.
-    let cli_type: &'static str = match payload.cli_type.as_deref() {
-        Some(CLI_TYPE_CLAUDE) => CLI_TYPE_CLAUDE,
-        Some(CLI_TYPE_CODEX) => CLI_TYPE_CODEX,
-        Some(CLI_TYPE_GEMINI) => CLI_TYPE_GEMINI,
-        _ => {
-            if payload.hook_event_name.is_some() {
-                CLI_TYPE_CLAUDE
-            } else if payload.event_type.is_some() {
-                CLI_TYPE_CODEX
-            } else {
-                CLI_TYPE_GEMINI
-            }
-        }
-    };
 
     let signal = SignalFile {
         status,
@@ -136,30 +122,97 @@ fn map_status(
     hook_event: Option<&str>,
     notification_type: Option<&str>,
     event_type: Option<&str>,
-    cli_type: Option<&str>,
+    cli_type: &'static str,
 ) -> &'static str {
-    if let Some(event) = hook_event {
-        return match event {
-            "UserPromptSubmit" => "working",
-            "Stop" => "response_ready",
-            "Notification" => match notification_type {
-                Some("permission_prompt") => "needs_attention",
-                _ => "idle",
-            },
-            _ => "idle",
-        };
+    match cli_type {
+        CLI_TYPE_CLAUDE => map_claude_status(hook_event, notification_type),
+        CLI_TYPE_GEMINI => map_gemini_status(hook_event, notification_type, event_type),
+        _ => map_codex_status(event_type),
     }
-
-    if let Some(cli) = cli_type {
-        if cli == CLI_TYPE_GEMINI {
-            return map_gemini_status(event_type);
-        }
-    }
-
-    map_codex_status(event_type)
 }
 
-fn map_gemini_status(event_type: Option<&str>) -> &'static str {
+fn infer_cli_type(payload: &HookPayload) -> &'static str {
+    infer_cli_type_with_gemini_env(payload, env::var_os("GEMINI_SESSION_ID").is_some())
+}
+
+fn infer_cli_type_with_gemini_env(
+    payload: &HookPayload,
+    gemini_env_present: bool,
+) -> &'static str {
+    match payload.cli_type.as_deref() {
+        Some(CLI_TYPE_CLAUDE) => return CLI_TYPE_CLAUDE,
+        Some(CLI_TYPE_CODEX) => return CLI_TYPE_CODEX,
+        Some(CLI_TYPE_GEMINI) => return CLI_TYPE_GEMINI,
+        _ => {}
+    }
+
+    if is_gemini_hook_event(payload.hook_event_name.as_deref()) || gemini_env_present {
+        return CLI_TYPE_GEMINI;
+    }
+
+    if payload.hook_event_name.is_some() {
+        return CLI_TYPE_CLAUDE;
+    }
+
+    if payload.event_type.is_some() {
+        return CLI_TYPE_CODEX;
+    }
+
+    CLI_TYPE_GEMINI
+}
+
+fn is_gemini_hook_event(hook_event: Option<&str>) -> bool {
+    matches!(
+        hook_event,
+        Some(
+            "BeforeAgent"
+                | "AfterAgent"
+                | "BeforeTool"
+                | "AfterTool"
+                | "BeforeModel"
+                | "AfterModel"
+                | "SessionStart"
+                | "SessionEnd"
+        )
+    )
+}
+
+fn map_claude_status(hook_event: Option<&str>, notification_type: Option<&str>) -> &'static str {
+    match hook_event {
+        Some("UserPromptSubmit") => "working",
+        Some("Stop") => "response_ready",
+        Some("Notification") => match notification_type {
+            Some("permission_prompt") => "needs_attention",
+            _ => "idle",
+        },
+        _ => "idle",
+    }
+}
+
+fn map_gemini_status(
+    hook_event: Option<&str>,
+    notification_type: Option<&str>,
+    event_type: Option<&str>,
+) -> &'static str {
+    match hook_event {
+        Some("BeforeAgent" | "BeforeTool" | "BeforeModel") => return "working",
+        Some("AfterAgent") => return "response_ready",
+        Some("AfterTool" | "AfterModel") => return "working",
+        Some("SessionEnd") => return "idle",
+        Some("Notification") => {
+            let notification_type = notification_type.unwrap_or("").to_ascii_lowercase();
+            if notification_type.contains("permission")
+                || notification_type.contains("approval")
+                || notification_type.contains("prompt")
+                || notification_type.contains("input")
+            {
+                return "needs_attention";
+            }
+            return "idle";
+        }
+        _ => {}
+    }
+
     let event_type = event_type.unwrap_or("").to_ascii_lowercase();
 
     if event_type.contains("working") || event_type.contains("started") {
@@ -255,20 +308,28 @@ mod tests {
     #[test]
     fn map_status_user_prompt_submit_is_working() {
         assert_eq!(
-            map_status(Some("UserPromptSubmit"), None, None, None),
+            map_status(Some("UserPromptSubmit"), None, None, CLI_TYPE_CLAUDE),
             "working"
         );
     }
 
     #[test]
     fn map_status_stop_is_response_ready() {
-        assert_eq!(map_status(Some("Stop"), None, None, None), "response_ready");
+        assert_eq!(
+            map_status(Some("Stop"), None, None, CLI_TYPE_CLAUDE),
+            "response_ready"
+        );
     }
 
     #[test]
     fn map_status_notification_permission_prompt_is_needs_attention() {
         assert_eq!(
-            map_status(Some("Notification"), Some("permission_prompt"), None, None),
+            map_status(
+                Some("Notification"),
+                Some("permission_prompt"),
+                None,
+                CLI_TYPE_CLAUDE
+            ),
             "needs_attention"
         );
     }
@@ -276,15 +337,65 @@ mod tests {
     #[test]
     fn map_status_notification_other_is_idle() {
         assert_eq!(
-            map_status(Some("Notification"), Some("idle_prompt"), None, None),
+            map_status(Some("Notification"), Some("idle_prompt"), None, CLI_TYPE_CLAUDE),
             "idle"
         );
-        assert_eq!(map_status(Some("Notification"), None, None, None), "idle");
+        assert_eq!(
+            map_status(Some("Notification"), None, None, CLI_TYPE_CLAUDE),
+            "idle"
+        );
     }
 
     #[test]
     fn map_status_unknown_event_is_idle() {
-        assert_eq!(map_status(Some("UnknownEvent"), None, None, None), "idle");
+        assert_eq!(
+            map_status(Some("UnknownEvent"), None, None, CLI_TYPE_CLAUDE),
+            "idle"
+        );
+    }
+
+    #[test]
+    fn infer_cli_type_uses_gemini_hook_events() {
+        let payload = HookPayload {
+            session_id: None,
+            hook_event_name: Some("BeforeAgent".to_string()),
+            notification_type: None,
+            event_type: None,
+            cli_type: None,
+        };
+        assert_eq!(
+            infer_cli_type_with_gemini_env(&payload, false),
+            CLI_TYPE_GEMINI
+        );
+    }
+
+    #[test]
+    fn map_status_gemini_before_agent_is_working() {
+        assert_eq!(
+            map_status(Some("BeforeAgent"), None, None, CLI_TYPE_GEMINI),
+            "working"
+        );
+    }
+
+    #[test]
+    fn map_status_gemini_after_agent_is_response_ready() {
+        assert_eq!(
+            map_status(Some("AfterAgent"), None, None, CLI_TYPE_GEMINI),
+            "response_ready"
+        );
+    }
+
+    #[test]
+    fn map_status_gemini_notification_permission_is_needs_attention() {
+        assert_eq!(
+            map_status(
+                Some("Notification"),
+                Some("tool_permission_required"),
+                None,
+                CLI_TYPE_GEMINI
+            ),
+            "needs_attention"
+        );
     }
 
     #[test]

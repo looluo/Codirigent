@@ -1,4 +1,4 @@
-//! Auto-installs Codirigent hooks into `~/.claude/settings.json`.
+//! Auto-installs Codirigent hooks into supported CLI config files.
 //!
 //! On first launch (and on updates), Codirigent merges its required hooks into
 //! Claude Code's settings file so the user never has to run a manual setup
@@ -42,14 +42,7 @@ pub fn ensure_hooks_installed(hook_binary: &Path) -> Result<bool> {
     let settings_path =
         claude_settings_path().context("Could not determine ~/.claude/settings.json path")?;
 
-    let raw = hook_binary.to_string_lossy().into_owned();
-    // Quote paths that contain spaces so the shell (bash on Windows) does
-    // not split the command at word boundaries during hook execution.
-    let command = if raw.contains(' ') {
-        format!("\"{raw}\"")
-    } else {
-        raw
-    };
+    let command = shell_escaped_hook_command(hook_binary);
     let mut settings = read_settings(&settings_path)?;
     let modified = merge_hooks(&mut settings, &command)?;
 
@@ -58,6 +51,28 @@ pub fn ensure_hooks_installed(hook_binary: &Path) -> Result<bool> {
         info!("Codirigent hooks installed in {}", settings_path.display());
     } else {
         debug!("Codirigent hooks already present, no changes needed");
+    }
+
+    Ok(modified)
+}
+
+/// Ensure Codirigent's hooks are present in `~/.gemini/settings.json`.
+///
+/// Gemini CLI uses the same JSON hook structure as Claude Code, so the merge is
+/// additive and idempotent. Existing hooks from other tools are preserved.
+pub fn ensure_gemini_hooks_installed(hook_binary: &Path) -> Result<bool> {
+    let settings_path =
+        gemini_settings_path().context("Could not determine ~/.gemini/settings.json path")?;
+
+    let command = shell_escaped_hook_command(hook_binary);
+    let mut settings = read_settings(&settings_path)?;
+    let modified = merge_gemini_hooks(&mut settings, &command)?;
+
+    if modified {
+        write_settings(&settings_path, &settings)?;
+        info!("Codirigent Gemini hooks installed in {}", settings_path.display());
+    } else {
+        debug!("Codirigent Gemini hooks already present, no changes needed");
     }
 
     Ok(modified)
@@ -111,8 +126,24 @@ fn claude_settings_path() -> Option<PathBuf> {
     Some(home.join(".claude").join("settings.json"))
 }
 
+fn gemini_settings_path() -> Option<PathBuf> {
+    if let Ok(home) = std::env::var("GEMINI_CLI_HOME") {
+        return Some(PathBuf::from(home).join("settings.json"));
+    }
+    home_dir().map(|home| home.join(".gemini").join("settings.json"))
+}
+
 fn codex_config_path() -> Option<PathBuf> {
     home_dir().map(|home| home.join(".codex").join("config.toml"))
+}
+
+fn shell_escaped_hook_command(hook_binary: &Path) -> String {
+    let raw = hook_binary.to_string_lossy().into_owned();
+    if raw.contains(' ') {
+        format!("\"{raw}\"")
+    } else {
+        raw
+    }
 }
 
 /// Returns the directory where `codirigent-hook` writes signal files.
@@ -257,6 +288,18 @@ fn merge_codex_notify(settings: &mut TomlValue, command: &str) -> Result<bool> {
 /// unchanged. If a legacy bare-name entry (containing `HOOK_MARKER` but not
 /// matching `command`) is found, it is upgraded in place to `command`.
 fn merge_hooks(settings: &mut JsonValue, command: &str) -> Result<bool> {
+    merge_json_hooks(settings, command, hook_definitions())
+}
+
+fn merge_gemini_hooks(settings: &mut JsonValue, command: &str) -> Result<bool> {
+    merge_json_hooks(settings, command, gemini_hook_definitions())
+}
+
+fn merge_json_hooks(
+    settings: &mut JsonValue,
+    command: &str,
+    definitions: &[(&'static str, &'static str, &'static str)],
+) -> Result<bool> {
     let hooks = settings
         .as_object_mut()
         .context("settings.json root must be an object")?
@@ -267,7 +310,7 @@ fn merge_hooks(settings: &mut JsonValue, command: &str) -> Result<bool> {
 
     let mut modified = false;
 
-    for (event, matcher, description) in hook_definitions() {
+    for (event, matcher, description) in definitions {
         let event_hooks = hooks
             .entry(event.to_string())
             .or_insert_with(|| json!([]))
@@ -305,6 +348,14 @@ fn hook_definitions() -> &'static [(&'static str, &'static str, &'static str)] {
             "mark session as idle or needs_attention",
         ),
         ("Stop", "", "mark session as idle on exit"),
+    ]
+}
+
+fn gemini_hook_definitions() -> &'static [(&'static str, &'static str, &'static str)] {
+    &[
+        ("BeforeAgent", "", "mark session as working"),
+        ("AfterAgent", "", "mark session as response ready"),
+        ("Notification", "", "mark session as needs attention or idle"),
     ]
 }
 
@@ -574,5 +625,51 @@ mod tests {
         assert_eq!(notify.len(), 2);
         assert_eq!(notify[0].as_str().unwrap(), "/usr/bin/old");
         assert_eq!(notify[1].as_str().unwrap(), CMD);
+    }
+
+    #[test]
+    fn fresh_gemini_install_adds_expected_hooks() {
+        let mut settings = json!({});
+        let modified = merge_gemini_hooks(&mut settings, CMD).unwrap();
+        assert!(modified);
+
+        let hooks = settings["hooks"].as_object().unwrap();
+        assert!(hooks.contains_key("BeforeAgent"));
+        assert!(hooks.contains_key("AfterAgent"));
+        assert!(hooks.contains_key("Notification"));
+    }
+
+    #[test]
+    fn gemini_install_is_idempotent() {
+        let mut settings = json!({});
+        merge_gemini_hooks(&mut settings, CMD).unwrap();
+        let modified = merge_gemini_hooks(&mut settings, CMD).unwrap();
+        assert!(!modified, "second Gemini install should not modify");
+    }
+
+    #[test]
+    fn gemini_install_upgrades_legacy_bare_name_entries() {
+        let mut settings = json!({
+            "hooks": {
+                "BeforeAgent": [
+                    {"matcher": "", "hooks": [{"type": "command", "command": "codirigent-hook"}]}
+                ],
+                "AfterAgent": [
+                    {"matcher": "", "hooks": [{"type": "command", "command": "codirigent-hook"}]}
+                ],
+                "Notification": [
+                    {"matcher": "", "hooks": [{"type": "command", "command": "codirigent-hook"}]}
+                ]
+            }
+        });
+        let modified = merge_gemini_hooks(&mut settings, CMD).unwrap();
+        assert!(modified, "legacy Gemini entries must be upgraded");
+
+        for event in &["BeforeAgent", "AfterAgent", "Notification"] {
+            let arr = settings["hooks"][event].as_array().unwrap();
+            assert_eq!(arr.len(), 1, "{event} must not grow");
+            let cmd = arr[0]["hooks"][0]["command"].as_str().unwrap();
+            assert_eq!(cmd, CMD);
+        }
     }
 }
