@@ -1519,9 +1519,13 @@ impl EntityInputHandler for WorkspaceView {
         self.ime_marked_range.clone()
     }
 
-    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+    fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let had_ime_overlay = self.ime_marked_range.is_some() || self.ime_preedit_text.is_some();
         self.ime_marked_range = None;
         self.ime_preedit_text = None;
+        if had_ime_overlay {
+            cx.notify();
+        }
     }
 
     fn replace_text_in_range(
@@ -1564,14 +1568,21 @@ impl EntityInputHandler for WorkspaceView {
         text: &str,
         _mark_range: Option<std::ops::Range<usize>>,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
         if self.has_blocking_modal() {
+            let had_ime_overlay =
+                self.ime_marked_range.is_some() || self.ime_preedit_text.is_some();
             self.ime_marked_range = None;
             self.ime_preedit_text = None;
+            if had_ime_overlay {
+                cx.notify();
+            }
             return;
         }
 
+        let previous_text = self.ime_preedit_text.clone();
+        let previous_range = self.ime_marked_range.clone();
         let len = text.encode_utf16().count();
         if len == 0 {
             self.ime_marked_range = None;
@@ -1579,6 +1590,10 @@ impl EntityInputHandler for WorkspaceView {
         } else {
             self.ime_marked_range = Some(0..len);
             self.ime_preedit_text = Some(text.to_string());
+        }
+
+        if self.ime_preedit_text != previous_text || self.ime_marked_range != previous_range {
+            cx.notify();
         }
     }
 
@@ -1876,14 +1891,6 @@ mod tests {
     //! - [ ] Action handlers (NewSession, CloseSession, etc.) work correctly
     //! - [ ] Focus delegation to child components
     //! - [ ] Layout changes trigger re-render
-
-    #[test]
-    fn test_workspace_view_module_compiles() {
-        // Validates that the module compiles with all GPUI dependencies.
-        // The actual rendering and interaction tests require GPUI test infrastructure.
-        // See workspace/tests.rs for core logic tests (29 tests, 100% coverage).
-        assert!(true, "WorkspaceView module compiles successfully");
-    }
 
     #[test]
     fn test_core_workspace_is_tested_separately() {
