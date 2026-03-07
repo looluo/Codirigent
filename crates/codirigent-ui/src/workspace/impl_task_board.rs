@@ -120,6 +120,7 @@ impl WorkspaceView {
                                     self.send_task_to_session(&task_id, sid, &prompt);
                                     self.cache.manually_assigned_sessions.insert(sid);
                                     info!("Manually assigned task {} to session {}", task_id, sid);
+                                    self.mark_ui_sync_dirty();
                                     cx.notify();
                                     return;
                                 }
@@ -189,6 +190,7 @@ impl WorkspaceView {
                 info!(?task_id, "Rejected assignment — task remains queued");
             }
         }
+        self.mark_ui_sync_dirty();
         cx.notify();
     }
 
@@ -225,6 +227,7 @@ impl WorkspaceView {
         self.polling
             .pending_enters
             .insert(session_id, (Instant::now(), false));
+        self.mark_ui_sync_dirty();
     }
 
     /// Find the best assignable session for a task, returning only its ID (no clone).
@@ -270,6 +273,7 @@ impl WorkspaceView {
         if let Some(session) = self.workspace.session_mut(sid) {
             session.current_task = None;
         }
+        self.mark_ui_sync_dirty();
         cx.notify();
     }
 

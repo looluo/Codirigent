@@ -11,7 +11,6 @@ use super::types::SESSION_NAME_PREFIX;
 use crate::terminal::Terminal;
 use crate::terminal_header::TerminalHeader;
 use crate::terminal_view::TerminalView;
-use codirigent_core::config_service::ConfigService;
 use codirigent_core::{
     CodirigentEvent, EventBus, ProcessMonitor, Session, SessionId, SessionManager, SessionStatus,
     SlotId,
@@ -23,6 +22,22 @@ use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 use tracing::{info, warn};
+
+#[derive(Debug)]
+struct RestoreSessionPlan {
+    session_name: String,
+    working_dir: PathBuf,
+    group: Option<String>,
+    color: Option<String>,
+    claude_resume: Option<String>,
+    codex_resume: Option<String>,
+    gemini_resume: Option<String>,
+}
+
+#[derive(Debug)]
+struct RestorePlan {
+    sessions: Vec<RestoreSessionPlan>,
+}
 
 /// Read the `permissionMode` value from the last complete JSON line of a
 /// Claude Code JSONL session file.
@@ -192,6 +207,215 @@ fn is_codex_full_auto_mode(mode: &str) -> bool {
 }
 
 impl WorkspaceView {
+    fn build_restore_plan(
+        state: codirigent_core::AppState,
+        fallback_dir: PathBuf,
+    ) -> Option<RestorePlan> {
+        if state.sessions.is_empty() {
+            return None;
+        }
+
+        let mut used_names = std::collections::HashSet::new();
+        let mut sessions = Vec::with_capacity(state.sessions.len());
+
+        for saved in state.sessions {
+            let working_dir = if saved.working_directory.exists() {
+                saved.working_directory.clone()
+            } else {
+                fallback_dir.clone()
+            };
+
+            let mut session_name = saved.name.clone();
+            if used_names.contains(&session_name) {
+                let mut counter = 2;
+                loop {
+                    let candidate = format!("{} ({})", saved.name, counter);
+                    if !used_names.contains(&candidate) {
+                        session_name = candidate;
+                        break;
+                    }
+                    counter += 1;
+                }
+                warn!(
+                    original = %saved.name,
+                    renamed = %session_name,
+                    "Renamed duplicate session name during restoration"
+                );
+            }
+            used_names.insert(session_name.clone());
+
+            let claude_resume = saved.claude_session_id.as_ref().map(|claude_id| {
+                let permission_mode = read_claude_permission_mode(claude_id).unwrap_or_default();
+                let mut cmd = format!("claude --resume {}", claude_id);
+                if permission_mode == "bypassPermissions" {
+                    cmd.push_str(" --dangerously-skip-permissions");
+                }
+                cmd.push('\r');
+                cmd
+            });
+
+            let codex_resume = saved.codex_session_id.as_ref().map(|codex_id| {
+                let permission_mode = read_codex_permission_mode(&working_dir, codex_id);
+                let mut cmd = format!("codex --session {}", codex_id);
+                if permission_mode
+                    .as_deref()
+                    .is_some_and(|mode| is_codex_full_auto_mode(mode))
+                {
+                    cmd.push_str(" --full-auto");
+                }
+                cmd.push('\r');
+                cmd
+            });
+
+            let gemini_resume = saved
+                .gemini_session_id
+                .as_ref()
+                .map(|gemini_id| format!("gemini --resume {}\r", gemini_id));
+
+            sessions.push(RestoreSessionPlan {
+                session_name,
+                working_dir,
+                group: saved.group,
+                color: saved.color,
+                claude_resume,
+                codex_resume,
+                gemini_resume,
+            });
+        }
+
+        Some(RestorePlan { sessions })
+    }
+
+    fn apply_restore_plan(
+        &mut self,
+        plan: RestorePlan,
+        shell: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
+        if plan.sessions.is_empty() {
+            return;
+        }
+
+        info!(count = plan.sessions.len(), "Restoring sessions from disk");
+
+        let session_count = plan.sessions.len();
+        let current_max = self.workspace.layout_profile().max_sessions();
+
+        if session_count > current_max {
+            use crate::layout::LayoutProfile;
+            let new_profile = if session_count <= 4 {
+                LayoutProfile::Grid2x2
+            } else if session_count <= 6 {
+                LayoutProfile::Grid2x3
+            } else if session_count <= 9 {
+                LayoutProfile::Grid3x3
+            } else {
+                let cols = 4;
+                let rows = (session_count as u32).div_ceil(cols);
+                LayoutProfile::Custom { rows, cols }
+            };
+
+            info!(
+                "Auto-expanding layout from {} to {} cells to fit {} sessions",
+                current_max,
+                new_profile.max_sessions(),
+                session_count
+            );
+            self.workspace.set_layout(new_profile);
+        }
+
+        for plan in plan.sessions {
+            let session_id = self.with_session_manager(|manager| {
+                match manager.create_session(
+                    plan.session_name.clone(),
+                    plan.working_dir.clone(),
+                    shell.clone(),
+                ) {
+                    Ok(id) => Some(id),
+                    Err(e) => {
+                        warn!(name = %plan.session_name, "Failed to restore session: {}", e);
+                        None
+                    }
+                }
+            });
+            let session_id = match session_id {
+                Some(id) => id,
+                None => continue,
+            };
+
+            for cmd in [
+                plan.claude_resume.as_deref(),
+                plan.codex_resume.as_deref(),
+                plan.gemini_resume.as_deref(),
+            ]
+            .into_iter()
+            .flatten()
+            {
+                if let Ok(mgr) = self.session_manager.lock() {
+                    if let Err(e) = mgr.send_input(session_id, cmd.as_bytes()) {
+                        warn!(?session_id, error = %e, "Failed to send resume command");
+                    }
+                }
+            }
+
+            if plan.group.is_some() || plan.color.is_some() {
+                self.with_session_manager(|manager| {
+                    let _ = manager.set_session_group(
+                        session_id,
+                        plan.group.clone(),
+                        plan.color.clone(),
+                    );
+                });
+            }
+
+            let child_pid = self.with_session_manager(|manager| manager.get_child_pid(session_id));
+            if let Some(pid) = child_pid {
+                self.with_detector(|detector| {
+                    let _ = detector.start_monitoring(session_id, pid);
+                });
+            }
+
+            let (pty_tx, pty_rx) = tokio::sync::mpsc::unbounded_channel();
+            let terminal = Terminal::new(24, 80, session_id, pty_tx);
+            let theme = self.workspace.theme();
+            let terminal_view = TerminalView::new(terminal, theme.clone());
+            self.terminals.insert(session_id, terminal_view);
+            self.pty_write_receivers.insert(session_id, pty_rx);
+
+            let session = self.with_session_manager(|manager| {
+                manager.get_session(session_id).unwrap_or_else(|| {
+                    Session::new(
+                        session_id,
+                        plan.session_name.clone(),
+                        plan.working_dir.clone(),
+                    )
+                })
+            });
+
+            if self.workspace.add_session(session.clone()) {
+                let mut header = TerminalHeader::new(&plan.session_name, SessionStatus::Idle);
+                if let Some(ref gi) = session.git_info {
+                    header = header.with_git_info(gi.branch.clone(), gi.dirty_count);
+                }
+                if let Some(ref group) = plan.group {
+                    header.group_name = Some(group.clone());
+                }
+                if let Some(ref color) = plan.color {
+                    header.session_color = crate::sidebar::Color::from_hex(color);
+                }
+                self.terminal_headers.insert(session_id, header);
+            }
+        }
+
+        if let Some(first_id) = self.workspace.sessions().first().map(|s| s.id) {
+            self.select_session_with_cx(first_id, cx);
+        }
+
+        info!("Session restoration complete");
+        self.mark_ui_sync_dirty();
+        cx.notify();
+    }
+
     /// Create a new terminal session in the focused pane.
     pub fn create_session(&mut self, cx: &mut Context<Self>) {
         self.create_session_inner(None, cx);
@@ -225,11 +449,10 @@ impl WorkspaceView {
         self.next_session_id = num + 1;
 
         let working_dir = self
-            .settings
-            .config_service
-            .as_ref()
-            .and_then(|cs| cs.load_user_settings().ok())
-            .and_then(|s| s.general.default_working_dir)
+            .effective_user_settings()
+            .general
+            .default_working_dir
+            .clone()
             .map(PathBuf::from)
             .filter(|p| p.is_dir())
             .or_else(|| self.project.project_root.clone())
@@ -314,215 +537,61 @@ impl WorkspaceView {
             } else {
                 info!(%name, "Created new session with PTY");
             }
-            self.save_state_to_disk();
+            self.mark_ui_sync_dirty();
+            self.save_state_to_disk(cx);
             cx.notify();
         }
     }
 
-    /// Restore sessions from disk on startup.
-    pub(super) fn restore_sessions_from_disk(&mut self, cx: &mut Context<Self>) {
-        let state = match self.persistence.storage.load_state() {
-            Ok(state) => state,
-            Err(e) => {
-                info!("No saved state to restore: {}", e);
-                return;
-            }
-        };
-
-        if state.sessions.is_empty() {
+    /// Restore sessions from disk on startup without blocking the UI thread.
+    pub(super) fn spawn_restore_sessions_from_disk(&mut self, cx: &mut Context<Self>) {
+        if self.polling.restore_in_flight {
             return;
         }
 
-        info!(count = state.sessions.len(), "Restoring sessions from disk");
+        self.polling.restore_in_flight = true;
+        let storage = self.persistence.storage.clone();
+        let shell = self.configured_shell();
+        let fallback_dir = self
+            .project
+            .project_root
+            .clone()
+            .or_else(|| std::env::current_dir().ok())
+            .unwrap_or_else(|| PathBuf::from("."));
 
-        // Auto-expand grid layout if needed to accommodate all sessions
-        let session_count = state.sessions.len();
-        let current_max = self.workspace.layout_profile().max_sessions();
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+            let restore_plan = cx
+                .background_executor()
+                .spawn(async move {
+                    let state = match storage.load_state() {
+                        Ok(state) => state,
+                        Err(e) => {
+                            info!("No saved state to restore: {}", e);
+                            return None;
+                        }
+                    };
+                    WorkspaceView::build_restore_plan(state, fallback_dir)
+                })
+                .await;
 
-        if session_count > current_max {
-            use crate::layout::LayoutProfile;
-            let new_profile = if session_count <= 4 {
-                LayoutProfile::Grid2x2
-            } else if session_count <= 6 {
-                LayoutProfile::Grid2x3
-            } else if session_count <= 9 {
-                LayoutProfile::Grid3x3
-            } else {
-                // For more than 9 sessions, create a custom grid
-                let cols = 4;
-                let rows = (session_count as u32).div_ceil(cols);
-                LayoutProfile::Custom { rows, cols }
-            };
-
-            info!(
-                "Auto-expanding layout from {} to {} cells to fit {} sessions",
-                current_max,
-                new_profile.max_sessions(),
-                session_count
-            );
-            self.workspace.set_layout(new_profile);
-        }
-
-        // Track used session names to ensure uniqueness during restoration
-        let mut used_names = std::collections::HashSet::new();
-
-        for saved in &state.sessions {
-            let working_dir = if saved.working_directory.exists() {
-                saved.working_directory.clone()
-            } else {
-                self.project
-                    .project_root
-                    .clone()
-                    .or_else(|| std::env::current_dir().ok())
-                    .unwrap_or_else(|| PathBuf::from("."))
-            };
-
-            let shell = self.configured_shell();
-
-            // Ensure session name is unique
-            let mut session_name = saved.name.clone();
-            if used_names.contains(&session_name) {
-                // Find next available number suffix
-                let mut counter = 2;
-                loop {
-                    let candidate = format!("{} ({})", saved.name, counter);
-                    if !used_names.contains(&candidate) {
-                        session_name = candidate;
-                        break;
-                    }
-                    counter += 1;
-                }
-                warn!(
-                    original = %saved.name,
-                    renamed = %session_name,
-                    "Renamed duplicate session name during restoration"
-                );
-            }
-            used_names.insert(session_name.clone());
-
-            let session_id = self.with_session_manager(|manager| {
-                match manager.create_session(session_name.clone(), working_dir.clone(), shell) {
-                    Ok(id) => Some(id),
-                    Err(e) => {
-                        warn!(name = %session_name, "Failed to restore session: {}", e);
-                        None
-                    }
+            let _ = this.update(cx, |this, cx| {
+                this.polling.restore_in_flight = false;
+                if let Some(plan) = restore_plan {
+                    this.apply_restore_plan(plan, shell.clone(), cx);
                 }
             });
-            let session_id = match session_id {
-                Some(id) => id,
-                None => continue,
-            };
-
-            // Resume Claude Code session if we have a stored session ID.
-            if let Some(ref claude_id) = saved.claude_session_id {
-                let permission_mode = read_claude_permission_mode(claude_id).unwrap_or_default();
-                let mut cmd = format!("claude --resume {}", claude_id);
-                if permission_mode == "bypassPermissions" {
-                    cmd.push_str(" --dangerously-skip-permissions");
-                }
-                cmd.push('\r');
-                if let Ok(mgr) = self.session_manager.lock() {
-                    if let Err(e) = mgr.send_input(session_id, cmd.as_bytes()) {
-                        warn!(?session_id, error = %e, "Failed to send claude --resume command");
-                    }
-                }
-            }
-
-            // Resume Codex CLI session if we have a stored session ID.
-            if let Some(ref codex_id) = saved.codex_session_id {
-                let permission_mode = read_codex_permission_mode(&working_dir, codex_id);
-                let mut cmd = format!("codex --session {}", codex_id);
-                if permission_mode
-                    .as_deref()
-                    .is_some_and(|mode| is_codex_full_auto_mode(mode))
-                {
-                    cmd.push_str(" --full-auto");
-                }
-                cmd.push('\r');
-                if let Ok(mgr) = self.session_manager.lock() {
-                    if let Err(e) = mgr.send_input(session_id, cmd.as_bytes()) {
-                        warn!(?session_id, error = %e, "Failed to send codex --session command");
-                    }
-                }
-            }
-
-            // Resume Gemini CLI session if we have a stored session ID.
-            if let Some(ref gemini_id) = saved.gemini_session_id {
-                let cmd = format!("gemini --resume {}\r", gemini_id);
-                if let Ok(mgr) = self.session_manager.lock() {
-                    if let Err(e) = mgr.send_input(session_id, cmd.as_bytes()) {
-                        warn!(?session_id, error = %e, "Failed to send gemini --resume command");
-                    }
-                }
-            }
-
-            // Restore group/color
-            if saved.group.is_some() || saved.color.is_some() {
-                self.with_session_manager(|manager| {
-                    let _ = manager.set_session_group(
-                        session_id,
-                        saved.group.clone(),
-                        saved.color.clone(),
-                    );
-                });
-            }
-
-            // Start monitoring
-            let child_pid = self.with_session_manager(|manager| manager.get_child_pid(session_id));
-            if let Some(pid) = child_pid {
-                self.with_detector(|detector| {
-                    let _ = detector.start_monitoring(session_id, pid);
-                });
-            }
-
-            // Create terminal view with PTY writer channel for VTE responses
-            let (pty_tx, pty_rx) = tokio::sync::mpsc::unbounded_channel();
-            let terminal = Terminal::new(24, 80, session_id, pty_tx);
-            let theme = self.workspace.theme();
-            let terminal_view = TerminalView::new(terminal, theme.clone());
-            self.terminals.insert(session_id, terminal_view);
-            self.pty_write_receivers.insert(session_id, pty_rx);
-
-            // Get session from manager (has git_info)
-            let session = self.with_session_manager(|manager| {
-                manager
-                    .get_session(session_id)
-                    .unwrap_or_else(|| Session::new(session_id, session_name.clone(), working_dir))
-            });
-
-            if self.workspace.add_session(session.clone()) {
-                let mut header = TerminalHeader::new(&session_name, SessionStatus::Idle);
-                if let Some(ref gi) = session.git_info {
-                    header = header.with_git_info(gi.branch.clone(), gi.dirty_count);
-                }
-                if let Some(ref group) = saved.group {
-                    header.group_name = Some(group.clone());
-                }
-                if let Some(ref color) = saved.color {
-                    header.session_color = crate::sidebar::Color::from_hex(color);
-                }
-                self.terminal_headers.insert(session_id, header);
-            }
-        }
-
-        // Select the first restored session
-        if let Some(first_id) = self.workspace.sessions().first().map(|s| s.id) {
-            self.select_session_with_cx(first_id, cx);
-        }
-
-        info!("Session restoration complete");
-        cx.notify();
+        })
+        .detach();
     }
 
     /// Return the configured shell, or `None` to use the system default.
     fn configured_shell(&self) -> Option<String> {
-        self.settings
-            .config_service
-            .as_ref()
-            .and_then(|cs| cs.load_user_settings().ok())
-            .map(|s| s.general.default_shell)
-            .filter(|s| !s.is_empty())
+        let shell = self.effective_user_settings().general.default_shell.clone();
+        if shell.is_empty() {
+            None
+        } else {
+            Some(shell)
+        }
     }
 
     /// Close the focused session.
@@ -567,7 +636,8 @@ impl WorkspaceView {
         self.event_bus
             .publish(CodirigentEvent::SessionClosed { id });
         info!(?id, "Closed session");
-        self.save_state_to_disk();
+        self.mark_ui_sync_dirty();
+        self.save_state_to_disk(cx);
         cx.notify();
     }
 }

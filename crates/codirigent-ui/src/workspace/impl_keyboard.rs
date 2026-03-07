@@ -6,25 +6,12 @@
 
 use super::gpui::WorkspaceView;
 use crate::toolbar::CustomLayoutMode;
-use codirigent_core::config_service::ConfigService;
 use codirigent_core::SplitDirection;
 use gpui::{Context, KeyDownEvent};
-use tracing::warn;
 
 impl WorkspaceView {
-    pub(super) fn save_layout_profiles_to_settings(&self) {
-        if let Some(ref config_service) = self.settings.config_service {
-            // Load current user settings
-            let mut user_settings = config_service.load_user_settings().unwrap_or_default();
-
-            // Update saved_layouts with current profiles
-            user_settings.saved_layouts = self.top_bar.export_user_profiles();
-
-            // Save back to disk
-            if let Err(e) = config_service.save_user_settings(&user_settings) {
-                warn!("Failed to save layout profiles: {}", e);
-            }
-        }
+    pub(super) fn save_layout_profiles_to_settings(&mut self, cx: &mut Context<Self>) {
+        self.persist_layout_profiles_to_settings(cx);
     }
 
     pub(super) fn handle_custom_layout_key_down(
@@ -38,7 +25,6 @@ impl WorkspaceView {
 
         let key = event.keystroke.key.to_lowercase();
 
-        // Universal keys (both modes)
         match key.as_str() {
             "escape" => {
                 self.custom_picker.close();
@@ -52,7 +38,6 @@ impl WorkspaceView {
                             self.custom_picker.close();
                             let profile = crate::layout::LayoutProfile::Custom { rows, cols };
                             self.workspace.set_layout(profile);
-                            // Save as a named profile in the profile manager
                             let id = format!("custom-{}x{}", rows, cols);
                             let name = format!("{}x{}", rows, cols);
                             let saved = crate::layout_profile::SavedLayoutProfile::new(
@@ -62,8 +47,7 @@ impl WorkspaceView {
                             );
                             self.top_bar.profile_manager.add_profile(saved);
                             self.top_bar.set_active_profile_id(&id);
-                            // Persist to disk
-                            self.save_layout_profiles_to_settings();
+                            self.save_layout_profiles_to_settings(cx);
                         }
                     }
                     CustomLayoutMode::Split => {
@@ -80,8 +64,7 @@ impl WorkspaceView {
                             self.workspace.set_split_tree(tree);
                             self.top_bar.profile_manager.add_profile(saved);
                             self.top_bar.set_active_profile_id(&id);
-                            // Persist to disk
-                            self.save_layout_profiles_to_settings();
+                            self.save_layout_profiles_to_settings(cx);
                         }
                     }
                 }
@@ -91,7 +74,6 @@ impl WorkspaceView {
             _ => {}
         }
 
-        // Mode-specific keys
         match self.custom_picker.mode {
             CustomLayoutMode::Grid => {
                 match key.as_str() {
@@ -126,44 +108,41 @@ impl WorkspaceView {
                     }
                 }
             }
-            CustomLayoutMode::Split => {
-                match key.as_str() {
-                    "h" => {
-                        self.custom_picker
-                            .split_selected(SplitDirection::Horizontal);
-                        cx.notify();
-                        return true;
-                    }
-                    "v" => {
-                        self.custom_picker.split_selected(SplitDirection::Vertical);
-                        cx.notify();
-                        return true;
-                    }
-                    "backspace" | "delete" => {
-                        self.custom_picker.remove_selected();
-                        cx.notify();
-                        return true;
-                    }
-                    "tab" => {
-                        // Cycle selected slot
-                        let slots = self.custom_picker.split_tree.slots_in_order();
-                        if !slots.is_empty() {
-                            let current_idx = self
-                                .custom_picker
-                                .selected_slot
-                                .and_then(|s| slots.iter().position(|&o| o == s));
-                            let next = match current_idx {
-                                Some(i) => (i + 1) % slots.len(),
-                                None => 0,
-                            };
-                            self.custom_picker.selected_slot = Some(slots[next]);
-                        }
-                        cx.notify();
-                        return true;
-                    }
-                    _ => {}
+            CustomLayoutMode::Split => match key.as_str() {
+                "h" => {
+                    self.custom_picker
+                        .split_selected(SplitDirection::Horizontal);
+                    cx.notify();
+                    return true;
                 }
-            }
+                "v" => {
+                    self.custom_picker.split_selected(SplitDirection::Vertical);
+                    cx.notify();
+                    return true;
+                }
+                "backspace" | "delete" => {
+                    self.custom_picker.remove_selected();
+                    cx.notify();
+                    return true;
+                }
+                "tab" => {
+                    let slots = self.custom_picker.split_tree.slots_in_order();
+                    if !slots.is_empty() {
+                        let current_idx = self
+                            .custom_picker
+                            .selected_slot
+                            .and_then(|s| slots.iter().position(|&o| o == s));
+                        let next = match current_idx {
+                            Some(i) => (i + 1) % slots.len(),
+                            None => 0,
+                        };
+                        self.custom_picker.selected_slot = Some(slots[next]);
+                    }
+                    cx.notify();
+                    return true;
+                }
+                _ => {}
+            },
         }
 
         true

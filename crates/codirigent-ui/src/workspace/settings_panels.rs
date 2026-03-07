@@ -61,7 +61,7 @@ impl super::gpui::WorkspaceView {
                 .py_2()
                 .cursor_pointer()
                 .on_click(cx.listener(|this, _, _, cx| {
-                    this.close_settings();
+                    this.close_settings(cx);
                     cx.notify();
                 }))
                 .child(
@@ -337,12 +337,16 @@ impl super::gpui::WorkspaceView {
         let notif = page.user_settings.notifications.clone();
         let theme = self.workspace.theme();
 
-        // Show actual CWD when no custom path is configured
-        let display_dir = working_dir.clone().unwrap_or_else(|| {
-            std::env::current_dir()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| String::new())
-        });
+        // Show the current project root when no custom path is configured.
+        let display_dir = working_dir
+            .clone()
+            .or_else(|| {
+                self.project
+                    .project_root
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+            })
+            .unwrap_or_default();
 
         let editor_options: Vec<&str> = page.detected_editors.iter().map(|s| s.as_str()).collect();
 

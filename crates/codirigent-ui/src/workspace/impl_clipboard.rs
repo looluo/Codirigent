@@ -39,6 +39,7 @@ impl WorkspaceView {
             }
         };
 
+        let mut did_change_viewport = false;
         match content {
             ClipboardContent::Text(text) => {
                 if text.is_empty() {
@@ -47,9 +48,10 @@ impl WorkspaceView {
                 let sanitized = crate::clipboard::sanitize_paste(&text);
                 let bytes = crate::clipboard::prepare_paste(&sanitized, bracketed);
 
-                // Auto-scroll to bottom on paste
+                // Auto-scroll to bottom on paste, but avoid dirtying the
+                // terminal cache when we were already at the live prompt.
                 if let Some(tv) = self.terminals.get_mut(&session_id) {
-                    tv.scroll_to_bottom();
+                    did_change_viewport = tv.scroll_to_bottom_if_needed();
                 }
 
                 self.with_session_manager(|manager| {
@@ -58,48 +60,66 @@ impl WorkspaceView {
                     }
                 });
             }
-            ClipboardContent::Image(ref _image_data) => {
+            ClipboardContent::Image(image_data) => {
                 // Get the CLI type for the focused session (defaults to ClaudeCode)
                 let cli_type = self
                     .clipboard
                     .clipboard_service
                     .get_session_cli_type(session_id);
-
-                // Format for CLI: saves image to temp file and returns path string
-                match self
+                let base_dir = self
                     .clipboard
                     .clipboard_service
-                    .format_for_cli(&content, cli_type)
-                {
-                    Ok(formatted_path) => {
-                        if formatted_path.is_empty() {
-                            return;
-                        }
-                        let sanitized = crate::clipboard::sanitize_paste(&formatted_path);
-                        let bytes = crate::clipboard::prepare_paste(&sanitized, bracketed);
+                    .temp_dir()
+                    .parent()
+                    .unwrap_or_else(|| self.clipboard.clipboard_service.temp_dir())
+                    .to_path_buf();
 
-                        // Auto-scroll to bottom on paste
-                        if let Some(tv) = self.terminals.get_mut(&session_id) {
-                            tv.scroll_to_bottom();
-                        }
+                cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+                    let content_for_bg = ClipboardContent::Image(image_data);
+                    let result = cx
+                        .background_executor()
+                        .spawn(async move {
+                            let service = codirigent_session::clipboard_service::DefaultClipboardService::new(
+                                &base_dir,
+                            );
+                            service.format_for_cli(&content_for_bg, cli_type)
+                        })
+                        .await;
 
-                        self.with_session_manager(|manager| {
-                            if let Err(e) = manager.send_input(session_id, &bytes) {
-                                warn!(
-                                    "Failed to paste image path to session {}: {}",
-                                    session_id, e
-                                );
+                    let _ = this.update(cx, |this, cx| {
+                        match result {
+                            Ok(formatted_path) => {
+                                if formatted_path.is_empty() {
+                                    return;
+                                }
+
+                                let sanitized = crate::clipboard::sanitize_paste(&formatted_path);
+                                let bytes = crate::clipboard::prepare_paste(&sanitized, bracketed);
+                                if let Some(tv) = this.terminals.get_mut(&session_id) {
+                                    tv.scroll_to_bottom_if_needed();
+                                }
+
+                                this.with_session_manager(|manager| {
+                                    if let Err(e) = manager.send_input(session_id, &bytes) {
+                                        warn!(
+                                            "Failed to paste image path to session {}: {}",
+                                            session_id, e
+                                        );
+                                    }
+                                });
+
+                                this.clipboard.clipboard_preview.hide();
+                                this.clipboard.clipboard_preview_shown_at = None;
+                                cx.notify();
                             }
-                        });
-
-                        // Hide clipboard preview on paste
-                        self.clipboard.clipboard_preview.hide();
-                        self.clipboard.clipboard_preview_shown_at = None;
-                    }
-                    Err(e) => {
-                        warn!("Failed to format image for CLI: {:?}", e);
-                    }
-                }
+                            Err(e) => {
+                                warn!("Failed to format image for CLI: {:?}", e);
+                            }
+                        }
+                    });
+                })
+                .detach();
+                return;
             }
             ClipboardContent::Files(paths) => {
                 if paths.is_empty() {
@@ -113,7 +133,7 @@ impl WorkspaceView {
                 let bytes = crate::clipboard::prepare_paste(&text, bracketed);
 
                 if let Some(tv) = self.terminals.get_mut(&session_id) {
-                    tv.scroll_to_bottom();
+                    did_change_viewport = tv.scroll_to_bottom_if_needed();
                 }
 
                 self.with_session_manager(|manager| {
@@ -125,7 +145,9 @@ impl WorkspaceView {
             ClipboardContent::Empty => {}
         }
 
-        cx.notify();
+        if did_change_viewport {
+            cx.notify();
+        }
     }
 
     /// Handle Copy action (Cmd+C / Ctrl+C).

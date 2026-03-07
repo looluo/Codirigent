@@ -36,7 +36,6 @@ use crate::terminal_view::TerminalView;
 use crate::theme::CodirigentTheme;
 use crate::toolbar::CustomLayoutPicker;
 use codirigent_core::compaction::{CompactionConfig, CompactionService};
-use codirigent_core::config_service::ConfigService;
 use codirigent_core::{
     CodirigentEvent, DefaultEventBus, EventBus, FileStorageService, GridPosition, SessionId,
     SessionManager, TaskManager, TaskManagerConfig,
@@ -138,6 +137,12 @@ impl WorkspaceView {
     const LIGHT_IDLE_THRESHOLD_POLLS: u32 = 4;
     /// Number of consecutive idle polls before backing off to the deep-idle interval.
     const DEEP_IDLE_THRESHOLD_POLLS: u32 = 64;
+    /// Maintenance cadence for non-output UI work (git refresh, clipboard, cleanup).
+    const MAINTENANCE_POLL_INTERVAL_MS: u64 = 250;
+    /// Fallback UI sync interval for any mutation path that misses an explicit dirty mark.
+    const UI_SYNC_FALLBACK_INTERVAL: Duration = Duration::from_secs(1);
+    /// Debounce window for persisted app-state saves.
+    const STATE_SAVE_DEBOUNCE: Duration = Duration::from_millis(200);
 
     /// Returns true when a computed target size is a transient collapse that
     /// should be ignored to avoid 1-column/1-row PTY resizes.
@@ -172,6 +177,7 @@ impl WorkspaceView {
         workspace.set_theme(theme);
 
         Self::start_output_polling(cx);
+        Self::start_maintenance_polling(cx);
         Self::start_modal_cursor_blink(cx);
 
         let (storage, task_manager) = Self::init_task_manager(event_bus.clone());
@@ -205,7 +211,7 @@ impl WorkspaceView {
                 file_tree_model,
                 project_root: project_root.clone(),
                 worktree_panel: WorktreePanel::new(),
-                worktree_manager: Self::init_worktree_manager(),
+                worktree_manager: None,
             },
             clipboard: super::clipboard_state::ClipboardState {
                 smart_clipboard: crate::platform::create_clipboard(),
@@ -235,29 +241,12 @@ impl WorkspaceView {
             notification_manager: NotificationManager::new(Default::default()),
         };
 
-        // Load notification settings from config so toggles and cooldown take effect from startup.
-        if let Some(ref cs) = view.settings.config_service {
-            if let Ok(user_settings) = cs.load_user_settings() {
-                view.notification_manager
-                    .update_settings(user_settings.notifications);
-            }
-        }
-
         // Pre-detect editors and shells in the background so settings open instantly
         Self::start_detection_background(cx);
+        view.start_settings_background_load(true, cx);
 
-        // Restore sessions from previous run
-        view.restore_sessions_from_disk(cx);
-
-        view.refresh_file_tree_panel();
-        view.refresh_worktree_panel();
-
-        // Load saved layout profiles from user settings
-        if let Some(ref config_service) = view.settings.config_service {
-            if let Ok(user_settings) = config_service.load_user_settings() {
-                view.top_bar
-                    .load_saved_profiles(user_settings.saved_layouts);
-            }
+        if let Some(root) = project_root {
+            view.set_project_root(root, cx);
         }
 
         view
@@ -293,6 +282,22 @@ impl WorkspaceView {
                 if result.is_err() {
                     break;
                 }
+            }
+        })
+        .detach();
+    }
+
+    /// Start slower maintenance polling for non-output UI work.
+    fn start_maintenance_polling(cx: &mut Context<Self>) {
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(Self::MAINTENANCE_POLL_INTERVAL_MS))
+                .await;
+            let result = this.update(cx, |this, cx| {
+                this.poll_maintenance(cx);
+            });
+            if result.is_err() {
+                break;
             }
         })
         .detach();
@@ -373,31 +378,12 @@ impl WorkspaceView {
     /// Initialize file tree panel from the current working directory.
     fn init_file_tree() -> (FileTreePanel, Option<FileTree>, Option<PathBuf>) {
         let mut file_tree = FileTreePanel::new();
-        let mut file_tree_model = None;
         let mut project_root = None;
         if let Ok(cwd) = std::env::current_dir() {
             file_tree.set_root(cwd.clone());
             project_root = Some(cwd.clone());
-            match FileTree::new(cwd) {
-                Ok(tree) => {
-                    file_tree_model = Some(tree);
-                }
-                Err(e) => {
-                    warn!("Failed to initialize file tree: {}", e);
-                }
-            }
         }
-        (file_tree, file_tree_model, project_root)
-    }
-
-    /// Initialize worktree manager if in a git repository.
-    fn init_worktree_manager() -> Option<Arc<Mutex<codirigent_session::WorktreeManager>>> {
-        if let Ok(cwd) = std::env::current_dir() {
-            if let Ok(manager) = codirigent_session::WorktreeManager::new(&cwd) {
-                return Some(Arc::new(Mutex::new(manager)));
-            }
-        }
-        None
+        (file_tree, None, project_root)
     }
 
     /// Check if a session should be created at the given position.
@@ -418,25 +404,79 @@ impl WorkspaceView {
         true
     }
 
-    /// Save current session state to disk.
-    pub(super) fn save_state_to_disk(&self) {
-        let sessions = self.with_session_manager(|m| m.list_sessions());
-        let state = codirigent_core::AppState {
-            sessions,
-            layout: codirigent_core::LayoutMode::Grid {
-                rows: self.workspace.layout_profile().dimensions().0,
-                cols: self.workspace.layout_profile().dimensions().1,
-            },
-            updated_at: Some(chrono::Utc::now()),
-        };
-        if let Err(e) = self.persistence.storage.save_state(&state) {
-            warn!("Failed to save state: {}", e);
+    fn persisted_layout_mode(&self) -> codirigent_core::LayoutMode {
+        match self.workspace.layout_state() {
+            crate::layout::WorkspaceLayoutState::Grid(state) => state.profile().to_mode(),
+            crate::layout::WorkspaceLayoutState::SplitTree(state) => {
+                codirigent_core::LayoutMode::SplitTree {
+                    root: state.tree().clone(),
+                }
+            }
         }
+    }
+
+    /// Mark derived UI state as dirty so it is recomputed on the next render.
+    pub(super) fn mark_ui_sync_dirty(&mut self) {
+        self.polling.ui_sync_dirty = true;
+    }
+
+    /// Debounce persisted session/layout state writes off the UI thread.
+    pub(super) fn save_state_to_disk(&mut self, cx: &mut Context<Self>) {
+        self.polling.state_save_generation = self.polling.state_save_generation.saturating_add(1);
+        let save_generation = self.polling.state_save_generation;
+        self.polling.state_save_task = None;
+        self.polling.state_save_task = Some(cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+            cx.background_executor()
+                .timer(Self::STATE_SAVE_DEBOUNCE)
+                .await;
+
+            let save_inputs = match this.update(cx, |this, _cx| {
+                if this.polling.state_save_generation != save_generation {
+                    return None;
+                }
+
+                Some((
+                    this.persistence.storage.clone(),
+                    this.session_manager.clone(),
+                    this.persisted_layout_mode(),
+                ))
+            }) {
+                Ok(Some(inputs)) => inputs,
+                Ok(None) | Err(_) => return,
+            };
+
+            let (storage, session_manager, layout) = save_inputs;
+            let result = cx
+                .background_executor()
+                .spawn(async move {
+                    let sessions = session_manager
+                        .lock()
+                        .map(|manager| manager.list_sessions())
+                        .unwrap_or_default();
+                    let state = codirigent_core::AppState {
+                        sessions,
+                        layout,
+                        updated_at: Some(chrono::Utc::now()),
+                    };
+                    storage.save_state(&state)
+                })
+                .await;
+
+            let _ = this.update(cx, |this, _cx| {
+                if this.polling.state_save_generation == save_generation {
+                    this.polling.state_save_task = None;
+                }
+                if let Err(e) = result {
+                    warn!("Failed to save state: {}", e);
+                }
+            });
+        }));
     }
 
     /// Cycle to next layout.
     pub fn next_layout(&mut self, cx: &mut Context<Self>) {
         self.workspace.next_layout();
+        self.mark_ui_sync_dirty();
         self.event_bus.publish(CodirigentEvent::LayoutChanged {
             mode: self.workspace.layout_profile().to_mode(),
         });
@@ -446,6 +486,7 @@ impl WorkspaceView {
     /// Toggle sidebar visibility.
     pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.workspace.toggle_sidebar();
+        self.mark_ui_sync_dirty();
         cx.notify();
     }
 
@@ -456,6 +497,7 @@ impl WorkspaceView {
                 self.event_bus
                     .publish(CodirigentEvent::SessionFocused { id });
             }
+            self.mark_ui_sync_dirty();
             self.sync_file_tree_to_focused_session(cx);
             cx.notify();
         }
@@ -610,6 +652,7 @@ impl WorkspaceView {
                             // Custom positional layouts not used from tabs
                         }
                     }
+                    self.mark_ui_sync_dirty();
                 }
                 crate::top_bar::TopBarEvent::RightPanelToggled => {
                     // Will be wired in plan 05 (right task board)
@@ -645,6 +688,7 @@ impl WorkspaceView {
         self.selection.selected_session_id = Some(session_id);
         self.drawer.set_selected_session(Some(session_id));
         self.workspace.focus_session(session_id);
+        self.mark_ui_sync_dirty();
         self.sync_file_tree_to_focused_session(cx);
         // If the session showed ResponseReady, downgrade the cache to Idle
         // immediately so the badge clears without waiting for the next poll.
@@ -824,10 +868,9 @@ impl WorkspaceView {
     /// Returns `true` if any terminal was actually resized.
     fn resize_terminals_to_grid(&mut self) -> bool {
         // Layout constants from types.rs: HEADER_HEIGHT, TERMINAL_CONTENT_PADDING, CELL_BORDER_WIDTH
-        let cell_info = self.workspace.cell_info();
         let mut resized_any = false;
 
-        for info in cell_info {
+        for info in self.cache.render_cell_info.clone() {
             if let Some(terminal_view) = self.terminals.get_mut(&info.session_id) {
                 // Subtract all chrome between the grid cell bounds and the
                 // actual terminal canvas drawing area:
@@ -901,7 +944,7 @@ impl WorkspaceView {
 
         // Escape closes settings page if open
         if self.settings.open && event.keystroke.key == "escape" {
-            self.close_settings();
+            self.close_settings(cx);
             cx.notify();
             return;
         }
@@ -1075,29 +1118,7 @@ impl WorkspaceView {
             // blocking the render thread with synchronous file I/O.
             // Only one task at a time — if a task is already in flight it will
             // flush whatever is dirty when it fires (including later edits).
-            let should_flush = self
-                .settings
-                .page
-                .as_ref()
-                .map(|p| p.user_save_pending || p.project_save_pending)
-                .unwrap_or(false);
-            if should_flush && self.settings.save_task.is_none() {
-                self.settings.save_task =
-                    Some(cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
-                        cx.background_executor()
-                            .timer(std::time::Duration::from_millis(500))
-                            .await;
-                        if this
-                            .update(cx, |this, _| {
-                                this.flush_settings();
-                                this.settings.save_task = None;
-                            })
-                            .is_err()
-                        {
-                            tracing::warn!("Settings save: entity dropped before flush");
-                        }
-                    }));
-            }
+            self.schedule_settings_save(std::time::Duration::from_millis(500), cx);
             container = container.child(self.render_settings_overlay(cx));
             return container;
         }
@@ -1312,7 +1333,7 @@ impl WorkspaceView {
                                                 move |this, _: &ClickEvent, _window, cx| {
                                                     this.modals.pending_profile_deletion = None;
                                                     this.top_bar.remove_tab(idx_for_confirm);
-                                                    this.save_layout_profiles_to_settings();
+                                                    this.save_layout_profiles_to_settings(cx);
                                                     cx.notify();
                                                 },
                                             ))
@@ -1500,11 +1521,14 @@ impl Render for WorkspaceView {
         self.process_top_bar_events();
         self.process_icon_rail_events();
 
-        // Sync UI state (throttled to ~10/sec to avoid locking task_manager
-        // and iterating all tasks on every frame during high-frequency output).
+        // Sync UI state only when metadata changed, with a slow fallback pass
+        // to recover from any missed invalidation.
         let now = Instant::now();
-        if now.duration_since(self.polling.last_ui_sync) >= Duration::from_millis(100) {
+        if self.polling.ui_sync_dirty
+            || now.duration_since(self.polling.last_ui_sync) >= Self::UI_SYNC_FALLBACK_INTERVAL
+        {
             self.sync_ui_state();
+            self.polling.ui_sync_dirty = false;
             self.polling.last_ui_sync = now;
         }
 
@@ -1532,6 +1556,7 @@ impl Render for WorkspaceView {
             0.0
         };
         self.workspace.set_right_panel_width(right_panel_w);
+        self.cache.render_cell_info = self.workspace.cell_info();
 
         self.sync_terminal_dimensions_and_resize(window, cx);
 

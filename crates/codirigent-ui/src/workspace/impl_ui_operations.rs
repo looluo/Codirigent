@@ -3,7 +3,6 @@
 use super::editor_detection::{extra_editor_dirs, is_terminal_editor};
 use super::gpui::WorkspaceView;
 use super::types::SessionActionKind;
-use codirigent_core::config_service::ConfigService;
 use codirigent_core::{SessionId, SessionManager};
 use gpui::Context;
 use std::path::Path;
@@ -12,13 +11,14 @@ use tracing::{info, warn};
 impl WorkspaceView {
     /// Open a file in the user's configured editor.
     pub(super) fn open_in_editor(&mut self, path: &Path) {
-        let editor = self
-            .settings
-            .config_service
-            .as_ref()
-            .and_then(|cs| cs.load_user_settings().ok())
-            .map(|s| s.general.editor_command)
-            .unwrap_or_else(|| "code".to_string());
+        let editor = {
+            let configured = self.effective_user_settings().general.editor_command.clone();
+            if configured.is_empty() {
+                "code".to_string()
+            } else {
+                configured
+            }
+        };
 
         let absolute_path = if path.is_absolute() {
             path.to_path_buf()
@@ -135,7 +135,8 @@ impl WorkspaceView {
             self.workspace
                 .sync_sessions_from_manager(&manager.list_sessions());
         }
-        self.save_state_to_disk();
+        self.mark_ui_sync_dirty();
+        self.save_state_to_disk(cx);
         cx.notify();
     }
 }

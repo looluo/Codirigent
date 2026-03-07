@@ -228,6 +228,7 @@ impl WorkspaceView {
             }
         }
 
+        self.mark_ui_sync_dirty();
         self.close_task_creation_modal();
         cx.notify();
     }
@@ -271,7 +272,8 @@ impl WorkspaceView {
             self.workspace
                 .sync_sessions_from_manager(&manager.list_sessions());
         }
-        self.save_state_to_disk();
+        self.mark_ui_sync_dirty();
+        self.save_state_to_disk(cx);
         self.close_session_action_modal();
         cx.notify();
     }

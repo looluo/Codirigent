@@ -178,6 +178,7 @@ pub enum ConfigChange {
 /// let config = service.load_project_config(project).unwrap();
 /// println!("Scheduler mode: {:?}", config.scheduler.mode);
 /// ```
+#[derive(Clone)]
 pub struct DefaultConfigService {
     user_config_dir: PathBuf,
 }

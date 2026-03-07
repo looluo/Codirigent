@@ -12,6 +12,7 @@ use super::types::FileTreeContextMenu;
 use crate::sidebar::{FileTreeEntryData, FileTreeEvent};
 use codirigent_core::{SessionId, SessionManager};
 use codirigent_filetree::FileTree;
+use codirigent_session::WorktreeManager;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
 use tracing::{info, warn};
@@ -41,25 +42,82 @@ impl WorkspaceView {
         self.project.file_tree.update_from_entries(entries);
     }
 
-    /// Refresh worktree panel from the worktree manager.
-    pub(super) fn refresh_worktree_panel(&mut self) {
-        if let Some(ref manager) = self.project.worktree_manager {
-            if let Ok(mut mgr) = manager.lock() {
-                let _: Result<(), anyhow::Error> = mgr.refresh();
-                self.project
-                    .worktree_panel
-                    .set_worktrees(mgr.list().to_vec());
-                if let Ok(branches) = mgr.list_local_branches() {
-                    self.project.worktree_panel.set_available_branches(branches);
-                }
-                return;
-            }
-        }
+    fn spawn_file_tree_refresh(
+        &mut self,
+        path: PathBuf,
+        generation: u64,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.polling.file_tree_rebuild_in_flight = true;
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+            let path_for_build = path.clone();
+            let tree_result = cx
+                .background_executor()
+                .spawn(async move { FileTree::new(path_for_build) })
+                .await;
 
-        self.project.worktree_panel.set_worktrees(Vec::new());
-        self.project
-            .worktree_panel
-            .set_available_branches(Vec::new());
+            let _ = this.update(cx, |this, cx| {
+                if this.polling.project_refresh_generation != generation
+                    || this.project.project_root.as_ref() != Some(&path)
+                {
+                    return;
+                }
+                this.polling.file_tree_rebuild_in_flight = false;
+                match tree_result {
+                    Ok(tree) => {
+                        this.project.file_tree_model = Some(tree);
+                    }
+                    Err(e) => {
+                        warn!("Failed to initialize file tree: {}", e);
+                        this.project.file_tree_model = None;
+                    }
+                }
+                this.refresh_file_tree_panel();
+                cx.notify();
+            });
+        })
+        .detach();
+    }
+
+    fn spawn_worktree_refresh(
+        &mut self,
+        path: PathBuf,
+        generation: u64,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+            let path_for_build = path.clone();
+            let worktree_result = cx.background_executor().spawn(async move {
+                let manager = WorktreeManager::new(&path_for_build)?;
+                let worktrees = manager.list().to_vec();
+                let branches = manager.list_local_branches().unwrap_or_default();
+                Ok::<_, anyhow::Error>((manager, worktrees, branches))
+            });
+
+            let result = worktree_result.await;
+            let _ = this.update(cx, |this, cx| {
+                if this.polling.project_refresh_generation != generation
+                    || this.project.project_root.as_ref() != Some(&path)
+                {
+                    return;
+                }
+
+                match result {
+                    Ok((manager, worktrees, branches)) => {
+                        this.project.worktree_manager = Some(Arc::new(Mutex::new(manager)));
+                        this.project.worktree_panel.set_worktrees(worktrees);
+                        this.project.worktree_panel.set_available_branches(branches);
+                    }
+                    Err(_) => {
+                        this.project.worktree_manager = None;
+                        this.project.worktree_panel.set_worktrees(Vec::new());
+                        this.project.worktree_panel.set_available_branches(Vec::new());
+                    }
+                }
+                cx.notify();
+            });
+        })
+        .detach();
     }
 
     /// Set the current project root and update dependent UI.
@@ -67,42 +125,26 @@ impl WorkspaceView {
     /// Sets the root immediately (cheap) and spawns the expensive directory
     /// walk on a background thread to avoid blocking the UI.
     pub(super) fn set_project_root(&mut self, path: PathBuf, cx: &mut gpui::Context<Self>) {
+        let same_root = self.project.project_root.as_ref() == Some(&path);
+        if same_root && self.project.file_tree_model.is_some() {
+            return;
+        }
+
         self.project.project_root = Some(path.clone());
         self.project.file_tree.set_root(path.clone());
+        self.project.file_tree_model = None;
+        self.project.worktree_manager = None;
+        self.project.worktree_panel.set_worktrees(Vec::new());
+        self.project.worktree_panel.set_available_branches(Vec::new());
+        self.refresh_file_tree_panel();
+        self.mark_ui_sync_dirty();
 
-        // Worktree manager init is cheap (just reads .git), do it synchronously
-        self.project.worktree_manager = codirigent_session::WorktreeManager::new(&path)
-            .ok()
-            .map(|manager| Arc::new(Mutex::new(manager)));
-        self.refresh_worktree_panel();
-
-        // Spawn the expensive FileTree::new (recursive dir walk) on background
-        if !self.polling.file_tree_rebuild_in_flight {
-            self.polling.file_tree_rebuild_in_flight = true;
-            let bg_path = path;
-            cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
-                let tree_result = cx
-                    .background_executor()
-                    .spawn(async move { FileTree::new(bg_path.clone()) })
-                    .await;
-
-                let _ = this.update(cx, |this, cx| {
-                    this.polling.file_tree_rebuild_in_flight = false;
-                    match tree_result {
-                        Ok(tree) => {
-                            this.project.file_tree_model = Some(tree);
-                        }
-                        Err(e) => {
-                            warn!("Failed to initialize file tree: {}", e);
-                            this.project.file_tree_model = None;
-                        }
-                    }
-                    this.refresh_file_tree_panel();
-                    cx.notify();
-                });
-            })
-            .detach();
-        }
+        self.polling.project_refresh_generation =
+            self.polling.project_refresh_generation.saturating_add(1);
+        let generation = self.polling.project_refresh_generation;
+        self.spawn_file_tree_refresh(path.clone(), generation, cx);
+        self.spawn_worktree_refresh(path, generation, cx);
+        self.start_settings_background_load(false, cx);
     }
 
     /// Sync the file tree panel to show the focused session's working directory.

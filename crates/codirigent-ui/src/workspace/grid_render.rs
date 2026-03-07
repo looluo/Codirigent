@@ -44,7 +44,7 @@ impl WorkspaceView {
         let grid_gap = theme.grid_gap;
 
         // Clone cell info and layout dimensions
-        let cells = self.workspace().cell_info();
+        let cells = self.cache.render_cell_info.clone();
         let profile = self.workspace().layout_profile();
         let (rows, cols) = profile.dimensions();
 

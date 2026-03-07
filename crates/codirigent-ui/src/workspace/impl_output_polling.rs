@@ -137,8 +137,6 @@ impl WorkspaceView {
     pub(super) fn poll_output(&mut self, cx: &mut Context<Self>) {
         self.process_deferred_enters();
         self.drain_vte_responses();
-        self.spawn_background_hook_signal_check(cx);
-        self.spawn_background_jsonl_check(cx);
 
         let mut session_ids: Vec<codirigent_core::SessionId> =
             self.terminals.keys().copied().collect();
@@ -156,15 +154,22 @@ impl WorkspaceView {
             had_output_activity |= session_dirty;
         }
 
-        self.cleanup_compaction_timeouts();
-        self.cleanup_stale_proposals();
-        self.schedule_background_git_refresh(cx);
-        any_dirty |= self.update_clipboard_preview(cx);
-
         // Track output activity for adaptive polling
         self.polling.last_poll_had_output = had_output_activity;
 
         if any_dirty {
+            cx.notify();
+        }
+    }
+
+    pub(super) fn poll_maintenance(&mut self, cx: &mut Context<Self>) {
+        self.spawn_background_hook_signal_check(cx);
+        self.spawn_background_jsonl_check(cx);
+        self.cleanup_compaction_timeouts();
+        self.cleanup_stale_proposals();
+        self.schedule_background_git_refresh(cx);
+
+        if self.update_clipboard_preview(cx) {
             cx.notify();
         }
     }
@@ -222,40 +227,27 @@ impl WorkspaceView {
 
             // Check for OSC 7 (working directory change) sequences
             if let Some(new_cwd) = codirigent_session::extract_osc7_path(&data) {
-                // Combine all session_manager accesses into one lock acquisition
-                let (changed, git_info, mgr_session) = self.with_session_manager(|manager| {
+                let mgr_session = self.with_session_manager(|manager| {
                     let changed = manager.update_working_directory(session_id, new_cwd);
                     if changed {
                         manager.invalidate_git_cache(session_id);
-                        let git_info = manager.refresh_git_status(session_id);
-                        let mgr_session = manager.get_session(session_id);
-                        (true, git_info, mgr_session)
+                        manager.get_session(session_id)
                     } else {
-                        (false, None, None)
+                        None
                     }
                 });
-                if changed {
-                    // Update terminal header (UI-only state, not part of Session)
+
+                if let Some(mgr_session) = mgr_session {
                     if let Some(header) = self.terminal_headers.get_mut(&session_id) {
-                        if let Some(ref info) = git_info {
-                            header.git_branch = Some(info.branch.clone());
-                            header.git_dirty_count = Some(info.dirty_count);
-                        } else {
-                            header.git_branch = None;
-                            header.git_dirty_count = None;
-                        }
+                        header.git_branch = None;
+                        header.git_dirty_count = None;
                     }
 
                     // Sync workspace cache so file tree sees the new CWD.
-                    if let Some(mgr) = mgr_session {
-                        if let Some(ws_session) = self.workspace.session_mut(session_id) {
-                            ws_session.working_directory = mgr.working_directory;
-                            // Keep drawer group in sync with current git branch
-                            if let Some(ref gi) = mgr.git_info {
-                                ws_session.group = Some(gi.branch.clone());
-                            }
-                            ws_session.git_info = mgr.git_info;
-                        }
+                    if let Some(ws_session) = self.workspace.session_mut(session_id) {
+                        ws_session.working_directory = mgr_session.working_directory.clone();
+                        ws_session.group = None;
+                        ws_session.git_info = None;
                     }
 
                     // Update file tree panel if this is the focused session.
@@ -264,6 +256,14 @@ impl WorkspaceView {
                     if self.workspace.focused_session_id() == Some(session_id) {
                         self.sync_file_tree_to_focused_session(cx);
                     }
+
+                    self.spawn_session_git_refresh(
+                        session_id,
+                        mgr_session.working_directory.clone(),
+                        cx,
+                    );
+                    self.mark_ui_sync_dirty();
+                    any_dirty = true;
                 }
             }
         }
@@ -308,6 +308,7 @@ impl WorkspaceView {
             let old_status = self.workspace.session(session_id).map(|s| s.status);
             let mut just_started_compaction = false;
             if self.workspace.update_session_status(session_id, status) {
+                self.mark_ui_sync_dirty();
                 any_dirty = true;
                 // Sync task board with the canonical (JSONL-corrected) status
                 if let Some(old) = old_status {
@@ -339,6 +340,7 @@ impl WorkspaceView {
                         if let Some(session) = self.workspace.session_mut(session_id) {
                             session.current_task = None;
                         }
+                        self.mark_ui_sync_dirty();
                         // Start context clear and reuse compaction infrastructure
                         let cli_type = self
                             .clipboard
@@ -763,7 +765,7 @@ impl WorkspaceView {
                     };
                     session_ids
                         .iter()
-                        .filter_map(|id| mgr.refresh_git_status(*id).map(|info| (*id, info)))
+                        .map(|id| (*id, mgr.refresh_git_status(*id)))
                         .collect::<Vec<_>>()
                 })
                 .await;
@@ -773,23 +775,86 @@ impl WorkspaceView {
                 let mut git_changed = false;
                 for (id, git_info) in &git_infos {
                     if let Some(header) = this.terminal_headers.get_mut(id) {
-                        if header.git_branch.as_deref() != Some(git_info.branch.as_str())
-                            || header.git_dirty_count != Some(git_info.dirty_count)
-                        {
-                            header.git_branch = Some(git_info.branch.clone());
-                            header.git_dirty_count = Some(git_info.dirty_count);
+                        let branch = git_info.as_ref().map(|info| info.branch.clone());
+                        let dirty_count = git_info.as_ref().map(|info| info.dirty_count);
+                        if header.git_branch != branch || header.git_dirty_count != dirty_count {
+                            header.git_branch = branch;
+                            header.git_dirty_count = dirty_count;
+                            git_changed = true;
+                        }
+                    }
+                    if let Some(session) = this.workspace.session_mut(*id) {
+                        let next_group = git_info.as_ref().map(|info| info.branch.clone());
+                        if session.git_info != *git_info || session.group != next_group {
+                            session.git_info = git_info.clone();
+                            session.group = next_group;
                             git_changed = true;
                         }
                     }
                 }
                 if git_changed {
-                    for (id, git_info) in &git_infos {
-                        if let Some(session) = this.workspace.session_mut(*id) {
-                            session.git_info = Some(git_info.clone());
-                            // Keep drawer group in sync with current git branch
-                            session.group = Some(git_info.branch.clone());
-                        }
+                    this.mark_ui_sync_dirty();
+                    cx.notify();
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn spawn_session_git_refresh(
+        &mut self,
+        session_id: SessionId,
+        expected_cwd: std::path::PathBuf,
+        cx: &mut Context<Self>,
+    ) {
+        let session_manager = self.session_manager.clone();
+
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+            let expected_cwd_for_bg = expected_cwd.clone();
+            let git_info = cx
+                .background_executor()
+                .spawn(async move {
+                    let mgr = session_manager.lock().ok()?;
+                    let session = mgr.get_session(session_id)?;
+                    if session.working_directory != expected_cwd_for_bg {
+                        return None;
                     }
+                    Some((session_id, expected_cwd_for_bg, mgr.refresh_git_status(session_id)))
+                })
+                .await;
+
+            let _ = this.update(cx, |this, cx| {
+                let Some((session_id, expected_cwd, git_info)) = git_info else {
+                    return;
+                };
+                if !this
+                    .workspace
+                    .session(session_id)
+                    .is_some_and(|session| session.working_directory == expected_cwd)
+                {
+                    return;
+                }
+
+                let branch = git_info.as_ref().map(|info| info.branch.clone());
+                let dirty_count = git_info.as_ref().map(|info| info.dirty_count);
+                let next_group = git_info.as_ref().map(|info| info.branch.clone());
+                let mut changed = false;
+                if let Some(header) = this.terminal_headers.get_mut(&session_id) {
+                    if header.git_branch != branch || header.git_dirty_count != dirty_count {
+                        header.git_branch = branch.clone();
+                        header.git_dirty_count = dirty_count;
+                        changed = true;
+                    }
+                }
+                if let Some(session) = this.workspace.session_mut(session_id) {
+                    if session.git_info != git_info || session.group != next_group {
+                        session.git_info = git_info.clone();
+                        session.group = next_group;
+                        changed = true;
+                    }
+                }
+                if changed {
+                    this.mark_ui_sync_dirty();
                     cx.notify();
                 }
             });
@@ -909,17 +974,17 @@ impl WorkspaceView {
                 .spawn(async move { read_recent_hook_signal_updates() })
                 .await;
 
-            let _ = this.update(cx, |this, _cx| {
+            let _ = this.update(cx, |this, cx| {
                 this.polling.hook_signal_check_in_flight = false;
                 for update in updates {
-                    this.apply_hook_signal_update(update);
+                    this.apply_hook_signal_update(update, cx);
                 }
             });
         })
         .detach();
     }
 
-    fn apply_hook_signal_update(&mut self, update: HookSignalUpdate) {
+    fn apply_hook_signal_update(&mut self, update: HookSignalUpdate, cx: &mut Context<Self>) {
         let HookSignalUpdate {
             session_id,
             cli_session_id,
@@ -979,7 +1044,7 @@ impl WorkspaceView {
         }
 
         if id_changed {
-            self.save_state_to_disk();
+            self.save_state_to_disk(cx);
         }
 
         let focused_id = self.workspace.focused_session_id();
@@ -1171,9 +1236,7 @@ impl WorkspaceView {
                 _ => {}
             }
 
-            if id_changed {
-                self.save_state_to_disk();
-            }
+            let _ = id_changed;
 
             let focused_id = self.workspace.focused_session_id();
             let new_status = match signal.status.as_str() {

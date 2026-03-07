@@ -310,8 +310,10 @@ pub(super) struct PollingState {
     pub last_git_refresh: Instant,
     /// Sessions that need a deferred Enter keypress sent to their PTY.
     pub pending_enters: HashMap<SessionId, (Instant, bool)>,
-    /// Last time sync_ui_state ran (throttled to avoid per-frame overhead).
+    /// Last time sync_ui_state ran (fallback safety sync for missed invalidations).
     pub last_ui_sync: Instant,
+    /// Whether derived UI state (headers, empty cells, task counts) needs recomputing.
+    pub ui_sync_dirty: bool,
     /// Last time clipboard was checked for changes (time-based, ~1/second).
     pub last_clipboard_check: Instant,
     /// Whether a background git refresh is currently in-flight.
@@ -324,10 +326,18 @@ pub(super) struct PollingState {
     pub file_tree_rebuild_in_flight: bool,
     /// Whether a background clipboard image save is currently in-flight.
     pub clipboard_load_in_flight: bool,
+    /// Debounced app-state persistence task.
+    pub state_save_task: Option<gpui::Task<()>>,
+    /// Monotonic generation for debounced app-state persistence.
+    pub state_save_generation: u64,
     /// Last time the Codex/Gemini JSONL check ran.
     pub last_jsonl_check: Instant,
     /// Last time hook signal files were scanned (~1/second throttle).
     pub last_hook_signal_check: Instant,
+    /// Generation counter for async project-root refreshes (file tree/worktree).
+    pub project_refresh_generation: u64,
+    /// Whether session restoration from disk is currently in-flight.
+    pub restore_in_flight: bool,
 }
 
 impl PollingState {
@@ -340,14 +350,19 @@ impl PollingState {
             last_git_refresh: Instant::now(),
             pending_enters: HashMap::new(),
             last_ui_sync: Instant::now() - std::time::Duration::from_millis(200),
+            ui_sync_dirty: true,
             last_clipboard_check: Instant::now(),
             git_refresh_in_flight: false,
             jsonl_check_in_flight: false,
             hook_signal_check_in_flight: false,
             file_tree_rebuild_in_flight: false,
             clipboard_load_in_flight: false,
+            state_save_task: None,
+            state_save_generation: 0,
             last_jsonl_check: Instant::now(),
             last_hook_signal_check: Instant::now() - std::time::Duration::from_secs(1),
+            project_refresh_generation: 0,
+            restore_in_flight: false,
         }
     }
 }
@@ -414,6 +429,8 @@ pub(super) struct CacheState {
     /// Cached result of font metric computation, keyed by font settings.
     /// Avoids repeated font system calls when settings haven't changed.
     pub cached_cell_dims: Option<CachedCellDims>,
+    /// Per-render snapshot of cell layout info reused by resize and paint passes.
+    pub render_cell_info: Vec<super::core::CellInfo>,
 }
 
 impl CacheState {
@@ -427,6 +444,7 @@ impl CacheState {
             compaction_start_times: HashMap::new(),
             drawer_group_expanded: HashMap::new(),
             cached_cell_dims: None,
+            render_cell_info: Vec::new(),
         }
     }
 }
