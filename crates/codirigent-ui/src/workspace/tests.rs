@@ -640,3 +640,90 @@ fn test_string_truncation_allocates_when_long() {
 
     assert!(matches!(result, Cow::Owned(_)));
 }
+
+#[test]
+fn test_workspace_swap_sessions_grid() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    ws.set_bounds(Bounds::from_size(1000.0, 800.0));
+    ws.add_session(make_session(1, "S1"));
+    ws.add_session(make_session(2, "S2"));
+    ws.add_session(make_session(3, "S3"));
+
+    // Swap index 0 (S1) with index 2 (S3)
+    assert!(ws.swap_sessions(0, 2));
+
+    let cells = ws.cell_info();
+    assert_eq!(cells[0].session_id, SessionId(3));
+    assert_eq!(cells[1].session_id, SessionId(2));
+    assert_eq!(cells[2].session_id, SessionId(1));
+}
+
+#[test]
+fn test_workspace_swap_sessions_same_index() {
+    let mut ws = Workspace::new();
+    ws.add_session(make_session(1, "S1"));
+
+    // Swap with self is a no-op, returns false
+    assert!(!ws.swap_sessions(0, 0));
+}
+
+#[test]
+fn test_workspace_swap_sessions_out_of_bounds() {
+    let mut ws = Workspace::new();
+    ws.add_session(make_session(1, "S1"));
+
+    assert!(!ws.swap_sessions(0, 5));
+    assert!(!ws.swap_sessions(5, 0));
+}
+
+#[test]
+fn test_workspace_swap_sessions_split_tree() {
+    let mut ws = Workspace::new();
+    let tree = LayoutNode::from_grid(1, 3);
+    ws.set_split_tree(tree);
+    ws.add_session(make_session(1, "S1"));
+    ws.add_session(make_session(2, "S2"));
+    ws.add_session(make_session(3, "S3"));
+
+    // Swap index 0 with index 2
+    assert!(ws.swap_sessions(0, 2));
+
+    let cells = ws.cell_info();
+    assert_eq!(cells[0].session_id, SessionId(3));
+    assert_eq!(cells[2].session_id, SessionId(1));
+}
+
+#[test]
+fn test_workspace_swap_sessions_split_tree_with_empty_slot() {
+    let mut ws = Workspace::new();
+    let tree = LayoutNode::from_grid(1, 3);
+    ws.set_split_tree(tree);
+    ws.add_session(make_session(1, "S1"));
+    // Slot 0 has S1, slots 1 and 2 are empty
+
+    // Swap S1 from slot 0 to empty slot 2
+    assert!(ws.swap_sessions(0, 2));
+
+    let split = ws.layout_state().as_split_tree().unwrap();
+    assert_eq!(split.assignments()[0].1, None);
+    assert_eq!(split.assignments()[2].1, Some(SessionId(1)));
+}
+
+#[test]
+fn test_workspace_swap_sessions_focus_follows_session() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    ws.set_bounds(Bounds::from_size(1000.0, 800.0));
+    ws.add_session(make_session(1, "S1"));
+    ws.add_session(make_session(2, "S2"));
+    ws.add_session(make_session(3, "S3"));
+
+    // Focus S1 at index 0
+    ws.focus_session(SessionId(1));
+    assert_eq!(ws.focused_session_id(), Some(SessionId(1)));
+
+    // Swap indices 0 and 2 — S1 moves to index 2
+    ws.swap_sessions(0, 2);
+
+    // Focus should follow S1 to its new position
+    assert_eq!(ws.focused_session_id(), Some(SessionId(1)));
+}

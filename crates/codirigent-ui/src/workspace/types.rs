@@ -278,6 +278,28 @@ pub(super) struct SelectionState {
     pub file_tree_context_menu: Option<FileTreeContextMenu>,
     /// Click deduplication: track last click position and time to prevent double-creation.
     pub last_click_position: Option<(codirigent_core::GridPosition, Instant)>,
+    /// Active drag-and-drop state for session reordering (None when not dragging).
+    pub drag: Option<DragState>,
+}
+
+/// State for drag-and-drop session reordering.
+///
+/// Tracks an in-progress drag operation where the user is moving a session
+/// from one pane to another by dragging its header bar.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct DragState {
+    /// Session being dragged.
+    pub source_session_id: SessionId,
+    /// Grid index (or slot index) of the source cell.
+    pub source_index: usize,
+    /// Mouse position when drag started (screen pixels).
+    pub start_position: crate::layout::Point,
+    /// Current mouse position (screen pixels).
+    pub current_position: crate::layout::Point,
+    /// Whether the drag threshold (5px) has been exceeded.
+    pub active: bool,
+    /// Index of the cell currently under the cursor (drop target), if any.
+    pub target_index: Option<usize>,
 }
 
 impl SelectionState {
@@ -289,6 +311,7 @@ impl SelectionState {
             selecting_session_id: None,
             file_tree_context_menu: None,
             last_click_position: None,
+            drag: None,
         }
     }
 }

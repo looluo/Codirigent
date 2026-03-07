@@ -20,6 +20,15 @@ use gpui::{
 use std::rc::Rc;
 use tracing::info;
 
+/// Visual state of a cell during drag-and-drop.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DragVisual {
+    /// This cell is being dragged (source) — dim it.
+    Source,
+    /// This cell is the current drop target — highlight it.
+    Target,
+}
+
 impl WorkspaceView {
     /// Dispatch workspace rendering to the appropriate layout: split-tree or NxM grid.
     pub(super) fn render_grid_with_headers(
@@ -35,7 +44,11 @@ impl WorkspaceView {
     }
 
     /// Render the traditional NxM grid layout.
-    fn render_grid_layout(&mut self, window: &mut Window, cx: &mut Context<Self>) -> impl IntoElement {
+    fn render_grid_layout(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
         // Clone all theme values upfront to avoid borrow issues
         let theme = self.workspace().theme().clone();
         let panel_bg: gpui::Hsla = theme.panel_background.into();
@@ -69,7 +82,8 @@ impl WorkspaceView {
                         if let Some(header) = self.get_terminal_header(info.session_id) {
                             header.render_hints()
                         } else {
-                            let focused = self.workspace().focused_session_id() == Some(info.session_id);
+                            let focused =
+                                self.workspace().focused_session_id() == Some(info.session_id);
                             self.workspace()
                                 .session(info.session_id)
                                 .map(|session| {
@@ -339,6 +353,39 @@ impl WorkspaceView {
         let muted: gpui::Hsla = theme.muted.into();
         let orange: gpui::Hsla = theme.orange.into();
 
+        // Drag-and-drop: find this cell's position in render_cell_info and its logical index.
+        // `drag_vec_pos` is the Vec position (for visual state comparison).
+        // `drag_logical_index` is `CellInfo.index` (for swap_sessions).
+        let drag_vec_pos = self
+            .cache
+            .render_cell_info
+            .iter()
+            .position(|c| c.session_id == session_id);
+        let drag_logical_index = drag_vec_pos.map(|pos| self.cache.render_cell_info[pos].index);
+
+        let drag_visual = drag_vec_pos.and_then(|_pos| {
+            let drag = self.selection.drag.as_ref()?;
+            if !drag.active {
+                return None;
+            }
+            if drag.source_index == drag_logical_index.unwrap_or(usize::MAX) {
+                Some(DragVisual::Source)
+            } else if drag.target_index == drag_logical_index {
+                Some(DragVisual::Target)
+            } else {
+                None
+            }
+        });
+
+        // Override border color for drop target
+        let cell_border = match drag_visual {
+            Some(DragVisual::Target) => {
+                let primary: gpui::Hsla = theme.primary.into();
+                primary
+            }
+            _ => cell_border,
+        };
+
         let header_border = cell_border;
 
         // Color indicator bar
@@ -462,6 +509,86 @@ impl WorkspaceView {
             );
         }
 
+        // Set cursor for draggable header
+        header = if matches!(drag_visual, Some(DragVisual::Source)) {
+            header.cursor_grabbing()
+        } else if drag_logical_index.is_some() && self.cache.render_cell_info.len() > 1 {
+            header.cursor_grab()
+        } else {
+            header
+        };
+
+        // --- Drag-and-drop handlers on header ---
+        // Use logical index (CellInfo.index) for swap operations, not Vec position.
+        if let Some(logical_index) = drag_logical_index {
+            // Don't allow drag in single-pane layout
+            if self.cache.render_cell_info.len() > 1 {
+                header = header
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
+                            let pos = crate::layout::Point::new(
+                                event.position.x.into(),
+                                event.position.y.into(),
+                            );
+                            this.selection.drag = Some(super::types::DragState {
+                                source_session_id: session_id,
+                                source_index: logical_index,
+                                start_position: pos,
+                                current_position: pos,
+                                active: false,
+                                target_index: None,
+                            });
+                            cx.notify();
+                        }),
+                    )
+                    .on_mouse_move(cx.listener(
+                        move |this, event: &MouseMoveEvent, _window, cx| {
+                            let Some(drag) = &mut this.selection.drag else {
+                                return;
+                            };
+                            if drag.source_session_id != session_id {
+                                return;
+                            }
+                            let pos = crate::layout::Point::new(
+                                event.position.x.into(),
+                                event.position.y.into(),
+                            );
+                            drag.current_position = pos;
+
+                            // Activate drag after 5px movement threshold
+                            if !drag.active {
+                                let dx = pos.x - drag.start_position.x;
+                                let dy = pos.y - drag.start_position.y;
+                                if (dx * dx + dy * dy) > 25.0 {
+                                    drag.active = true;
+                                } else {
+                                    return;
+                                }
+                            }
+
+                            // Hit-test: find which cell the cursor is over,
+                            // then map Vec position to CellInfo.index for swap.
+                            let target = this
+                                .cache
+                                .render_cell_info
+                                .iter()
+                                .find(|cell| cell.bounds.contains(pos))
+                                .map(|cell| cell.index);
+
+                            // Update target (exclude source)
+                            if let Some(drag) = &mut this.selection.drag {
+                                drag.target_index = target.filter(|&t| t != logical_index);
+                            }
+
+                            cx.notify();
+                        },
+                    ));
+                // Note: mouse-up swap is handled by the global handler on
+                // workspace-container (gpui.rs) to catch releases anywhere.
+            }
+        }
+
         // Render terminal content before building the div tree so the
         // mutable borrow on `self` is released before `cx.listener()`.
         let entity = cx.entity();
@@ -483,7 +610,6 @@ impl WorkspaceView {
             .id(SharedString::from(format!("session-cell-{}", session_id.0)))
             .w_full()
             .bg(panel_bg)
-            .border_1()
             .border_color(cell_border)
             .rounded_lg()
             .flex()
@@ -497,6 +623,18 @@ impl WorkspaceView {
                     cx.notify();
                 }),
             );
+
+        // Drag visual: thicker border for drop target, normal otherwise
+        outer = if matches!(drag_visual, Some(DragVisual::Target)) {
+            outer.border_2()
+        } else {
+            outer.border_1()
+        };
+
+        // Drag visual: dim the source cell
+        if matches!(drag_visual, Some(DragVisual::Source)) {
+            outer = outer.opacity(0.5);
+        }
 
         // Fixed height for grid mode, flexible for split tree mode
         if let Some(h) = cell_height {
@@ -543,6 +681,10 @@ impl WorkspaceView {
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
+                        // Don't start text selection during drag
+                        if this.selection.drag.as_ref().is_some_and(|d| d.active) {
+                            return;
+                        }
                         let (ox, oy) = origin_for_down.get();
                         let mouse_x: f32 = event.position.x.into();
                         let mouse_y: f32 = event.position.y.into();
@@ -563,6 +705,10 @@ impl WorkspaceView {
                 // Mouse move: update selection during drag
                 .on_mouse_move(
                     cx.listener(move |this, event: &MouseMoveEvent, _window, cx| {
+                        // Don't update text selection during drag
+                        if this.selection.drag.as_ref().is_some_and(|d| d.active) {
+                            return;
+                        }
                         if !this.selection.is_selecting {
                             return;
                         }

@@ -47,8 +47,8 @@ use codirigent_session::clipboard_service::DefaultClipboardService;
 use codirigent_session::DefaultSessionManager;
 use gpui::{
     div, px, App, AppContext, Bounds, ClickEvent, Context, Entity, EntityInputHandler, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels, Render,
-    StatefulInteractiveElement, Styled, UTF16Selection, Window,
+    Focusable, InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseUpEvent,
+    ParentElement, Pixels, Render, StatefulInteractiveElement, Styled, UTF16Selection, Window,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -276,8 +276,7 @@ impl WorkspaceView {
                             this.polling.idle_poll_count.saturating_add(1);
                         if this.polling.idle_poll_count > Self::DEEP_IDLE_THRESHOLD_POLLS {
                             poll_interval_ms = Self::DEEP_IDLE_OUTPUT_POLL_INTERVAL_MS;
-                        } else if this.polling.idle_poll_count > Self::LIGHT_IDLE_THRESHOLD_POLLS
-                        {
+                        } else if this.polling.idle_poll_count > Self::LIGHT_IDLE_THRESHOLD_POLLS {
                             poll_interval_ms = Self::LIGHT_IDLE_OUTPUT_POLL_INTERVAL_MS;
                         }
                     }
@@ -449,52 +448,53 @@ impl WorkspaceView {
         self.polling.state_save_generation = self.polling.state_save_generation.saturating_add(1);
         let save_generation = self.polling.state_save_generation;
         self.polling.state_save_task = None;
-        self.polling.state_save_task = Some(cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
-            cx.background_executor()
-                .timer(Self::STATE_SAVE_DEBOUNCE)
-                .await;
+        self.polling.state_save_task =
+            Some(cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+                cx.background_executor()
+                    .timer(Self::STATE_SAVE_DEBOUNCE)
+                    .await;
 
-            let save_inputs = match this.update(cx, |this, _cx| {
-                if this.polling.state_save_generation != save_generation {
-                    return None;
-                }
+                let save_inputs = match this.update(cx, |this, _cx| {
+                    if this.polling.state_save_generation != save_generation {
+                        return None;
+                    }
 
-                Some((
-                    this.persistence.storage.clone(),
-                    this.session_manager.clone(),
-                    this.persisted_layout_mode(),
-                ))
-            }) {
-                Ok(Some(inputs)) => inputs,
-                Ok(None) | Err(_) => return,
-            };
+                    Some((
+                        this.persistence.storage.clone(),
+                        this.session_manager.clone(),
+                        this.persisted_layout_mode(),
+                    ))
+                }) {
+                    Ok(Some(inputs)) => inputs,
+                    Ok(None) | Err(_) => return,
+                };
 
-            let (storage, session_manager, layout) = save_inputs;
-            let result = cx
-                .background_executor()
-                .spawn(async move {
-                    let sessions = session_manager
-                        .lock()
-                        .map(|manager| manager.list_sessions())
-                        .unwrap_or_default();
-                    let state = codirigent_core::AppState {
-                        sessions,
-                        layout,
-                        updated_at: Some(chrono::Utc::now()),
-                    };
-                    storage.save_state(&state)
-                })
-                .await;
+                let (storage, session_manager, layout) = save_inputs;
+                let result = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let sessions = session_manager
+                            .lock()
+                            .map(|manager| manager.list_sessions())
+                            .unwrap_or_default();
+                        let state = codirigent_core::AppState {
+                            sessions,
+                            layout,
+                            updated_at: Some(chrono::Utc::now()),
+                        };
+                        storage.save_state(&state)
+                    })
+                    .await;
 
-            let _ = this.update(cx, |this, _cx| {
-                if this.polling.state_save_generation == save_generation {
-                    this.polling.state_save_task = None;
-                }
-                if let Err(e) = result {
-                    warn!("Failed to save state: {}", e);
-                }
-            });
-        }));
+                let _ = this.update(cx, |this, _cx| {
+                    if this.polling.state_save_generation == save_generation {
+                        this.polling.state_save_task = None;
+                    }
+                    if let Err(e) = result {
+                        warn!("Failed to save state: {}", e);
+                    }
+                });
+            }));
     }
 
     /// Cycle to next layout.
@@ -534,24 +534,26 @@ impl WorkspaceView {
     /// This should be called before rendering to ensure all UI components
     /// reflect the current workspace state.
     fn sync_ui_state(&mut self) {
-        let (task_titles, task_counts, task_snapshot) = if let Ok(manager) = self.task_manager.lock() {
+        let (task_titles, task_counts, task_snapshot) = if let Ok(manager) =
+            self.task_manager.lock()
+        {
             let mut titles = HashMap::new();
             let all_tasks = manager.list_tasks();
-            let counts = all_tasks.iter().fold(
-                (0usize, 0usize, 0usize, 0usize),
-                |(q, ip, r, d), task| {
-                    titles.insert(task.id.clone(), task.title.clone());
-                    match task.status {
-                        codirigent_core::TaskStatus::Queued
-                        | codirigent_core::TaskStatus::Blocked => (q + 1, ip, r, d),
-                        codirigent_core::TaskStatus::Assigned
-                        | codirigent_core::TaskStatus::Working => (q, ip + 1, r, d),
-                        codirigent_core::TaskStatus::Verifying
-                        | codirigent_core::TaskStatus::Review => (q, ip, r + 1, d),
-                        codirigent_core::TaskStatus::Done => (q, ip, r, d + 1),
-                    }
-                },
-            );
+            let counts =
+                all_tasks
+                    .iter()
+                    .fold((0usize, 0usize, 0usize, 0usize), |(q, ip, r, d), task| {
+                        titles.insert(task.id.clone(), task.title.clone());
+                        match task.status {
+                            codirigent_core::TaskStatus::Queued
+                            | codirigent_core::TaskStatus::Blocked => (q + 1, ip, r, d),
+                            codirigent_core::TaskStatus::Assigned
+                            | codirigent_core::TaskStatus::Working => (q, ip + 1, r, d),
+                            codirigent_core::TaskStatus::Verifying
+                            | codirigent_core::TaskStatus::Review => (q, ip, r + 1, d),
+                            codirigent_core::TaskStatus::Done => (q, ip, r, d + 1),
+                        }
+                    });
             let running_items = all_tasks
                 .iter()
                 .filter(|t| {
@@ -1706,6 +1708,23 @@ impl Render for WorkspaceView {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.handle_key_down(event, window, cx);
             }))
+            // Global mouse-up: catch drag releases anywhere in workspace
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
+                    if let Some(drag) = this.selection.drag.take() {
+                        if drag.active {
+                            if let Some(target) = drag.target_index {
+                                this.workspace.swap_sessions(drag.source_index, target);
+                                this.mark_layout_cache_dirty();
+                                this.mark_ui_sync_dirty();
+                                this.save_state_to_disk(cx);
+                            }
+                        }
+                        cx.notify();
+                    }
+                }),
+            )
             .bg(bg)
             .flex()
             .flex_col();

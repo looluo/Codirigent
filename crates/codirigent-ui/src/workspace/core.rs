@@ -648,6 +648,19 @@ impl Workspace {
         }
     }
 
+    /// Swap two sessions by their cell/slot index.
+    ///
+    /// This only changes which session is assigned to which position —
+    /// the layout structure (grid dimensions or split tree shape) is unchanged.
+    ///
+    /// Returns `true` if the swap was performed.
+    pub fn swap_sessions(&mut self, index_a: usize, index_b: usize) -> bool {
+        match &mut self.layout_state {
+            WorkspaceLayoutState::Grid(s) => s.swap_assignments(index_a, index_b),
+            WorkspaceLayoutState::SplitTree(s) => s.swap_assignments(index_a, index_b),
+        }
+    }
+
     // --- State for Rendering ---
 
     /// Get information about each visible cell for rendering.

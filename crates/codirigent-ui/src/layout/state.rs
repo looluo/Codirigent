@@ -252,6 +252,28 @@ impl LayoutState {
             self.focused_index = Some(new_index);
         }
     }
+
+    /// Swap two session assignments by index.
+    ///
+    /// Focus follows the session: if the focused session was at index `a`,
+    /// focus moves to index `b` (and vice versa).
+    ///
+    /// Returns `true` if both indices are valid and different.
+    pub fn swap_assignments(&mut self, a: usize, b: usize) -> bool {
+        if a == b || a >= self.assignments.len() || b >= self.assignments.len() {
+            return false;
+        }
+        self.assignments.swap(a, b);
+        // Keep focus on the same session (it moved to the other index)
+        if let Some(fi) = self.focused_index {
+            if fi == a {
+                self.focused_index = Some(b);
+            } else if fi == b {
+                self.focused_index = Some(a);
+            }
+        }
+        true
+    }
 }
 
 /// Split layout state manager.
@@ -568,6 +590,21 @@ impl SplitLayoutState {
             .iter()
             .find(|(s, _)| *s == slot)
             .and_then(|(_, sess)| *sess)
+    }
+
+    /// Swap session assignments between two slots by index into the assignments vec.
+    ///
+    /// Swaps the `Option<SessionId>` values (not the SlotIds).
+    /// Returns `true` if both indices are valid and different.
+    pub fn swap_assignments(&mut self, a: usize, b: usize) -> bool {
+        if a == b || a >= self.assignments.len() || b >= self.assignments.len() {
+            return false;
+        }
+        let session_a = self.assignments[a].1;
+        let session_b = self.assignments[b].1;
+        self.assignments[a].1 = session_b;
+        self.assignments[b].1 = session_a;
+        true
     }
 }
 
