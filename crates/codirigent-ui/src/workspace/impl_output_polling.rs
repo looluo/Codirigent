@@ -23,6 +23,8 @@ use codirigent_session::detect_cli_from_output;
 use codirigent_session::CliSessionStatus;
 use gpui::Context;
 use serde::Deserialize;
+use std::collections::hash_map::DefaultHasher;
+use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
 
@@ -40,6 +42,40 @@ struct PreparedSessionOutput {
     has_more: bool,
     detected_cli_type: Option<CliType>,
     cwd_session: Option<Session>,
+}
+
+enum ClipboardPreviewUpdate {
+    NoChange,
+    ChangedToNonImage,
+    Image {
+        signature: u64,
+        preview: crate::smart_clipboard::ThumbnailPreview,
+    },
+}
+
+fn clipboard_image_signature(image_data: &codirigent_core::ImageData) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    image_data.width.hash(&mut hasher);
+    image_data.height.hash(&mut hasher);
+    image_data.bytes.len().hash(&mut hasher);
+    image_data.format.extension().hash(&mut hasher);
+    image_data.bytes.hash(&mut hasher);
+    hasher.finish()
+}
+
+fn should_show_clipboard_preview(image_data: &codirigent_core::ImageData) -> bool {
+    // Windows apps often place a tiny DIB/bitmap icon or thumbnail on the
+    // clipboard alongside other content. Those are not useful as "image in
+    // clipboard" previews and are a common source of false positives.
+    if image_data.format == codirigent_core::ImageFormat::Dib
+        && image_data.width <= 64
+        && image_data.height <= 64
+        && image_data.bytes.len() <= 16 * 1024
+    {
+        return false;
+    }
+
+    true
 }
 
 /// Signal file written by `codirigent-hook` for each hook event.
@@ -184,7 +220,8 @@ impl WorkspaceView {
     }
 
     fn schedule_output_preparation(&mut self, cx: &mut Context<Self>) -> bool {
-        let mut session_ids = self.with_session_manager(|manager| manager.sessions_with_pending_output());
+        let mut session_ids =
+            self.with_session_manager(|manager| manager.sessions_with_pending_output());
         if let Some(focused_id) = self.workspace.focused_session_id() {
             if let Some(index) = session_ids.iter().position(|id| *id == focused_id) {
                 session_ids.swap(0, index);
@@ -238,16 +275,17 @@ impl WorkspaceView {
                         }
                     }
 
-                    let cwd_session = codirigent_session::extract_osc7_path(&data).and_then(|new_cwd| {
-                        let manager = session_manager.lock().ok()?;
-                        let changed = manager.update_working_directory(session_id, new_cwd);
-                        if changed {
-                            manager.invalidate_git_cache(session_id);
-                            manager.get_session(session_id)
-                        } else {
-                            None
-                        }
-                    });
+                    let cwd_session =
+                        codirigent_session::extract_osc7_path(&data).and_then(|new_cwd| {
+                            let manager = session_manager.lock().ok()?;
+                            let changed = manager.update_working_directory(session_id, new_cwd);
+                            if changed {
+                                manager.invalidate_git_cache(session_id);
+                                manager.get_session(session_id)
+                            } else {
+                                None
+                            }
+                        });
 
                     Some(PreparedSessionOutput {
                         session_id,
@@ -289,7 +327,10 @@ impl WorkspaceView {
         }
 
         if let Some(cli_type) = detected_cli_type {
-            let current = self.clipboard.clipboard_service.get_session_cli_type(session_id);
+            let current = self
+                .clipboard
+                .clipboard_service
+                .get_session_cli_type(session_id);
             if current == codirigent_core::CliType::GenericShell {
                 self.clipboard
                     .clipboard_service
@@ -658,9 +699,7 @@ impl WorkspaceView {
                                     Some("question") | None => {
                                         (NotificationType::InputRequired, None)
                                     }
-                                    Some(tool) => {
-                                        (NotificationType::PermissionPrompt, Some(tool))
-                                    }
+                                    Some(tool) => (NotificationType::PermissionPrompt, Some(tool)),
                                 };
                                 this.notification_manager.notify(
                                     notif_type,
@@ -885,7 +924,11 @@ impl WorkspaceView {
                     if session.working_directory != expected_cwd_for_bg {
                         return None;
                     }
-                    Some((session_id, expected_cwd_for_bg, mgr.refresh_git_status(session_id)))
+                    Some((
+                        session_id,
+                        expected_cwd_for_bg,
+                        mgr.refresh_git_status(session_id),
+                    ))
                 })
                 .await;
 
@@ -946,38 +989,65 @@ impl WorkspaceView {
             let temp_dir = self.clipboard.clipboard_service.temp_dir().to_path_buf();
 
             cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
-                let preview = cx
+                let update = cx
                     .background_executor()
                     .spawn(async move {
-                        if !clipboard.has_changed() || !clipboard.has_image() {
-                            return None;
+                        if !clipboard.has_changed() {
+                            return ClipboardPreviewUpdate::NoChange;
                         }
-                        let codirigent_core::ClipboardContent::Image(image_data) =
-                            clipboard.read_content().ok()?
-                        else {
-                            return None;
-                        };
 
-                        let _ = std::fs::create_dir_all(&temp_dir);
-                        let svc =
-                            DefaultClipboardService::new(temp_dir.parent().unwrap_or(&temp_dir));
-                        let path = svc.save_image(&image_data).ok()?;
-                        let file_size = image_data.bytes.len() as u64;
-                        Some(crate::clipboard_preview::ClipboardPreview::create_preview(
-                            &image_data,
-                            path,
-                            file_size,
-                        ))
+                        // Many apps publish an auxiliary bitmap alongside text or
+                        // file data. Only auto-show the image overlay for image-only
+                        // clipboard changes.
+                        if clipboard.has_text() || clipboard.has_files() {
+                            return ClipboardPreviewUpdate::ChangedToNonImage;
+                        }
+
+                        match clipboard.read_content() {
+                            Ok(codirigent_core::ClipboardContent::Image(image_data)) => {
+                                if !should_show_clipboard_preview(&image_data) {
+                                    return ClipboardPreviewUpdate::ChangedToNonImage;
+                                }
+                                let signature = clipboard_image_signature(&image_data);
+                                let _ = std::fs::create_dir_all(&temp_dir);
+                                let svc = DefaultClipboardService::new(
+                                    temp_dir.parent().unwrap_or(&temp_dir),
+                                );
+                                let path = match svc.save_image(&image_data) {
+                                    Ok(path) => path,
+                                    Err(_) => return ClipboardPreviewUpdate::NoChange,
+                                };
+                                let file_size = image_data.bytes.len() as u64;
+                                let preview =
+                                    crate::clipboard_preview::ClipboardPreview::create_preview(
+                                        &image_data,
+                                        path,
+                                        file_size,
+                                    );
+                                ClipboardPreviewUpdate::Image { signature, preview }
+                            }
+                            Ok(_) => ClipboardPreviewUpdate::ChangedToNonImage,
+                            Err(_) => ClipboardPreviewUpdate::NoChange,
+                        }
                     })
                     .await;
 
                 let _ = this.update(cx, |this, cx| {
                     this.polling.clipboard_load_in_flight = false;
-                    if let Some(preview) = preview {
-                        this.clipboard.clipboard_preview.show(preview);
-                        this.clipboard.clipboard_preview_shown_at =
-                            Some(std::time::Instant::now());
-                        cx.notify();
+                    match update {
+                        ClipboardPreviewUpdate::NoChange => {}
+                        ClipboardPreviewUpdate::ChangedToNonImage => {
+                            this.clipboard.last_preview_image_signature = None;
+                        }
+                        ClipboardPreviewUpdate::Image { signature, preview } => {
+                            if this.clipboard.last_preview_image_signature != Some(signature) {
+                                this.clipboard.last_preview_image_signature = Some(signature);
+                                this.clipboard.clipboard_preview.show(preview);
+                                this.clipboard.clipboard_preview_shown_at =
+                                    Some(std::time::Instant::now());
+                                cx.notify();
+                            }
+                        }
                     }
                 });
             })
@@ -1373,9 +1443,7 @@ impl WorkspaceView {
             }
 
             // Fire ResponseReady notification on transition from Working → ResponseReady.
-            if new_status == SessionStatus::ResponseReady
-                && prev_status == SessionStatus::Working
-            {
+            if new_status == SessionStatus::ResponseReady && prev_status == SessionStatus::Working {
                 let name = self
                     .workspace
                     .session(session_id)
@@ -1521,6 +1589,7 @@ impl WorkspaceView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codirigent_core::{ImageData, ImageFormat};
 
     fn sig(status: &str, codirigent_session_id: Option<&str>, ts: u64) -> HookSignal {
         HookSignal {
@@ -1579,5 +1648,29 @@ mod tests {
         let json = r#"{"status":"idle","ts":100}"#;
         let signal: HookSignal = serde_json::from_str(json).unwrap();
         assert!(signal.codirigent_session_id.is_none());
+    }
+
+    #[test]
+    fn tiny_dib_preview_is_suppressed() {
+        let image = ImageData {
+            bytes: vec![0; 8 * 1024],
+            width: 32,
+            height: 32,
+            format: ImageFormat::Dib,
+        };
+
+        assert!(!should_show_clipboard_preview(&image));
+    }
+
+    #[test]
+    fn larger_dib_preview_is_allowed() {
+        let image = ImageData {
+            bytes: vec![0; 40 * 1024],
+            width: 320,
+            height: 240,
+            format: ImageFormat::Dib,
+        };
+
+        assert!(should_show_clipboard_preview(&image));
     }
 }

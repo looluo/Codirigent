@@ -227,6 +227,7 @@ impl WorkspaceView {
                 ),
                 clipboard_preview: ClipboardPreview::new(theme_for_clipboard),
                 clipboard_preview_shown_at: None,
+                last_preview_image_signature: None,
             },
             settings: super::settings_state::SettingsState::new(),
             persistence: super::persistence_state::PersistenceServices {

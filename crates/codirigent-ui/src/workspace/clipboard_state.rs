@@ -15,4 +15,8 @@ pub(super) struct ClipboardState {
     pub(super) clipboard_preview: ClipboardPreview,
     /// Timestamp when clipboard preview was last shown (for auto-hide).
     pub(super) clipboard_preview_shown_at: Option<std::time::Instant>,
+    /// Signature of the last clipboard image that triggered a preview.
+    /// Used to suppress repeated preview popups for the same image when the
+    /// platform clipboard sequence changes without a genuinely new image.
+    pub(super) last_preview_image_signature: Option<u64>,
 }

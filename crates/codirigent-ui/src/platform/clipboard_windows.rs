@@ -48,6 +48,8 @@ mod format_ids {
     pub const CF_DIB: u32 = 8;
     /// CF_BITMAP - Bitmap handle format.
     pub const CF_BITMAP: u32 = 2;
+    /// CF_HDROP - File list format.
+    pub const CF_HDROP: u32 = 15;
 }
 
 /// BITMAPINFOHEADER size constant.
@@ -325,6 +327,14 @@ impl SmartClipboardProvider for WindowsSmartClipboard {
         is_format_avail(format_ids::CF_DIB) || is_format_avail(format_ids::CF_BITMAP)
     }
 
+    fn has_text(&self) -> bool {
+        is_format_avail(format_ids::CF_UNICODETEXT)
+    }
+
+    fn has_files(&self) -> bool {
+        is_format_avail(format_ids::CF_HDROP)
+    }
+
     fn has_changed(&self) -> bool {
         self.has_changed()
     }
@@ -541,6 +551,7 @@ mod tests {
         assert_eq!(format_ids::CF_UNICODETEXT, 13);
         assert_eq!(format_ids::CF_DIB, 8);
         assert_eq!(format_ids::CF_BITMAP, 2);
+        assert_eq!(format_ids::CF_HDROP, 15);
     }
 
     #[test]

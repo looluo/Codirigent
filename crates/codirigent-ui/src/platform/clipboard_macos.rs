@@ -435,6 +435,14 @@ impl SmartClipboardProvider for MacOSSmartClipboard {
         Self::has_type(&Self::png_type()) || Self::has_type(&Self::tiff_type())
     }
 
+    fn has_text(&self) -> bool {
+        Self::has_type(&Self::string_type())
+    }
+
+    fn has_files(&self) -> bool {
+        Self::has_type(&Self::file_url_type())
+    }
+
     fn has_changed(&self) -> bool {
         self.has_changed()
     }
