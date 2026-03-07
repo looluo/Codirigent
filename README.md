@@ -77,8 +77,6 @@ Download the `.msi` installer from the [latest release](https://github.com/oso95
 
 Download the `.dmg` from the [latest release](https://github.com/oso95/Codirigent/releases/latest).
 
-> The app is signed and notarized — it should open without Gatekeeper warnings.
-
 ## Hook Setup (Recommended)
 
 Codirigent uses lightweight hooks to track agent status in real time — showing whether each session is Working, Needs Attention, or has a Response Ready. If hooks are unavailable, Codirigent falls back to its reader/detector path, which is less precise.
