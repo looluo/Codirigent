@@ -17,9 +17,10 @@ use serde::Deserialize;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
-use std::time::Duration;
-use std::time::SystemTime;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 use tracing::{debug, trace};
+
+type SessionFileCacheKey = (PathBuf, Option<String>, Option<u128>);
 
 /// Status derived from Codex CLI's JSONL rollout logs.
 pub type CodexSessionStatus = CliSessionStatus;
@@ -29,7 +30,7 @@ pub struct CodexSessionReader {
     /// Path to ~/.codex
     codex_home: PathBuf,
     /// Cache: CWD → rollout file path (avoid re-scanning on every poll).
-    session_file_cache: HashMap<PathBuf, (PathBuf, SystemTime)>,
+    session_file_cache: HashMap<SessionFileCacheKey, (PathBuf, SystemTime)>,
 }
 
 /// Approval mode from Codex CLI session metadata.
@@ -46,6 +47,10 @@ enum ApprovalMode {
 /// Parsed session metadata from the first line of a rollout file.
 #[derive(Debug, Deserialize)]
 struct SessionMeta {
+    #[serde(default)]
+    id: Option<String>,
+    #[serde(default)]
+    timestamp: Option<String>,
     #[serde(default)]
     cwd: Option<String>,
     #[serde(default)]
@@ -93,7 +98,7 @@ impl CodexSessionReader {
     /// project-specific rollout file under `~/.codex/sessions/`.
     /// `_pid` is accepted for API consistency but not used (Codex uses different file naming).
     pub fn get_status(&mut self, working_dir: &Path, _pid: Option<u32>) -> CodexSessionStatus {
-        self.get_status_if_recent(working_dir, _pid, Duration::MAX)
+        self.get_status_if_recent(working_dir, None, _pid, Duration::MAX, None)
             .unwrap_or(CodexSessionStatus::Unknown)
     }
 
@@ -103,10 +108,13 @@ impl CodexSessionReader {
     pub fn get_status_if_recent(
         &mut self,
         working_dir: &Path,
+        session_id: Option<&str>,
         _pid: Option<u32>,
         max_age: Duration,
+        created_after: Option<SystemTime>,
     ) -> Option<CodexSessionStatus> {
-        let Some(rollout_path) = self.find_rollout_file(working_dir) else {
+        let Some(rollout_path) = self.find_rollout_file(working_dir, session_id, created_after)
+        else {
             trace!(?working_dir, "No Codex rollout file found");
             return None;
         };
@@ -136,12 +144,25 @@ impl CodexSessionReader {
     /// Codex stores rollout files under `~/.codex/sessions/YYYY/MM/DD/`.
     /// We scan in reverse date order (newest first) and check the first line
     /// of each file for the `cwd` field.
-    fn find_rollout_file(&mut self, working_dir: &Path) -> Option<PathBuf> {
+    fn find_rollout_file(
+        &mut self,
+        working_dir: &Path,
+        session_id: Option<&str>,
+        created_after: Option<SystemTime>,
+    ) -> Option<PathBuf> {
+        let cache_key = (
+            working_dir.to_path_buf(),
+            session_id.map(str::to_owned),
+            created_after.and_then(Self::system_time_cache_key),
+        );
+
         // Check cache first
-        if let Some((cached_path, cached_mtime)) = self.session_file_cache.get(working_dir) {
+        if let Some((cached_path, cached_mtime)) = self.session_file_cache.get(&cache_key) {
             if let Ok(meta) = fs::metadata(cached_path) {
                 if let Ok(mtime) = meta.modified() {
-                    if mtime == *cached_mtime {
+                    if mtime == *cached_mtime
+                        && Self::is_rollout_recent_enough(mtime, created_after)
+                    {
                         return Some(cached_path.clone());
                     }
                 }
@@ -159,6 +180,10 @@ impl CodexSessionReader {
         date_dirs.sort_unstable_by(|a, b| b.cmp(a));
 
         let working_dir_str = working_dir.to_string_lossy();
+        let expected_suffix = session_id
+            .filter(|id| !id.is_empty())
+            .map(|id| format!("-{id}.jsonl"));
+        let mut best_candidate: Option<(PathBuf, SystemTime, Option<Duration>)> = None;
 
         for date_dir in date_dirs {
             // List rollout files in this date directory, sorted by mtime (newest first)
@@ -182,18 +207,58 @@ impl CodexSessionReader {
             rollout_files.sort_unstable_by(|a, b| b.1.cmp(&a.1));
 
             for (path, mtime) in rollout_files {
+                if !Self::is_rollout_recent_enough(mtime, created_after) {
+                    continue;
+                }
+
                 // Read first line for session_meta
-                if let Some(cwd) = Self::read_cwd_from_first_line(&path) {
-                    if cwd == working_dir_str.as_ref() {
+                if let Some(meta) = Self::read_session_meta(&path) {
+                    if meta.cwd.as_deref() != Some(working_dir_str.as_ref()) {
+                        continue;
+                    }
+
+                    if let Some(expected_session_id) = session_id.filter(|id| !id.is_empty()) {
+                        let session_id_matches_meta =
+                            meta.id.as_deref() == Some(expected_session_id);
+                        let session_id_matches_filename = expected_suffix
+                            .as_deref()
+                            .and_then(|suffix| {
+                                path.file_name()
+                                    .and_then(|name| name.to_str())
+                                    .map(|name| name.ends_with(suffix))
+                            })
+                            .unwrap_or(false);
+                        if !session_id_matches_meta && !session_id_matches_filename {
+                            continue;
+                        }
+
                         self.session_file_cache
-                            .insert(working_dir.to_path_buf(), (path.clone(), mtime));
+                            .insert(cache_key.clone(), (path.clone(), mtime));
                         return Some(path);
+                    }
+
+                    let start_delta = created_after.and_then(|created_after| {
+                        Self::session_meta_started_at(&meta)
+                            .and_then(|started_at| started_at.duration_since(created_after).ok())
+                    });
+                    let should_replace_best = match best_candidate.as_ref() {
+                        None => true,
+                        Some((_best_path, _best_mtime, Some(best_delta))) => {
+                            start_delta.is_some_and(|delta| delta < *best_delta)
+                        }
+                        Some((_best_path, _best_mtime, None)) => start_delta.is_some(),
+                    };
+                    if should_replace_best {
+                        best_candidate = Some((path, mtime, start_delta));
                     }
                 }
             }
         }
 
-        None
+        let (path, mtime, _start_delta) = best_candidate?;
+        self.session_file_cache
+            .insert(cache_key, (path.clone(), mtime));
+        Some(path)
     }
 
     /// Recursively collect date directories (YYYY/MM/DD structure).
@@ -230,8 +295,7 @@ impl CodexSessionReader {
         }
     }
 
-    /// Read the CWD from the first line (session_meta) of a rollout file.
-    fn read_cwd_from_first_line(path: &Path) -> Option<String> {
+    fn read_session_meta(path: &Path) -> Option<SessionMeta> {
         let file = fs::File::open(path).ok()?;
         let mut reader = std::io::BufReader::new(file);
         let mut first_line = String::new();
@@ -243,29 +307,18 @@ impl CodexSessionReader {
         }
 
         let payload = entry.payload?;
-        let meta: SessionMeta = serde_json::from_value(payload).ok()?;
-        meta.cwd
+        serde_json::from_value(payload).ok()
+    }
+
+    /// Read the CWD from the first line (session_meta) of a rollout file.
+    #[cfg(test)]
+    fn read_cwd_from_first_line(path: &Path) -> Option<String> {
+        Self::read_session_meta(path)?.cwd
     }
 
     /// Read the approval mode from the first line of a rollout file.
     fn read_approval_mode(&self, path: &Path) -> ApprovalMode {
-        let Some(first_line) = Self::read_first_line(path) else {
-            return ApprovalMode::Suggest;
-        };
-
-        let Ok(entry) = serde_json::from_str::<RolloutEntry>(first_line.trim()) else {
-            return ApprovalMode::Suggest;
-        };
-
-        if entry.entry_type != "session_meta" {
-            return ApprovalMode::Suggest;
-        }
-
-        let Some(payload) = entry.payload else {
-            return ApprovalMode::Suggest;
-        };
-
-        let Ok(meta) = serde_json::from_value::<SessionMeta>(payload) else {
+        let Some(meta) = Self::read_session_meta(path) else {
             return ApprovalMode::Suggest;
         };
 
@@ -274,15 +327,6 @@ impl CodexSessionReader {
             Some("auto-edit") => ApprovalMode::AutoEdit,
             _ => ApprovalMode::Suggest,
         }
-    }
-
-    /// Read the first line of a file.
-    fn read_first_line(path: &Path) -> Option<String> {
-        let file = fs::File::open(path).ok()?;
-        let mut reader = std::io::BufReader::new(file);
-        let mut line = String::new();
-        std::io::BufRead::read_line(&mut reader, &mut line).ok()?;
-        Some(line)
     }
 
     /// Core status determination algorithm.
@@ -294,8 +338,13 @@ impl CodexSessionReader {
     /// 4. Otherwise → Unknown
     fn determine_status(&self, tail: &str, approval_mode: &ApprovalMode) -> CodexSessionStatus {
         let mut pending_calls: HashMap<String, String> = HashMap::new(); // call_id → tool name
-        let mut last_entry_type = String::new();
-        let mut has_turn_complete = false;
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        enum LastActivity {
+            Progress,
+            Terminal,
+        }
+
+        let mut last_activity = None;
 
         for line in tail.lines() {
             let line = line.trim();
@@ -306,8 +355,6 @@ impl CodexSessionReader {
             let Ok(entry) = serde_json::from_str::<RolloutEntry>(line) else {
                 continue;
             };
-
-            last_entry_type = entry.entry_type.clone();
 
             if entry.entry_type == "response_item" {
                 if let Some(ref payload) = entry.payload {
@@ -321,23 +368,41 @@ impl CodexSessionReader {
                                     .unwrap_or("unknown")
                                     .to_string();
                                 pending_calls.insert(call_id.to_string(), name);
+                                last_activity = Some(LastActivity::Progress);
                             }
                         } else if item_type == "function_call_output" {
                             if let Some(call_id) = payload.get("call_id").and_then(|v| v.as_str()) {
                                 pending_calls.remove(call_id);
                             }
+                            last_activity = Some(LastActivity::Progress);
+                        } else if matches!(
+                            item_type,
+                            "reasoning" | "custom_tool_call" | "custom_tool_call_output"
+                        ) {
+                            last_activity = Some(LastActivity::Progress);
+                        } else if item_type == "message"
+                            && payload.get("role").and_then(|v| v.as_str()) == Some("assistant")
+                        {
+                            last_activity = Some(LastActivity::Progress);
                         }
                     }
                 }
             } else if entry.entry_type == "event_msg" {
-                // Check for turn completion events
                 if let Some(ref payload) = entry.payload {
                     if let Some(event_type) = payload.get("type").and_then(|v| v.as_str()) {
-                        if event_type == "turn_complete"
-                            || event_type == "response.completed"
-                            || event_type == "response.done"
-                        {
-                            has_turn_complete = true;
+                        if matches!(
+                            event_type,
+                            "task_started" | "user_message" | "agent_message" | "token_count"
+                        ) {
+                            last_activity = Some(LastActivity::Progress);
+                        } else if matches!(
+                            event_type,
+                            "task_complete"
+                                | "turn_complete"
+                                | "response.completed"
+                                | "response.done"
+                        ) {
+                            last_activity = Some(LastActivity::Terminal);
                         }
                     }
                 }
@@ -364,11 +429,35 @@ impl CodexSessionReader {
         }
 
         // No pending tools — check if turn is complete
-        if has_turn_complete || last_entry_type == "event_msg" {
-            return CodexSessionStatus::NeedsAttention { detail: None };
+        if last_activity == Some(LastActivity::Progress) {
+            return CodexSessionStatus::Working;
         }
 
         CodexSessionStatus::Unknown
+    }
+
+    fn is_rollout_recent_enough(mtime: SystemTime, created_after: Option<SystemTime>) -> bool {
+        match created_after {
+            Some(created_after) => mtime >= created_after,
+            None => true,
+        }
+    }
+
+    fn system_time_cache_key(time: SystemTime) -> Option<u128> {
+        time.duration_since(UNIX_EPOCH).ok().map(|d| d.as_millis())
+    }
+
+    fn session_meta_started_at(meta: &SessionMeta) -> Option<SystemTime> {
+        let timestamp = meta.timestamp.as_deref()?;
+        let started_at = chrono::DateTime::parse_from_rfc3339(timestamp)
+            .ok()?
+            .with_timezone(&chrono::Utc);
+        let secs = u64::try_from(started_at.timestamp()).ok()?;
+        Some(
+            UNIX_EPOCH
+                + Duration::from_secs(secs)
+                + Duration::from_nanos(u64::from(started_at.timestamp_subsec_nanos())),
+        )
     }
 
     /// Check if a tool name represents a file edit operation.
@@ -407,7 +496,7 @@ mod tests {
     }
 
     #[test]
-    fn test_waiting_for_input_on_turn_complete() {
+    fn test_turn_complete_without_pending_tools_is_unknown() {
         let tail = r#"{"type":"response_item","payload":{"type":"function_call","call_id":"c1","name":"shell"}}
 {"type":"response_item","payload":{"type":"function_call_output","call_id":"c1"}}
 {"type":"event_msg","payload":{"type":"turn_complete"}}"#;
@@ -418,7 +507,7 @@ mod tests {
         };
         assert_eq!(
             reader.determine_status(tail, &ApprovalMode::Suggest),
-            CodexSessionStatus::NeedsAttention { detail: None }
+            CodexSessionStatus::Unknown
         );
     }
 
@@ -449,18 +538,19 @@ mod tests {
         let fresh = reader.get_status_if_recent(
             Path::new("/Users/test/project"),
             None,
+            None,
             std::time::Duration::from_secs(10),
+            None,
         );
-        assert_eq!(
-            fresh,
-            Some(CodexSessionStatus::NeedsAttention { detail: None })
-        );
+        assert_eq!(fresh, Some(CodexSessionStatus::Unknown));
 
         std::thread::sleep(std::time::Duration::from_millis(20));
         let stale = reader.get_status_if_recent(
             Path::new("/Users/test/project"),
             None,
+            None,
             std::time::Duration::from_nanos(1),
+            None,
         );
         assert!(stale.is_none());
     }
@@ -526,7 +616,7 @@ mod tests {
     }
 
     #[test]
-    fn test_resolved_tool_no_turn_complete() {
+    fn test_resolved_tool_without_terminal_event_is_working() {
         let tail = r#"{"type":"response_item","payload":{"type":"function_call","call_id":"c1","name":"shell"}}
 {"type":"response_item","payload":{"type":"function_call_output","call_id":"c1"}}"#;
 
@@ -534,7 +624,35 @@ mod tests {
             codex_home: PathBuf::from("/nonexistent"),
             session_file_cache: HashMap::new(),
         };
-        // All tools resolved but no turn_complete event → Unknown
+        // All tools are resolved, but the rollout still shows active progress.
+        assert_eq!(
+            reader.determine_status(tail, &ApprovalMode::Suggest),
+            CodexSessionStatus::Working
+        );
+    }
+
+    #[test]
+    fn test_progress_event_msg_is_working() {
+        let tail = r#"{"type":"event_msg","payload":{"type":"token_count"}}"#;
+
+        let reader = CodexSessionReader {
+            codex_home: PathBuf::from("/nonexistent"),
+            session_file_cache: HashMap::new(),
+        };
+        assert_eq!(
+            reader.determine_status(tail, &ApprovalMode::Suggest),
+            CodexSessionStatus::Working
+        );
+    }
+
+    #[test]
+    fn test_task_complete_without_pending_tools_is_unknown() {
+        let tail = r#"{"type":"event_msg","payload":{"type":"task_complete"}}"#;
+
+        let reader = CodexSessionReader {
+            codex_home: PathBuf::from("/nonexistent"),
+            session_file_cache: HashMap::new(),
+        };
         assert_eq!(
             reader.determine_status(tail, &ApprovalMode::Suggest),
             CodexSessionStatus::Unknown
@@ -630,7 +748,7 @@ mod tests {
             session_file_cache: HashMap::new(),
         };
 
-        let found = reader.find_rollout_file(Path::new("/Users/test/project"));
+        let found = reader.find_rollout_file(Path::new("/Users/test/project"), None, None);
         assert_eq!(found, Some(rollout_path));
     }
 
@@ -658,7 +776,7 @@ mod tests {
             session_file_cache: HashMap::new(),
         };
 
-        let found = reader.find_rollout_file(Path::new("/Users/test/project"));
+        let found = reader.find_rollout_file(Path::new("/Users/test/project"), None, None);
         assert!(found.is_none());
     }
 
@@ -690,13 +808,129 @@ mod tests {
 
         // Pre-populate cache
         reader.session_file_cache.insert(
-            PathBuf::from("/Users/test/project"),
+            (PathBuf::from("/Users/test/project"), None, None),
             (rollout_path.clone(), mtime),
         );
 
         // Should return cached path without scanning
-        let found = reader.find_rollout_file(Path::new("/Users/test/project"));
+        let found = reader.find_rollout_file(Path::new("/Users/test/project"), None, None);
         assert_eq!(found, Some(rollout_path));
+    }
+
+    #[test]
+    fn test_find_rollout_file_filters_out_older_same_cwd_session() {
+        let tmp = TempDir::new().unwrap();
+        let sessions_dir = tmp
+            .path()
+            .join("sessions")
+            .join("2025")
+            .join("01")
+            .join("15");
+        fs::create_dir_all(&sessions_dir).unwrap();
+
+        let rollout_path = sessions_dir.join("rollout-old-session.jsonl");
+        fs::write(
+            &rollout_path,
+            r#"{"type":"session_meta","payload":{"cwd":"/Users/test/project","approval_mode":"suggest"}}"#,
+        )
+        .unwrap();
+
+        let mtime = fs::metadata(&rollout_path).unwrap().modified().unwrap();
+        let created_after = mtime.checked_add(Duration::from_secs(1)).unwrap();
+
+        let mut reader = CodexSessionReader {
+            codex_home: tmp.path().to_path_buf(),
+            session_file_cache: HashMap::new(),
+        };
+
+        let found =
+            reader.find_rollout_file(Path::new("/Users/test/project"), None, Some(created_after));
+        assert!(found.is_none());
+    }
+
+    #[test]
+    fn test_find_rollout_file_prefers_closest_session_timestamp_without_session_id() {
+        let tmp = TempDir::new().unwrap();
+        let sessions_dir = tmp
+            .path()
+            .join("sessions")
+            .join("2025")
+            .join("01")
+            .join("15");
+        fs::create_dir_all(&sessions_dir).unwrap();
+
+        let first_rollout_path = sessions_dir.join("rollout-111111-first-session.jsonl");
+        fs::write(
+            &first_rollout_path,
+            r#"{"type":"session_meta","payload":{"id":"first-session","timestamp":"2026-03-07T05:41:46.072Z","cwd":"/Users/test/project","approval_mode":"suggest"}}"#,
+        )
+        .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        let second_rollout_path = sessions_dir.join("rollout-222222-second-session.jsonl");
+        fs::write(
+            &second_rollout_path,
+            r#"{"type":"session_meta","payload":{"id":"second-session","timestamp":"2026-03-07T05:42:33.256Z","cwd":"/Users/test/project","approval_mode":"suggest"}}"#,
+        )
+        .unwrap();
+
+        let created_after = CodexSessionReader::session_meta_started_at(&SessionMeta {
+            id: None,
+            timestamp: Some("2026-03-07T05:41:45.500Z".to_string()),
+            cwd: None,
+            approval_mode: None,
+        })
+        .unwrap();
+
+        let mut reader = CodexSessionReader {
+            codex_home: tmp.path().to_path_buf(),
+            session_file_cache: HashMap::new(),
+        };
+
+        let found =
+            reader.find_rollout_file(Path::new("/Users/test/project"), None, Some(created_after));
+        assert_eq!(found, Some(first_rollout_path));
+    }
+
+    #[test]
+    fn test_find_rollout_file_prefers_matching_session_id_suffix() {
+        let tmp = TempDir::new().unwrap();
+        let sessions_dir = tmp
+            .path()
+            .join("sessions")
+            .join("2025")
+            .join("01")
+            .join("15");
+        fs::create_dir_all(&sessions_dir).unwrap();
+
+        let older_rollout_path = sessions_dir.join("rollout-111111-old-session.jsonl");
+        fs::write(
+            &older_rollout_path,
+            r#"{"type":"session_meta","payload":{"cwd":"/Users/test/project","approval_mode":"suggest"}}"#,
+        )
+        .unwrap();
+
+        std::thread::sleep(std::time::Duration::from_millis(20));
+
+        let matching_rollout_path = sessions_dir.join("rollout-222222-target-session.jsonl");
+        fs::write(
+            &matching_rollout_path,
+            r#"{"type":"session_meta","payload":{"cwd":"/Users/test/project","approval_mode":"suggest"}}"#,
+        )
+        .unwrap();
+
+        let mut reader = CodexSessionReader {
+            codex_home: tmp.path().to_path_buf(),
+            session_file_cache: HashMap::new(),
+        };
+
+        let found = reader.find_rollout_file(
+            Path::new("/Users/test/project"),
+            Some("target-session"),
+            None,
+        );
+        assert_eq!(found, Some(matching_rollout_path));
     }
 
     #[test]

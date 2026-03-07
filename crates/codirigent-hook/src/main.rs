@@ -39,6 +39,8 @@ struct SignalFile {
     status: &'static str,
     #[serde(skip_serializing_if = "Option::is_none")]
     cli_type: Option<&'static str>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    cli_session_id: Option<String>,
     codirigent_session_id: Option<String>,
     ts: u64,
 }
@@ -58,6 +60,12 @@ fn handle_payload(payload: HookPayload) {
     if codirigent_session_id.is_none() {
         return;
     }
+
+    let cli_session_id = payload
+        .session_id
+        .as_deref()
+        .filter(|id| is_safe_filename(id))
+        .map(str::to_owned);
 
     let filename_session_id = payload
         .session_id
@@ -85,6 +93,7 @@ fn handle_payload(payload: HookPayload) {
     let signal = SignalFile {
         status,
         cli_type: Some(cli_type),
+        cli_session_id,
         codirigent_session_id,
         ts: SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -135,10 +144,7 @@ fn infer_cli_type(payload: &HookPayload) -> &'static str {
     infer_cli_type_with_gemini_env(payload, env::var_os("GEMINI_SESSION_ID").is_some())
 }
 
-fn infer_cli_type_with_gemini_env(
-    payload: &HookPayload,
-    gemini_env_present: bool,
-) -> &'static str {
+fn infer_cli_type_with_gemini_env(payload: &HookPayload, gemini_env_present: bool) -> &'static str {
     match payload.cli_type.as_deref() {
         Some(CLI_TYPE_CLAUDE) => return CLI_TYPE_CLAUDE,
         Some(CLI_TYPE_CODEX) => return CLI_TYPE_CODEX,
@@ -337,7 +343,12 @@ mod tests {
     #[test]
     fn map_status_notification_other_is_idle() {
         assert_eq!(
-            map_status(Some("Notification"), Some("idle_prompt"), None, CLI_TYPE_CLAUDE),
+            map_status(
+                Some("Notification"),
+                Some("idle_prompt"),
+                None,
+                CLI_TYPE_CLAUDE
+            ),
             "idle"
         );
         assert_eq!(

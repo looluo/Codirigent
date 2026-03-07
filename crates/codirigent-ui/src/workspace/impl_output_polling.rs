@@ -83,6 +83,8 @@ fn should_show_clipboard_preview(image_data: &codirigent_core::ImageData) -> boo
 struct HookSignal {
     status: String,
     cli_type: Option<String>,
+    #[serde(default)]
+    cli_session_id: Option<String>,
     /// Codirigent session ID, present only when Claude Code was spawned by Codirigent
     /// (via the `CODIRIGENT_SESSION_ID` environment variable).
     codirigent_session_id: Option<String>,
@@ -92,9 +94,36 @@ struct HookSignal {
 #[derive(Debug)]
 struct HookSignalUpdate {
     session_id: SessionId,
-    cli_session_id: String,
+    signal_file_id: String,
+    cli_session_id: Option<String>,
     status: String,
     cli_type: Option<String>,
+}
+
+fn prefer_live_working_status(
+    detector_status: Option<SessionStatus>,
+    cached_status: SessionStatus,
+) -> bool {
+    matches!(detector_status, Some(SessionStatus::Working))
+        && cached_status != SessionStatus::Working
+}
+
+fn resolve_hook_cli_session_id(
+    signal_file_id: &str,
+    explicit_cli_session_id: Option<&str>,
+    session_id: SessionId,
+) -> Option<String> {
+    explicit_cli_session_id
+        .filter(|id| !id.is_empty())
+        .map(str::to_owned)
+        .or_else(|| {
+            let fallback = signal_file_id.trim();
+            if fallback.is_empty() || fallback == session_id.0.to_string() {
+                None
+            } else {
+                Some(fallback.to_owned())
+            }
+        })
 }
 
 fn read_recent_hook_signal_updates() -> Vec<HookSignalUpdate> {
@@ -120,7 +149,7 @@ fn read_recent_hook_signal_updates() -> Vec<HookSignalUpdate> {
             continue;
         }
 
-        let cli_session_id = match path.file_stem().and_then(|s| s.to_str()) {
+        let signal_file_id = match path.file_stem().and_then(|s| s.to_str()) {
             Some(s) => s.to_owned(),
             None => continue,
         };
@@ -150,7 +179,8 @@ fn read_recent_hook_signal_updates() -> Vec<HookSignalUpdate> {
 
         updates.push(HookSignalUpdate {
             session_id,
-            cli_session_id,
+            signal_file_id,
+            cli_session_id: signal.cli_session_id,
             status: signal.status,
             cli_type: signal.cli_type,
         });
@@ -390,7 +420,9 @@ impl WorkspaceView {
             let is_stale_attention = cached_status == SessionStatus::NeedsAttention
                 && matches!(status, Some(SessionStatus::Idle))
                 && self.is_cli_status_stale(session_id, Duration::from_secs(30));
-            if is_stale_attention {
+            if prefer_live_working_status(status, cached_status) {
+                // Keep live detector activity instead of masking it with cached hook state.
+            } else if is_stale_attention {
                 // Claude likely exited — clear JSONL cache AND revert CLI type
                 // so the JSONL reader stops being consulted on subsequent polls.
                 if let Ok(mut readers) = self.cli_readers.lock() {
@@ -542,8 +574,9 @@ impl WorkspaceView {
             std::path::PathBuf,
             Option<u32>,
             codirigent_core::CliType,
+            Option<String>,
             SessionStatus, // current status for transition detection
-            i64,           // session created_at (unix timestamp for JSONL file filtering)
+            i64,           // session created_at in unix millis for JSONL file filtering
         )> = self
             .workspace
             .sessions()
@@ -551,13 +584,19 @@ impl WorkspaceView {
             .map(|s| {
                 let cli_type = self.clipboard.clipboard_service.get_session_cli_type(s.id);
                 let child_pid = self.with_session_manager(|manager| manager.get_child_pid(s.id));
+                let known_codex_session_id = s
+                    .codex_session_id
+                    .as_ref()
+                    .filter(|id| *id != &s.id.0.to_string())
+                    .cloned();
                 (
                     s.id,
                     s.working_directory.clone(),
                     child_pid,
                     cli_type,
+                    known_codex_session_id,
                     s.status,
-                    s.created_at.timestamp(),
+                    s.created_at.timestamp_millis(),
                 )
             })
             .collect();
@@ -579,8 +618,9 @@ impl WorkspaceView {
                             working_dir,
                             child_pid,
                             cli_type,
+                            codex_session_id,
                             _current_status,
-                            _created_at,
+                            created_at,
                         ) in &jsonl_inputs
                         {
                             // For GenericShell sessions, try process-tree detection.
@@ -619,7 +659,16 @@ impl WorkspaceView {
                                 }
                                 codirigent_core::CliType::CodexCli => {
                                     readers.codex.as_mut().and_then(|r| {
-                                        r.get_status_if_recent(working_dir, *child_pid, max_age)
+                                        let created_after = (*created_at >= 0).then_some(
+                                            UNIX_EPOCH + Duration::from_millis(*created_at as u64),
+                                        );
+                                        r.get_status_if_recent(
+                                            working_dir,
+                                            codex_session_id.as_deref(),
+                                            *child_pid,
+                                            max_age,
+                                            created_after,
+                                        )
                                     })
                                 }
                                 codirigent_core::CliType::GeminiCli => {
@@ -644,7 +693,7 @@ impl WorkspaceView {
                 let (results, inputs, detected_types) = results;
                 let input_statuses: std::collections::HashMap<SessionId, SessionStatus> = inputs
                     .iter()
-                    .map(|(id, _, _, _, status, _)| (*id, *status))
+                    .map(|(id, _, _, _, _, status, _)| (*id, *status))
                     .collect();
                 let cache_update_time = Instant::now();
                 let mut cached_status = this.cli_readers.lock().ok();
@@ -1125,6 +1174,7 @@ impl WorkspaceView {
     fn apply_hook_signal_update(&mut self, update: HookSignalUpdate, cx: &mut Context<Self>) {
         let HookSignalUpdate {
             session_id,
+            signal_file_id,
             cli_session_id,
             status,
             cli_type,
@@ -1132,53 +1182,57 @@ impl WorkspaceView {
 
         let mut id_changed = false;
         let cli_type_name = cli_type.as_deref().unwrap_or(CLI_TYPE_CLAUDE);
-        match cli_type_name {
-            CLI_TYPE_CLAUDE => {
-                id_changed = self
-                    .session_manager
-                    .lock()
-                    .ok()
-                    .and_then(|mgr| {
-                        mgr.with_session_state_mut(session_id, |state| {
-                            let changed =
-                                state.session.claude_session_id.as_deref() != Some(&cli_session_id);
-                            state.session.claude_session_id = Some(cli_session_id.clone());
-                            changed
+        let resolved_cli_session_id =
+            resolve_hook_cli_session_id(&signal_file_id, cli_session_id.as_deref(), session_id);
+        if let Some(cli_session_id) = resolved_cli_session_id.as_deref() {
+            match cli_type_name {
+                CLI_TYPE_CLAUDE => {
+                    id_changed = self
+                        .session_manager
+                        .lock()
+                        .ok()
+                        .and_then(|mgr| {
+                            mgr.with_session_state_mut(session_id, |state| {
+                                let changed = state.session.claude_session_id.as_deref()
+                                    != Some(cli_session_id);
+                                state.session.claude_session_id = Some(cli_session_id.to_owned());
+                                changed
+                            })
                         })
-                    })
-                    .unwrap_or(false);
-            }
-            CLI_TYPE_GEMINI => {
-                id_changed = self
-                    .session_manager
-                    .lock()
-                    .ok()
-                    .and_then(|mgr| {
-                        mgr.with_session_state_mut(session_id, |state| {
-                            let changed =
-                                state.session.gemini_session_id.as_deref() != Some(&cli_session_id);
-                            state.session.gemini_session_id = Some(cli_session_id.clone());
-                            changed
+                        .unwrap_or(false);
+                }
+                CLI_TYPE_GEMINI => {
+                    id_changed = self
+                        .session_manager
+                        .lock()
+                        .ok()
+                        .and_then(|mgr| {
+                            mgr.with_session_state_mut(session_id, |state| {
+                                let changed = state.session.gemini_session_id.as_deref()
+                                    != Some(cli_session_id);
+                                state.session.gemini_session_id = Some(cli_session_id.to_owned());
+                                changed
+                            })
                         })
-                    })
-                    .unwrap_or(false);
-            }
-            CLI_TYPE_CODEX => {
-                id_changed = self
-                    .session_manager
-                    .lock()
-                    .ok()
-                    .and_then(|mgr| {
-                        mgr.with_session_state_mut(session_id, |state| {
-                            let changed =
-                                state.session.codex_session_id.as_deref() != Some(&cli_session_id);
-                            state.session.codex_session_id = Some(cli_session_id.clone());
-                            changed
+                        .unwrap_or(false);
+                }
+                CLI_TYPE_CODEX => {
+                    id_changed = self
+                        .session_manager
+                        .lock()
+                        .ok()
+                        .and_then(|mgr| {
+                            mgr.with_session_state_mut(session_id, |state| {
+                                let changed = state.session.codex_session_id.as_deref()
+                                    != Some(cli_session_id);
+                                state.session.codex_session_id = Some(cli_session_id.to_owned());
+                                changed
+                            })
                         })
-                    })
-                    .unwrap_or(false);
+                        .unwrap_or(false);
+                }
+                _ => {}
             }
-            _ => {}
         }
 
         if id_changed {
@@ -1595,6 +1649,7 @@ mod tests {
         HookSignal {
             status: status.to_owned(),
             cli_type: None,
+            cli_session_id: None,
             codirigent_session_id: codirigent_session_id.map(str::to_owned),
             ts,
         }
@@ -1635,9 +1690,10 @@ mod tests {
 
     #[test]
     fn hook_signal_deserializes_from_json() {
-        let json = r#"{"status":"working","codirigent_session_id":"3","ts":1234567890}"#;
+        let json = r#"{"status":"working","cli_session_id":"codex-session","codirigent_session_id":"3","ts":1234567890}"#;
         let signal: HookSignal = serde_json::from_str(json).unwrap();
         assert_eq!(signal.status, "working");
+        assert_eq!(signal.cli_session_id.as_deref(), Some("codex-session"));
         assert_eq!(signal.codirigent_session_id.as_deref(), Some("3"));
         assert_eq!(signal.ts, 1234567890);
     }
@@ -1647,7 +1703,37 @@ mod tests {
         // Backwards-compatible: old signal files without the field deserialize fine.
         let json = r#"{"status":"idle","ts":100}"#;
         let signal: HookSignal = serde_json::from_str(json).unwrap();
+        assert!(signal.cli_session_id.is_none());
         assert!(signal.codirigent_session_id.is_none());
+    }
+
+    #[test]
+    fn live_working_status_is_not_masked_by_cached_response_ready() {
+        assert!(prefer_live_working_status(
+            Some(SessionStatus::Working),
+            SessionStatus::ResponseReady,
+        ));
+    }
+
+    #[test]
+    fn numeric_signal_file_id_is_not_treated_as_codex_session_id() {
+        assert_eq!(resolve_hook_cli_session_id("3", None, SessionId(3)), None);
+    }
+
+    #[test]
+    fn non_numeric_signal_file_id_can_backfill_cli_session_id() {
+        assert_eq!(
+            resolve_hook_cli_session_id("codex-uuid", None, SessionId(3)),
+            Some("codex-uuid".to_string())
+        );
+    }
+
+    #[test]
+    fn explicit_cli_session_id_wins_over_signal_file_id() {
+        assert_eq!(
+            resolve_hook_cli_session_id("3", Some("real-codex-id"), SessionId(3)),
+            Some("real-codex-id".to_string())
+        );
     }
 
     #[test]
