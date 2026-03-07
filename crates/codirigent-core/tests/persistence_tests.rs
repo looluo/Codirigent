@@ -27,6 +27,7 @@ fn test_save_and_load_state() {
         color: None,
         git_info: None,
         claude_session_id: None,
+        codex_session_id: None,
         gemini_session_id: None,
     };
 
@@ -94,6 +95,7 @@ fn test_overwrite_state() {
         color: None,
         git_info: None,
         claude_session_id: None,
+        codex_session_id: None,
         gemini_session_id: None,
     };
 
@@ -116,6 +118,7 @@ fn test_overwrite_state() {
         color: None,
         git_info: None,
         claude_session_id: None,
+        codex_session_id: None,
         gemini_session_id: None,
     };
 
@@ -254,6 +257,7 @@ fn test_multiple_checkpoints_independent() {
         color: None,
         git_info: None,
         claude_session_id: None,
+        codex_session_id: None,
         gemini_session_id: None,
     };
     state1
@@ -273,6 +277,7 @@ fn test_multiple_checkpoints_independent() {
         color: None,
         git_info: None,
         claude_session_id: None,
+        codex_session_id: None,
         gemini_session_id: None,
     };
     state2
@@ -362,6 +367,7 @@ fn test_session_to_persistent_conversion() {
         color: Some("#ff0000".to_string()),
         git_info: None,
         claude_session_id: None,
+        codex_session_id: None,
         gemini_session_id: None,
     };
 
