@@ -198,8 +198,8 @@ impl DefaultNotesGenerator {
     /// # Returns
     ///
     /// A filename-safe version of the title.
-    fn safe_filename(&self, title: &str) -> String {
-        title
+    fn safe_filename(&self, value: &str) -> String {
+        value
             .to_lowercase()
             .replace(' ', "-")
             .chars()
@@ -284,8 +284,9 @@ impl NotesGenerator for DefaultNotesGenerator {
         fs::create_dir_all(&dir).context("Failed to create notes directory")?;
 
         // Generate filename
+        let safe_task_id = self.safe_filename(&note.task_id.to_string());
         let safe_title = self.safe_filename(&note.title);
-        let filename = format!("{}-{}.md", note.task_id, safe_title);
+        let filename = format!("{}-{}.md", safe_task_id, safe_title);
         let path = dir.join(&filename);
 
         // Render and save
@@ -762,6 +763,31 @@ mod tests {
         assert_eq!(generator.safe_filename("   "), "---");
         assert_eq!(generator.safe_filename("!!!"), "");
         assert_eq!(generator.safe_filename("a"), "a");
+    }
+
+    #[test]
+    fn test_save_sanitizes_task_id_in_filename() {
+        let temp = TempDir::new().unwrap();
+        let generator = DefaultNotesGenerator::new();
+        let note = SessionNote {
+            task_id: TaskId::from("../../etc/passwd"),
+            title: "Test Task".to_string(),
+            session_id: SessionId(1),
+            duration_minutes: 10,
+            completion_status: codirigent_core::session_notes::CompletionStatus::Completed,
+            change_summary: None,
+            verification: None,
+            summary: None,
+            learnings: vec![],
+            generated_at: chrono::Utc::now(),
+        };
+
+        let path = generator.save(&note, temp.path()).unwrap();
+        assert!(path.starts_with(temp.path()));
+        assert!(path
+            .file_name()
+            .and_then(|name| name.to_str())
+            .is_some_and(|name| !name.contains("..")));
     }
 
     #[test]

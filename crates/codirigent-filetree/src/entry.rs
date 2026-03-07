@@ -52,9 +52,10 @@ impl FileEntry {
         let metadata = path.symlink_metadata();
         let is_symlink = metadata.as_ref().map(|m| m.is_symlink()).unwrap_or(false);
 
-        // For symlinks, check the target to determine if it's a directory
+        // Treat symlinks as non-directories so the file tree never follows them
+        // outside the project root or into recursive cycles.
         let is_dir = if is_symlink {
-            path.metadata().map(|m| m.is_dir()).unwrap_or(false)
+            false
         } else {
             metadata.map(|m| m.is_dir()).unwrap_or(false)
         };
@@ -570,7 +571,7 @@ mod tests {
         let entry = FileEntry::new(link);
 
         assert!(entry.is_symlink);
-        assert!(entry.is_dir);
+        assert!(!entry.is_dir);
     }
 
     #[test]

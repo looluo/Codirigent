@@ -12,6 +12,15 @@ use std::path::{Path, PathBuf};
 #[cfg(windows)]
 const CREATE_NO_WINDOW: u32 = 0x08000000;
 
+#[cfg(windows)]
+fn system_where_executable() -> std::path::PathBuf {
+    std::env::var_os("SystemRoot")
+        .map(PathBuf::from)
+        .unwrap_or_else(|| PathBuf::from(r"C:\Windows"))
+        .join("System32")
+        .join("where.exe")
+}
+
 /// Known GUI-based code editors with CLI support.
 pub(super) const KNOWN_GUI_EDITORS: &[&str] =
     &["code", "zed", "cursor", "windsurf", "codium", "subl"];
@@ -86,7 +95,6 @@ fn is_executable(path: &Path) -> bool {
 /// Returns a list of editor command names in a consistent order (GUI editors first,
 /// then terminal editors) with no duplicates.
 pub(super) fn detect_installed_editors() -> Vec<String> {
-    let check_cmd = if cfg!(windows) { "where" } else { "which" };
     let mut found = HashSet::new();
 
     // Pass 1: use which/where (finds editors already on PATH)
@@ -94,16 +102,29 @@ pub(super) fn detect_installed_editors() -> Vec<String> {
         .iter()
         .chain(KNOWN_TERMINAL_EDITORS.iter())
     {
-        let mut cmd = std::process::Command::new(check_cmd);
-        cmd.arg(editor)
-            .stdout(std::process::Stdio::null())
-            .stderr(std::process::Stdio::null());
-        #[cfg(windows)]
-        {
-            use std::os::windows::process::CommandExt;
-            cmd.creation_flags(CREATE_NO_WINDOW);
-        }
-        let on_path = cmd.status().map(|s| s.success()).unwrap_or(false);
+        let on_path = {
+            #[cfg(windows)]
+            {
+                let mut cmd = std::process::Command::new(system_where_executable());
+                cmd.arg(editor)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null());
+                use std::os::windows::process::CommandExt;
+                cmd.creation_flags(CREATE_NO_WINDOW);
+                cmd.status().map(|s| s.success()).unwrap_or(false)
+            }
+
+            #[cfg(not(windows))]
+            {
+                std::process::Command::new("which")
+                    .arg(editor)
+                    .stdout(std::process::Stdio::null())
+                    .stderr(std::process::Stdio::null())
+                    .status()
+                    .map(|s| s.success())
+                    .unwrap_or(false)
+            }
+        };
         if on_path {
             found.insert(*editor);
         }

@@ -9,6 +9,17 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tracing::debug;
 
+/// Shell-specific quoting style for terminal path insertion.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalPathStyle {
+    /// POSIX-style shells such as bash, zsh, and sh.
+    Posix,
+    /// PowerShell / pwsh.
+    PowerShell,
+    /// Windows cmd.exe.
+    Cmd,
+}
+
 /// File tree state managing a hierarchical view of the filesystem.
 ///
 /// The file tree maintains a root directory and tracks which directories
@@ -281,14 +292,56 @@ impl FileTree {
 
     /// Get the path as a string suitable for terminal insertion.
     ///
-    /// Properly escapes special characters for shell usage.
-    pub fn path_for_terminal(&self, path: &Path) -> String {
-        let path_str = path.to_string_lossy();
-        // Escape spaces and special characters
-        if path_str.contains(|c: char| c.is_whitespace() || "\"'`$\\!".contains(c)) {
-            format!("'{}'", path_str.replace('\'', "'\\''"))
-        } else {
-            path_str.to_string()
+    /// Returns `None` when the current shell cannot represent the path safely
+    /// without risking command injection.
+    pub fn path_for_terminal(&self, path: &Path, style: TerminalPathStyle) -> Option<String> {
+        quote_path_for_terminal(path, style)
+    }
+}
+
+/// Quote a path for insertion into an interactive terminal line.
+///
+/// Returns `None` when the path contains control characters, or when the
+/// target shell has no safe representation for the path.
+pub fn quote_path_for_terminal(path: &Path, style: TerminalPathStyle) -> Option<String> {
+    let path_str = path.to_string_lossy();
+    if path_str.chars().any(|c| c.is_control()) {
+        return None;
+    }
+
+    match style {
+        TerminalPathStyle::Posix => {
+            if path_str
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || "/._-".contains(c))
+            {
+                Some(path_str.to_string())
+            } else {
+                Some(format!("'{}'", path_str.replace('\'', "'\\''")))
+            }
+        }
+        TerminalPathStyle::PowerShell => {
+            if path_str
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || ":/\\._-".contains(c))
+            {
+                Some(path_str.to_string())
+            } else {
+                Some(format!("'{}'", path_str.replace('\'', "''")))
+            }
+        }
+        TerminalPathStyle::Cmd => {
+            if path_str.contains(['%', '!']) {
+                return None;
+            }
+            if path_str
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || ":/\\._-".contains(c))
+            {
+                Some(path_str.to_string())
+            } else {
+                Some(format!("\"{}\"", path_str))
+            }
         }
     }
 }
@@ -656,7 +709,10 @@ mod tests {
         let tree = FileTree::new(temp.path().to_path_buf()).unwrap();
 
         let simple_path = PathBuf::from("/home/user/file.txt");
-        assert_eq!(tree.path_for_terminal(&simple_path), "/home/user/file.txt");
+        assert_eq!(
+            tree.path_for_terminal(&simple_path, TerminalPathStyle::Posix),
+            Some("/home/user/file.txt".to_string())
+        );
     }
 
     #[test]
@@ -666,8 +722,8 @@ mod tests {
 
         let path_with_spaces = PathBuf::from("/home/user/my file.txt");
         assert_eq!(
-            tree.path_for_terminal(&path_with_spaces),
-            "'/home/user/my file.txt'"
+            tree.path_for_terminal(&path_with_spaces, TerminalPathStyle::Posix),
+            Some("'/home/user/my file.txt'".to_string())
         );
     }
 
@@ -678,9 +734,42 @@ mod tests {
 
         let path_with_quote = PathBuf::from("/home/user/it's.txt");
         assert_eq!(
-            tree.path_for_terminal(&path_with_quote),
-            "'/home/user/it'\\''s.txt'"
+            tree.path_for_terminal(&path_with_quote, TerminalPathStyle::Posix),
+            Some("'/home/user/it'\\''s.txt'".to_string())
         );
+    }
+
+    #[test]
+    fn test_path_for_terminal_quotes_shell_metacharacters() {
+        let temp = TempDir::new().unwrap();
+        let tree = FileTree::new(temp.path().to_path_buf()).unwrap();
+
+        let path = PathBuf::from("/tmp/hello;rm -rf.txt");
+        assert_eq!(
+            tree.path_for_terminal(&path, TerminalPathStyle::Posix),
+            Some("'/tmp/hello;rm -rf.txt'".to_string())
+        );
+    }
+
+    #[test]
+    fn test_path_for_terminal_powershell_quotes_single_quote() {
+        let temp = TempDir::new().unwrap();
+        let tree = FileTree::new(temp.path().to_path_buf()).unwrap();
+
+        let path = PathBuf::from(r"C:\temp\it's.txt");
+        assert_eq!(
+            tree.path_for_terminal(&path, TerminalPathStyle::PowerShell),
+            Some(r"'C:\temp\it''s.txt'".to_string())
+        );
+    }
+
+    #[test]
+    fn test_path_for_terminal_cmd_rejects_percent_expansion() {
+        let temp = TempDir::new().unwrap();
+        let tree = FileTree::new(temp.path().to_path_buf()).unwrap();
+
+        let path = PathBuf::from(r"C:\temp\%TEMP%.txt");
+        assert_eq!(tree.path_for_terminal(&path, TerminalPathStyle::Cmd), None);
     }
 
     #[test]

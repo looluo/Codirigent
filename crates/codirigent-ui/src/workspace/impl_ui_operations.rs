@@ -1,5 +1,6 @@
 //! UI operation handlers for WorkspaceView.
 
+use super::cli_helpers::terminal_path_style;
 use super::editor_detection::{extra_editor_dirs, is_terminal_editor};
 use super::gpui::WorkspaceView;
 use super::types::SessionActionKind;
@@ -9,8 +10,26 @@ use std::path::Path;
 use tracing::{info, warn};
 
 impl WorkspaceView {
+    pub(super) fn terminal_path_style(&self) -> codirigent_filetree::TerminalPathStyle {
+        let configured = self
+            .effective_user_settings()
+            .general
+            .default_shell
+            .as_str();
+        let shell_name = (!configured.is_empty()).then_some(configured);
+        terminal_path_style(shell_name)
+    }
+
     /// Open a file in the user's configured editor.
     pub(super) fn open_in_editor(&mut self, path: &Path) {
+        if !self.project.is_safe_project_path(path) {
+            warn!(
+                ?path,
+                "Blocked attempt to open a path outside the project root"
+            );
+            return;
+        }
+
         let editor = {
             let configured = self
                 .effective_user_settings()
@@ -34,7 +53,13 @@ impl WorkspaceView {
 
         if is_terminal_editor(&editor) {
             if let Some(session_id) = self.workspace.focused_session_id() {
-                let path_str = self.project.format_path_for_terminal(path);
+                let Some(path_str) = self
+                    .project
+                    .format_path_for_terminal(path, self.terminal_path_style())
+                else {
+                    warn!(?path, "Failed to quote path safely for terminal editor");
+                    return;
+                };
 
                 let command = format!("{} {}\n", editor, path_str);
                 if let Ok(manager) = self.session_manager.lock() {

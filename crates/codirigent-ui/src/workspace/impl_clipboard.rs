@@ -49,11 +49,18 @@ impl WorkspaceView {
                 if paths.is_empty() {
                     return;
                 }
-                let text = paths
+                let Some(formatted_paths) = paths
                     .iter()
-                    .map(|p| self.project.format_path_for_terminal(p))
-                    .collect::<Vec<_>>()
-                    .join(" ");
+                    .map(|p| {
+                        self.project
+                            .format_path_for_terminal(p, self.terminal_path_style())
+                    })
+                    .collect::<Option<Vec<_>>>()
+                else {
+                    warn!("Failed to quote one or more clipboard file paths safely");
+                    return;
+                };
+                let text = formatted_paths.join(" ");
                 if !text.contains(['\r', '\n']) {
                     captured_text = Some(text.clone());
                 }

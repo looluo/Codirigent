@@ -10,6 +10,7 @@
 //! - Handles clipboard preview auto-show/hide
 
 use super::cli_helpers::clear_command;
+use super::cli_helpers::is_safe_cli_session_id;
 use super::gpui::WorkspaceView;
 use super::types::{CachedCliStatus, CliStatusSource};
 use codirigent_core::{
@@ -215,17 +216,36 @@ fn resolve_hook_cli_session_id(
     explicit_cli_session_id: Option<&str>,
     session_id: SessionId,
 ) -> Option<String> {
-    explicit_cli_session_id
+    if let Some(explicit_id) = explicit_cli_session_id
+        .map(str::trim)
         .filter(|id| !id.is_empty())
-        .map(str::to_owned)
-        .or_else(|| {
-            let fallback = signal_file_id.trim();
-            if fallback.is_empty() || fallback == session_id.0.to_string() {
-                None
-            } else {
-                Some(fallback.to_owned())
-            }
-        })
+    {
+        if is_safe_cli_session_id(explicit_id) {
+            return Some(explicit_id.to_owned());
+        }
+        warn!(
+            session_id = session_id.0,
+            signal_file_id,
+            cli_session_id = %explicit_id,
+            "Ignoring unsafe CLI session ID from hook signal"
+        );
+        return None;
+    }
+
+    let fallback = signal_file_id.trim();
+    if fallback.is_empty() || fallback == session_id.0.to_string() {
+        return None;
+    }
+    if !is_safe_cli_session_id(fallback) {
+        warn!(
+            session_id = session_id.0,
+            signal_file_id = fallback,
+            "Ignoring unsafe fallback CLI session ID from hook signal filename"
+        );
+        return None;
+    }
+
+    Some(fallback.to_owned())
 }
 
 fn codex_execution_mode_from_approval_and_sandbox(
@@ -934,6 +954,14 @@ impl WorkspaceView {
                 for result in &results {
                     let session_id = result.session_id;
                     if let Some(codex_session_id) = result.codex_session_id.as_deref() {
+                        if !is_safe_cli_session_id(codex_session_id) {
+                            warn!(
+                                ?session_id,
+                                codex_session_id,
+                                "Ignoring unsafe Codex session ID from rollout polling"
+                            );
+                            continue;
+                        }
                         let mut updated = false;
                         if let Ok(mgr) = this.session_manager.lock() {
                             updated |= mgr
@@ -1687,8 +1715,8 @@ impl WorkspaceView {
             if path.extension().and_then(|e| e.to_str()) != Some("json") {
                 continue;
             }
-            // The filename stem is the Claude Code session_id.
-            let claude_session_id = match path.file_stem().and_then(|s| s.to_str()) {
+            // The filename stem is the hook signal identifier.
+            let signal_file_id = match path.file_stem().and_then(|s| s.to_str()) {
                 Some(s) => s.to_owned(),
                 None => continue,
             };
@@ -1717,14 +1745,14 @@ impl WorkspaceView {
             let last_seen_ts = self
                 .polling
                 .last_processed_hook_signal_ts
-                .get(&claude_session_id)
+                .get(&signal_file_id)
                 .copied();
             if !should_apply_hook_signal(last_seen_ts, signal.ts) {
                 continue;
             }
             self.polling
                 .last_processed_hook_signal_ts
-                .insert(claude_session_id.clone(), signal.ts);
+                .insert(signal_file_id.clone(), signal.ts);
 
             // Store the Claude/Gemini/Codex session_id on the Session for resume on next startup.
             // Persist to disk whenever it changes (first assignment or new session
@@ -1737,51 +1765,65 @@ impl WorkspaceView {
                     .clipboard_service
                     .set_session_cli_type(session_id, cli_type);
             }
+            let resolved_cli_session_id = resolve_hook_cli_session_id(
+                &signal_file_id,
+                signal.cli_session_id.as_deref(),
+                session_id,
+            );
             match cli_type {
                 CLI_TYPE_CLAUDE => {
-                    id_changed = self
-                        .session_manager
-                        .lock()
-                        .ok()
-                        .and_then(|mgr| {
-                            mgr.with_session_state_mut(session_id, |state| {
-                                let changed = state.session.claude_session_id.as_deref()
-                                    != Some(&claude_session_id);
-                                state.session.claude_session_id = Some(claude_session_id.clone());
-                                changed
+                    if let Some(cli_session_id) = resolved_cli_session_id.as_deref() {
+                        id_changed = self
+                            .session_manager
+                            .lock()
+                            .ok()
+                            .and_then(|mgr| {
+                                mgr.with_session_state_mut(session_id, |state| {
+                                    let changed = state.session.claude_session_id.as_deref()
+                                        != Some(cli_session_id);
+                                    state.session.claude_session_id =
+                                        Some(cli_session_id.to_owned());
+                                    changed
+                                })
                             })
-                        })
-                        .unwrap_or(false);
+                            .unwrap_or(false);
+                    }
                 }
                 CLI_TYPE_GEMINI => {
-                    id_changed = self
-                        .session_manager
-                        .lock()
-                        .ok()
-                        .and_then(|mgr| {
-                            mgr.with_session_state_mut(session_id, |state| {
-                                let changed = state.session.gemini_session_id.as_deref()
-                                    != Some(&claude_session_id);
-                                state.session.gemini_session_id = Some(claude_session_id.clone());
-                                changed
+                    if let Some(cli_session_id) = resolved_cli_session_id.as_deref() {
+                        id_changed = self
+                            .session_manager
+                            .lock()
+                            .ok()
+                            .and_then(|mgr| {
+                                mgr.with_session_state_mut(session_id, |state| {
+                                    let changed = state.session.gemini_session_id.as_deref()
+                                        != Some(cli_session_id);
+                                    state.session.gemini_session_id =
+                                        Some(cli_session_id.to_owned());
+                                    changed
+                                })
                             })
-                        })
-                        .unwrap_or(false);
+                            .unwrap_or(false);
+                    }
                 }
                 CLI_TYPE_CODEX => {
-                    id_changed = self
-                        .session_manager
-                        .lock()
-                        .ok()
-                        .and_then(|mgr| {
-                            mgr.with_session_state_mut(session_id, |state| {
-                                let changed = state.session.codex_session_id.as_deref()
-                                    != Some(&claude_session_id);
-                                state.session.codex_session_id = Some(claude_session_id.clone());
-                                changed
+                    if let Some(cli_session_id) = resolved_cli_session_id.as_deref() {
+                        id_changed = self
+                            .session_manager
+                            .lock()
+                            .ok()
+                            .and_then(|mgr| {
+                                mgr.with_session_state_mut(session_id, |state| {
+                                    let changed = state.session.codex_session_id.as_deref()
+                                        != Some(cli_session_id);
+                                    state.session.codex_session_id =
+                                        Some(cli_session_id.to_owned());
+                                    changed
+                                })
                             })
-                        })
-                        .unwrap_or(false);
+                            .unwrap_or(false);
+                    }
                 }
                 _ => {}
             }
@@ -2143,6 +2185,18 @@ mod tests {
         assert_eq!(
             resolve_hook_cli_session_id("3", Some("real-codex-id"), SessionId(3)),
             Some("real-codex-id".to_string())
+        );
+    }
+
+    #[test]
+    fn unsafe_hook_cli_session_id_is_rejected() {
+        assert_eq!(
+            resolve_hook_cli_session_id("3", Some("bad;id"), SessionId(3)),
+            None
+        );
+        assert_eq!(
+            resolve_hook_cli_session_id("bad;id", None, SessionId(3)),
+            None
         );
     }
 

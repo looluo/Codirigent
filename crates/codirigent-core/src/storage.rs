@@ -27,7 +27,7 @@
 
 use crate::traits::StorageService;
 use crate::types::{AppState, SessionId, Task, TaskId};
-use anyhow::{Context, Result};
+use anyhow::{bail, Context, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -87,6 +87,15 @@ pub struct FileStorageService {
 }
 
 impl FileStorageService {
+    fn reject_symlink(path: &Path, description: &str) -> Result<()> {
+        if let Ok(metadata) = fs::symlink_metadata(path) {
+            if metadata.file_type().is_symlink() {
+                bail!("Refusing to use symlinked {} at {:?}", description, path);
+            }
+        }
+        Ok(())
+    }
+
     /// Create a new storage service for the given project directory.
     ///
     /// Creates the `.codirigent` directory and its subdirectories if they don't exist.
@@ -160,15 +169,18 @@ impl FileStorageService {
                 self.codirigent_dir
             )
         })?;
+        Self::reject_symlink(&self.codirigent_dir, ".codirigent directory")?;
         fs::create_dir_all(self.tasks_dir()).with_context(|| {
             format!("Failed to create tasks directory at {:?}", self.tasks_dir())
         })?;
+        Self::reject_symlink(&self.tasks_dir(), "tasks directory")?;
         fs::create_dir_all(self.context_dir()).with_context(|| {
             format!(
                 "Failed to create context directory at {:?}",
                 self.context_dir()
             )
         })?;
+        Self::reject_symlink(&self.context_dir(), "context directory")?;
         debug!("Directories ensured at {}", self.codirigent_dir.display());
         Ok(())
     }
@@ -230,6 +242,8 @@ impl FileStorageService {
     /// If rename fails after write succeeds, the temp file is cleaned up.
     fn atomic_write(&self, path: &Path, content: &str) -> Result<()> {
         let temp_path = path.with_extension("json.tmp");
+        Self::reject_symlink(path, "output file")?;
+        Self::reject_symlink(&temp_path, "temporary output file")?;
         fs::write(&temp_path, content)
             .with_context(|| format!("Failed to write temp file at {:?}", temp_path))?;
 
@@ -263,6 +277,7 @@ impl StorageService for FileStorageService {
             return Ok(AppState::default());
         }
 
+        Self::reject_symlink(&path, "state file")?;
         let content = fs::read_to_string(&path)
             .with_context(|| format!("Failed to read state.json at {:?}", path))?;
         let state: AppState = serde_json::from_str(&content)

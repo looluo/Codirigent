@@ -486,7 +486,7 @@ impl CodirigentApp {
                 // Show splash screen with transition to workspace
                 cx.open_window(
                     WindowOptions {
-                        window_bounds: Some(window_bounds.clone()),
+                        window_bounds: Some(window_bounds),
                         window_min_size: Some(size(px(min_width), px(min_height))),
                         titlebar: Some(TitlebarOptions {
                             title: Some("Codirigent".into()),
@@ -513,7 +513,7 @@ impl CodirigentApp {
                 // Skip splash, go directly to workspace
                 cx.open_window(
                     WindowOptions {
-                        window_bounds: Some(window_bounds.clone()),
+                        window_bounds: Some(window_bounds),
                         window_min_size: Some(size(px(min_width), px(min_height))),
                         titlebar: Some(TitlebarOptions {
                             title: Some("Codirigent".into()),

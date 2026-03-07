@@ -6,6 +6,7 @@
 //! - Session closure (close, close_focused)
 //! - State persistence to disk
 
+use super::cli_helpers::is_safe_cli_session_id;
 use super::gpui::WorkspaceView;
 use super::types::SESSION_NAME_PREFIX;
 use crate::terminal::Terminal;
@@ -326,17 +327,48 @@ fn resolve_saved_codex_execution_mode(
     saved_mode.or_else(|| read_saved_codex_execution_mode(working_dir, codex_session_id))
 }
 
-fn build_codex_resume_command(codex_session_id: &str, mode: Option<CodexExecutionMode>) -> String {
+fn build_codex_resume_command(
+    codex_session_id: &str,
+    mode: Option<CodexExecutionMode>,
+) -> Option<String> {
+    if !is_safe_cli_session_id(codex_session_id) {
+        warn!(
+            session_id = %codex_session_id,
+            "Ignoring unsafe persisted Codex session ID during restore"
+        );
+        return None;
+    }
+
     let mut cmd = format!("codex resume {}", codex_session_id);
     if let Some(mode) = mode {
         cmd.push(' ');
         cmd.push_str(codex_resume_flag(mode));
     }
     cmd.push('\r');
-    cmd
+    Some(cmd)
+}
+
+fn build_resume_command(program: &str, session_id: &str, extra_args: &[&str]) -> Option<String> {
+    if !is_safe_cli_session_id(session_id) {
+        warn!(
+            program,
+            session_id = %session_id,
+            "Ignoring unsafe persisted CLI session ID during restore"
+        );
+        return None;
+    }
+
+    let mut cmd = format!("{} --resume {}", program, session_id);
+    for arg in extra_args {
+        cmd.push(' ');
+        cmd.push_str(arg);
+    }
+    cmd.push('\r');
+    Some(cmd)
 }
 
 #[cfg(test)]
+#[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
     use tempfile::TempDir;
@@ -345,7 +377,7 @@ mod tests {
     fn codex_resume_command_uses_resume_subcommand() {
         assert_eq!(
             build_codex_resume_command("session-123", None),
-            "codex resume session-123\r"
+            Some("codex resume session-123\r".to_string())
         );
     }
 
@@ -353,7 +385,9 @@ mod tests {
     fn codex_resume_command_preserves_bypass_mode() {
         assert_eq!(
             build_codex_resume_command("session-123", Some(CodexExecutionMode::Bypass)),
-            "codex resume session-123 --dangerously-bypass-approvals-and-sandbox\r"
+            Some(
+                "codex resume session-123 --dangerously-bypass-approvals-and-sandbox\r".to_string()
+            )
         );
     }
 
@@ -361,8 +395,13 @@ mod tests {
     fn codex_resume_command_preserves_full_auto_mode() {
         assert_eq!(
             build_codex_resume_command("session-123", Some(CodexExecutionMode::FullAuto)),
-            "codex resume session-123 --full-auto\r"
+            Some("codex resume session-123 --full-auto\r".to_string())
         );
+    }
+
+    #[test]
+    fn codex_resume_command_rejects_unsafe_session_id() {
+        assert_eq!(build_codex_resume_command("session-123;rm", None), None);
     }
 
     #[test]
@@ -434,22 +473,25 @@ impl WorkspaceView {
                 .claude_session_id
                 .as_ref()
                 .filter(|id| used_claude_ids.insert((*id).clone()))
-                .map(|claude_id| {
-                    let permission_mode =
-                        read_claude_permission_mode(claude_id).unwrap_or_default();
-                    let mut cmd = format!("claude --resume {}", claude_id);
-                    if permission_mode == "bypassPermissions" {
-                        cmd.push_str(" --dangerously-skip-permissions");
-                    }
-                    cmd.push('\r');
-                    cmd
+                .and_then(|claude_id| {
+                    let permission_mode = if is_safe_cli_session_id(claude_id) {
+                        read_claude_permission_mode(claude_id).unwrap_or_default()
+                    } else {
+                        String::new()
+                    };
+                    let extra_args = if permission_mode == "bypassPermissions" {
+                        vec!["--dangerously-skip-permissions"]
+                    } else {
+                        Vec::new()
+                    };
+                    build_resume_command("claude", claude_id, &extra_args)
                 });
 
             let codex_resume = saved
                 .codex_session_id
                 .as_ref()
                 .filter(|id| used_codex_ids.insert((*id).clone()))
-                .map(|codex_id| {
+                .and_then(|codex_id| {
                     let mode = resolve_saved_codex_execution_mode(
                         saved.codex_execution_mode,
                         &working_dir,
@@ -462,7 +504,7 @@ impl WorkspaceView {
                 .gemini_session_id
                 .as_ref()
                 .filter(|id| used_gemini_ids.insert((*id).clone()))
-                .map(|gemini_id| format!("gemini --resume {}\r", gemini_id));
+                .and_then(|gemini_id| build_resume_command("gemini", gemini_id, &[]));
 
             sessions.push(RestoreSessionPlan {
                 session_name,
