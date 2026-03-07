@@ -396,6 +396,12 @@ impl WorkspaceView {
         }
 
         let mut used_names = std::collections::HashSet::new();
+        let mut used_claude_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        let mut used_codex_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
+        let mut used_gemini_ids: std::collections::HashSet<String> =
+            std::collections::HashSet::new();
         let mut sessions = Vec::with_capacity(state.sessions.len());
 
         for saved in state.sessions {
@@ -424,28 +430,38 @@ impl WorkspaceView {
             }
             used_names.insert(session_name.clone());
 
-            let claude_resume = saved.claude_session_id.as_ref().map(|claude_id| {
-                let permission_mode = read_claude_permission_mode(claude_id).unwrap_or_default();
-                let mut cmd = format!("claude --resume {}", claude_id);
-                if permission_mode == "bypassPermissions" {
-                    cmd.push_str(" --dangerously-skip-permissions");
-                }
-                cmd.push('\r');
-                cmd
-            });
+            let claude_resume = saved
+                .claude_session_id
+                .as_ref()
+                .filter(|id| used_claude_ids.insert((*id).clone()))
+                .map(|claude_id| {
+                    let permission_mode =
+                        read_claude_permission_mode(claude_id).unwrap_or_default();
+                    let mut cmd = format!("claude --resume {}", claude_id);
+                    if permission_mode == "bypassPermissions" {
+                        cmd.push_str(" --dangerously-skip-permissions");
+                    }
+                    cmd.push('\r');
+                    cmd
+                });
 
-            let codex_resume = saved.codex_session_id.as_ref().map(|codex_id| {
-                let mode = resolve_saved_codex_execution_mode(
-                    saved.codex_execution_mode,
-                    &working_dir,
-                    codex_id,
-                );
-                build_codex_resume_command(codex_id, mode)
-            });
+            let codex_resume = saved
+                .codex_session_id
+                .as_ref()
+                .filter(|id| used_codex_ids.insert((*id).clone()))
+                .map(|codex_id| {
+                    let mode = resolve_saved_codex_execution_mode(
+                        saved.codex_execution_mode,
+                        &working_dir,
+                        codex_id,
+                    );
+                    build_codex_resume_command(codex_id, mode)
+                });
 
             let gemini_resume = saved
                 .gemini_session_id
                 .as_ref()
+                .filter(|id| used_gemini_ids.insert((*id).clone()))
                 .map(|gemini_id| format!("gemini --resume {}\r", gemini_id));
 
             sessions.push(RestoreSessionPlan {
