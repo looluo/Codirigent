@@ -23,7 +23,7 @@
 
 ---
 
-<video src="website/video/demo.mp4" autoplay loop muted playsinline width="100%"></video>
+https://github.com/user-attachments/assets/e6ee6a6e-24a2-4309-aacf-33bfaebcfde6
 
 ---
 
@@ -35,11 +35,18 @@ Codirigent is a Tmux-style workspace built for this workflow. Open it once, and 
 
 <img src="website/images/main.png" alt="Multiple AI coding CLIs running in parallel" width="100%" />
 
-**Multiple sessions, one view** — run Claude Code, Codex, and Gemini side by side. Status indicators show which agent is Working, Needs Attention, or Idle.
+**Multiple sessions, one view** — run Claude Code, Codex, and Gemini side by side. Each session shows a real-time status indicator:
+
+| Status | | Meaning |
+|--------|---|---------|
+| Idle | ![gray](https://img.shields.io/badge/●-gray) | Shell idle, no agent activity |
+| Working | ![amber](https://img.shields.io/badge/●-f59e0b) | Agent is generating a response |
+| Attention | ![rose](https://img.shields.io/badge/●-f43f5e) | Agent is waiting for user input or permission |
+| Ready | ![green](https://img.shields.io/badge/●-22c55e) | Agent finished, response is waiting in an unfocused session |
 
 ---
 
-<video src="website/video/customLayout.mp4" autoplay loop muted playsinline width="100%"></video>
+https://github.com/user-attachments/assets/36d38a89-ac41-48bb-856e-4330efb65f45
 
 **Custom layouts** — arrange sessions in any grid configuration and save them. Drag and drop session headers to rearrange positions on the fly.
 
