@@ -9,13 +9,14 @@ use crate::session::SessionState;
 use anyhow::{anyhow, Context, Result};
 use codirigent_core::{
     CodirigentEvent, EventBus, GitRepoInfo, Session, SessionId, SessionManager, SessionStatus,
+    SessionUpdate,
 };
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 
 /// Default terminal height in rows.
 const DEFAULT_PTY_ROWS: u16 = 24;
@@ -47,6 +48,12 @@ fn normalize_path(path: &std::path::Path) -> PathBuf {
     }
     canonical
 }
+
+/// Channel capacity for the `SessionUpdate` mpsc channel.
+///
+/// Sized to handle bursts from multiple concurrent PTY readers without
+/// back-pressure. Each `SessionUpdate` is small (enum + SessionId).
+const SESSION_UPDATE_CHANNEL_CAPACITY: usize = 512;
 
 /// Default implementation of [`SessionManager`].
 ///
@@ -86,6 +93,16 @@ pub struct DefaultSessionManager {
     git_status: Mutex<GitStatusService>,
     /// Sessions whose PTY readers have queued unread output since the last poll.
     pending_output_sessions: Arc<Mutex<HashSet<SessionId>>>,
+    /// Sender for the internal hot-path `SessionUpdate` channel.
+    ///
+    /// Cloned into PTY reader callbacks and OSC parser paths so they can
+    /// emit events without going through the legacy `pending_output_sessions`
+    /// mechanism. The receiver is taken once via [`take_update_receiver`].
+    update_tx: tokio::sync::mpsc::Sender<SessionUpdate>,
+    /// Receiver for the internal hot-path `SessionUpdate` channel.
+    ///
+    /// Wrapped in `Option` because it is taken once by the output dispatcher.
+    update_rx: Mutex<Option<tokio::sync::mpsc::Receiver<SessionUpdate>>>,
 }
 
 impl DefaultSessionManager {
@@ -95,13 +112,35 @@ impl DefaultSessionManager {
     ///
     /// * `event_bus` - The event bus for publishing session events
     pub fn new(event_bus: Arc<dyn EventBus>) -> Self {
+        let (update_tx, update_rx) = tokio::sync::mpsc::channel(SESSION_UPDATE_CHANNEL_CAPACITY);
         Self {
             sessions: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             event_bus,
             git_status: Mutex::new(GitStatusService::new()),
             pending_output_sessions: Arc::new(Mutex::new(HashSet::new())),
+            update_tx,
+            update_rx: Mutex::new(Some(update_rx)),
         }
+    }
+
+    /// Take the `SessionUpdate` receiver.
+    ///
+    /// This can only be called once — the receiver is consumed by the output
+    /// dispatcher. Returns `None` on subsequent calls.
+    pub fn take_update_receiver(&self) -> Option<tokio::sync::mpsc::Receiver<SessionUpdate>> {
+        self.update_rx
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take()
+    }
+
+    /// Get a clone of the `SessionUpdate` sender.
+    ///
+    /// Used by external components that need to emit `SessionUpdate` events
+    /// (e.g., hook signal readers, JSONL parsers).
+    pub fn update_sender(&self) -> tokio::sync::mpsc::Sender<SessionUpdate> {
+        self.update_tx.clone()
     }
 
     /// Acquire the sessions lock.
@@ -245,7 +284,11 @@ impl DefaultSessionManager {
 
     /// Get all sessions that currently have unread PTY output queued.
     pub fn sessions_with_pending_output(&self) -> Vec<SessionId> {
-        self.lock_pending_output_sessions().drain().collect()
+        let ids: Vec<SessionId> = self.lock_pending_output_sessions().drain().collect();
+        if !ids.is_empty() {
+            trace!(count = ids.len(), "sessions_with_pending_output");
+        }
+        ids
     }
 
     /// Mark a session as having unread PTY output ready for UI polling.
@@ -434,11 +477,15 @@ impl SessionManager for DefaultSessionManager {
             .take_reader()
             .ok_or_else(|| anyhow!("Failed to get PTY reader"))?;
         let pending_output_sessions = self.pending_output_sessions.clone();
+        let update_tx = self.update_tx.clone();
         let output_rx = spawn_output_reader_with_notify(reader, move || {
+            // Legacy path: mark in the pending set (consumed by broad poll)
             pending_output_sessions
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .insert(id);
+            // New path: emit event for the output dispatcher
+            let _ = update_tx.try_send(SessionUpdate::OutputReady { session_id: id });
         });
 
         // Create session metadata
