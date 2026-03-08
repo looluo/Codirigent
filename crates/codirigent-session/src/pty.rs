@@ -999,4 +999,50 @@ mod tests {
         drop(pty);
         output_reader.stop();
     }
+
+    #[tokio::test]
+    async fn test_on_exit_called_on_eof() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+
+        // Use a Cursor to simulate a reader that yields data then hits EOF.
+        let data = b"hello world";
+        let reader: Box<dyn Read + Send> = Box::new(std::io::Cursor::new(data.to_vec()));
+
+        let chunk_called = Arc::new(AtomicBool::new(false));
+        let exit_called = Arc::new(AtomicBool::new(false));
+
+        let chunk_flag = chunk_called.clone();
+        let exit_flag = exit_called.clone();
+
+        let mut rx = spawn_output_reader_with_notify(
+            reader,
+            move || {
+                chunk_flag.store(true, Ordering::SeqCst);
+            },
+            move || {
+                exit_flag.store(true, Ordering::SeqCst);
+            },
+        );
+
+        // Drain output — Cursor reads all data in one chunk then returns EOF.
+        let received = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+        assert_eq!(&received, data);
+        assert!(chunk_called.load(Ordering::SeqCst), "on_chunk should fire");
+
+        // Wait for channel to close (reader thread hit EOF and exited)
+        while rx.recv().await.is_some() {}
+
+        // Give the thread a moment to run on_exit after the loop
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            exit_called.load(Ordering::SeqCst),
+            "on_exit should fire on EOF"
+        );
+    }
 }
