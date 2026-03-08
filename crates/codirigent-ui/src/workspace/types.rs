@@ -447,8 +447,6 @@ pub(super) enum CliStatusSource {
 #[derive(Debug, Clone)]
 pub(super) struct CachedCliStatus {
     pub(super) status: SessionStatus,
-    #[allow(dead_code)] // Populated on cache; read when tool-specific side effects are wired
-    pub(super) tool_name: Option<String>,
     pub(super) seen_at: Instant,
     pub(super) source: CliStatusSource,
     /// When the status last changed (for stale NeedsAttention detection).

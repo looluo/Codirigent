@@ -51,9 +51,7 @@ pub(super) fn reconcile(
     let detector_wins = |prev: Option<SessionStatus>| ReconciledStatus {
         status: detector,
         source: HintSource::Detector,
-        tool_name: None,
         changed: prev != Some(detector),
-        previous_status: prev,
     };
 
     let Some(cached) = cached_status else {
@@ -82,9 +80,7 @@ pub(super) fn reconcile(
         Some(ReconciledStatus {
             status: cached,
             source: cached_source,
-            tool_name: None,
             changed: previous_status != Some(cached),
-            previous_status,
         }),
         StaleAction::None,
     )

@@ -18,18 +18,10 @@ pub(super) type HintSource = StatusHintSource;
 pub(super) struct ReconciledStatus {
     /// The final reconciled status.
     pub status: SessionStatus,
-    /// Which source won.
-    #[allow(dead_code)] // Validated in tests; used in shadow-mode diffing
+    /// Which source won (used in shadow-mode logging).
     pub source: HintSource,
-    /// Optional tool name from the winning hint.
-    #[allow(dead_code)] // Used when tool-specific side effects are wired in
-    pub tool_name: Option<String>,
     /// Whether the status changed from the previous value.
-    #[allow(dead_code)] // Validated in tests; used in shadow-mode diffing
     pub changed: bool,
-    /// Previous status (for side-effect logic).
-    #[allow(dead_code)] // Used when side-effect routing is consolidated
-    pub previous_status: Option<SessionStatus>,
 }
 
 /// Result of provider-level stale NeedsAttention detection.
