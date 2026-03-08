@@ -44,7 +44,7 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 
 /// Configuration for the input detector.
 ///
@@ -422,6 +422,7 @@ impl InputDetector {
     /// process state and timing.
     pub fn tick(&mut self) {
         let session_ids: Vec<SessionId> = self.sessions.keys().copied().collect();
+        trace!(session_count = session_ids.len(), "detector_tick");
         for session_id in session_ids {
             self.update_session_status(session_id);
         }
