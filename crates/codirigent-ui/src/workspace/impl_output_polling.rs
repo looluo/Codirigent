@@ -502,9 +502,16 @@ impl WorkspaceView {
                         );
                         self.output_dispatcher.mark_ready(session_id);
                     }
-                    _ => {
-                        // Phase-2: ShellStateChanged, WorkingDirectoryChanged,
-                        // etc. are handled inline during output preparation
+                    SessionUpdate::OutputReady { .. } => {
+                        // Consumed by drain_updates into the ready set — should
+                        // not appear here, but handle gracefully.
+                    }
+                    SessionUpdate::ShellStateChanged { .. }
+                    | SessionUpdate::WorkingDirectoryChanged { .. }
+                    | SessionUpdate::OutputDrained { .. }
+                    | SessionUpdate::StatusHintChanged { .. }
+                    | SessionUpdate::GitInfoChanged { .. } => {
+                        // Phase-2: handled inline during output preparation
                         // (dual-path). Channel copies are informational only
                         // until phase-2 routing replaces the inline path.
                     }
@@ -766,7 +773,11 @@ impl WorkspaceView {
             cx.notify();
         }
         if has_more {
-            self.schedule_session_output_preparation(session_id, cx);
+            // Re-queue through the dispatcher so other sessions get fair
+            // scheduling in the next poll cycle (16ms), instead of immediately
+            // re-entering schedule_session_output_preparation which bypasses
+            // the dispatcher's focused-first prioritization.
+            self.output_dispatcher.mark_ready(session_id);
         }
     }
 

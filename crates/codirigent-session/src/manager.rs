@@ -477,6 +477,7 @@ impl SessionManager for DefaultSessionManager {
             .take_reader()
             .ok_or_else(|| anyhow!("Failed to get PTY reader"))?;
         let pending_output_sessions = self.pending_output_sessions.clone();
+        let pending_output_for_exit = self.pending_output_sessions.clone();
         let update_tx = self.update_tx.clone();
         let exit_tx = self.update_tx.clone();
         let output_rx = spawn_output_reader_with_notify(
@@ -498,11 +499,15 @@ impl SessionManager for DefaultSessionManager {
             },
             move || {
                 // Notify the event-driven pipeline that the PTY child exited.
-                // Unlike OutputReady, there is no legacy fallback for this event.
                 if let Err(e) =
                     exit_tx.try_send(SessionUpdate::ChildProcessExited { session_id: id })
                 {
                     tracing::warn!("ChildProcessExited channel full for session {}: {e}", id.0);
+                    // Fallback: ensure the session gets one more drain via legacy poll
+                    pending_output_for_exit
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .insert(id);
                 }
             },
         );
