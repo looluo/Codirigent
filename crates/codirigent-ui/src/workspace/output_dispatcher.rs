@@ -32,6 +32,10 @@ pub(super) struct OutputDispatcher {
     ready_sessions: HashSet<SessionId>,
     /// Sessions currently being processed (background task in-flight).
     in_flight: HashSet<SessionId>,
+    /// Sessions that have been closed. Late events for these sessions are
+    /// silently dropped to prevent re-introduction into the ready/in-flight
+    /// sets after `remove_session` has cleaned up.
+    closed: HashSet<SessionId>,
 }
 
 impl Default for OutputDispatcher {
@@ -46,6 +50,7 @@ impl OutputDispatcher {
         Self {
             ready_sessions: HashSet::new(),
             in_flight: HashSet::new(),
+            closed: HashSet::new(),
         }
     }
 
@@ -68,6 +73,11 @@ impl OutputDispatcher {
             match rx.try_recv() {
                 Ok(event) => {
                     drained += 1;
+                    let sid = event.session_id();
+                    if self.closed.contains(&sid) {
+                        trace!(?sid, "dropping event for closed session");
+                        continue;
+                    }
                     match event {
                         SessionUpdate::OutputReady { session_id } => {
                             self.ready_sessions.insert(session_id);
@@ -90,17 +100,22 @@ impl OutputDispatcher {
     /// Mark a session as ready for output processing.
     ///
     /// Used by the legacy fallback poll path and when `has_more` is true
-    /// after a bounded drain.
+    /// after a bounded drain. Silently drops events for closed sessions.
     /// Returns `true` if the session was newly inserted (not already ready).
     pub fn mark_ready(&mut self, session_id: SessionId) -> bool {
+        if self.closed.contains(&session_id) {
+            return false;
+        }
         self.ready_sessions.insert(session_id)
     }
 
     /// Mark a session as in-flight (background task started).
     ///
-    /// Returns `false` if the session is already in-flight (caller should
-    /// re-mark it as ready instead of double-dispatching).
+    /// Returns `false` if the session is already in-flight or closed.
     pub fn mark_in_flight(&mut self, session_id: SessionId) -> bool {
+        if self.closed.contains(&session_id) {
+            return false;
+        }
         if self.in_flight.contains(&session_id) {
             // Already processing — re-queue so it's not lost.
             // The next poll cycle will dispatch it after the current
@@ -184,9 +199,14 @@ impl OutputDispatcher {
     }
 
     /// Remove a session from all tracking (e.g., when session is closed).
+    ///
+    /// The session is added to a closed set so that late events (e.g.,
+    /// `ChildProcessExited` arriving after teardown) are silently dropped
+    /// instead of re-introducing the session into the ready/in-flight sets.
     pub fn remove_session(&mut self, session_id: SessionId) {
         self.ready_sessions.remove(&session_id);
         self.in_flight.remove(&session_id);
+        self.closed.insert(session_id);
     }
 }
 
@@ -341,6 +361,20 @@ mod tests {
         dispatcher.mark_ready(s1); // re-queued while in-flight
 
         dispatcher.remove_session(s1);
+        assert!(!dispatcher.has_activity());
+    }
+
+    #[test]
+    fn closed_session_cannot_be_reintroduced() {
+        let mut dispatcher = OutputDispatcher::new();
+        let s1 = SessionId(1);
+
+        dispatcher.mark_ready(s1);
+        dispatcher.remove_session(s1);
+
+        // Late events after close should be silently dropped
+        assert!(!dispatcher.mark_ready(s1));
+        assert!(!dispatcher.mark_in_flight(s1));
         assert!(!dispatcher.has_activity());
     }
 
