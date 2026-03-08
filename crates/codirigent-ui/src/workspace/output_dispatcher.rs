@@ -23,6 +23,12 @@ const DEFAULT_MAX_CHUNKS_PER_POLL: usize = 64;
 /// Maximum bytes drained per session per poll cycle (256 KB).
 const DEFAULT_MAX_BYTES_PER_POLL: usize = 256 * 1024;
 
+/// Maximum events drained from the mpsc channel per poll cycle.
+/// Prevents unbounded loop in pathological flooding scenarios (e.g., `yes`).
+/// OutputReady events deduplicate into the HashSet, so this primarily caps
+/// non-OutputReady events and loop iterations.
+const MAX_EVENTS_PER_DRAIN: usize = 1024;
+
 /// Scheduling policy for output dispatch.
 ///
 /// Extracted from the inline logic in `schedule_output_preparation` to make
@@ -38,6 +44,12 @@ pub(super) struct OutputDispatcher {
     /// Maximum bytes per session per poll cycle.
     #[allow(dead_code)] // Used when budget enforcement is wired in Task 7
     pub max_bytes_per_poll: usize,
+}
+
+impl Default for OutputDispatcher {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl OutputDispatcher {
@@ -61,16 +73,24 @@ impl OutputDispatcher {
         rx: &mut tokio::sync::mpsc::Receiver<SessionUpdate>,
     ) -> Vec<SessionUpdate> {
         let mut other_events = Vec::new();
+        let mut drained = 0usize;
         loop {
+            if drained >= MAX_EVENTS_PER_DRAIN {
+                trace!(drained, "drain_updates: hit event cap");
+                break;
+            }
             match rx.try_recv() {
-                Ok(event) => match event {
-                    SessionUpdate::OutputReady { session_id } => {
-                        self.ready_sessions.insert(session_id);
+                Ok(event) => {
+                    drained += 1;
+                    match event {
+                        SessionUpdate::OutputReady { session_id } => {
+                            self.ready_sessions.insert(session_id);
+                        }
+                        other => {
+                            other_events.push(other);
+                        }
                     }
-                    other => {
-                        other_events.push(other);
-                    }
-                },
+                }
                 Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
                 Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
                     warn!("SessionUpdate channel disconnected — all senders dropped");

@@ -34,6 +34,7 @@ const STALE_ATTENTION_THRESHOLD: Duration = Duration::from_secs(30);
 /// * `cached_source` — Source of the cached status.
 /// * `cache_age` — How long the cached status has been unchanged.
 /// * `previous_status` — The session's current status before reconciliation.
+#[must_use]
 pub(super) fn reconcile(
     session_id: SessionId,
     detector_status: Option<SessionStatus>,
@@ -48,32 +49,23 @@ pub(super) fn reconcile(
         return (None, StaleAction::None);
     };
 
+    // Helper: build a ReconciledStatus where the detector wins.
+    let detector_wins = |prev: Option<SessionStatus>| ReconciledStatus {
+        status: detector,
+        source: HintSource::Detector,
+        tool_name: None,
+        changed: prev != Some(detector),
+        previous_status: prev,
+    };
+
     let Some(cached) = cached_status else {
         // No cached status — detector wins
-        return (
-            Some(ReconciledStatus {
-                status: detector,
-                source: HintSource::Detector,
-                tool_name: None,
-                changed: previous_status != Some(detector),
-                previous_status,
-            }),
-            StaleAction::None,
-        );
+        return (Some(detector_wins(previous_status)), StaleAction::None);
     };
 
     // Rule 1: Live Working from detector beats cached (session is active)
     if detector == SessionStatus::Working && cached != SessionStatus::Working {
-        return (
-            Some(ReconciledStatus {
-                status: detector,
-                source: HintSource::Detector,
-                tool_name: None,
-                changed: previous_status != Some(detector),
-                previous_status,
-            }),
-            StaleAction::None,
-        );
+        return (Some(detector_wins(previous_status)), StaleAction::None);
     }
 
     // Rule 2: Stale NeedsAttention — CLI likely exited
@@ -82,13 +74,7 @@ pub(super) fn reconcile(
         && cache_age.is_some_and(|age| age > STALE_ATTENTION_THRESHOLD)
     {
         return (
-            Some(ReconciledStatus {
-                status: detector,
-                source: HintSource::Detector,
-                tool_name: None,
-                changed: previous_status != Some(detector),
-                previous_status,
-            }),
+            Some(detector_wins(previous_status)),
             StaleAction::ClearAndRevert { session_id },
         );
     }
