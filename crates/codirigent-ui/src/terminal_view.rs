@@ -239,10 +239,6 @@ pub struct TerminalView {
     cached_terminal_bg: gpui::Hsla,
     /// Cached GPUI Hsla for terminal foreground (avoids per-frame conversion).
     cached_terminal_fg: gpui::Hsla,
-    /// Last known cursor (x, y) position when it was visible.
-    /// Used to anchor the IME preedit overlay even when the cursor is hidden
-    /// (e.g. during a Ink/Claude Code `\e[?25l` redraw cycle).
-    last_visible_cursor_pos: Option<(f32, f32)>,
 }
 
 impl TerminalView {
@@ -287,7 +283,6 @@ impl TerminalView {
             dimensions_initialized: false,
             cached_terminal_bg,
             cached_terminal_fg,
-            last_visible_cursor_pos: None,
         }
     }
 
@@ -479,33 +474,12 @@ impl TerminalView {
     /// Returns `None` if the cursor is not visible or is scrolled off-screen.
     /// Uses viewport-relative coordinates from `renderable_content()` so the
     /// cursor position is correct when the terminal is scrolled.
-    ///
-    /// As a side effect, updates `last_visible_cursor_pos` whenever the cursor
-    /// is visible, so that `ime_anchor_pos` can return a stable position even
-    /// during `\e[?25l` redraw cycles.
-    pub fn cursor_rect(&mut self) -> Option<CursorRect> {
+    pub fn cursor_rect(&self) -> Option<CursorRect> {
         if !self.terminal.cursor_visible() {
             return None;
         }
 
-        let content = self.terminal.term().renderable_content();
-        let display_offset = content.display_offset;
-        let cursor_point = content.cursor.point;
-
-        // Convert grid-relative cursor line to viewport-relative row.
-        let viewport_line = cursor_point.line.0 + display_offset as i32;
-        let rows = self.terminal.rows() as usize;
-        if viewport_line < 0 || viewport_line as usize >= rows {
-            return None; // Cursor is off-screen
-        }
-
-        let row = viewport_line as usize;
-        let col = cursor_point.column.0;
-        let x = col as f32 * self.cell_width;
-        let y = row as f32 * self.cell_height;
-
-        // Keep the IME anchor up-to-date while the cursor is visible.
-        self.last_visible_cursor_pos = Some((x, y));
+        let (x, y) = self.cursor_pos_in_viewport()?;
 
         let shape = if self.focused {
             self.cursor_shape
@@ -523,14 +497,34 @@ impl TerminalView {
         })
     }
 
-    /// Returns the cursor position to use as the IME preedit anchor.
+    /// Returns the cursor (x, y) position for IME preedit anchoring.
     ///
-    /// Unlike `cursor_rect`, this returns the *last known visible* position
-    /// even when the cursor is currently hidden (e.g. during a Claude Code /
-    /// Ink `\e[?25l` redraw cycle). This keeps the preedit overlay stable
-    /// instead of jumping around or disappearing mid-composition.
+    /// Unlike `cursor_rect`, this ignores `\e[?25l` cursor-hide mode so the
+    /// preedit overlay always tracks the real cursor location — even during
+    /// Claude Code / Ink redraw cycles. The hide/show sequence completes
+    /// within a single PTY poll batch, so by the time GPUI renders the next
+    /// frame the cursor is already back at the input row.
     pub fn ime_anchor_pos(&self) -> Option<(f32, f32)> {
-        self.last_visible_cursor_pos
+        self.cursor_pos_in_viewport()
+    }
+
+    /// Computes viewport-relative (x, y) pixel position of the cursor.
+    /// Returns `None` if the cursor is scrolled off-screen.
+    fn cursor_pos_in_viewport(&self) -> Option<(f32, f32)> {
+        let content = self.terminal.term().renderable_content();
+        let display_offset = content.display_offset;
+        let cursor_point = content.cursor.point;
+
+        // Convert grid-relative cursor line to viewport-relative row.
+        let viewport_line = cursor_point.line.0 + display_offset as i32;
+        let rows = self.terminal.rows() as usize;
+        if viewport_line < 0 || viewport_line as usize >= rows {
+            return None;
+        }
+
+        let row = viewport_line as usize;
+        let col = cursor_point.column.0;
+        Some((col as f32 * self.cell_width, row as f32 * self.cell_height))
     }
 
     /// Calculate pixel dimensions for the current terminal size.

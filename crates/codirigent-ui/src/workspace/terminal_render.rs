@@ -64,11 +64,10 @@ impl WorkspaceView {
         let cell_height = terminal_view.cell_height();
         let font_size = terminal_view.font_size();
         let font_family_str = terminal_view.font_family().to_owned();
-        // cursor_rect() also updates last_visible_cursor_pos as a side effect.
         let cursor_rect = terminal_view.cursor_rect();
-        // ime_anchor_pos() returns the last *visible* cursor position, so the
-        // preedit overlay stays anchored even during \e[?25l redraw cycles
-        // (e.g. while Claude Code / Ink is streaming output).
+        // ime_anchor_pos() reads the live cursor position from the alacritty
+        // grid regardless of \e[?25l visibility, so the preedit overlay tracks
+        // the real input location even during Claude Code / Ink redraws.
         let ime_anchor = terminal_view.ime_anchor_pos();
 
         // Terminal runs/backgrounds are cached per row and only rebuilt when dirty.
