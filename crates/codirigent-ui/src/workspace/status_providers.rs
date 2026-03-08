@@ -5,24 +5,6 @@
 //! explicit precedence rules.
 
 use codirigent_core::{SessionId, SessionStatus};
-use std::time::{Duration, Instant};
-
-/// A status hint from a specific provider.
-#[derive(Debug, Clone)]
-pub(super) struct StatusHint {
-    /// The hinted status.
-    #[allow(dead_code)] // Used when provider-level reconciliation is wired in
-    pub status: SessionStatus,
-    /// When this hint was last updated.
-    #[allow(dead_code)] // Used when provider-level freshness checking is wired in
-    pub updated_at: Instant,
-    /// Optional tool name (e.g., for JSONL providers).
-    #[allow(dead_code)] // Used when provider-level freshness checking is wired in
-    pub tool_name: Option<String>,
-    /// Where this hint came from.
-    #[allow(dead_code)] // Used when provider-level reconciliation is wired in
-    pub source: HintSource,
-}
 
 /// Source of a status hint, used for reconciler precedence.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -35,27 +17,19 @@ pub(super) enum HintSource {
     Jsonl,
 }
 
-impl StatusHint {
-    /// Whether this hint is still within its time-to-live.
-    #[allow(dead_code)] // Used when provider-level freshness checking is wired in
-    pub fn is_fresh(&self, ttl: Duration) -> bool {
-        self.updated_at.elapsed() < ttl
-    }
-}
-
 /// The result of reconciling multiple status hints for a single session.
 #[derive(Debug)]
 pub(super) struct ReconciledStatus {
     /// The final reconciled status.
     pub status: SessionStatus,
     /// Which source won.
-    #[allow(dead_code)] // Logged in shadow-mode diffing (Task 5)
+    #[allow(dead_code)] // Validated in tests; used in shadow-mode diffing
     pub source: HintSource,
     /// Optional tool name from the winning hint.
     #[allow(dead_code)] // Used when tool-specific side effects are wired in
     pub tool_name: Option<String>,
     /// Whether the status changed from the previous value.
-    #[allow(dead_code)] // Used in shadow-mode diffing (Task 5)
+    #[allow(dead_code)] // Validated in tests; used in shadow-mode diffing
     pub changed: bool,
     /// Previous status (for side-effect logic).
     #[allow(dead_code)] // Used when side-effect routing is consolidated

@@ -238,15 +238,6 @@ struct HookSignalUpdate {
     ts: u64,
 }
 
-#[allow(dead_code)] // Used in tests; reconciler replaces production usage (Task 7 cleanup)
-fn prefer_live_working_status(
-    detector_status: Option<SessionStatus>,
-    cached_status: SessionStatus,
-) -> bool {
-    matches!(detector_status, Some(SessionStatus::Working))
-        && cached_status != SessionStatus::Working
-}
-
 fn codex_execution_mode_fingerprint(mode: Option<CodexExecutionMode>) -> Option<&'static str> {
     match mode {
         Some(CodexExecutionMode::FullAuto) => Some("full-auto"),
@@ -1639,35 +1630,6 @@ impl WorkspaceView {
         false
     }
 
-    /// Check if the cached JSONL status hasn't changed for longer than `threshold`.
-    #[allow(dead_code)] // Staleness now handled by status reconciler
-    fn is_cli_status_stale(&self, session_id: SessionId, threshold: Duration) -> bool {
-        self.cli_readers
-            .lock()
-            .ok()
-            .and_then(|r| r.cached_status.get(&session_id).map(|c| c.status_since))
-            .is_some_and(|since| since.elapsed() > threshold)
-    }
-
-    #[allow(dead_code)] // Logic inlined into sync_session_status for single-lock consistency
-    fn get_recent_cached_cli_status(
-        &mut self,
-        session_id: SessionId,
-    ) -> Option<(SessionStatus, Option<String>)> {
-        let mut readers = self.cli_readers.lock().ok()?;
-        let cached_status = readers.cached_status.get(&session_id)?;
-
-        // Use the per-entry TTL: hook-based entries (Claude Code) stay valid for
-        // HOOK_SIGNAL_CACHE_TTL (600s); JSONL-based entries (Codex/Gemini) expire
-        // after GENERIC_SHELL_JSONL_CACHE_TTL (120s).
-        if cached_status.seen_at.elapsed() > cached_status.ttl {
-            readers.cached_status.remove(&session_id);
-            return None;
-        }
-
-        Some((cached_status.status, cached_status.tool_name.clone()))
-    }
-
     /// Read hook signal files on a background thread and apply them on the UI thread.
     fn spawn_background_hook_signal_check(&mut self, cx: &mut Context<Self>) {
         if self.polling.last_hook_signal_check.elapsed() < Duration::from_secs(1)
@@ -2394,14 +2356,6 @@ mod tests {
             codex_execution_mode_from_approval_and_sandbox(Some("never"), Some("workspace-write"),),
             Some(CodexExecutionMode::FullAuto)
         );
-    }
-
-    #[test]
-    fn live_working_status_is_not_masked_by_cached_response_ready() {
-        assert!(prefer_live_working_status(
-            Some(SessionStatus::Working),
-            SessionStatus::ResponseReady,
-        ));
     }
 
     #[test]
