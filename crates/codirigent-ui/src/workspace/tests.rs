@@ -455,6 +455,39 @@ fn test_workspace_single_layout_preserves_order_on_exit() {
     assert_eq!(ws.focused_session_id(), Some(SessionId(3)));
 }
 
+#[test]
+fn test_workspace_restores_hidden_sessions_after_returning_from_smaller_split_layout() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    ws.set_bounds(Bounds::from_size(1000.0, 800.0));
+
+    for i in 1..=4 {
+        assert!(ws.add_session(make_session(i, &format!("S{}", i))));
+    }
+
+    ws.set_split_tree(LayoutNode::from_grid(1, 2));
+    assert!(ws.is_split_tree_mode());
+
+    let split_cells = ws.cell_info();
+    assert_eq!(
+        split_cells
+            .iter()
+            .map(|cell| cell.session_id)
+            .collect::<Vec<_>>(),
+        vec![SessionId(1), SessionId(2)]
+    );
+
+    ws.set_layout(LayoutProfile::Grid2x2);
+
+    let grid_cells = ws.cell_info();
+    assert_eq!(
+        grid_cells
+            .iter()
+            .map(|cell| cell.session_id)
+            .collect::<Vec<_>>(),
+        vec![SessionId(1), SessionId(2), SessionId(3), SessionId(4)]
+    );
+}
+
 // --- set_split_tree tests ---
 
 #[test]
@@ -514,6 +547,44 @@ fn test_set_split_tree_from_grid_state() {
     assert!(ws.is_split_tree_mode());
     // 3 slots, 4 sessions — only first 3 get assigned
     assert_eq!(ws.visible_sessions().len(), 3);
+}
+
+#[test]
+fn test_workspace_split_pane_promotes_next_hidden_session() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    for i in 1..=4 {
+        assert!(ws.add_session(make_session(i, &format!("S{}", i))));
+    }
+
+    ws.set_split_tree(LayoutNode::from_grid(1, 2));
+    ws.focus_session(SessionId(1));
+
+    assert!(ws.split_pane(SplitDirection::Horizontal, 0.5).is_some());
+
+    let cells = ws.cell_info();
+    assert_eq!(
+        cells.iter().map(|cell| cell.session_id).collect::<Vec<_>>(),
+        vec![SessionId(1), SessionId(3), SessionId(2)]
+    );
+}
+
+#[test]
+fn test_workspace_remove_session_promotes_hidden_split_session() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    for i in 1..=4 {
+        assert!(ws.add_session(make_session(i, &format!("S{}", i))));
+    }
+
+    ws.set_split_tree(LayoutNode::from_grid(1, 2));
+
+    let removed = ws.remove_session(SessionId(1));
+    assert!(removed.is_some());
+
+    let cells = ws.cell_info();
+    assert_eq!(
+        cells.iter().map(|cell| cell.session_id).collect::<Vec<_>>(),
+        vec![SessionId(3), SessionId(2)]
+    );
 }
 
 #[test]
