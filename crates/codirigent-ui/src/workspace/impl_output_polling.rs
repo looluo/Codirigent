@@ -46,10 +46,23 @@ static APP_START_TS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
 /// pipeline transition — it will be removed once shadow-mode validation
 /// confirms zero diffs.
 static LEGACY_PIPELINE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+/// When `CODIRIGENT_SHADOW_STATUS=1` is set, the reconciler logs full
+/// input/output detail for every status change and the legacy fallback
+/// logs sessions that the event-driven path missed. Used to validate
+/// correctness during the pipeline transition.
+static SHADOW_STATUS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 fn is_legacy_pipeline() -> bool {
     *LEGACY_PIPELINE.get_or_init(|| {
         std::env::var("CODIRIGENT_LEGACY_PIPELINE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    })
+}
+
+fn is_shadow_status() -> bool {
+    *SHADOW_STATUS.get_or_init(|| {
+        std::env::var("CODIRIGENT_SHADOW_STATUS")
             .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
             .unwrap_or(false)
     })
@@ -533,6 +546,15 @@ impl WorkspaceView {
                     "legacy fallback drain (safety net)"
                 );
                 for id in &legacy_ids {
+                    // Shadow mode: log sessions discovered by the legacy
+                    // fallback that weren't already in the dispatcher's ready
+                    // set, indicating the mpsc channel missed an event.
+                    if is_shadow_status() {
+                        info!(
+                            ?id,
+                            "shadow: legacy fallback discovered session not in dispatcher"
+                        );
+                    }
                     self.output_dispatcher.mark_ready(*id);
                 }
             }
@@ -837,6 +859,26 @@ impl WorkspaceView {
             cache_age,
             previous_status,
         );
+
+        // Shadow mode: log full reconciler input/output when status changes
+        if is_shadow_status() {
+            if let Some(ref r) = reconciled {
+                if r.changed {
+                    info!(
+                        ?session_id,
+                        ?detector_status,
+                        ?cached_status,
+                        ?cached_source,
+                        ?cache_age,
+                        ?previous_status,
+                        reconciled_status = ?r.status,
+                        reconciled_source = ?r.source,
+                        ?stale_action,
+                        "shadow: reconciler status change"
+                    );
+                }
+            }
+        }
 
         // Handle stale cache action
         match stale_action {
