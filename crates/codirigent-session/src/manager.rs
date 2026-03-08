@@ -498,7 +498,12 @@ impl SessionManager for DefaultSessionManager {
             },
             move || {
                 // Notify the event-driven pipeline that the PTY child exited.
-                let _ = exit_tx.try_send(SessionUpdate::ChildProcessExited { session_id: id });
+                // Unlike OutputReady, there is no legacy fallback for this event.
+                if let Err(e) =
+                    exit_tx.try_send(SessionUpdate::ChildProcessExited { session_id: id })
+                {
+                    tracing::warn!("ChildProcessExited channel full for session {}: {e}", id.0);
+                }
             },
         );
 

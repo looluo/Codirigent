@@ -588,10 +588,13 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) {
         trace!(?session_id, "schedule_session_output_preparation");
-        // Use dispatcher for in-flight tracking (also updates legacy set)
+        // Guard: prevent double-dispatch via the dispatcher's in-flight set.
         if !self.output_dispatcher.mark_in_flight(session_id) {
             return;
         }
+        // TRANSITION: Legacy in-flight set kept in sync until
+        // CODIRIGENT_LEGACY_PIPELINE and schedule_output_preparation_legacy
+        // are removed. Both sets are always updated together.
         self.polling.output_prepare_in_flight.insert(session_id);
 
         let session_manager = self.session_manager.clone();
@@ -618,7 +621,8 @@ impl WorkspaceView {
                         let mut detector = detector.lock().ok()?;
                         detector.process_output(session_id, &data);
                         for event in codirigent_session::extract_osc133_events(&data) {
-                            // Emit ShellStateChanged for the event-driven pipeline
+                            // DUAL-PATH: Emitted to channel for phase-2 event routing.
+                            // Also applied directly below via set_shell_state() for correctness now.
                             if let Some(tx) = &update_tx {
                                 if let Err(e) =
                                     tx.try_send(codirigent_core::SessionUpdate::ShellStateChanged {
@@ -635,7 +639,8 @@ impl WorkspaceView {
 
                     let cwd_session =
                         codirigent_session::extract_osc7_path(&data).and_then(|new_cwd| {
-                            // Emit WorkingDirectoryChanged for the event-driven pipeline
+                            // DUAL-PATH: Emitted to channel for phase-2 event routing.
+                            // Also applied directly below via update_working_directory() for correctness now.
                             if let Some(tx) = &update_tx {
                                 if let Err(e) = tx.try_send(
                                     codirigent_core::SessionUpdate::WorkingDirectoryChanged {
@@ -790,7 +795,8 @@ impl WorkspaceView {
                     CliStatusSource::Jsonl => HintSource::Jsonl,
                 };
                 let age = Some(cached.status_since.elapsed());
-                Some((Some(cached.status), cached.tool_name.clone(), source, age))
+                // tool_name not yet consumed by reconciler — skip clone
+                Some((Some(cached.status), None, source, age))
             })
             .unwrap_or((None, None, HintSource::Detector, None));
 

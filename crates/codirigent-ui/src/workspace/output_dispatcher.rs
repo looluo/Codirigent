@@ -146,39 +146,30 @@ impl OutputDispatcher {
         }
 
         let mut result = Vec::with_capacity(self.ready_sessions.len());
-        let mut deferred = Vec::new();
 
         // Priority: focused session is dispatched first to minimize
         // perceived latency for the pane the user is looking at.
         if let Some(focused) = focused_session_id {
             if self.ready_sessions.remove(&focused) {
                 if self.in_flight.contains(&focused) {
-                    deferred.push(focused);
+                    // Deferred — re-insert immediately so it isn't lost.
+                    self.ready_sessions.insert(focused);
                 } else {
                     result.push(focused);
                 }
             }
         }
 
-        // Remaining sessions in arbitrary order (HashSet iteration).
-        // Fair round-robin is approximated by the fact that in-flight
-        // sessions are deferred, preventing any single session from
-        // monopolizing dispatch slots.
-        let remaining: Vec<SessionId> = self.ready_sessions.drain().collect();
-        for id in remaining {
-            if self.in_flight.contains(&id) {
-                deferred.push(id);
+        // Remaining sessions: retain in-flight (deferred), take the rest.
+        // Uses retain to avoid intermediate Vec allocation from drain().
+        self.ready_sessions.retain(|id| {
+            if self.in_flight.contains(id) {
+                true // keep deferred — picked up after in-flight task completes
             } else {
-                result.push(id);
+                result.push(*id);
+                false
             }
-        }
-
-        // Re-insert deferred sessions so they aren't lost — they'll be
-        // picked up on the next poll cycle after their in-flight task
-        // completes.
-        for id in deferred {
-            self.ready_sessions.insert(id);
-        }
+        });
 
         if !result.is_empty() {
             trace!(
