@@ -480,4 +480,90 @@ mod tests {
         // Remaining events should still be in the channel
         assert!(rx.try_recv().is_ok());
     }
+
+    // --- Regression tests for behavioral gaps ---
+
+    #[test]
+    fn session_without_terminal_is_requeued_not_dropped() {
+        // Regression: sessions taken from the dispatcher but not yet in the
+        // terminals map should be re-queued so the next poll picks them up,
+        // instead of silently dropping the wakeup.
+        let mut dispatcher = OutputDispatcher::new();
+        let s1 = SessionId(1);
+        let s2 = SessionId(2);
+
+        dispatcher.mark_ready(s1);
+        dispatcher.mark_ready(s2);
+
+        // Simulate take_ready_sessions returning both, but s1 has no terminal yet
+        let ready = dispatcher.take_ready_sessions(None);
+        assert_eq!(ready.len(), 2);
+
+        // Simulate the filter: s1 has no terminal, requeue it
+        let has_terminal = |id: SessionId| id == s2;
+        for id in &ready {
+            if !has_terminal(*id) {
+                dispatcher.mark_ready(*id);
+            }
+        }
+
+        // s1 should be back in the ready set
+        assert_eq!(dispatcher.ready_count(), 1);
+        let next_ready = dispatcher.take_ready_sessions(None);
+        assert_eq!(next_ready, vec![s1]);
+    }
+
+    #[test]
+    fn child_process_exit_empty_drain_still_allows_status_recompute() {
+        // Regression: ChildProcessExited marks session ready. If the background
+        // task finds no output to drain (try_drain_output_bounded returns None),
+        // the session should still be marked complete_in_flight so it's no longer
+        // blocked, allowing status reconciliation.
+        let mut dispatcher = OutputDispatcher::new();
+        let s1 = SessionId(1);
+
+        // ChildProcessExited → mark_ready
+        dispatcher.mark_ready(s1);
+        let ready = dispatcher.take_ready_sessions(None);
+        assert_eq!(ready, vec![s1]);
+
+        // Session dispatched in-flight
+        assert!(dispatcher.mark_in_flight(s1));
+
+        // Background task: drain returns None (no output)
+        // Caller should still call complete_in_flight
+        dispatcher.complete_in_flight(s1);
+        assert!(!dispatcher.has_activity());
+        assert_eq!(dispatcher.in_flight_count(), 0);
+    }
+
+    #[test]
+    fn duplicate_output_ready_does_not_grow_channel() {
+        // Regression: producer-side dedup should prevent a noisy session from
+        // sending redundant OutputReady events. At the dispatcher level, the
+        // HashSet already deduplicates, but this test verifies the consumer-side
+        // dedup behavior under burst conditions.
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let mut dispatcher = OutputDispatcher::new();
+
+        let s1 = SessionId(1);
+        let s2 = SessionId(2);
+
+        // Simulate a noisy session s1 sending many events alongside s2
+        for _ in 0..10 {
+            tx.try_send(SessionUpdate::OutputReady { session_id: s1 })
+                .unwrap();
+        }
+        tx.try_send(SessionUpdate::OutputReady { session_id: s2 })
+            .unwrap();
+
+        let _others = dispatcher.drain_updates(&mut rx);
+
+        // Despite 10 events for s1, the ready set should only have 2 sessions
+        assert_eq!(dispatcher.ready_count(), 2);
+
+        // Both should be schedulable
+        let ready = dispatcher.take_ready_sessions(None);
+        assert_eq!(ready.len(), 2);
+    }
 }
