@@ -341,4 +341,44 @@ mod tests {
         assert_eq!(dispatcher.max_chunks_per_poll, DEFAULT_MAX_CHUNKS_PER_POLL);
         assert_eq!(dispatcher.max_bytes_per_poll, DEFAULT_MAX_BYTES_PER_POLL);
     }
+
+    #[test]
+    fn drain_updates_handles_disconnected_channel() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let mut dispatcher = OutputDispatcher::new();
+
+        let s1 = SessionId(1);
+
+        // Send one event then drop the sender to disconnect
+        tx.try_send(SessionUpdate::OutputReady { session_id: s1 })
+            .unwrap();
+        drop(tx);
+
+        // drain_updates should consume the buffered event and stop
+        // gracefully when it hits the disconnected state
+        let others = dispatcher.drain_updates(&mut rx);
+
+        assert_eq!(dispatcher.ready_count(), 1);
+        assert!(others.is_empty());
+    }
+
+    #[test]
+    fn drain_updates_deduplicates_output_ready() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let mut dispatcher = OutputDispatcher::new();
+
+        let s1 = SessionId(1);
+
+        // Send the same OutputReady event 5 times
+        for _ in 0..5 {
+            tx.try_send(SessionUpdate::OutputReady { session_id: s1 })
+                .unwrap();
+        }
+
+        let others = dispatcher.drain_updates(&mut rx);
+
+        // HashSet deduplicates — only 1 session in ready set
+        assert_eq!(dispatcher.ready_count(), 1);
+        assert!(others.is_empty());
+    }
 }

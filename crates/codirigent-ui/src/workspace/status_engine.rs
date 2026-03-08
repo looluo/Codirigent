@@ -215,4 +215,42 @@ mod tests {
         let r = result.unwrap();
         assert!(!r.changed);
     }
+
+    #[test]
+    fn both_working_uses_cached_source() {
+        // When both detector and cache say Working, the cache wins (Rule 1
+        // only fires when cached != Working).
+        let (result, stale) = reconcile(
+            SessionId(1),
+            Some(SessionStatus::Working),
+            Some(SessionStatus::Working),
+            Some("bash".to_string()),
+            HintSource::Jsonl,
+            Some(Duration::from_secs(2)),
+            Some(SessionStatus::Idle),
+        );
+        assert!(matches!(stale, StaleAction::None));
+        let r = result.unwrap();
+        assert_eq!(r.status, SessionStatus::Working);
+        assert_eq!(r.source, HintSource::Jsonl);
+        assert!(r.changed); // Idle -> Working
+    }
+
+    #[test]
+    fn needs_attention_with_no_cache_age_treated_as_fresh() {
+        // When cache_age is None, is_some_and returns false, so the cached
+        // NeedsAttention is treated as fresh (not stale).
+        let (result, stale) = reconcile(
+            SessionId(1),
+            Some(SessionStatus::Idle),
+            Some(SessionStatus::NeedsAttention),
+            None,
+            HintSource::HookSignal,
+            None, // no age info
+            Some(SessionStatus::Working),
+        );
+        assert!(matches!(stale, StaleAction::None));
+        let r = result.unwrap();
+        assert_eq!(r.status, SessionStatus::NeedsAttention);
+    }
 }
