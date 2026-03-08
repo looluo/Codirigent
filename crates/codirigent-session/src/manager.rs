@@ -4,18 +4,19 @@
 //! trait, managing session lifecycle, PTY I/O, and event publishing.
 
 use crate::git_status::GitStatusService;
-use crate::pty::{spawn_output_reader, PtyHandle};
+use crate::pty::{spawn_output_reader_with_notify, PtyHandle};
 use crate::session::SessionState;
 use anyhow::{anyhow, Context, Result};
 use codirigent_core::{
     CodirigentEvent, EventBus, GitRepoInfo, Session, SessionId, SessionManager, SessionStatus,
+    SessionUpdate,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 
 /// Default terminal height in rows.
 const DEFAULT_PTY_ROWS: u16 = 24;
@@ -31,22 +32,13 @@ pub struct DrainedOutput {
     pub has_more: bool,
 }
 
-/// Canonicalize a path and strip the `\\?\` extended-length prefix on Windows.
+use crate::normalize_path;
+
+/// Channel capacity for the `SessionUpdate` mpsc channel.
 ///
-/// `std::fs::canonicalize` on Windows returns UNC paths like `\\?\C:\Users\...`
-/// which cause PowerShell to display `Microsoft.PowerShell.Core\FileSystem::\\?\C:\...`
-/// in its prompt instead of the normal `C:\Users\...` form.
-fn normalize_path(path: &std::path::Path) -> PathBuf {
-    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    #[cfg(windows)]
-    {
-        let s = canonical.to_string_lossy();
-        if let Some(stripped) = s.strip_prefix(r"\\?\") {
-            return PathBuf::from(stripped);
-        }
-    }
-    canonical
-}
+/// Sized to handle bursts from multiple concurrent PTY readers without
+/// back-pressure. Each `SessionUpdate` is small (enum + SessionId).
+const SESSION_UPDATE_CHANNEL_CAPACITY: usize = 512;
 
 /// Default implementation of [`SessionManager`].
 ///
@@ -84,6 +76,18 @@ pub struct DefaultSessionManager {
     event_bus: Arc<dyn EventBus>,
     /// Git status detection service.
     git_status: Mutex<GitStatusService>,
+    /// Sessions whose PTY readers have queued unread output since the last poll.
+    pending_output_sessions: Arc<Mutex<HashSet<SessionId>>>,
+    /// Sender for the internal hot-path `SessionUpdate` channel.
+    ///
+    /// Cloned into PTY reader callbacks and OSC parser paths so they can
+    /// emit events without going through the legacy `pending_output_sessions`
+    /// mechanism. The receiver is taken once via [`take_update_receiver`].
+    update_tx: tokio::sync::mpsc::Sender<SessionUpdate>,
+    /// Receiver for the internal hot-path `SessionUpdate` channel.
+    ///
+    /// Wrapped in `Option` because it is taken once by the output dispatcher.
+    update_rx: Mutex<Option<tokio::sync::mpsc::Receiver<SessionUpdate>>>,
 }
 
 impl DefaultSessionManager {
@@ -93,18 +97,47 @@ impl DefaultSessionManager {
     ///
     /// * `event_bus` - The event bus for publishing session events
     pub fn new(event_bus: Arc<dyn EventBus>) -> Self {
+        let (update_tx, update_rx) = tokio::sync::mpsc::channel(SESSION_UPDATE_CHANNEL_CAPACITY);
         Self {
             sessions: Mutex::new(HashMap::new()),
             next_id: AtomicU64::new(1),
             event_bus,
             git_status: Mutex::new(GitStatusService::new()),
+            pending_output_sessions: Arc::new(Mutex::new(HashSet::new())),
+            update_tx,
+            update_rx: Mutex::new(Some(update_rx)),
         }
+    }
+
+    /// Take the `SessionUpdate` receiver.
+    ///
+    /// This can only be called once — the receiver is consumed by the output
+    /// dispatcher. Returns `None` on subsequent calls.
+    pub fn take_update_receiver(&self) -> Option<tokio::sync::mpsc::Receiver<SessionUpdate>> {
+        self.update_rx
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .take()
+    }
+
+    /// Get a clone of the `SessionUpdate` sender.
+    ///
+    /// Used by external components that need to emit `SessionUpdate` events
+    /// (e.g., hook signal readers, JSONL parsers).
+    pub fn update_sender(&self) -> tokio::sync::mpsc::Sender<SessionUpdate> {
+        self.update_tx.clone()
     }
 
     /// Acquire the sessions lock.
     ///
     fn lock_sessions(&self) -> MutexGuard<'_, HashMap<SessionId, SessionState>> {
         self.sessions.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn lock_pending_output_sessions(&self) -> MutexGuard<'_, HashSet<SessionId>> {
+        self.pending_output_sessions
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
     }
 
     /// Generate a unique session ID.
@@ -178,21 +211,43 @@ impl DefaultSessionManager {
         max_chunks: usize,
         max_bytes: usize,
     ) -> Option<DrainedOutput> {
-        let mut sessions = self.lock_sessions();
-        let state = sessions.get_mut(&id)?;
-        let chunk_budget = max_chunks.max(1);
-        let byte_budget = max_bytes.max(1);
-        let mut output = Vec::with_capacity(byte_budget.min(64 * 1024));
-        let mut chunks_drained = 0usize;
-        let mut hit_budget = false;
+        let (output, has_more) = {
+            let mut sessions = self.lock_sessions();
+            let state = sessions.get_mut(&id)?;
+            let chunk_budget = max_chunks.max(1);
+            let byte_budget = max_bytes.max(1);
+            let mut output = Vec::with_capacity(byte_budget.min(64 * 1024));
+            let mut chunks_drained = 0usize;
+            let mut hit_budget = false;
 
-        while let Ok(data) = state.output_rx.try_recv() {
-            output.extend(data);
-            chunks_drained += 1;
-            if chunks_drained >= chunk_budget || output.len() >= byte_budget {
-                hit_budget = true;
-                break;
+            while let Ok(data) = state.output_rx.try_recv() {
+                output.extend(data);
+                chunks_drained += 1;
+                if chunks_drained >= chunk_budget || output.len() >= byte_budget {
+                    hit_budget = true;
+                    break;
+                }
             }
+
+            // Reset the producer-side dedup flag so the PTY reader sends a
+            // new OutputReady notification for any subsequent output.
+            //
+            // Race window: a PTY chunk may arrive between this reset and the
+            // `is_empty()` check below. If so, the producer's swap(true) succeeds
+            // and sends OutputReady to the channel, but `has_more` may be false
+            // for this cycle. Data is NOT lost — the OutputReady event in the
+            // channel is drained on the next poll_output cycle (~16ms). The 1s
+            // legacy fallback poll acts as an additional safety net.
+            state
+                .output_notified
+                .store(false, std::sync::atomic::Ordering::Relaxed);
+
+            let has_more = !output.is_empty() && (hit_budget || !state.output_rx.is_empty());
+            (output, has_more)
+        };
+
+        if has_more {
+            self.lock_pending_output_sessions().insert(id);
         }
 
         if output.is_empty() {
@@ -200,7 +255,7 @@ impl DefaultSessionManager {
         } else {
             Some(DrainedOutput {
                 data: output,
-                has_more: hit_budget || !state.output_rx.is_empty(),
+                has_more,
             })
         }
     }
@@ -227,10 +282,18 @@ impl DefaultSessionManager {
 
     /// Get all sessions that currently have unread PTY output queued.
     pub fn sessions_with_pending_output(&self) -> Vec<SessionId> {
-        self.lock_sessions()
-            .iter()
-            .filter_map(|(id, state)| (!state.output_rx.is_empty()).then_some(*id))
-            .collect()
+        let ids: Vec<SessionId> = self.lock_pending_output_sessions().drain().collect();
+        if !ids.is_empty() {
+            trace!(count = ids.len(), "sessions_with_pending_output");
+        }
+        ids
+    }
+
+    /// Mark a session as having unread PTY output ready for UI polling.
+    pub fn mark_output_pending(&self, id: SessionId) {
+        if self.session_exists(id) {
+            self.lock_pending_output_sessions().insert(id);
+        }
     }
 
     /// Get the child PID for a session.
@@ -294,27 +357,6 @@ impl DefaultSessionManager {
         true
     }
 
-    /// Invalidate the git cache for a specific session's repo root.
-    ///
-    /// Call this before `refresh_git_status()` when the working directory
-    /// changes (e.g. OSC 7) so the next refresh picks up fresh data
-    /// instead of hitting the 15-second cache.
-    pub fn invalidate_git_cache(&self, id: SessionId) {
-        let repo_root = {
-            let sessions = self.lock_sessions();
-            sessions
-                .get(&id)
-                .and_then(|s| s.session.git_info.as_ref())
-                .map(|gi| gi.repo_root.clone())
-        };
-        if let Some(root) = repo_root {
-            self.git_status
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .invalidate(&root);
-        }
-    }
-
     /// Refresh git status for a session.
     ///
     /// Detects or refreshes git repository information for the session's
@@ -324,16 +366,32 @@ impl DefaultSessionManager {
     /// Returns the updated git info, or None if the session doesn't exist
     /// or isn't in a git repository.
     pub fn refresh_git_status(&self, id: SessionId) -> Option<GitRepoInfo> {
+        self.refresh_git_status_impl(id, false)
+    }
+
+    /// Refresh git status for a session, bypassing the TTL cache.
+    ///
+    /// Use this after an explicit working-directory change so the UI does not
+    /// inherit a stale cached snapshot from another session's recent visit to
+    /// the destination worktree.
+    pub fn refresh_git_status_fresh(&self, id: SessionId) -> Option<GitRepoInfo> {
+        self.refresh_git_status_impl(id, true)
+    }
+
+    fn refresh_git_status_impl(&self, id: SessionId, force_fresh: bool) -> Option<GitRepoInfo> {
         let working_dir = {
             let sessions = self.lock_sessions();
             sessions.get(&id)?.session.working_directory.clone()
         };
 
-        let info = self
-            .git_status
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .detect_cached(&working_dir, Duration::from_secs(15));
+        let info = {
+            let mut git_status = self.git_status.lock().unwrap_or_else(|p| p.into_inner());
+            if force_fresh {
+                git_status.detect_fresh(&working_dir)
+            } else {
+                git_status.detect_cached(&working_dir, Duration::from_secs(15))
+            }
+        };
 
         // Update session
         let mut sessions = self.lock_sessions();
@@ -416,7 +474,66 @@ impl SessionManager for DefaultSessionManager {
         let reader = pty
             .take_reader()
             .ok_or_else(|| anyhow!("Failed to get PTY reader"))?;
-        let output_rx = spawn_output_reader(reader);
+        let pending_output_sessions = self.pending_output_sessions.clone();
+        let pending_output_for_exit = self.pending_output_sessions.clone();
+        let update_tx = self.update_tx.clone();
+        let exit_tx = self.update_tx.clone();
+        // Producer-side deduplication: the flag is set before try_send and
+        // only sends when transitioning from false → true. The consumer
+        // (output_dispatcher::drain_updates) deduplicates into a HashSet,
+        // so clearing the flag is not required — it auto-resets when the
+        // next drain_updates call consumes all pending OutputReady events.
+        // The flag prevents a noisy session (e.g. `yes`) from saturating
+        // the bounded channel with redundant OutputReady events.
+        let output_notified = Arc::new(AtomicBool::new(false));
+        let output_notified_clone = output_notified.clone();
+        let output_rx = spawn_output_reader_with_notify(
+            reader,
+            move || {
+                // Legacy path: mark in the pending set (consumed by broad poll)
+                pending_output_sessions
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .insert(id);
+                // New path: emit event for the output dispatcher.
+                // NOTE: This runs on a bare std::thread (PTY reader), not a tokio
+                // task. Use try_send(), NOT .send().await, as there is no async
+                // runtime here. Failure is non-fatal: the legacy path above ensures
+                // output is not lost.
+                //
+                // Producer-side dedup: skip try_send if a notification is already
+                // pending in the channel. This prevents a single noisy session from
+                // filling the bounded 512-slot channel.
+                if !output_notified.swap(true, Ordering::Relaxed) {
+                    if let Err(e) =
+                        update_tx.try_send(SessionUpdate::OutputReady { session_id: id })
+                    {
+                        tracing::warn!("SessionUpdate channel full for session {}: {e}", id.0);
+                        // Reset so the next chunk retries
+                        output_notified.store(false, Ordering::Relaxed);
+                    }
+                }
+            },
+            move || {
+                // Notify the event-driven pipeline that the PTY child exited.
+                // If the channel is full, the fallback inserts into
+                // pending_output_sessions which is drained every ~1s. The exit
+                // semantic (ChildProcessExited) is lost in this case, but the
+                // consumer's `prepared == None` handler in
+                // schedule_session_output_preparation still runs
+                // sync_session_status(), ensuring the session does not get
+                // stuck in Working indefinitely.
+                if let Err(e) =
+                    exit_tx.try_send(SessionUpdate::ChildProcessExited { session_id: id })
+                {
+                    tracing::warn!("ChildProcessExited channel full for session {}: {e}", id.0);
+                    pending_output_for_exit
+                        .lock()
+                        .unwrap_or_else(|p| p.into_inner())
+                        .insert(id);
+                }
+            },
+        );
 
         // Create session metadata
         let mut session = Session::new(id, name, working_dir.clone());
@@ -429,7 +546,7 @@ impl SessionManager for DefaultSessionManager {
             .detect(&working_dir);
 
         // Create session state
-        let state = SessionState::new(session, pty, output_rx);
+        let state = SessionState::new(session, pty, output_rx, output_notified_clone);
         self.lock_sessions().insert(id, state);
 
         // Publish event
@@ -445,6 +562,8 @@ impl SessionManager for DefaultSessionManager {
             .lock_sessions()
             .remove(&id)
             .ok_or_else(|| anyhow!("Session not found: {}", id))?;
+
+        self.lock_pending_output_sessions().remove(&id);
 
         // PTY and output_rx will be dropped, cleaning up resources
 
@@ -564,7 +683,15 @@ impl SessionManager for DefaultSessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codirigent_core::DefaultEventBus;
+    use crate::pty::PtyHandle;
+    use crate::session::SessionState;
+    use codirigent_core::{DefaultEventBus, Session};
+    use git2::Repository;
+    use std::fs;
+    use std::io::Write;
+    use std::path::Path;
+    use tempfile::TempDir;
+    use tokio::sync::mpsc;
 
     fn create_manager() -> DefaultSessionManager {
         let event_bus = Arc::new(DefaultEventBus::new(16));
@@ -575,6 +702,68 @@ mod tests {
         let event_bus = Arc::new(DefaultEventBus::new(16));
         let manager = DefaultSessionManager::new(event_bus.clone());
         (manager, event_bus)
+    }
+
+    fn create_manual_session_state(
+        id: SessionId,
+    ) -> (SessionState, mpsc::Sender<Vec<u8>>, TempDir) {
+        let temp = TempDir::new().unwrap();
+        let pty = PtyHandle::spawn(temp.path(), DEFAULT_PTY_ROWS, DEFAULT_PTY_COLS, &[]).unwrap();
+        let (tx, rx) = mpsc::channel(8);
+        let session = Session::new(id, format!("Session {}", id.0), temp.path().to_path_buf());
+        let output_notified = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        (
+            SessionState::new(session, pty, rx, output_notified),
+            tx,
+            temp,
+        )
+    }
+
+    fn create_test_repo() -> TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+
+        {
+            let mut config = repo.config().unwrap();
+            config.set_str("user.name", "Test User").unwrap();
+            config.set_str("user.email", "test@example.com").unwrap();
+        }
+
+        let readme = dir.path().join("README.md");
+        let mut file = fs::File::create(&readme).unwrap();
+        file.write_all(b"hello").unwrap();
+
+        let sig = repo.signature().unwrap();
+        let tree_id = {
+            let mut index = repo.index().unwrap();
+            index.add_path(Path::new("README.md")).unwrap();
+            index.write().unwrap();
+            index.write_tree().unwrap()
+        };
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
+            .unwrap();
+
+        dir
+    }
+
+    fn create_linked_worktree(repo_path: &Path, branch: &str) -> PathBuf {
+        let repo = Repository::open(repo_path).unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch(branch, &head, false).unwrap();
+
+        let worktree_path = repo_path.join("worktrees").join(branch);
+        fs::create_dir_all(worktree_path.parent().unwrap()).unwrap();
+
+        let reference = repo
+            .find_reference(&format!("refs/heads/{}", branch))
+            .unwrap();
+        let mut add_options = git2::WorktreeAddOptions::new();
+        add_options.reference(Some(&reference));
+        repo.worktree(branch, &worktree_path, Some(&add_options))
+            .unwrap();
+
+        worktree_path
     }
 
     #[test]
@@ -594,6 +783,31 @@ mod tests {
         assert!(manager.get_session(id).is_some());
         assert_eq!(manager.list_sessions().len(), 1);
         assert_eq!(manager.session_count(), 1);
+    }
+
+    #[test]
+    fn test_refresh_git_status_fresh_bypasses_stale_destination_worktree_cache() {
+        let manager = create_manager();
+        let repo_dir = create_test_repo();
+        let worktree_path = create_linked_worktree(repo_dir.path(), "feature-fresh");
+
+        let source_session = manager
+            .create_session("Source".to_string(), worktree_path.clone(), None)
+            .unwrap();
+        let cached_clean = manager.refresh_git_status(source_session).unwrap();
+        assert_eq!(cached_clean.branch, "feature-fresh");
+        assert_eq!(cached_clean.dirty_count, 0);
+
+        fs::write(worktree_path.join("dirty.txt"), "dirty").unwrap();
+
+        let switched_session = manager
+            .create_session("Switch".to_string(), repo_dir.path().to_path_buf(), None)
+            .unwrap();
+        assert!(manager.update_working_directory(switched_session, worktree_path.clone()));
+
+        let fresh = manager.refresh_git_status_fresh(switched_session).unwrap();
+        assert_eq!(fresh.branch, "feature-fresh");
+        assert_eq!(fresh.dirty_count, 1);
     }
 
     #[test]
@@ -1053,6 +1267,73 @@ mod tests {
     }
 
     #[test]
+    fn test_sessions_with_pending_output_drains_ready_set() {
+        let manager = create_manager();
+        let id = SessionId(42);
+        let (state, tx, _temp) = create_manual_session_state(id);
+        manager.lock_sessions().insert(id, state);
+
+        tx.try_send(b"hello".to_vec()).unwrap();
+        manager.lock_pending_output_sessions().insert(id);
+
+        let pending = manager.sessions_with_pending_output();
+        assert_eq!(pending.len(), 1);
+        assert!(pending.contains(&id));
+        assert!(manager.sessions_with_pending_output().is_empty());
+
+        let drained = manager.try_drain_output_bounded(id, 4, 1024).unwrap();
+        assert_eq!(drained.data, b"hello".to_vec());
+        assert!(!drained.has_more);
+    }
+
+    #[test]
+    fn test_try_drain_output_bounded_requeues_when_more_output_remains() {
+        let manager = create_manager();
+        let id = SessionId(43);
+        let (state, tx, _temp) = create_manual_session_state(id);
+        manager.lock_sessions().insert(id, state);
+
+        tx.try_send(b"hello".to_vec()).unwrap();
+        tx.try_send(b"world".to_vec()).unwrap();
+        manager.lock_pending_output_sessions().insert(id);
+
+        let drained = manager.try_drain_output_bounded(id, 1, 1024).unwrap();
+        assert_eq!(drained.data, b"hello".to_vec());
+        assert!(drained.has_more);
+
+        let pending = manager.sessions_with_pending_output();
+        assert_eq!(pending.len(), 1);
+        assert!(pending.contains(&id));
+
+        let drained = manager.try_drain_output_bounded(id, 2, 1024).unwrap();
+        assert_eq!(drained.data, b"world".to_vec());
+        assert!(!drained.has_more);
+        assert!(manager.sessions_with_pending_output().is_empty());
+    }
+
+    #[test]
+    fn test_close_session_clears_pending_output_ready_flag() {
+        let manager = create_manager();
+        let id = SessionId(44);
+        let (state, _tx, _temp) = create_manual_session_state(id);
+        manager.lock_sessions().insert(id, state);
+        manager.lock_pending_output_sessions().insert(id);
+
+        manager.close_session(id).unwrap();
+
+        assert!(manager.sessions_with_pending_output().is_empty());
+    }
+
+    #[test]
+    fn test_mark_output_pending_ignores_unknown_session() {
+        let manager = create_manager();
+
+        manager.mark_output_pending(SessionId(999));
+
+        assert!(manager.sessions_with_pending_output().is_empty());
+    }
+
+    #[test]
     fn test_session_increments_ids() {
         let manager = create_manager();
 
@@ -1135,5 +1416,25 @@ mod tests {
     fn test_update_context_usage_nonexistent() {
         let manager = create_manager();
         manager.update_context_usage(SessionId(999), Some(0.5));
+    }
+
+    #[test]
+    fn test_take_update_receiver_returns_some_then_none() {
+        let manager = create_manager();
+        let rx1 = manager.take_update_receiver();
+        assert!(rx1.is_some(), "first call should return Some");
+        let rx2 = manager.take_update_receiver();
+        assert!(rx2.is_none(), "second call should return None");
+    }
+
+    #[test]
+    fn test_update_sender_returns_working_sender() {
+        let manager = create_manager();
+        let tx = manager.update_sender();
+        // Should be able to send without error (receiver still held by manager)
+        tx.try_send(SessionUpdate::OutputReady {
+            session_id: SessionId(1),
+        })
+        .expect("send should succeed while receiver exists");
     }
 }

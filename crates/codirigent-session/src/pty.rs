@@ -346,7 +346,20 @@ impl OutputReader {
     /// output_reader.stop();
     /// # }
     /// ```
-    pub fn new(mut reader: Box<dyn Read + Send>) -> Self {
+    pub fn new(reader: Box<dyn Read + Send>) -> Self {
+        Self::new_with_notify(reader, || {}, || {})
+    }
+
+    /// Create a new output reader with per-chunk and on-exit callbacks.
+    ///
+    /// `on_chunk` is called after each successful send to the output channel.
+    /// `on_exit` is called once when the reader thread exits (EOF, error, or
+    /// channel close).
+    pub fn new_with_notify<F, G>(mut reader: Box<dyn Read + Send>, on_chunk: F, on_exit: G) -> Self
+    where
+        F: Fn() + Send + 'static,
+        G: FnOnce() + Send + 'static,
+    {
         let (tx, rx) = mpsc::channel(OUTPUT_CHANNEL_CAPACITY);
 
         let handle = thread::spawn(move || {
@@ -363,6 +376,7 @@ impl OutputReader {
                             debug!("PTY output channel closed");
                             break;
                         }
+                        on_chunk();
                     }
                     Err(e) => {
                         debug!(?e, "PTY read error");
@@ -370,6 +384,7 @@ impl OutputReader {
                     }
                 }
             }
+            on_exit();
         });
 
         Self {
@@ -508,6 +523,22 @@ pub fn spawn_output_reader(reader: Box<dyn Read + Send>) -> mpsc::Receiver<Vec<u
     // The thread will still terminate when the receiver is dropped.
     // Use OutputReader::new() directly for proper lifecycle management.
     output_reader.into_receiver()
+}
+
+/// Spawn an output reader with per-chunk and on-exit callbacks.
+///
+/// `on_chunk` is called after each successful send.
+/// `on_exit` is called once when the reader thread exits.
+pub fn spawn_output_reader_with_notify<F, G>(
+    reader: Box<dyn Read + Send>,
+    on_chunk: F,
+    on_exit: G,
+) -> mpsc::Receiver<Vec<u8>>
+where
+    F: Fn() + Send + 'static,
+    G: FnOnce() + Send + 'static,
+{
+    OutputReader::new_with_notify(reader, on_chunk, on_exit).into_receiver()
 }
 
 #[cfg(test)]
@@ -967,5 +998,51 @@ mod tests {
         // Drop PTY first so the reader thread gets EOF on Windows
         drop(pty);
         output_reader.stop();
+    }
+
+    #[tokio::test]
+    async fn test_on_exit_called_on_eof() {
+        use std::sync::{
+            atomic::{AtomicBool, Ordering},
+            Arc,
+        };
+
+        // Use a Cursor to simulate a reader that yields data then hits EOF.
+        let data = b"hello world";
+        let reader: Box<dyn Read + Send> = Box::new(std::io::Cursor::new(data.to_vec()));
+
+        let chunk_called = Arc::new(AtomicBool::new(false));
+        let exit_called = Arc::new(AtomicBool::new(false));
+
+        let chunk_flag = chunk_called.clone();
+        let exit_flag = exit_called.clone();
+
+        let mut rx = spawn_output_reader_with_notify(
+            reader,
+            move || {
+                chunk_flag.store(true, Ordering::SeqCst);
+            },
+            move || {
+                exit_flag.store(true, Ordering::SeqCst);
+            },
+        );
+
+        // Drain output — Cursor reads all data in one chunk then returns EOF.
+        let received = tokio::time::timeout(std::time::Duration::from_secs(5), rx.recv())
+            .await
+            .expect("timeout")
+            .expect("channel closed");
+        assert_eq!(&received, data);
+        assert!(chunk_called.load(Ordering::SeqCst), "on_chunk should fire");
+
+        // Wait for channel to close (reader thread hit EOF and exited)
+        while rx.recv().await.is_some() {}
+
+        // Give the thread a moment to run on_exit after the loop
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+        assert!(
+            exit_called.load(Ordering::SeqCst),
+            "on_exit should fire on EOF"
+        );
     }
 }

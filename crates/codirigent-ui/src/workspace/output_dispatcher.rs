@@ -1,0 +1,603 @@
+//! Output dispatcher for the event-driven session pipeline.
+//!
+//! Replaces the broad `sessions_with_pending_output()` scan with a targeted
+//! approach: the dispatcher is fed by [`SessionUpdate::OutputReady`] events
+//! from the PTY reader mpsc channel and maintains a ready-session set.
+//!
+//! The dispatcher owns scheduling policy:
+//! - Focused session gets first priority
+//! - Fair round-robin among hot background sessions
+//! - Per-poll chunk and byte budgets
+//! - In-flight session tracking to prevent double-dispatch
+//!
+//! During the transition period, a low-frequency fallback poll (~1s) is
+//! retained as a safety net to catch any events missed by the channel.
+
+use codirigent_core::{SessionId, SessionUpdate};
+use std::collections::HashSet;
+use tracing::{trace, warn};
+
+/// Maximum events drained from the mpsc channel per poll cycle.
+/// Prevents unbounded loop in pathological flooding scenarios (e.g., `yes`).
+/// OutputReady events deduplicate into the HashSet, so this primarily caps
+/// non-OutputReady events and loop iterations.
+const MAX_EVENTS_PER_DRAIN: usize = 1024;
+
+/// Scheduling policy for output dispatch.
+///
+/// Extracted from the inline logic in `schedule_output_preparation` to make
+/// it independently testable and configurable.
+pub(super) struct OutputDispatcher {
+    /// Sessions with pending output (fed by `SessionUpdate::OutputReady`).
+    ready_sessions: HashSet<SessionId>,
+    /// Sessions currently being processed (background task in-flight).
+    in_flight: HashSet<SessionId>,
+    /// Sessions that have been closed. Late events for these sessions are
+    /// silently dropped to prevent re-introduction into the ready/in-flight
+    /// sets after `remove_session` has cleaned up.
+    closed: HashSet<SessionId>,
+}
+
+impl Default for OutputDispatcher {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl OutputDispatcher {
+    /// Create a new dispatcher.
+    pub fn new() -> Self {
+        Self {
+            ready_sessions: HashSet::new(),
+            in_flight: HashSet::new(),
+            closed: HashSet::new(),
+        }
+    }
+
+    /// Process a batch of `SessionUpdate` events from the mpsc channel.
+    ///
+    /// Drains the receiver without blocking (returns when empty or channel
+    /// closed). Only `OutputReady` events are consumed here; other event
+    /// types are returned for the caller to dispatch.
+    pub fn drain_updates(
+        &mut self,
+        rx: &mut tokio::sync::mpsc::Receiver<SessionUpdate>,
+    ) -> Vec<SessionUpdate> {
+        let mut other_events = Vec::with_capacity(8);
+        let mut drained = 0usize;
+        loop {
+            if drained >= MAX_EVENTS_PER_DRAIN {
+                trace!(drained, "drain_updates: hit event cap");
+                break;
+            }
+            match rx.try_recv() {
+                Ok(event) => {
+                    drained += 1;
+                    let sid = event.session_id();
+                    if self.closed.contains(&sid) {
+                        trace!(?sid, "dropping event for closed session");
+                        continue;
+                    }
+                    match event {
+                        SessionUpdate::OutputReady { session_id } => {
+                            self.ready_sessions.insert(session_id);
+                        }
+                        other => {
+                            other_events.push(other);
+                        }
+                    }
+                }
+                Err(tokio::sync::mpsc::error::TryRecvError::Empty) => break,
+                Err(tokio::sync::mpsc::error::TryRecvError::Disconnected) => {
+                    warn!("SessionUpdate channel disconnected — all senders dropped");
+                    break;
+                }
+            }
+        }
+        other_events
+    }
+
+    /// Mark a session as ready for output processing.
+    ///
+    /// Used by the legacy fallback poll path and when `has_more` is true
+    /// after a bounded drain. Silently drops events for closed sessions.
+    /// Returns `true` if the session was newly inserted (not already ready).
+    pub fn mark_ready(&mut self, session_id: SessionId) -> bool {
+        if self.closed.contains(&session_id) {
+            return false;
+        }
+        self.ready_sessions.insert(session_id)
+    }
+
+    /// Mark a session as in-flight (background task started).
+    ///
+    /// Returns `false` if the session is already in-flight or closed.
+    pub fn mark_in_flight(&mut self, session_id: SessionId) -> bool {
+        if self.closed.contains(&session_id) {
+            return false;
+        }
+        if self.in_flight.contains(&session_id) {
+            // Already processing — re-queue so it's not lost.
+            // The next poll cycle will dispatch it after the current
+            // in-flight task completes.
+            self.ready_sessions.insert(session_id);
+            false
+        } else {
+            self.ready_sessions.remove(&session_id);
+            self.in_flight.insert(session_id);
+            true
+        }
+    }
+
+    /// Mark a session as no longer in-flight (background task completed).
+    pub fn complete_in_flight(&mut self, session_id: SessionId) {
+        self.in_flight.remove(&session_id);
+    }
+
+    /// Take the set of sessions ready for dispatch, prioritized.
+    ///
+    /// The focused session (if ready) is placed first. All returned sessions
+    /// are removed from the ready set but NOT yet marked in-flight — the
+    /// caller must call [`mark_in_flight`] for each one it actually dispatches.
+    ///
+    /// Sessions that are already in-flight are excluded and left in the
+    /// ready set for the next cycle.
+    pub fn take_ready_sessions(&mut self, focused_session_id: Option<SessionId>) -> Vec<SessionId> {
+        if self.ready_sessions.is_empty() {
+            return Vec::new();
+        }
+
+        let mut result = Vec::with_capacity(self.ready_sessions.len());
+
+        // Priority: focused session is dispatched first to minimize
+        // perceived latency for the pane the user is looking at.
+        if let Some(focused) = focused_session_id {
+            if self.ready_sessions.contains(&focused) && !self.in_flight.contains(&focused) {
+                self.ready_sessions.remove(&focused);
+                result.push(focused);
+            }
+            // If in-flight, the session stays in ready_sessions and the
+            // retain() loop below will keep it deferred for the next cycle.
+        }
+
+        // Remaining sessions: retain in-flight (deferred), take the rest.
+        // Uses retain to avoid intermediate Vec allocation from drain().
+        self.ready_sessions.retain(|id| {
+            if self.in_flight.contains(id) {
+                true // keep deferred — picked up after in-flight task completes
+            } else {
+                result.push(*id);
+                false
+            }
+        });
+
+        if !result.is_empty() {
+            trace!(
+                count = result.len(),
+                deferred = self.ready_sessions.len(),
+                "dispatcher: take_ready_sessions"
+            );
+        }
+
+        result
+    }
+
+    /// Whether there is any active work (ready or in-flight sessions).
+    pub fn has_activity(&self) -> bool {
+        !self.ready_sessions.is_empty() || !self.in_flight.is_empty()
+    }
+
+    /// Number of sessions currently in-flight.
+    pub fn in_flight_count(&self) -> usize {
+        self.in_flight.len()
+    }
+
+    /// Number of sessions in the ready set.
+    #[allow(dead_code)] // Used in tests; exposed for diagnostics
+    pub fn ready_count(&self) -> usize {
+        self.ready_sessions.len()
+    }
+
+    /// Remove a session from all tracking (e.g., when session is closed).
+    ///
+    /// The session is added to a closed set so that late events (e.g.,
+    /// `ChildProcessExited` arriving after teardown) are silently dropped
+    /// instead of re-introducing the session into the ready/in-flight sets.
+    pub fn remove_session(&mut self, session_id: SessionId) {
+        self.ready_sessions.remove(&session_id);
+        self.in_flight.remove(&session_id);
+        self.closed.insert(session_id);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn focused_session_is_prioritized() {
+        let mut dispatcher = OutputDispatcher::new();
+        let s1 = SessionId(1);
+        let s2 = SessionId(2);
+        let s3 = SessionId(3);
+
+        dispatcher.mark_ready(s1);
+        dispatcher.mark_ready(s2);
+        dispatcher.mark_ready(s3);
+
+        let ready = dispatcher.take_ready_sessions(Some(s2));
+        assert_eq!(ready[0], s2);
+        assert_eq!(ready.len(), 3);
+    }
+
+    #[test]
+    fn focused_session_deferred_when_in_flight() {
+        let mut dispatcher = OutputDispatcher::new();
+        let s1 = SessionId(1);
+        let s2 = SessionId(2);
+
+        dispatcher.mark_ready(s1);
+        dispatcher.mark_ready(s2);
+
+        // Mark s1 (focused) as in-flight
+        assert!(dispatcher.mark_in_flight(s1));
+
+        // New output arrives for s1 while in-flight
+        dispatcher.mark_ready(s1);
+
+        // s1 is focused but in-flight — should be deferred, only s2 returned
+        let ready = dispatcher.take_ready_sessions(Some(s1));
+        assert_eq!(ready, vec![s2]);
+        // s1 still in ready set, waiting for in-flight to complete
+        assert_eq!(dispatcher.ready_count(), 1);
+
+        // Complete in-flight, next cycle picks up s1
+        dispatcher.complete_in_flight(s1);
+        let ready = dispatcher.take_ready_sessions(Some(s1));
+        assert_eq!(ready, vec![s1]);
+    }
+
+    #[test]
+    fn in_flight_sessions_are_deferred() {
+        let mut dispatcher = OutputDispatcher::new();
+        let s1 = SessionId(1);
+        let s2 = SessionId(2);
+
+        dispatcher.mark_ready(s1);
+        dispatcher.mark_ready(s2);
+
+        // Mark s1 as in-flight
+        assert!(dispatcher.mark_in_flight(s1));
+        // Now s1 is in-flight, s2 is still ready
+        dispatcher.mark_ready(s1); // new output arrived while in-flight
+
+        let ready = dispatcher.take_ready_sessions(None);
+        // s1 should be deferred (it's in-flight), only s2 returned
+        assert_eq!(ready, vec![s2]);
+        // s1 should still be in the ready set
+        assert_eq!(dispatcher.ready_count(), 1);
+    }
+
+    #[test]
+    fn mark_in_flight_prevents_double_dispatch() {
+        let mut dispatcher = OutputDispatcher::new();
+        let s1 = SessionId(1);
+
+        dispatcher.mark_ready(s1);
+        assert!(dispatcher.mark_in_flight(s1));
+        // Second attempt should fail and re-queue
+        assert!(!dispatcher.mark_in_flight(s1));
+        assert_eq!(dispatcher.ready_count(), 1);
+    }
+
+    #[test]
+    fn complete_in_flight_clears_tracking() {
+        let mut dispatcher = OutputDispatcher::new();
+        let s1 = SessionId(1);
+
+        dispatcher.mark_ready(s1);
+        dispatcher.mark_in_flight(s1);
+        assert_eq!(dispatcher.in_flight_count(), 1);
+
+        dispatcher.complete_in_flight(s1);
+        assert_eq!(dispatcher.in_flight_count(), 0);
+    }
+
+    #[test]
+    fn has_activity_reflects_state() {
+        let mut dispatcher = OutputDispatcher::new();
+        assert!(!dispatcher.has_activity());
+
+        let s1 = SessionId(1);
+        dispatcher.mark_ready(s1);
+        assert!(dispatcher.has_activity());
+
+        dispatcher.mark_in_flight(s1);
+        assert!(dispatcher.has_activity());
+
+        dispatcher.complete_in_flight(s1);
+        assert!(!dispatcher.has_activity());
+    }
+
+    #[test]
+    fn has_more_re_queues_after_completion() {
+        // Simulates the has_more flow: session completes in-flight, then
+        // mark_ready re-queues it for the next poll cycle.
+        let mut dispatcher = OutputDispatcher::new();
+        let s1 = SessionId(1);
+        let s2 = SessionId(2);
+
+        dispatcher.mark_ready(s1);
+        dispatcher.mark_ready(s2);
+
+        // Dispatch both
+        let ready = dispatcher.take_ready_sessions(Some(s1));
+        assert_eq!(ready.len(), 2);
+        assert_eq!(ready[0], s1); // focused first
+
+        assert!(dispatcher.mark_in_flight(s1));
+        assert!(dispatcher.mark_in_flight(s2));
+
+        // s1 completes with has_more=true
+        dispatcher.complete_in_flight(s1);
+        dispatcher.mark_ready(s1); // has_more re-queue
+
+        // s2 completes normally
+        dispatcher.complete_in_flight(s2);
+
+        // Next cycle: only s1 should be ready
+        let ready = dispatcher.take_ready_sessions(Some(s1));
+        assert_eq!(ready, vec![s1]);
+        assert!(!dispatcher.has_activity());
+    }
+
+    #[test]
+    fn remove_session_clears_all_state() {
+        let mut dispatcher = OutputDispatcher::new();
+        let s1 = SessionId(1);
+
+        dispatcher.mark_ready(s1);
+        dispatcher.mark_in_flight(s1);
+        dispatcher.mark_ready(s1); // re-queued while in-flight
+
+        dispatcher.remove_session(s1);
+        assert!(!dispatcher.has_activity());
+    }
+
+    #[test]
+    fn closed_session_cannot_be_reintroduced() {
+        let mut dispatcher = OutputDispatcher::new();
+        let s1 = SessionId(1);
+
+        dispatcher.mark_ready(s1);
+        dispatcher.remove_session(s1);
+
+        // Late events after close should be silently dropped
+        assert!(!dispatcher.mark_ready(s1));
+        assert!(!dispatcher.mark_in_flight(s1));
+        assert!(!dispatcher.has_activity());
+    }
+
+    #[test]
+    fn take_ready_sessions_empty_when_all_in_flight() {
+        let mut dispatcher = OutputDispatcher::new();
+        let s1 = SessionId(1);
+        let s2 = SessionId(2);
+
+        dispatcher.mark_ready(s1);
+        dispatcher.mark_ready(s2);
+        assert!(dispatcher.mark_in_flight(s1));
+        assert!(dispatcher.mark_in_flight(s2));
+
+        // New output arrives for both while in-flight
+        dispatcher.mark_ready(s1);
+        dispatcher.mark_ready(s2);
+
+        // take_ready_sessions should return empty (both deferred)
+        let ready = dispatcher.take_ready_sessions(None);
+        assert!(ready.is_empty());
+        // But they're still in the ready set for when in-flight completes
+        assert_eq!(dispatcher.ready_count(), 2);
+    }
+
+    #[test]
+    fn drain_updates_separates_output_ready() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let mut dispatcher = OutputDispatcher::new();
+
+        let s1 = SessionId(1);
+        let s2 = SessionId(2);
+
+        // Send mixed events
+        tx.try_send(SessionUpdate::OutputReady { session_id: s1 })
+            .unwrap();
+        tx.try_send(SessionUpdate::ChildProcessExited { session_id: s2 })
+            .unwrap();
+        tx.try_send(SessionUpdate::OutputReady { session_id: s2 })
+            .unwrap();
+
+        let others = dispatcher.drain_updates(&mut rx);
+
+        // OutputReady events consumed into ready set
+        assert_eq!(dispatcher.ready_count(), 2);
+        // Non-OutputReady events returned
+        assert_eq!(others.len(), 1);
+        assert_eq!(others[0].session_id(), s2);
+    }
+
+    #[test]
+    fn drain_updates_handles_disconnected_channel() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let mut dispatcher = OutputDispatcher::new();
+
+        let s1 = SessionId(1);
+
+        // Send one event then drop the sender to disconnect
+        tx.try_send(SessionUpdate::OutputReady { session_id: s1 })
+            .unwrap();
+        drop(tx);
+
+        // drain_updates should consume the buffered event and stop
+        // gracefully when it hits the disconnected state
+        let others = dispatcher.drain_updates(&mut rx);
+
+        assert_eq!(dispatcher.ready_count(), 1);
+        assert!(others.is_empty());
+    }
+
+    #[test]
+    fn drain_updates_deduplicates_output_ready() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let mut dispatcher = OutputDispatcher::new();
+
+        let s1 = SessionId(1);
+
+        // Send the same OutputReady event 5 times
+        for _ in 0..5 {
+            tx.try_send(SessionUpdate::OutputReady { session_id: s1 })
+                .unwrap();
+        }
+
+        let others = dispatcher.drain_updates(&mut rx);
+
+        // HashSet deduplicates — only 1 session in ready set
+        assert_eq!(dispatcher.ready_count(), 1);
+        assert!(others.is_empty());
+    }
+
+    #[test]
+    fn child_process_exited_can_be_routed_to_mark_ready() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let mut dispatcher = OutputDispatcher::new();
+
+        let s1 = SessionId(1);
+
+        // Send a ChildProcessExited event (not OutputReady)
+        tx.try_send(SessionUpdate::ChildProcessExited { session_id: s1 })
+            .unwrap();
+
+        let others = dispatcher.drain_updates(&mut rx);
+
+        // ChildProcessExited is NOT consumed by drain_updates — it's returned
+        assert_eq!(dispatcher.ready_count(), 0);
+        assert_eq!(others.len(), 1);
+
+        // The caller routes it by calling mark_ready
+        for event in others {
+            if let SessionUpdate::ChildProcessExited { session_id } = event {
+                dispatcher.mark_ready(session_id);
+            }
+        }
+
+        assert_eq!(dispatcher.ready_count(), 1);
+        let ready = dispatcher.take_ready_sessions(None);
+        assert_eq!(ready, vec![s1]);
+    }
+
+    #[test]
+    fn drain_updates_respects_event_cap() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(2048);
+        let mut dispatcher = OutputDispatcher::new();
+
+        // Send more events than MAX_EVENTS_PER_DRAIN (1024)
+        for i in 0..1200 {
+            tx.try_send(SessionUpdate::OutputReady {
+                session_id: SessionId(i as u64),
+            })
+            .unwrap();
+        }
+
+        let _others = dispatcher.drain_updates(&mut rx);
+
+        // Should have drained exactly MAX_EVENTS_PER_DRAIN events (all unique IDs)
+        assert_eq!(dispatcher.ready_count(), MAX_EVENTS_PER_DRAIN);
+        // Remaining events should still be in the channel
+        assert!(rx.try_recv().is_ok());
+    }
+
+    // --- Regression tests for behavioral gaps ---
+
+    #[test]
+    fn session_without_terminal_is_requeued_not_dropped() {
+        // Regression: sessions taken from the dispatcher but not yet in the
+        // terminals map should be re-queued so the next poll picks them up,
+        // instead of silently dropping the wakeup.
+        let mut dispatcher = OutputDispatcher::new();
+        let s1 = SessionId(1);
+        let s2 = SessionId(2);
+
+        dispatcher.mark_ready(s1);
+        dispatcher.mark_ready(s2);
+
+        // Simulate take_ready_sessions returning both, but s1 has no terminal yet
+        let ready = dispatcher.take_ready_sessions(None);
+        assert_eq!(ready.len(), 2);
+
+        // Simulate the filter: s1 has no terminal, requeue it
+        let has_terminal = |id: SessionId| id == s2;
+        for id in &ready {
+            if !has_terminal(*id) {
+                dispatcher.mark_ready(*id);
+            }
+        }
+
+        // s1 should be back in the ready set
+        assert_eq!(dispatcher.ready_count(), 1);
+        let next_ready = dispatcher.take_ready_sessions(None);
+        assert_eq!(next_ready, vec![s1]);
+    }
+
+    #[test]
+    fn child_process_exit_empty_drain_still_allows_status_recompute() {
+        // Regression: ChildProcessExited marks session ready. If the background
+        // task finds no output to drain (try_drain_output_bounded returns None),
+        // the session should still be marked complete_in_flight so it's no longer
+        // blocked, allowing status reconciliation.
+        let mut dispatcher = OutputDispatcher::new();
+        let s1 = SessionId(1);
+
+        // ChildProcessExited → mark_ready
+        dispatcher.mark_ready(s1);
+        let ready = dispatcher.take_ready_sessions(None);
+        assert_eq!(ready, vec![s1]);
+
+        // Session dispatched in-flight
+        assert!(dispatcher.mark_in_flight(s1));
+
+        // Background task: drain returns None (no output)
+        // Caller should still call complete_in_flight
+        dispatcher.complete_in_flight(s1);
+        assert!(!dispatcher.has_activity());
+        assert_eq!(dispatcher.in_flight_count(), 0);
+    }
+
+    #[test]
+    fn duplicate_output_ready_does_not_grow_channel() {
+        // Regression: producer-side dedup should prevent a noisy session from
+        // sending redundant OutputReady events. At the dispatcher level, the
+        // HashSet already deduplicates, but this test verifies the consumer-side
+        // dedup behavior under burst conditions.
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let mut dispatcher = OutputDispatcher::new();
+
+        let s1 = SessionId(1);
+        let s2 = SessionId(2);
+
+        // Simulate a noisy session s1 sending many events alongside s2
+        for _ in 0..10 {
+            tx.try_send(SessionUpdate::OutputReady { session_id: s1 })
+                .unwrap();
+        }
+        tx.try_send(SessionUpdate::OutputReady { session_id: s2 })
+            .unwrap();
+
+        let _others = dispatcher.drain_updates(&mut rx);
+
+        // Despite 10 events for s1, the ready set should only have 2 sessions
+        assert_eq!(dispatcher.ready_count(), 2);
+
+        // Both should be schedulable
+        let ready = dispatcher.take_ready_sessions(None);
+        assert_eq!(ready.len(), 2);
+    }
+}

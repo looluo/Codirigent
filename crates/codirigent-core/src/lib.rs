@@ -98,6 +98,7 @@ pub mod ralph;
 pub mod scheduler;
 pub mod session_advanced;
 pub mod session_notes;
+pub mod session_update;
 pub mod skill;
 pub mod storage;
 pub mod task_manager;
@@ -177,3 +178,6 @@ pub use compaction::{CompactionConfig, CompactionService};
 
 // Re-export clipboard types
 pub use clipboard_types::{CliType, ClipboardContent, ImageData, ImageFormat};
+
+// Re-export session update types (internal hot-path transport)
+pub use session_update::{SessionUpdate, StatusHintSource};

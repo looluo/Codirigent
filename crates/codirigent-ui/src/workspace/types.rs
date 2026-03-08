@@ -395,6 +395,8 @@ pub(super) struct PollingState {
     pub project_refresh_generation: u64,
     /// Whether session restoration from disk is currently in-flight.
     pub restore_in_flight: bool,
+    /// Last time the legacy fallback safety net drained pending_output_sessions.
+    pub last_legacy_fallback: Instant,
     /// Best-effort shell command line capture per session while the shell is idle.
     pub shell_input_buffers: HashMap<SessionId, String>,
 }
@@ -430,6 +432,7 @@ impl PollingState {
             last_processed_hook_signal_ts: HashMap::new(),
             project_refresh_generation: 0,
             restore_in_flight: false,
+            last_legacy_fallback: Instant::now(),
             shell_input_buffers: HashMap::new(),
         }
     }
@@ -444,7 +447,6 @@ pub(super) enum CliStatusSource {
 #[derive(Debug, Clone)]
 pub(super) struct CachedCliStatus {
     pub(super) status: SessionStatus,
-    pub(super) tool_name: Option<String>,
     pub(super) seen_at: Instant,
     pub(super) source: CliStatusSource,
     /// When the status last changed (for stale NeedsAttention detection).
@@ -459,7 +461,7 @@ pub(super) struct CachedCliStatus {
 ///
 /// Contains JSONL/session readers for Codex and Gemini plus the process-tree
 /// CLI detector. Claude Code and Gemini can receive hook-based status updates
-/// via `check_hook_signals`; the readers remain as a higher-fidelity fallback.
+/// via hook signal processing; the readers remain as a higher-fidelity fallback.
 pub(super) struct CliReaders {
     /// Codex CLI JSONL session reader for high-fidelity status detection.
     pub codex: Option<CodexSessionReader>,

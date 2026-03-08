@@ -23,7 +23,7 @@
 
 ---
 
-https://github.com/user-attachments/assets/e6ee6a6e-24a2-4309-aacf-33bfaebcfde6
+https://github.com/user-attachments/assets/51b821fd-dfc3-40f0-b1f3-e8727045f474
 
 ---
 
@@ -32,8 +32,6 @@ If you're running Claude Code, Codex, or Gemini across multiple projects at the 
 Codirigent is a Tmux-style workspace built for this workflow. Open it once, and your sessions are already where you left them — right directory, right layout, right agent.
 
 ## Features
-
-<img src="website/images/main.png" alt="Multiple AI coding CLIs running in parallel" width="100%" />
 
 **Multiple sessions, one view** — run Claude Code, Codex, and Gemini side by side. Each session shows a real-time status indicator:
 
@@ -46,19 +44,13 @@ Codirigent is a Tmux-style workspace built for this workflow. Open it once, and 
 
 ---
 
-https://github.com/user-attachments/assets/36d38a89-ac41-48bb-856e-4330efb65f45
-
 **Custom layouts** — arrange sessions in any grid configuration and save them. Drag and drop session headers to rearrange positions on the fly.
 
 ---
 
-<img src="website/images/fileTree.png" alt="File tree" width="100%" />
-
 **Synced file tree** — the file explorer always reflects whichever session is focused, so you always know where you are.
 
 ---
-
-<img src="website/images/gitWorktree.png" alt="Git worktree" width="100%" />
 
 **Git worktree support** — run agents on isolated branches simultaneously without conflicts.
 

@@ -118,6 +118,13 @@ pub struct WorkspaceView {
     pub(super) selection: SelectionState,
     /// Adaptive polling and timing state (output polling, resize throttle, git refresh).
     pub(super) polling: PollingState,
+    /// Event-driven output dispatcher (replaces broad session scan).
+    pub(super) output_dispatcher: super::output_dispatcher::OutputDispatcher,
+    /// Receiver for the `SessionUpdate` mpsc channel from session manager.
+    pub(super) update_rx: Option<tokio::sync::mpsc::Receiver<codirigent_core::SessionUpdate>>,
+    /// Sender for the `SessionUpdate` mpsc channel (cloned to background tasks
+    /// for OSC 133 / OSC 7 event emission).
+    pub(super) update_tx: Option<tokio::sync::mpsc::Sender<codirigent_core::SessionUpdate>>,
     /// CLI session readers and process-tree detector (shared with background tasks).
     pub(super) cli_readers: Arc<Mutex<CliReaders>>,
     /// Cached detection results and memoized state.
@@ -404,9 +411,34 @@ impl WorkspaceView {
         let mut workspace = Workspace::new();
         workspace.set_theme(theme);
 
+        // Eagerly initialize the hook-signal run epoch so that signals
+        // emitted between app start and the first scan are not dropped.
+        super::impl_output_polling::init_app_start_ts();
+
         Self::start_output_polling(cx);
         Self::start_maintenance_polling(cx);
         Self::start_modal_cursor_blink(cx);
+
+        // Take the SessionUpdate receiver and clone the sender from the session
+        // manager for the event-driven output dispatcher. The sender is cloned
+        // to background tasks for OSC 133 / OSC 7 event emission.
+        let (update_rx, update_tx) = match session_manager.lock() {
+            Ok(mgr) => {
+                let rx = mgr.take_update_receiver();
+                let tx = Some(mgr.update_sender());
+                (rx, tx)
+            }
+            Err(e) => {
+                tracing::warn!("Failed to init SessionUpdate channel (mutex poisoned): {e}");
+                (None, None)
+            }
+        };
+        if update_rx.is_none() {
+            tracing::error!(
+                "Event-driven output pipeline unavailable; \
+                 falling back to 1s legacy polling for all sessions"
+            );
+        }
 
         let (storage, task_manager) = Self::init_task_manager(event_bus.clone());
         let (file_tree, file_tree_model, project_root) = Self::init_file_tree();
@@ -466,6 +498,9 @@ impl WorkspaceView {
             modals: ModalState::new(),
             selection: SelectionState::new(),
             polling: PollingState::new(),
+            output_dispatcher: super::output_dispatcher::OutputDispatcher::new(),
+            update_rx,
+            update_tx,
             cli_readers: Arc::new(Mutex::new(CliReaders::new())),
             cache: CacheState::new(),
             notification_manager: NotificationManager::new(Default::default()),
@@ -761,7 +796,8 @@ impl WorkspaceView {
     /// Synchronize UI component states with workspace state.
     ///
     /// This should be called before rendering to ensure all UI components
-    /// reflect the current workspace state.
+    /// reflect the current workspace state. For hot-path per-session updates,
+    /// see [`Self::sync_session_header`] which does targeted delta updates.
     fn sync_ui_state(&mut self) {
         let (task_titles, task_counts, task_snapshot) = if let Ok(manager) =
             self.task_manager.lock()
@@ -880,6 +916,14 @@ impl WorkspaceView {
                 if header.project_name != project_name {
                     header.project_name = project_name;
                 }
+                let git_branch = session.git_info.as_ref().map(|gi| gi.branch.as_str());
+                if header.git_branch.as_deref() != git_branch {
+                    header.git_branch = git_branch.map(str::to_owned);
+                }
+                let git_dirty_count = session.git_info.as_ref().map(|gi| gi.dirty_count);
+                if header.git_dirty_count != git_dirty_count {
+                    header.git_dirty_count = git_dirty_count;
+                }
 
                 let session_color = session
                     .color
@@ -928,6 +972,53 @@ impl WorkspaceView {
         }
         if let Some(snapshot) = task_snapshot {
             self.task_board.set_snapshot(snapshot);
+        }
+    }
+
+    /// Sync a single session's terminal header from workspace state.
+    ///
+    /// This is a targeted delta update for the common case where only one
+    /// session's status changed. Avoids the O(all sessions) cost of
+    /// `sync_ui_state()` for each output poll.
+    ///
+    /// Note: `task` field is intentionally deferred to the 1s fallback
+    /// `sync_ui_state()` because resolving task titles requires iterating
+    /// the task manager, which is not worth the cost on the hot path.
+    pub(super) fn sync_session_header(&mut self, session_id: SessionId) {
+        let Some(session) = self.workspace.session(session_id) else {
+            return;
+        };
+        let focused_id = self.workspace.focused_session_id();
+
+        if let Some(header) = self.terminal_headers.get_mut(&session_id) {
+            header.status = session.status;
+            header.context_usage = session.context_usage;
+            header.is_focused = focused_id == Some(session_id);
+
+            if header.session_name != session.name {
+                header.session_name = session.name.clone();
+            }
+            if header.group_name != session.group {
+                header.group_name = session.group.clone();
+            }
+
+            let git_branch = session.git_info.as_ref().map(|gi| gi.branch.as_str());
+            if header.git_branch.as_deref() != git_branch {
+                header.git_branch = git_branch.map(str::to_owned);
+            }
+            let git_dirty_count = session.git_info.as_ref().map(|gi| gi.dirty_count);
+            if header.git_dirty_count != git_dirty_count {
+                header.git_dirty_count = git_dirty_count;
+            }
+
+            let session_color = session
+                .color
+                .as_deref()
+                .map(crate::sidebar::Color::from_hex)
+                .unwrap_or_else(|| crate::sidebar::Color::from_hex("#6366f1"));
+            if header.session_color != session_color {
+                header.session_color = session_color;
+            }
         }
     }
 

@@ -29,6 +29,8 @@ jobs:
         run: cargo fmt --all -- --check
       - name: Clippy
         run: cargo clippy --all --all-targets -- -D warnings
+      - name: Check gpui-full feature
+        run: cargo check -p codirigent-ui --features gpui-full
 
   test:
     name: Test
@@ -53,20 +55,35 @@ jobs:
         with:
           fetch-depth: 0
       - name: Check for new unwrap() calls
+        shell: bash
         run: |
-          # Count unwraps in current branch
-          CURRENT=$(git grep -n "\.unwrap()" -- 'crates/*/src/*.rs' | grep -v "tests/" | grep -v "///" | wc -l)
+          # Count unwraps in production code only (exclude #[cfg(test)] blocks and test dirs).
+          count_prod_unwraps() {
+            local ref="$1"
+            local total=0
+            while IFS= read -r file; do
+              # Find the first #[cfg(test)] line; count unwraps only before it
+              test_line=$(git show "$ref:$file" | grep -n '#\[cfg(test)\]' | head -1 | cut -d: -f1)
+              if [ -n "$test_line" ]; then
+                count=$(git show "$ref:$file" | head -n "$((test_line - 1))" | grep -v '///' | grep -c '\.unwrap()' || true)
+              else
+                count=$(git show "$ref:$file" | grep -v '///' | grep -c '\.unwrap()' || true)
+              fi
+              total=$((total + count))
+            done < <(git ls-tree -r --name-only "$ref" -- crates/ | grep '/src/.*\.rs$' | grep -v '/tests/')
+            echo "$total"
+          }
 
-          # Count unwraps in main branch without checking out
-          BASELINE=$(git grep -n "\.unwrap()" origin/main -- 'crates/*/src/*.rs' | grep -v "tests/" | grep -v "///" | wc -l)
+          CURRENT=$(count_prod_unwraps HEAD)
+          BASELINE=$(count_prod_unwraps origin/main)
 
-          echo "Baseline unwraps: $BASELINE"
-          echo "Current unwraps: $CURRENT"
+          echo "Baseline unwraps (production): $BASELINE"
+          echo "Current unwraps (production): $CURRENT"
 
-          if [ $CURRENT -gt $BASELINE ]; then
-            echo "❌ New unwrap() calls detected! ($((CURRENT - BASELINE)) added)"
+          if [ "$CURRENT" -gt "$BASELINE" ]; then
+            echo "❌ New unwrap() calls in production code! ($((CURRENT - BASELINE)) added)"
             echo "Please use safe error handling instead. See docs/coding-guidelines/error-handling.md"
             exit 1
           else
-            echo "✅ No new unwrap() calls added"
+            echo "✅ No new unwrap() calls in production code"
           fi

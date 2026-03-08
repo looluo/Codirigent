@@ -15,7 +15,7 @@ use super::gpui::WorkspaceView;
 use super::types::{CachedCliStatus, CliStatusSource, ProcessedHookSignal};
 use codirigent_core::{
     hook_signals_dir, AssignmentAction, CliType, CodexExecutionMode, CodirigentEvent, EventBus,
-    ProcessMonitor, Session, SessionId, SessionManager, SessionStatus, TaskStatus,
+    ProcessMonitor, Session, SessionId, SessionManager, SessionStatus, SessionUpdate, TaskStatus,
 };
 use codirigent_detector::NotificationType;
 use codirigent_session::cli_detector::CliDetector;
@@ -25,20 +25,56 @@ use codirigent_session::CliSessionStatus;
 use gpui::Context;
 use serde::Deserialize;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
-use tracing::{info, warn};
+use tracing::{info, trace, warn};
 
 const CLI_TYPE_CLAUDE: &str = "claude";
 const CLI_TYPE_GEMINI: &str = "gemini";
 const CLI_TYPE_CODEX: &str = "codex";
 
-/// Unix timestamp (seconds) recorded the first time it is read, acting as a
-/// per-process "run epoch".  Hook signals written before this moment belong to
+/// Unix timestamp (seconds) recorded at process startup, acting as a
+/// per-process "run epoch". Hook signals written before this moment belong to
 /// a previous Codirigent run and must be ignored, regardless of the 600-second
 /// recency window, to prevent stale signals from routing to re-used session IDs.
+///
+/// Eagerly initialized via `init_app_start_ts()` in `WorkspaceView::new`.
 static APP_START_TS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
+
+/// When `CODIRIGENT_LEGACY_PIPELINE=1` is set, the event-driven output
+/// dispatcher and status reconciler are disabled and the legacy broad-scan
+/// polling path runs exclusively. This is a temporary kill switch for the
+/// pipeline transition — it will be removed once shadow-mode validation
+/// confirms zero diffs.
+///
+/// Read once at first access and cached for the process lifetime.
+/// Changing the env var after startup has no effect.
+static LEGACY_PIPELINE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+/// When `CODIRIGENT_SHADOW_STATUS=1` is set, the reconciler logs full
+/// input/output detail for every status change and the legacy fallback
+/// logs sessions that the event-driven path missed. Used to validate
+/// correctness during the pipeline transition.
+///
+/// Read once at first access and cached for the process lifetime.
+/// Changing the env var after startup has no effect.
+static SHADOW_STATUS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+fn is_legacy_pipeline() -> bool {
+    *LEGACY_PIPELINE.get_or_init(|| {
+        std::env::var("CODIRIGENT_LEGACY_PIPELINE")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    })
+}
+
+fn is_shadow_status() -> bool {
+    *SHADOW_STATUS.get_or_init(|| {
+        std::env::var("CODIRIGENT_SHADOW_STATUS")
+            .map(|v| v == "1" || v.eq_ignore_ascii_case("true"))
+            .unwrap_or(false)
+    })
+}
 
 fn app_start_ts() -> u64 {
     *APP_START_TS.get_or_init(|| {
@@ -47,6 +83,42 @@ fn app_start_ts() -> u64 {
             .map(|d| d.as_secs())
             .unwrap_or(0)
     })
+}
+
+/// Eagerly initialize the hook-signal run epoch.
+///
+/// Must be called early in startup (e.g., `WorkspaceView::new`) so that
+/// hook signals emitted between app launch and the first scan are not
+/// incorrectly filtered as belonging to a previous run.
+pub(super) fn init_app_start_ts() {
+    let _ = app_start_ts();
+}
+
+fn prioritize_and_partition_output_sessions<F>(
+    mut session_ids: Vec<SessionId>,
+    focused_id: Option<SessionId>,
+    mut can_schedule: F,
+) -> (Vec<SessionId>, Vec<SessionId>)
+where
+    F: FnMut(SessionId) -> bool,
+{
+    if let Some(focused_id) = focused_id {
+        if let Some(index) = session_ids.iter().position(|id| *id == focused_id) {
+            session_ids.swap(0, index);
+        }
+    }
+
+    let mut ready = Vec::with_capacity(session_ids.len());
+    let mut deferred = Vec::new();
+    for session_id in session_ids {
+        if can_schedule(session_id) {
+            ready.push(session_id);
+        } else {
+            deferred.push(session_id);
+        }
+    }
+
+    (ready, deferred)
 }
 
 /// Session status result from a background JSONL read: (status, optional detail string).
@@ -194,14 +266,6 @@ struct HookSignalUpdate {
     status: String,
     cli_type: Option<String>,
     ts: u64,
-}
-
-fn prefer_live_working_status(
-    detector_status: Option<SessionStatus>,
-    cached_status: SessionStatus,
-) -> bool {
-    matches!(detector_status, Some(SessionStatus::Working))
-        && cached_status != SessionStatus::Working
 }
 
 fn codex_execution_mode_fingerprint(mode: Option<CodexExecutionMode>) -> Option<&'static str> {
@@ -389,13 +453,16 @@ impl WorkspaceView {
     /// Delay before sending a deferred Enter keypress after a task prompt (ms).
     const PENDING_ENTER_DELAY: Duration = Duration::from_millis(100);
     /// TTL for Claude Code hook signal cache. Matches the 600s stale-signal guard
-    /// in check_hook_signals so a long-running task never loses its "working" status
-    /// just because no hook fired recently.
+    /// so a long-running task never loses its "working" status just because no
+    /// hook fired recently.
     const HOOK_SIGNAL_CACHE_TTL: Duration = Duration::from_secs(600);
     /// Maximum output bytes to process from a session in one poll tick.
     const MAX_OUTPUT_BYTES_PER_POLL: usize = 256 * 1024;
     /// Maximum PTY chunks to process from a session in one poll tick.
     const MAX_OUTPUT_CHUNKS_PER_POLL: usize = 64;
+    /// How often the legacy fallback drains `pending_output_sessions` as a
+    /// safety net for sessions that bypass the mpsc channel.
+    const LEGACY_FALLBACK_INTERVAL: Duration = Duration::from_secs(1);
 
     pub(super) fn poll_output(&mut self, cx: &mut Context<Self>) {
         self.process_deferred_enters();
@@ -403,26 +470,13 @@ impl WorkspaceView {
 
         let had_output_activity = self.schedule_output_preparation(cx);
 
-        let mut session_ids: Vec<codirigent_core::SessionId> =
-            self.terminals.keys().copied().collect();
-        if let Some(focused_id) = self.workspace.focused_session_id() {
-            if let Some(index) = session_ids.iter().position(|id| *id == focused_id) {
-                session_ids.swap(0, index);
-            }
-        }
-        let mut any_dirty = false;
-
-        for session_id in session_ids {
-            let session_dirty = self.sync_session_status(session_id);
-            any_dirty |= session_dirty;
-        }
-
         // Track output activity for adaptive polling
+        //
+        // Sessions that actually produced output are synchronized in
+        // `apply_prepared_session_output()`. Detector-based status decay stays
+        // on the slower maintenance cadence to avoid O(all sessions) work on
+        // every active 16 ms poll.
         self.polling.last_poll_had_output = had_output_activity;
-
-        if any_dirty {
-            cx.notify();
-        }
     }
 
     pub(super) fn poll_maintenance(&mut self, cx: &mut Context<Self>) {
@@ -445,27 +499,166 @@ impl WorkspaceView {
     /// Windows PTY path), where `process_output()` can move a session into
     /// `Working` but only `tick()` can later decay it back to `Idle`.
     fn tick_detector_statuses(&mut self) -> bool {
-        let session_ids: Vec<SessionId> = self.terminals.keys().copied().collect();
-        if session_ids.is_empty() {
+        let has_sessions = !self.terminals.is_empty();
+        if !has_sessions {
             return false;
         }
 
-        self.with_detector(|detector| detector.tick());
+        // tick() returns only sessions whose detector status actually changed,
+        // so we only run the full reconciler for those — avoiding per-session
+        // lock acquisition for the common case where nothing changed.
+        let changed_ids = self.with_detector(|detector| detector.tick());
 
-        session_ids.into_iter().fold(false, |dirty, session_id| {
-            dirty | self.sync_session_status(session_id)
-        })
+        let mut dirty = false;
+
+        if !changed_ids.is_empty() {
+            trace!(changed = changed_ids.len(), "tick_detector_statuses");
+            for session_id in changed_ids {
+                dirty |= self.sync_session_status(session_id);
+            }
+        }
+
+        // Stale-cache sweep: sessions with cached statuses that are
+        // unchanged in the detector (not in `changed_ids`) still need
+        // periodic reconciliation. This ensures:
+        // - NeedsAttention entries hit the 30s staleness check
+        // - Working/ResponseReady entries hit TTL eviction
+        // This is cheap: only sessions with a cached status are checked.
+        //
+        // The lock is scoped to the collection phase so the mutable
+        // `sync_session_status` call below does not overlap the borrow.
+        let stale_candidates: Vec<SessionId> = self
+            .cli_readers
+            .lock()
+            .ok()
+            .map(|readers| readers.cached_status.keys().copied().collect())
+            .unwrap_or_default();
+        for session_id in stale_candidates {
+            dirty |= self.sync_session_status(session_id);
+        }
+
+        dirty
     }
 
     fn schedule_output_preparation(&mut self, cx: &mut Context<Self>) -> bool {
-        let mut session_ids =
-            self.with_session_manager(|manager| manager.sessions_with_pending_output());
-        if let Some(focused_id) = self.workspace.focused_session_id() {
-            if let Some(index) = session_ids.iter().position(|id| *id == focused_id) {
-                session_ids.swap(0, index);
+        if is_legacy_pipeline() {
+            return self.schedule_output_preparation_legacy(cx);
+        }
+
+        // Phase 1: Drain the event-driven mpsc channel into the dispatcher.
+        if let Some(ref mut rx) = self.update_rx {
+            let other_events = self.output_dispatcher.drain_updates(rx);
+            for event in other_events {
+                match event {
+                    SessionUpdate::ChildProcessExited { session_id } => {
+                        // PTY child exited — mark session ready so it gets a
+                        // final output drain and status re-evaluation.
+                        trace!(
+                            ?session_id,
+                            "ChildProcessExited: marking ready for final drain"
+                        );
+                        self.output_dispatcher.mark_ready(session_id);
+                    }
+                    SessionUpdate::OutputReady { .. } => {
+                        // Consumed by drain_updates into the ready set — should
+                        // not appear here, but handle gracefully.
+                    }
+                    SessionUpdate::ShellStateChanged { session_id, .. }
+                    | SessionUpdate::WorkingDirectoryChanged { session_id, .. } => {
+                        // Phase-2: handled inline during output preparation
+                        // (dual-path). Channel copies are informational only
+                        // until phase-2 routing replaces the inline path.
+                        trace!(?session_id, "phase-2 event received (not yet routed)");
+                    }
+                }
             }
         }
-        session_ids.retain(|id| self.terminals.contains_key(id));
+
+        // Phase 2: Low-frequency legacy safety net — drain the
+        // pending_output_sessions set at ~1s intervals to catch any sessions
+        // that bypass the mpsc channel (e.g., manual mark_output_pending
+        // calls). This is NOT the hot path — the dispatcher handles that.
+        if self.polling.last_legacy_fallback.elapsed() >= Self::LEGACY_FALLBACK_INTERVAL {
+            self.polling.last_legacy_fallback = Instant::now();
+            let legacy_ids =
+                self.with_session_manager(|manager| manager.sessions_with_pending_output());
+            if !legacy_ids.is_empty() {
+                trace!(
+                    count = legacy_ids.len(),
+                    "legacy fallback drain (safety net)"
+                );
+                for id in &legacy_ids {
+                    let was_new = self.output_dispatcher.mark_ready(*id);
+                    // Shadow mode: log only genuinely missed events — sessions
+                    // the mpsc channel didn't deliver to the dispatcher.
+                    if is_shadow_status() && was_new {
+                        info!(
+                            ?id,
+                            "shadow: legacy fallback discovered session not in dispatcher"
+                        );
+                    }
+                }
+            }
+        }
+
+        // Phase 3: Take ready sessions from the dispatcher (focused first).
+        let session_ids = self
+            .output_dispatcher
+            .take_ready_sessions(self.workspace.focused_session_id());
+
+        // Filter: only schedule sessions that have a terminal view.
+        // Sessions without a terminal yet (gap between create_session and
+        // terminals.insert) are re-queued so the next poll cycle picks them
+        // up, avoiding a ~1s delay waiting for the legacy fallback.
+        let mut schedulable = Vec::with_capacity(session_ids.len());
+        for id in session_ids {
+            if self.terminals.contains_key(&id) {
+                schedulable.push(id);
+            } else {
+                self.output_dispatcher.mark_ready(id);
+            }
+        }
+
+        let in_flight_count = self.output_dispatcher.in_flight_count();
+        if !schedulable.is_empty() || in_flight_count > 0 {
+            trace!(
+                discovered_count = schedulable.len(),
+                in_flight_count,
+                "schedule_output_preparation"
+            );
+        }
+
+        let had_output_activity = !schedulable.is_empty() || self.output_dispatcher.has_activity();
+
+        for session_id in schedulable {
+            self.schedule_session_output_preparation(session_id, cx);
+        }
+
+        had_output_activity
+    }
+
+    /// Legacy output preparation path — uses the broad
+    /// `sessions_with_pending_output()` scan without the event-driven
+    /// dispatcher. Activated by `CODIRIGENT_LEGACY_PIPELINE=1`.
+    fn schedule_output_preparation_legacy(&mut self, cx: &mut Context<Self>) -> bool {
+        let session_ids =
+            self.with_session_manager(|manager| manager.sessions_with_pending_output());
+        let (session_ids, deferred_ids) = prioritize_and_partition_output_sessions(
+            session_ids,
+            self.workspace.focused_session_id(),
+            |id| {
+                self.terminals.contains_key(&id)
+                    && !self.polling.output_prepare_in_flight.contains(&id)
+            },
+        );
+
+        if !deferred_ids.is_empty() {
+            self.with_session_manager(|manager| {
+                for session_id in deferred_ids {
+                    manager.mark_output_pending(session_id);
+                }
+            });
+        }
 
         let had_output_activity =
             !session_ids.is_empty() || !self.polling.output_prepare_in_flight.is_empty();
@@ -482,12 +675,25 @@ impl WorkspaceView {
         session_id: SessionId,
         cx: &mut Context<Self>,
     ) {
-        if !self.polling.output_prepare_in_flight.insert(session_id) {
+        trace!(?session_id, "schedule_session_output_preparation");
+        // Guard: prevent double-dispatch via the dispatcher's in-flight set.
+        if !self.output_dispatcher.mark_in_flight(session_id) {
             return;
         }
+        // TRANSITION: Legacy in-flight set kept in sync until
+        // CODIRIGENT_LEGACY_PIPELINE and schedule_output_preparation_legacy
+        // are removed. Both sets are always updated together.
+        self.polling.output_prepare_in_flight.insert(session_id);
+        debug_assert_eq!(
+            self.polling.output_prepare_in_flight.len(),
+            self.output_dispatcher.in_flight_count(),
+            "dual in-flight sets desynchronized after marking session {} in-flight",
+            session_id.0,
+        );
 
         let session_manager = self.session_manager.clone();
         let detector = self.detector.clone();
+        let update_tx = self.update_tx.clone();
 
         cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
             let prepared = cx
@@ -509,16 +715,42 @@ impl WorkspaceView {
                         let mut detector = detector.lock().ok()?;
                         detector.process_output(session_id, &data);
                         for event in codirigent_session::extract_osc133_events(&data) {
+                            // DUAL-PATH: Emitted to channel for phase-2 event routing.
+                            // Also applied directly below via set_shell_state() for correctness now.
+                            if let Some(tx) = &update_tx {
+                                if let Err(e) =
+                                    tx.try_send(codirigent_core::SessionUpdate::ShellStateChanged {
+                                        session_id,
+                                        state: event.clone(),
+                                    })
+                                {
+                                    trace!("ShellStateChanged try_send for {}: {e}", session_id.0);
+                                }
+                            }
                             detector.set_shell_state(session_id, event);
                         }
                     }
 
                     let cwd_session =
                         codirigent_session::extract_osc7_path(&data).and_then(|new_cwd| {
+                            // DUAL-PATH: Emitted to channel for phase-2 event routing.
+                            // Also applied directly below via update_working_directory() for correctness now.
+                            if let Some(tx) = &update_tx {
+                                if let Err(e) = tx.try_send(
+                                    codirigent_core::SessionUpdate::WorkingDirectoryChanged {
+                                        session_id,
+                                        cwd: new_cwd.clone(),
+                                    },
+                                ) {
+                                    trace!(
+                                        "WorkingDirectoryChanged try_send for {}: {e}",
+                                        session_id.0
+                                    );
+                                }
+                            }
                             let manager = session_manager.lock().ok()?;
                             let changed = manager.update_working_directory(session_id, new_cwd);
                             if changed {
-                                manager.invalidate_git_cache(session_id);
                                 manager.get_session(session_id)
                             } else {
                                 None
@@ -537,8 +769,24 @@ impl WorkspaceView {
 
             let _ = this.update(cx, |this, cx| {
                 this.polling.output_prepare_in_flight.remove(&session_id);
+                this.output_dispatcher.complete_in_flight(session_id);
+                debug_assert_eq!(
+                    this.polling.output_prepare_in_flight.len(),
+                    this.output_dispatcher.in_flight_count(),
+                    "dual in-flight sets desynchronized after completing session {}",
+                    session_id.0,
+                );
                 if let Some(prepared) = prepared {
                     this.apply_prepared_session_output(prepared, cx);
+                } else {
+                    // No output to drain (e.g. ChildProcessExited with no
+                    // trailing bytes). Still run status reconciliation so
+                    // OSC133-driven sessions don't stick in Working after
+                    // the PTY exits.
+                    if this.sync_session_status(session_id) {
+                        this.sync_session_header(session_id);
+                        cx.notify();
+                    }
                 }
             });
         })
@@ -557,6 +805,13 @@ impl WorkspaceView {
             detected_cli_type,
             cwd_session,
         } = prepared;
+        let bytes_drained = data.len();
+        trace!(
+            ?session_id,
+            bytes_drained,
+            has_more,
+            "apply_prepared_session_output"
+        );
         let mut any_dirty = false;
 
         if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
@@ -599,56 +854,121 @@ impl WorkspaceView {
         }
 
         any_dirty |= self.sync_session_status(session_id);
+
+        // Targeted delta: sync only this session's header instead of
+        // dirtying the full UI sync path for every output poll.
         if any_dirty {
+            self.sync_session_header(session_id);
             cx.notify();
         }
         if has_more {
-            self.schedule_session_output_preparation(session_id, cx);
+            // Re-queue through the dispatcher so other sessions get fair
+            // scheduling in the next poll cycle (16ms), instead of immediately
+            // re-entering schedule_session_output_preparation which bypasses
+            // the dispatcher's focused-first prioritization.
+            self.output_dispatcher.mark_ready(session_id);
+            // Also mark in the legacy pending set so the legacy path picks
+            // it up when CODIRIGENT_LEGACY_PIPELINE=1 is active.
+            self.with_session_manager(|manager| manager.mark_output_pending(session_id));
         }
     }
 
     /// Update session status from detector/cache state.
     ///
+    /// Uses the status reconciler ([`super::status_engine::reconcile`]) to
+    /// combine detector hints with cached CLI hints, then applies side effects
+    /// (task transitions, compaction, auto-assign, notifications).
+    ///
     /// Returns `true` if any UI-visible change was made that requires a repaint.
     fn sync_session_status(&mut self, session_id: codirigent_core::SessionId) -> bool {
+        use super::status_engine::reconcile;
+        use super::status_providers::{HintSource, StaleAction};
+
         let mut any_dirty = false;
 
-        // Update session status from detector
-        let (mut status, idle_time) = self.with_detector(|detector| {
+        // Gather inputs for the reconciler
+        let (detector_status, idle_time) = self.with_detector(|detector| {
             (
                 detector.get_status(session_id),
                 detector.get_idle_time(session_id),
             )
         });
 
-        // Overlay cached JSONL status (background task updates the cache).
-        // But don't overlay stale NeedsAttention when the detector says Idle —
-        // this means Claude exited and the shell prompt is showing.
-        if let Some((cached_status, _tool_name)) = self.get_recent_cached_cli_status(session_id) {
-            let is_stale_attention = cached_status == SessionStatus::NeedsAttention
-                && matches!(status, Some(SessionStatus::Idle))
-                && self.is_cli_status_stale(session_id, Duration::from_secs(30));
-            if prefer_live_working_status(status, cached_status) {
-                // Keep live detector activity instead of masking it with cached hook state.
-            } else if is_stale_attention {
-                // Claude likely exited — clear JSONL cache AND revert CLI type
-                // so the JSONL reader stops being consulted on subsequent polls.
-                if let Ok(mut readers) = self.cli_readers.lock() {
+        // Gather cached CLI status in a single lock acquisition to ensure
+        // consistency between status, source, and age.
+        let (cached_status, cached_source, cache_age) = self
+            .cli_readers
+            .lock()
+            .ok()
+            .and_then(|mut readers| {
+                let cached = readers.cached_status.get(&session_id)?;
+                if cached.seen_at.elapsed() > cached.ttl {
                     readers.cached_status.remove(&session_id);
+                    return None;
                 }
-                self.clipboard
-                    .clipboard_service
-                    .set_session_cli_type(session_id, codirigent_core::CliType::GenericShell);
-                info!(
-                    ?session_id,
-                    "Cleared stale NeedsAttention, reverted to GenericShell"
-                );
-            } else {
-                status = Some(cached_status);
+                let source = match cached.source {
+                    CliStatusSource::Hook => HintSource::HookSignal,
+                    CliStatusSource::Jsonl => HintSource::Jsonl,
+                };
+                let age = Some(cached.status_since.elapsed());
+                Some((Some(cached.status), source, age))
+            })
+            .unwrap_or((None, HintSource::Detector, None));
+
+        let previous_status = self.workspace.session(session_id).map(|s| s.status);
+
+        // Run the reconciler
+        let (reconciled, stale_action) = reconcile(
+            session_id,
+            detector_status,
+            cached_status,
+            cached_source,
+            cache_age,
+            previous_status,
+        );
+
+        // Shadow mode: log full reconciler input/output when status changes
+        if is_shadow_status() {
+            if let Some(ref r) = reconciled {
+                if r.changed {
+                    info!(
+                        ?session_id,
+                        ?detector_status,
+                        ?cached_status,
+                        ?cached_source,
+                        ?cache_age,
+                        ?previous_status,
+                        reconciled_status = ?r.status,
+                        reconciled_source = ?r.source,
+                        ?stale_action,
+                        "shadow: reconciler status change"
+                    );
+                }
             }
         }
 
-        if let Some(status) = status {
+        // Handle stale cache action
+        match stale_action {
+            StaleAction::ClearAndRevert {
+                session_id: stale_id,
+            } => {
+                if let Ok(mut readers) = self.cli_readers.lock() {
+                    readers.cached_status.remove(&stale_id);
+                }
+                self.clipboard
+                    .clipboard_service
+                    .set_session_cli_type(stale_id, codirigent_core::CliType::GenericShell);
+                info!(
+                    ?stale_id,
+                    "Cleared stale NeedsAttention, reverted to GenericShell"
+                );
+            }
+            StaleAction::None => {}
+        }
+
+        // Apply reconciled status and side effects
+        if let Some(reconciled) = reconciled {
+            let status = reconciled.status;
             if self.polling.idle_poll_count % Self::STATUS_LOG_INTERVAL == 0 {
                 info!(?session_id, ?status, ?idle_time, "Session status poll");
             }
@@ -775,6 +1095,7 @@ impl WorkspaceView {
         }
         self.polling.last_jsonl_check = Instant::now();
         self.polling.jsonl_check_in_flight = true;
+        trace!("spawn_background_jsonl_check");
 
         // Collect inputs for background JSONL check from the authoritative
         // SessionManager snapshot so hook-updated Codex ids/modes are visible
@@ -782,11 +1103,16 @@ impl WorkspaceView {
         let manager_sessions = self.with_session_manager(|manager| manager.list_sessions());
         let jsonl_inputs: Vec<JsonlCheckInput> = manager_sessions
             .into_iter()
-            .map(|session| {
+            .filter_map(|session| {
                 let cli_type = self
                     .clipboard
                     .clipboard_service
                     .get_session_cli_type(session.id);
+                // ClaudeCode uses hook signals exclusively — skip JSONL collection
+                // to avoid unnecessary PID lookup and working dir copy.
+                if cli_type == codirigent_core::CliType::ClaudeCode {
+                    return None;
+                }
                 let child_pid =
                     self.with_session_manager(|manager| manager.get_child_pid(session.id));
                 let known_codex_session_id = session
@@ -794,7 +1120,7 @@ impl WorkspaceView {
                     .as_ref()
                     .filter(|id| *id != &session.id.0.to_string())
                     .cloned();
-                JsonlCheckInput {
+                Some(JsonlCheckInput {
                     session_id: session.id,
                     working_dir: session.working_directory,
                     child_pid,
@@ -811,7 +1137,7 @@ impl WorkspaceView {
                         .codex_started_at
                         .unwrap_or(session.created_at)
                         .timestamp_millis(),
-                }
+                })
             })
             .collect();
 
@@ -873,7 +1199,7 @@ impl WorkspaceView {
                             ) = match effective_type {
                                 codirigent_core::CliType::ClaudeCode => {
                                     // Claude Code status is handled by hook signal files
-                                    // (check_hook_signals) — no JSONL reader needed here.
+                                    // (spawn_background_hook_signal_check) — no JSONL reader needed here.
                                     (None, None, None)
                                 }
                                 codirigent_core::CliType::CodexCli => {
@@ -945,7 +1271,7 @@ impl WorkspaceView {
             // Marshal results back to UI thread
             let _ = this.update(cx, |this, cx| {
                 this.polling.jsonl_check_in_flight = false;
-                let mut changed = false;
+                let mut any_dirty = false;
                 let (results, inputs, detected_types) = results;
                 let input_statuses: HashMap<SessionId, SessionStatus> = inputs
                     .iter()
@@ -956,6 +1282,7 @@ impl WorkspaceView {
                     .map(|input| (input.session_id, input.codex_execution_mode))
                     .collect();
                 let cache_update_time = Instant::now();
+                let mut status_sync_ids = HashSet::new();
                 let mut cached_status = this.cli_readers.lock().ok();
                 let mut should_save_state = false;
                 let mut pending_mode_updates = Vec::new();
@@ -1067,7 +1394,6 @@ impl WorkspaceView {
                                 result.session_id,
                                 CachedCliStatus {
                                     status: *new_status,
-                                    tool_name: tool_name.clone(),
                                     seen_at: cache_update_time,
                                     source: CliStatusSource::Jsonl,
                                     status_since,
@@ -1102,7 +1428,7 @@ impl WorkspaceView {
                                 );
                             }
                         }
-                        changed = true;
+                        status_sync_ids.insert(result.session_id);
                     } else {
                         // No JSONL result — check if detector says idle and clear stale cache
                         let detector_idle = this.with_detector(|detector| {
@@ -1123,7 +1449,7 @@ impl WorkspaceView {
                                     .unwrap_or(false);
                                 if is_stale {
                                     readers.cached_status.remove(&result.session_id);
-                                    changed = true;
+                                    status_sync_ids.insert(result.session_id);
                                 }
                             }
                         }
@@ -1136,7 +1462,10 @@ impl WorkspaceView {
                 if should_save_state {
                     this.save_state_to_disk(cx);
                 }
-                if changed {
+                for session_id in status_sync_ids {
+                    any_dirty |= this.sync_session_status(session_id);
+                }
+                if any_dirty {
                     cx.notify();
                 }
             });
@@ -1330,7 +1659,7 @@ impl WorkspaceView {
                     Some((
                         session_id,
                         expected_cwd_for_bg,
-                        mgr.refresh_git_status(session_id),
+                        mgr.refresh_git_status_fresh(session_id),
                     ))
                 })
                 .await;
@@ -1471,33 +1800,6 @@ impl WorkspaceView {
         false
     }
 
-    /// Check if the cached JSONL status hasn't changed for longer than `threshold`.
-    fn is_cli_status_stale(&self, session_id: SessionId, threshold: Duration) -> bool {
-        self.cli_readers
-            .lock()
-            .ok()
-            .and_then(|r| r.cached_status.get(&session_id).map(|c| c.status_since))
-            .is_some_and(|since| since.elapsed() > threshold)
-    }
-
-    fn get_recent_cached_cli_status(
-        &mut self,
-        session_id: SessionId,
-    ) -> Option<(SessionStatus, Option<String>)> {
-        let mut readers = self.cli_readers.lock().ok()?;
-        let cached_status = readers.cached_status.get(&session_id)?;
-
-        // Use the per-entry TTL: hook-based entries (Claude Code) stay valid for
-        // HOOK_SIGNAL_CACHE_TTL (600s); JSONL-based entries (Codex/Gemini) expire
-        // after GENERIC_SHELL_JSONL_CACHE_TTL (120s).
-        if cached_status.seen_at.elapsed() > cached_status.ttl {
-            readers.cached_status.remove(&session_id);
-            return None;
-        }
-
-        Some((cached_status.status, cached_status.tool_name.clone()))
-    }
-
     /// Read hook signal files on a background thread and apply them on the UI thread.
     fn spawn_background_hook_signal_check(&mut self, cx: &mut Context<Self>) {
         if self.polling.last_hook_signal_check.elapsed() < Duration::from_secs(1)
@@ -1506,6 +1808,7 @@ impl WorkspaceView {
             return;
         }
 
+        trace!("spawn_background_hook_signal_check");
         self.polling.last_hook_signal_check = Instant::now();
         self.polling.hook_signal_check_in_flight = true;
 
@@ -1668,7 +1971,7 @@ impl WorkspaceView {
         }
 
         let focused_id = self.workspace.focused_session_id();
-        let raw_status = match status.as_str() {
+        let new_status = match status.as_str() {
             "working" => SessionStatus::Working,
             "needs_attention" => SessionStatus::NeedsAttention,
             "response_ready" => {
@@ -1680,7 +1983,6 @@ impl WorkspaceView {
             }
             _ => SessionStatus::Idle,
         };
-        let new_status = raw_status;
 
         if let Ok(mut readers) = self.cli_readers.lock() {
             let status_since = readers
@@ -1693,7 +1995,6 @@ impl WorkspaceView {
                 session_id,
                 CachedCliStatus {
                     status: new_status,
-                    tool_name: cli_type.clone(),
                     seen_at: Instant::now(),
                     source: CliStatusSource::Hook,
                     status_since,
@@ -1741,250 +2042,9 @@ impl WorkspaceView {
                 None,
             );
         }
-    }
 
-    /// Check Claude Code hook signal files and update session status.
-    ///
-    /// Signal files are written by `codirigent-hook` for Claude and Codex sessions.
-    /// Each file is tiny
-    /// (<100 bytes) so this runs synchronously on the UI thread without a
-    /// background task.
-    ///
-    /// Matching is exact: each signal file contains `codirigent_session_id`
-    /// which is injected via the `CODIRIGENT_SESSION_ID` environment variable
-    /// when Codirigent spawns the Claude Code process. Signal files without
-    /// this field are ignored (Claude Code started outside Codirigent).
-    #[allow(dead_code)]
-    fn check_hook_signals(&mut self) {
-        let signals_dir = match hook_signals_dir() {
-            Some(d) => d,
-            None => return,
-        };
-
-        let entries = match std::fs::read_dir(&signals_dir) {
-            Ok(e) => e,
-            Err(_) => return,
-        };
-
-        let now_ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            // The filename stem is the hook signal identifier.
-            let signal_file_id = match path.file_stem().and_then(|s| s.to_str()) {
-                Some(s) => s.to_owned(),
-                None => continue,
-            };
-            let content = match std::fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-            let signal: HookSignal = match serde_json::from_str(&content) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            // Ignore stale signals (older than 10 minutes).
-            if now_ts.saturating_sub(signal.ts) > 600 {
-                continue;
-            }
-            // Ignore signals from Claude Code sessions not spawned by Codirigent.
-            let codirigent_id_str = match &signal.codirigent_session_id {
-                Some(id) => id,
-                None => continue,
-            };
-            let session_id = match codirigent_id_str.parse::<u64>() {
-                Ok(n) => SessionId(n),
-                Err(_) => continue,
-            };
-
-            let signal_fingerprint = hook_signal_fingerprint(
-                &signal.status,
-                signal.cli_type.as_deref(),
-                signal.cli_session_id.as_deref(),
-                codex_execution_mode_from_approval_and_sandbox(
-                    signal.approval_policy.as_deref(),
-                    signal.sandbox_policy_type.as_deref(),
-                ),
-            );
-            let last_seen = self
-                .polling
-                .last_processed_hook_signal_ts
-                .get(&signal_file_id)
-                .copied();
-            if !should_apply_hook_signal(last_seen, signal.ts, signal_fingerprint) {
-                continue;
-            }
-            self.polling.last_processed_hook_signal_ts.insert(
-                signal_file_id.clone(),
-                ProcessedHookSignal {
-                    ts: signal.ts,
-                    fingerprint: signal_fingerprint,
-                },
-            );
-
-            // Store the Claude/Gemini/Codex session_id on the Session for resume on next startup.
-            // Persist to disk whenever it changes (first assignment or new session
-            // started in the same terminal) so a clean app quit never loses the ID.
-            let mut id_changed = false;
-
-            let cli_type = signal.cli_type.as_deref().unwrap_or(CLI_TYPE_CLAUDE);
-            if let Some(cli_type) = cli_type_from_hook_signal_name(cli_type) {
-                self.clipboard
-                    .clipboard_service
-                    .set_session_cli_type(session_id, cli_type);
-            }
-            let resolved_cli_session_id = resolve_hook_cli_session_id(
-                &signal_file_id,
-                signal.cli_session_id.as_deref(),
-                session_id,
-            );
-            match cli_type {
-                CLI_TYPE_CLAUDE => {
-                    if let Some(cli_session_id) = resolved_cli_session_id.as_deref() {
-                        id_changed = self
-                            .session_manager
-                            .lock()
-                            .ok()
-                            .and_then(|mgr| {
-                                mgr.with_session_state_mut(session_id, |state| {
-                                    let changed = state.session.claude_session_id.as_deref()
-                                        != Some(cli_session_id);
-                                    state.session.claude_session_id =
-                                        Some(cli_session_id.to_owned());
-                                    changed
-                                })
-                            })
-                            .unwrap_or(false);
-                    }
-                }
-                CLI_TYPE_GEMINI => {
-                    if let Some(cli_session_id) = resolved_cli_session_id.as_deref() {
-                        id_changed = self
-                            .session_manager
-                            .lock()
-                            .ok()
-                            .and_then(|mgr| {
-                                mgr.with_session_state_mut(session_id, |state| {
-                                    let changed = state.session.gemini_session_id.as_deref()
-                                        != Some(cli_session_id);
-                                    state.session.gemini_session_id =
-                                        Some(cli_session_id.to_owned());
-                                    changed
-                                })
-                            })
-                            .unwrap_or(false);
-                    }
-                }
-                CLI_TYPE_CODEX => {
-                    if let Some(cli_session_id) = resolved_cli_session_id.as_deref() {
-                        id_changed = self
-                            .session_manager
-                            .lock()
-                            .ok()
-                            .and_then(|mgr| {
-                                mgr.with_session_state_mut(session_id, |state| {
-                                    let changed = state.session.codex_session_id.as_deref()
-                                        != Some(cli_session_id);
-                                    state.session.codex_session_id =
-                                        Some(cli_session_id.to_owned());
-                                    changed
-                                })
-                            })
-                            .unwrap_or(false);
-                    }
-                }
-                _ => {}
-            }
-
-            let _ = id_changed;
-
-            let focused_id = self.workspace.focused_session_id();
-            let new_status = match signal.status.as_str() {
-                "working" => SessionStatus::Working,
-                "needs_attention" => SessionStatus::NeedsAttention,
-                // response_ready: use ResponseReady only for non-focused sessions.
-                // If the session is already in view, the user is seeing the response,
-                // so treat it as plain Idle to avoid a spurious badge.
-                "response_ready" => {
-                    if Some(session_id) == focused_id {
-                        SessionStatus::Idle
-                    } else {
-                        SessionStatus::ResponseReady
-                    }
-                }
-                _ => SessionStatus::Idle,
-            };
-
-            if let Ok(mut readers) = self.cli_readers.lock() {
-                let status_since = readers
-                    .cached_status
-                    .get(&session_id)
-                    .filter(|c| c.status == new_status)
-                    .map(|c| c.status_since)
-                    .unwrap_or_else(Instant::now);
-                readers.cached_status.insert(
-                    session_id,
-                    CachedCliStatus {
-                        status: new_status,
-                        tool_name: signal.cli_type.clone(),
-                        seen_at: Instant::now(),
-                        source: CliStatusSource::Hook,
-                        status_since,
-                        ttl: Self::HOOK_SIGNAL_CACHE_TTL,
-                    },
-                );
-            }
-
-            let prev_status = self
-                .workspace
-                .session(session_id)
-                .map(|s| s.status)
-                .unwrap_or(SessionStatus::Idle);
-
-            // Fire AttentionRequired on transition to NeedsAttention.
-            if new_status == SessionStatus::NeedsAttention
-                && prev_status != SessionStatus::NeedsAttention
-            {
-                self.event_bus.publish(CodirigentEvent::AttentionRequired {
-                    session_id,
-                    detail: None,
-                });
-                let name = self
-                    .workspace
-                    .session(session_id)
-                    .map(|s| s.name.clone())
-                    .unwrap_or_else(|| format!("Session {}", session_id.0));
-                // Hook signals carry no tool detail — treat as InputRequired.
-                // If the hook protocol is later extended with a tool name, this
-                // can be dispatched as PermissionPrompt with detail.
-                self.notification_manager.notify(
-                    NotificationType::InputRequired,
-                    session_id,
-                    &name,
-                    None,
-                );
-            }
-
-            // Fire ResponseReady notification on transition from Working → ResponseReady.
-            if new_status == SessionStatus::ResponseReady && prev_status == SessionStatus::Working {
-                let name = self
-                    .workspace
-                    .session(session_id)
-                    .map(|s| s.name.clone())
-                    .unwrap_or_else(|| format!("Session {}", session_id.0));
-                self.notification_manager.notify(
-                    NotificationType::ResponseReady,
-                    session_id,
-                    &name,
-                    None,
-                );
-            }
+        if self.sync_session_status(session_id) {
+            cx.notify();
         }
     }
 
@@ -2178,7 +2238,7 @@ mod tests {
 
     #[test]
     fn hook_signal_invalid_codirigent_id_not_parseable() {
-        // Non-numeric IDs are rejected at parse time in check_hook_signals.
+        // Non-numeric IDs are rejected at parse time in hook signal processing.
         let bad_id = "not-a-number".to_owned();
         assert!(bad_id.parse::<u64>().is_err());
     }
@@ -2219,14 +2279,6 @@ mod tests {
             codex_execution_mode_from_approval_and_sandbox(Some("never"), Some("workspace-write"),),
             Some(CodexExecutionMode::FullAuto)
         );
-    }
-
-    #[test]
-    fn live_working_status_is_not_masked_by_cached_response_ready() {
-        assert!(prefer_live_working_status(
-            Some(SessionStatus::Working),
-            SessionStatus::ResponseReady,
-        ));
     }
 
     #[test]
@@ -2390,5 +2442,33 @@ mod tests {
         };
 
         assert!(should_show_clipboard_preview(&image));
+    }
+
+    #[test]
+    fn focused_schedulable_output_is_prioritized() {
+        let session_ids = vec![SessionId(1), SessionId(2), SessionId(3)];
+        let schedulable = HashSet::from([SessionId(2), SessionId(3)]);
+
+        let (ready, deferred) =
+            prioritize_and_partition_output_sessions(session_ids, Some(SessionId(2)), |id| {
+                schedulable.contains(&id)
+            });
+
+        assert_eq!(ready, vec![SessionId(2), SessionId(3)]);
+        assert_eq!(deferred, vec![SessionId(1)]);
+    }
+
+    #[test]
+    fn unschedulable_output_sessions_are_deferred_instead_of_dropped() {
+        let session_ids = vec![SessionId(1), SessionId(2), SessionId(3)];
+        let schedulable = HashSet::from([SessionId(3)]);
+
+        let (ready, deferred) =
+            prioritize_and_partition_output_sessions(session_ids, Some(SessionId(2)), |id| {
+                schedulable.contains(&id)
+            });
+
+        assert_eq!(ready, vec![SessionId(3)]);
+        assert_eq!(deferred, vec![SessionId(2), SessionId(1)]);
     }
 }

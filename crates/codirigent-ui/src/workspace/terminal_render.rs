@@ -33,7 +33,7 @@ impl WorkspaceView {
             None
         };
 
-        // Get the terminal view for this session
+        // Get the terminal view for this session.
         let Some(terminal_view) = self.terminals_mut().get_mut(&session_id) else {
             // No terminal yet, show placeholder
             let terminal_bg: gpui::Hsla = theme.terminal_background.into();
@@ -64,11 +64,14 @@ impl WorkspaceView {
         let cell_height = terminal_view.cell_height();
         let font_size = terminal_view.font_size();
         let font_family_str = terminal_view.font_family().to_owned();
-        let cursor_rect = terminal_view.cursor_rect();
 
-        // Terminal runs/backgrounds are cached per row and only rebuilt when dirty.
+        // Rebuild row caches first — this also refreshes cached_cursor_viewport_pos.
         let cached_rows = terminal_view.render_rows();
         let shaped_rows = terminal_view.shaped_rows(window.text_system());
+
+        // Both read from cache — pure field access, no terminal state touch.
+        let cursor_rect = terminal_view.cursor_rect();
+        let ime_anchor = terminal_view.ime_anchor_pos();
 
         // Pre-convert cursor color (cursor position changes per-frame so not cacheable in content)
         let cursor_data = cursor_rect.map(|c| {
@@ -79,8 +82,8 @@ impl WorkspaceView {
         let font_family: gpui::SharedString = font_family_str.into();
         let font_size_px = px(font_size);
 
-        let ime_preedit = if let (Some(preedit), Some((cursor, _))) =
-            (ime_preedit_text.as_ref(), cursor_data.as_ref())
+        let ime_preedit = if let (Some(preedit), Some((anchor_x, anchor_y))) =
+            (ime_preedit_text.as_ref(), ime_anchor)
         {
             if preedit.is_empty() {
                 None
@@ -111,7 +114,7 @@ impl WorkspaceView {
                     &[preedit_run],
                     None,
                 );
-                Some((cursor.x, cursor.y, shaped))
+                Some((anchor_x, anchor_y, shaped))
             }
         } else {
             None

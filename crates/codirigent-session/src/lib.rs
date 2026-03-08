@@ -73,6 +73,22 @@ impl CliSessionStatus {
     }
 }
 
+/// Normalize a path by canonicalizing and stripping the `\\?\` prefix on Windows.
+///
+/// Windows `fs::canonicalize()` prepends `\\?\` which breaks path comparison
+/// with non-canonical paths (e.g., those from ConPTY or user-provided working dirs).
+pub fn normalize_path(path: &std::path::Path) -> std::path::PathBuf {
+    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
+    #[cfg(windows)]
+    {
+        let s = canonical.to_string_lossy();
+        if let Some(stripped) = s.strip_prefix(r"\\?\") {
+            return std::path::PathBuf::from(stripped);
+        }
+    }
+    canonical
+}
+
 pub mod cli_detector;
 pub mod cli_output_detection;
 pub mod clipboard_service;

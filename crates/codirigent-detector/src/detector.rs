@@ -44,7 +44,7 @@ use regex::Regex;
 use std::collections::HashMap;
 use std::sync::Arc;
 use std::time::{Duration, Instant};
-use tracing::{debug, info};
+use tracing::{debug, info, trace};
 
 /// Configuration for the input detector.
 ///
@@ -419,12 +419,41 @@ impl InputDetector {
     /// Tick the detector (called periodically).
     ///
     /// Updates the status of all monitored sessions based on current
-    /// process state and timing.
-    pub fn tick(&mut self) {
+    /// process state and timing. Sessions with OSC 133 shell state (and no
+    /// pending pattern match) are skipped because their status only changes
+    /// through [`set_shell_state`] or [`process_output`], not from
+    /// time-based heuristics. This avoids unnecessary work per tick.
+    ///
+    /// Returns the IDs of sessions whose detector status actually changed,
+    /// allowing the caller to skip reconciliation for unchanged sessions.
+    pub fn tick(&mut self) -> Vec<SessionId> {
         let session_ids: Vec<SessionId> = self.sessions.keys().copied().collect();
-        for session_id in session_ids {
-            self.update_session_status(session_id);
+        let mut skipped = 0usize;
+        let mut changed = Vec::new();
+        for session_id in &session_ids {
+            let needs_tick = self
+                .sessions
+                .get(session_id)
+                .map(|s| s.shell_state.is_none() || s.pattern_matched.is_some())
+                .unwrap_or(false);
+            if needs_tick {
+                let old_status = self.sessions.get(session_id).map(|s| s.current_status);
+                self.update_session_status(*session_id);
+                let new_status = self.sessions.get(session_id).map(|s| s.current_status);
+                if old_status != new_status {
+                    changed.push(*session_id);
+                }
+            } else {
+                skipped += 1;
+            }
         }
+        trace!(
+            total = session_ids.len(),
+            skipped,
+            changed = changed.len(),
+            "detector_tick"
+        );
+        changed
     }
 
     /// Get the configuration.
@@ -955,6 +984,84 @@ mod tests {
         detector.tick();
 
         assert_eq!(detector.get_status(SessionId(1)), Some(SessionStatus::Idle));
+    }
+
+    #[test]
+    fn test_tick_skips_osc133_sessions_without_pattern() {
+        let event_bus = Arc::new(DefaultEventBus::new(16));
+        let config = DetectorConfig {
+            idle_threshold: Duration::from_millis(0),
+            ..Default::default()
+        };
+        let mut detector = InputDetector::new(config, event_bus);
+
+        // Session 1: has OSC 133 shell state, no pattern match → should be skipped
+        detector
+            .start_monitoring(SessionId(1), std::process::id())
+            .expect("monitoring should start");
+        detector.process_output(SessionId(1), b"streaming output");
+        assert_eq!(
+            detector.get_status(SessionId(1)),
+            Some(SessionStatus::Working)
+        );
+        detector.set_shell_state(SessionId(1), ShellState::PromptStart);
+
+        // Session 2: no OSC 133 shell state → should be ticked normally
+        detector
+            .start_monitoring(SessionId(2), std::process::id())
+            .expect("monitoring should start");
+        detector.process_output(SessionId(2), b"streaming output");
+        assert_eq!(
+            detector.get_status(SessionId(2)),
+            Some(SessionStatus::Working)
+        );
+
+        std::thread::sleep(Duration::from_millis(10));
+        detector.tick();
+
+        // Session 1 should keep its shell-state-derived status (Idle from
+        // set_shell_state), NOT be re-evaluated by tick's heuristic decay.
+        // The key point: tick() skipped it, so update_session_status was
+        // not called for session 1.
+        assert_eq!(detector.get_status(SessionId(1)), Some(SessionStatus::Idle));
+
+        // Session 2 (no shell state) should have been ticked and decayed
+        // from Working to Idle due to the 0ms idle_threshold.
+        assert_eq!(detector.get_status(SessionId(2)), Some(SessionStatus::Idle));
+    }
+
+    #[test]
+    fn test_tick_does_not_skip_osc133_session_with_pattern_match() {
+        let event_bus = Arc::new(DefaultEventBus::new(16));
+        let config = DetectorConfig {
+            idle_threshold: Duration::from_millis(0),
+            ..Default::default()
+        };
+        let mut detector = InputDetector::new(config, event_bus);
+
+        detector
+            .start_monitoring(SessionId(1), std::process::id())
+            .expect("monitoring should start");
+        // Set OSC 133 shell state
+        detector.set_shell_state(SessionId(1), ShellState::PromptStart);
+        // Trigger a pattern match (NeedsAttention)
+        detector.process_output(SessionId(1), b"Continue? [y/n] ");
+        assert_eq!(
+            detector.get_status(SessionId(1)),
+            Some(SessionStatus::NeedsAttention)
+        );
+
+        // tick() should NOT skip this session because pattern_matched is Some
+        std::thread::sleep(Duration::from_millis(10));
+        detector.tick();
+
+        // Session was ticked — the exact resulting status depends on
+        // update_session_status logic, but the point is it was NOT skipped.
+        // With pattern match present, status should remain NeedsAttention.
+        assert_eq!(
+            detector.get_status(SessionId(1)),
+            Some(SessionStatus::NeedsAttention)
+        );
     }
 
     // MonitoredSession tests

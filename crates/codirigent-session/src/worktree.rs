@@ -37,21 +37,7 @@ use std::path::Component;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
-/// Normalize a path by canonicalizing and stripping the `\\?\` prefix on Windows.
-///
-/// On Windows, `std::fs::canonicalize` returns UNC-style paths like `\\?\C:\...`
-/// which break string comparisons with regular paths. This helper strips that prefix.
-fn normalize_path(path: &Path) -> PathBuf {
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    #[cfg(windows)]
-    {
-        let s = canonical.to_string_lossy();
-        if let Some(stripped) = s.strip_prefix(r"\\?\") {
-            return PathBuf::from(stripped);
-        }
-    }
-    canonical
-}
+use crate::normalize_path;
 
 fn normalize_nonexistent_path(path: &Path) -> PathBuf {
     // Find the deepest existing ancestor and canonicalize it, then append
@@ -178,6 +164,12 @@ impl WorktreeManager {
         // Use discover() to find the repo root from any subdirectory,
         // consistent with GitStatusService::detect() and detect_git_branch().
         let repo = Repository::discover(&repo_path).context("Not a git repository")?;
+        let repo = if repo.is_worktree() {
+            Repository::open(repo.commondir())
+                .context("Failed to open common repository for linked worktree")?
+        } else {
+            repo
+        };
         let repo_path = repo.workdir().map(normalize_path).unwrap_or(repo_path);
 
         let mut manager = Self {
@@ -709,6 +701,33 @@ mod tests {
         // repo_path should resolve to the repo root, not the subdirectory
         let expected = normalize_path(&path);
         assert_eq!(manager.repo_path(), expected);
+    }
+
+    #[test]
+    fn test_worktree_manager_new_from_linked_worktree_uses_main_repo_root() {
+        let (_temp, path) = setup_test_repo();
+        let mut main_manager = WorktreeManager::new(&path).unwrap();
+        let linked = main_manager
+            .create(WorktreeCreateOptions::new(
+                "feature-linked-root".to_string(),
+            ))
+            .unwrap()
+            .path;
+
+        let manager = WorktreeManager::new(&linked).unwrap();
+        let expected_main = normalize_path(&path);
+        let expected_linked = normalize_path(&linked);
+
+        assert_eq!(manager.repo_path(), expected_main);
+
+        let main_wt = manager.list().iter().find(|wt| wt.is_main).unwrap();
+        assert_eq!(main_wt.path, expected_main);
+        assert_ne!(main_wt.path, expected_linked);
+
+        assert!(manager
+            .list()
+            .iter()
+            .any(|wt| !wt.is_main && wt.path == expected_linked));
     }
 
     #[test]
