@@ -5,7 +5,7 @@
 <h1 align="center">Codirigent</h1>
 
 <p align="center">
-  <strong>在同一個工作區中並行運行多個 AI 程式設計 CLI 的終端工作區</strong>
+  <strong>在同一個工作空間中並行運行多個 AI Coding CLI 的終端工作空間</strong>
 </p>
 
 <p align="center">
@@ -30,7 +30,7 @@ https://github.com/user-attachments/assets/51b821fd-dfc3-40f0-b1f3-e8727045f474
 
 如果你同時在多個專案中使用 Claude Code、Codex 或 Gemini，你一定懂那種痛苦：不斷開啟終端、`cd` 切換目錄、排列視窗，還要搞清楚哪個 AI 代理在做什麼。
 
-Codirigent 是一個專為這種工作流程打造的 Tmux 風格工作區。啟動一次，你的所有 session 就已在原本的位置等你——正確的目錄、正確的版面、正確的代理。
+Codirigent 是一個專為這種工作流程打造的 Tmux 風格工作空間。啟動一次，你的所有 session 就已在原本的位置等你——正確的目錄、正確的版面、正確的代理。
 
 ## 功能特色
 
