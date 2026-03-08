@@ -5,6 +5,8 @@
 
 use crate::pty::PtyHandle;
 use codirigent_core::{Session, SessionId, SessionStatus};
+use std::sync::atomic::AtomicBool;
+use std::sync::Arc;
 use tokio::sync::mpsc;
 
 /// Internal session state combining metadata with runtime handles.
@@ -19,6 +21,9 @@ pub struct SessionState {
     pub pty: PtyHandle,
     /// Channel receiving PTY output.
     pub output_rx: mpsc::Receiver<Vec<u8>>,
+    /// Producer-side dedup flag for the `OutputReady` channel notification.
+    /// Shared with the PTY reader callback; cleared when output is drained.
+    pub output_notified: Arc<AtomicBool>,
 }
 
 impl SessionState {
@@ -29,11 +34,18 @@ impl SessionState {
     /// * `session` - The session metadata
     /// * `pty` - The PTY handle for terminal I/O
     /// * `output_rx` - Channel for receiving PTY output
-    pub fn new(session: Session, pty: PtyHandle, output_rx: mpsc::Receiver<Vec<u8>>) -> Self {
+    /// * `output_notified` - Shared dedup flag for output notifications
+    pub fn new(
+        session: Session,
+        pty: PtyHandle,
+        output_rx: mpsc::Receiver<Vec<u8>>,
+        output_notified: Arc<AtomicBool>,
+    ) -> Self {
         Self {
             session,
             pty,
             output_rx,
+            output_notified,
         }
     }
 
@@ -86,7 +98,11 @@ mod tests {
             temp.path().to_path_buf(),
         );
 
-        (SessionState::new(session, pty, output_rx), temp)
+        let output_notified = Arc::new(AtomicBool::new(false));
+        (
+            SessionState::new(session, pty, output_rx, output_notified),
+            temp,
+        )
     }
 
     #[test]

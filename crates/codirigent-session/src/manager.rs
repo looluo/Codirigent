@@ -13,7 +13,7 @@ use codirigent_core::{
 };
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
-use std::sync::atomic::{AtomicU64, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
 use std::time::Duration;
 use tracing::{debug, info, trace};
@@ -243,6 +243,12 @@ impl DefaultSessionManager {
                     break;
                 }
             }
+
+            // Reset the producer-side dedup flag so the PTY reader sends a
+            // new OutputReady notification for any subsequent output.
+            state
+                .output_notified
+                .store(false, std::sync::atomic::Ordering::Relaxed);
 
             let has_more = !output.is_empty() && (hit_budget || !state.output_rx.is_empty());
             (output, has_more)
@@ -480,6 +486,15 @@ impl SessionManager for DefaultSessionManager {
         let pending_output_for_exit = self.pending_output_sessions.clone();
         let update_tx = self.update_tx.clone();
         let exit_tx = self.update_tx.clone();
+        // Producer-side deduplication: the flag is set before try_send and
+        // only sends when transitioning from false → true. The consumer
+        // (output_dispatcher::drain_updates) deduplicates into a HashSet,
+        // so clearing the flag is not required — it auto-resets when the
+        // next drain_updates call consumes all pending OutputReady events.
+        // The flag prevents a noisy session (e.g. `yes`) from saturating
+        // the bounded channel with redundant OutputReady events.
+        let output_notified = Arc::new(AtomicBool::new(false));
+        let output_notified_clone = output_notified.clone();
         let output_rx = spawn_output_reader_with_notify(
             reader,
             move || {
@@ -493,8 +508,18 @@ impl SessionManager for DefaultSessionManager {
                 // task. Use try_send(), NOT .send().await, as there is no async
                 // runtime here. Failure is non-fatal: the legacy path above ensures
                 // output is not lost.
-                if let Err(e) = update_tx.try_send(SessionUpdate::OutputReady { session_id: id }) {
-                    tracing::warn!("SessionUpdate channel full for session {}: {e}", id.0);
+                //
+                // Producer-side dedup: skip try_send if a notification is already
+                // pending in the channel. This prevents a single noisy session from
+                // filling the bounded 512-slot channel.
+                if !output_notified.swap(true, Ordering::Relaxed) {
+                    if let Err(e) =
+                        update_tx.try_send(SessionUpdate::OutputReady { session_id: id })
+                    {
+                        tracing::warn!("SessionUpdate channel full for session {}: {e}", id.0);
+                        // Reset so the next chunk retries
+                        output_notified.store(false, Ordering::Relaxed);
+                    }
                 }
             },
             move || {
@@ -523,7 +548,7 @@ impl SessionManager for DefaultSessionManager {
             .detect(&working_dir);
 
         // Create session state
-        let state = SessionState::new(session, pty, output_rx);
+        let state = SessionState::new(session, pty, output_rx, output_notified_clone);
         self.lock_sessions().insert(id, state);
 
         // Publish event
@@ -688,7 +713,12 @@ mod tests {
         let pty = PtyHandle::spawn(temp.path(), DEFAULT_PTY_ROWS, DEFAULT_PTY_COLS, &[]).unwrap();
         let (tx, rx) = mpsc::channel(8);
         let session = Session::new(id, format!("Session {}", id.0), temp.path().to_path_buf());
-        (SessionState::new(session, pty, rx), tx, temp)
+        let output_notified = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        (
+            SessionState::new(session, pty, rx, output_notified),
+            tx,
+            temp,
+        )
     }
 
     fn create_test_repo() -> TempDir {
