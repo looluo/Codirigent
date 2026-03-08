@@ -620,12 +620,14 @@ impl WorkspaceView {
                         for event in codirigent_session::extract_osc133_events(&data) {
                             // Emit ShellStateChanged for the event-driven pipeline
                             if let Some(tx) = &update_tx {
-                                let _ = tx.try_send(
-                                    codirigent_core::SessionUpdate::ShellStateChanged {
+                                if let Err(e) =
+                                    tx.try_send(codirigent_core::SessionUpdate::ShellStateChanged {
                                         session_id,
                                         state: event.clone(),
-                                    },
-                                );
+                                    })
+                                {
+                                    trace!("ShellStateChanged try_send for {}: {e}", session_id.0);
+                                }
                             }
                             detector.set_shell_state(session_id, event);
                         }
@@ -635,12 +637,17 @@ impl WorkspaceView {
                         codirigent_session::extract_osc7_path(&data).and_then(|new_cwd| {
                             // Emit WorkingDirectoryChanged for the event-driven pipeline
                             if let Some(tx) = &update_tx {
-                                let _ = tx.try_send(
+                                if let Err(e) = tx.try_send(
                                     codirigent_core::SessionUpdate::WorkingDirectoryChanged {
                                         session_id,
                                         cwd: new_cwd.clone(),
                                     },
-                                );
+                                ) {
+                                    trace!(
+                                        "WorkingDirectoryChanged try_send for {}: {e}",
+                                        session_id.0
+                                    );
+                                }
                             }
                             let manager = session_manager.lock().ok()?;
                             let changed = manager.update_working_directory(session_id, new_cwd);
