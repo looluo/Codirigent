@@ -118,6 +118,10 @@ pub struct WorkspaceView {
     pub(super) selection: SelectionState,
     /// Adaptive polling and timing state (output polling, resize throttle, git refresh).
     pub(super) polling: PollingState,
+    /// Event-driven output dispatcher (replaces broad session scan).
+    pub(super) output_dispatcher: super::output_dispatcher::OutputDispatcher,
+    /// Receiver for the `SessionUpdate` mpsc channel from session manager.
+    pub(super) update_rx: Option<tokio::sync::mpsc::Receiver<codirigent_core::SessionUpdate>>,
     /// CLI session readers and process-tree detector (shared with background tasks).
     pub(super) cli_readers: Arc<Mutex<CliReaders>>,
     /// Cached detection results and memoized state.
@@ -408,6 +412,13 @@ impl WorkspaceView {
         Self::start_maintenance_polling(cx);
         Self::start_modal_cursor_blink(cx);
 
+        // Take the SessionUpdate receiver from the session manager for the
+        // event-driven output dispatcher.
+        let update_rx = session_manager
+            .lock()
+            .ok()
+            .and_then(|mgr| mgr.take_update_receiver());
+
         let (storage, task_manager) = Self::init_task_manager(event_bus.clone());
         let (file_tree, file_tree_model, project_root) = Self::init_file_tree();
 
@@ -466,6 +477,8 @@ impl WorkspaceView {
             modals: ModalState::new(),
             selection: SelectionState::new(),
             polling: PollingState::new(),
+            output_dispatcher: super::output_dispatcher::OutputDispatcher::new(),
+            update_rx,
             cli_readers: Arc::new(Mutex::new(CliReaders::new())),
             cache: CacheState::new(),
             notification_manager: NotificationManager::new(Default::default()),
@@ -936,6 +949,40 @@ impl WorkspaceView {
         }
         if let Some(snapshot) = task_snapshot {
             self.task_board.set_snapshot(snapshot);
+        }
+    }
+
+    /// Sync a single session's terminal header from workspace state.
+    ///
+    /// This is a targeted delta update for the common case where only one
+    /// session's status changed. Avoids the O(all sessions) cost of
+    /// `sync_ui_state()` for each output poll.
+    pub(super) fn sync_session_header(&mut self, session_id: SessionId) {
+        let Some(session) = self.workspace.session(session_id) else {
+            return;
+        };
+        let focused_id = self.workspace.focused_session_id();
+
+        if let Some(header) = self.terminal_headers.get_mut(&session_id) {
+            header.status = session.status;
+            header.context_usage = session.context_usage;
+            header.is_focused = focused_id == Some(session_id);
+
+            if header.session_name != session.name {
+                header.session_name = session.name.clone();
+            }
+            if header.group_name != session.group {
+                header.group_name = session.group.clone();
+            }
+
+            let git_branch = session.git_info.as_ref().map(|gi| gi.branch.as_str());
+            if header.git_branch.as_deref() != git_branch {
+                header.git_branch = git_branch.map(str::to_owned);
+            }
+            let git_dirty_count = session.git_info.as_ref().map(|gi| gi.dirty_count);
+            if header.git_dirty_count != git_dirty_count {
+                header.git_dirty_count = git_dirty_count;
+            }
         }
     }
 
