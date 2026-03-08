@@ -39,10 +39,10 @@ pub(super) struct OutputDispatcher {
     /// Sessions currently being processed (background task in-flight).
     in_flight: HashSet<SessionId>,
     /// Maximum PTY chunks per session per poll cycle.
-    #[allow(dead_code)] // Used when budget enforcement is wired in Task 7
+    #[allow(dead_code)] // Tested; production uses WorkspaceView constants directly for now
     pub max_chunks_per_poll: usize,
     /// Maximum bytes per session per poll cycle.
-    #[allow(dead_code)] // Used when budget enforcement is wired in Task 7
+    #[allow(dead_code)] // Tested; production uses WorkspaceView constants directly for now
     pub max_bytes_per_poll: usize,
 }
 

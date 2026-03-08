@@ -478,21 +478,29 @@ impl SessionManager for DefaultSessionManager {
             .ok_or_else(|| anyhow!("Failed to get PTY reader"))?;
         let pending_output_sessions = self.pending_output_sessions.clone();
         let update_tx = self.update_tx.clone();
-        let output_rx = spawn_output_reader_with_notify(reader, move || {
-            // Legacy path: mark in the pending set (consumed by broad poll)
-            pending_output_sessions
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .insert(id);
-            // New path: emit event for the output dispatcher.
-            // NOTE: This runs on a bare std::thread (PTY reader), not a tokio
-            // task. Use try_send(), NOT .send().await, as there is no async
-            // runtime here. Failure is non-fatal: the legacy path above ensures
-            // output is not lost.
-            if let Err(e) = update_tx.try_send(SessionUpdate::OutputReady { session_id: id }) {
-                tracing::warn!("SessionUpdate channel full for session {}: {e}", id.0);
-            }
-        });
+        let exit_tx = self.update_tx.clone();
+        let output_rx = spawn_output_reader_with_notify(
+            reader,
+            move || {
+                // Legacy path: mark in the pending set (consumed by broad poll)
+                pending_output_sessions
+                    .lock()
+                    .unwrap_or_else(|p| p.into_inner())
+                    .insert(id);
+                // New path: emit event for the output dispatcher.
+                // NOTE: This runs on a bare std::thread (PTY reader), not a tokio
+                // task. Use try_send(), NOT .send().await, as there is no async
+                // runtime here. Failure is non-fatal: the legacy path above ensures
+                // output is not lost.
+                if let Err(e) = update_tx.try_send(SessionUpdate::OutputReady { session_id: id }) {
+                    tracing::warn!("SessionUpdate channel full for session {}: {e}", id.0);
+                }
+            },
+            move || {
+                // Notify the event-driven pipeline that the PTY child exited.
+                let _ = exit_tx.try_send(SessionUpdate::ChildProcessExited { session_id: id });
+            },
+        );
 
         // Create session metadata
         let mut session = Session::new(id, name, working_dir.clone());

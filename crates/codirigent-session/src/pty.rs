@@ -347,13 +347,18 @@ impl OutputReader {
     /// # }
     /// ```
     pub fn new(reader: Box<dyn Read + Send>) -> Self {
-        Self::new_with_notify(reader, || {})
+        Self::new_with_notify(reader, || {}, || {})
     }
 
-    /// Create a new output reader and invoke `on_chunk` after each successful send.
-    pub fn new_with_notify<F>(mut reader: Box<dyn Read + Send>, on_chunk: F) -> Self
+    /// Create a new output reader with per-chunk and on-exit callbacks.
+    ///
+    /// `on_chunk` is called after each successful send to the output channel.
+    /// `on_exit` is called once when the reader thread exits (EOF, error, or
+    /// channel close).
+    pub fn new_with_notify<F, G>(mut reader: Box<dyn Read + Send>, on_chunk: F, on_exit: G) -> Self
     where
         F: Fn() + Send + 'static,
+        G: FnOnce() + Send + 'static,
     {
         let (tx, rx) = mpsc::channel(OUTPUT_CHANNEL_CAPACITY);
 
@@ -379,6 +384,7 @@ impl OutputReader {
                     }
                 }
             }
+            on_exit();
         });
 
         Self {
@@ -519,15 +525,20 @@ pub fn spawn_output_reader(reader: Box<dyn Read + Send>) -> mpsc::Receiver<Vec<u
     output_reader.into_receiver()
 }
 
-/// Spawn an output reader and notify after each successfully queued chunk.
-pub fn spawn_output_reader_with_notify<F>(
+/// Spawn an output reader with per-chunk and on-exit callbacks.
+///
+/// `on_chunk` is called after each successful send.
+/// `on_exit` is called once when the reader thread exits.
+pub fn spawn_output_reader_with_notify<F, G>(
     reader: Box<dyn Read + Send>,
     on_chunk: F,
+    on_exit: G,
 ) -> mpsc::Receiver<Vec<u8>>
 where
     F: Fn() + Send + 'static,
+    G: FnOnce() + Send + 'static,
 {
-    OutputReader::new_with_notify(reader, on_chunk).into_receiver()
+    OutputReader::new_with_notify(reader, on_chunk, on_exit).into_receiver()
 }
 
 #[cfg(test)]
