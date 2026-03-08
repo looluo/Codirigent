@@ -12,7 +12,7 @@
 use super::cli_helpers::clear_command;
 use super::cli_helpers::is_safe_cli_session_id;
 use super::gpui::WorkspaceView;
-use super::types::{CachedCliStatus, CliStatusSource};
+use super::types::{CachedCliStatus, CliStatusSource, ProcessedHookSignal};
 use codirigent_core::{
     hook_signals_dir, AssignmentAction, CliType, CodexExecutionMode, CodirigentEvent, EventBus,
     ProcessMonitor, Session, SessionId, SessionManager, SessionStatus, TaskStatus,
@@ -204,10 +204,41 @@ fn prefer_live_working_status(
         && cached_status != SessionStatus::Working
 }
 
-fn should_apply_hook_signal(last_seen_ts: Option<u64>, signal_ts: u64) -> bool {
-    match last_seen_ts {
-        Some(last_seen_ts) => signal_ts > last_seen_ts,
-        None => true,
+fn codex_execution_mode_fingerprint(mode: Option<CodexExecutionMode>) -> Option<&'static str> {
+    match mode {
+        Some(CodexExecutionMode::FullAuto) => Some("full-auto"),
+        Some(CodexExecutionMode::Bypass) => Some("bypass"),
+        None => None,
+    }
+}
+
+fn hook_signal_fingerprint(
+    status: &str,
+    cli_type: Option<&str>,
+    cli_session_id: Option<&str>,
+    codex_execution_mode: Option<CodexExecutionMode>,
+) -> u64 {
+    let mut hasher = DefaultHasher::new();
+    status.hash(&mut hasher);
+    cli_type.hash(&mut hasher);
+    cli_session_id.hash(&mut hasher);
+    codex_execution_mode_fingerprint(codex_execution_mode).hash(&mut hasher);
+    hasher.finish()
+}
+
+fn should_apply_hook_signal(
+    last_seen: Option<ProcessedHookSignal>,
+    signal_ts: u64,
+    signal_fingerprint: u64,
+) -> bool {
+    match last_seen {
+        Some(last_seen) if signal_ts < last_seen.ts => false,
+        Some(last_seen)
+            if signal_ts == last_seen.ts && signal_fingerprint == last_seen.fingerprint =>
+        {
+            false
+        }
+        _ => true,
     }
 }
 
@@ -395,15 +426,35 @@ impl WorkspaceView {
     }
 
     pub(super) fn poll_maintenance(&mut self, cx: &mut Context<Self>) {
+        let any_status_dirty = self.tick_detector_statuses();
         self.spawn_background_hook_signal_check(cx);
         self.spawn_background_jsonl_check(cx);
         self.cleanup_compaction_timeouts();
         self.cleanup_stale_proposals();
         self.schedule_background_git_refresh(cx);
 
-        if self.update_clipboard_preview(cx) {
+        if any_status_dirty || self.update_clipboard_preview(cx) {
             cx.notify();
         }
+    }
+
+    /// Advance process-state detection on a maintenance cadence, then sync any
+    /// resulting status changes into the workspace cache.
+    ///
+    /// This is required on shells without OSC 133 integration (notably the
+    /// Windows PTY path), where `process_output()` can move a session into
+    /// `Working` but only `tick()` can later decay it back to `Idle`.
+    fn tick_detector_statuses(&mut self) -> bool {
+        let session_ids: Vec<SessionId> = self.terminals.keys().copied().collect();
+        if session_ids.is_empty() {
+            return false;
+        }
+
+        self.with_detector(|detector| detector.tick());
+
+        session_ids.into_iter().fold(false, |dirty, session_id| {
+            dirty | self.sync_session_status(session_id)
+        })
     }
 
     fn schedule_output_preparation(&mut self, cx: &mut Context<Self>) -> bool {
@@ -1485,17 +1536,27 @@ impl WorkspaceView {
             ts,
         } = update;
 
-        let last_seen_ts = self
+        let signal_fingerprint = hook_signal_fingerprint(
+            &status,
+            cli_type.as_deref(),
+            cli_session_id.as_deref(),
+            codex_execution_mode,
+        );
+        let last_seen = self
             .polling
             .last_processed_hook_signal_ts
             .get(&signal_file_id)
             .copied();
-        if !should_apply_hook_signal(last_seen_ts, ts) {
+        if !should_apply_hook_signal(last_seen, ts, signal_fingerprint) {
             return;
         }
-        self.polling
-            .last_processed_hook_signal_ts
-            .insert(signal_file_id.clone(), ts);
+        self.polling.last_processed_hook_signal_ts.insert(
+            signal_file_id.clone(),
+            ProcessedHookSignal {
+                ts,
+                fingerprint: signal_fingerprint,
+            },
+        );
 
         let mut id_changed = false;
         let cli_type_name = cli_type.as_deref().unwrap_or(CLI_TYPE_CLAUDE);
@@ -1742,17 +1803,30 @@ impl WorkspaceView {
                 Err(_) => continue,
             };
 
-            let last_seen_ts = self
+            let signal_fingerprint = hook_signal_fingerprint(
+                &signal.status,
+                signal.cli_type.as_deref(),
+                signal.cli_session_id.as_deref(),
+                codex_execution_mode_from_approval_and_sandbox(
+                    signal.approval_policy.as_deref(),
+                    signal.sandbox_policy_type.as_deref(),
+                ),
+            );
+            let last_seen = self
                 .polling
                 .last_processed_hook_signal_ts
                 .get(&signal_file_id)
                 .copied();
-            if !should_apply_hook_signal(last_seen_ts, signal.ts) {
+            if !should_apply_hook_signal(last_seen, signal.ts, signal_fingerprint) {
                 continue;
             }
-            self.polling
-                .last_processed_hook_signal_ts
-                .insert(signal_file_id.clone(), signal.ts);
+            self.polling.last_processed_hook_signal_ts.insert(
+                signal_file_id.clone(),
+                ProcessedHookSignal {
+                    ts: signal.ts,
+                    fingerprint: signal_fingerprint,
+                },
+            );
 
             // Store the Claude/Gemini/Codex session_id on the Session for resume on next startup.
             // Persist to disk whenever it changes (first assignment or new session
@@ -2157,14 +2231,52 @@ mod tests {
 
     #[test]
     fn hook_signal_is_applied_when_timestamp_advances() {
-        assert!(should_apply_hook_signal(None, 100));
-        assert!(should_apply_hook_signal(Some(99), 100));
+        let fp = hook_signal_fingerprint("working", Some(CLI_TYPE_CLAUDE), None, None);
+        assert!(should_apply_hook_signal(None, 100, fp));
+        assert!(should_apply_hook_signal(
+            Some(ProcessedHookSignal {
+                ts: 99,
+                fingerprint: fp,
+            }),
+            100,
+            fp,
+        ));
     }
 
     #[test]
-    fn hook_signal_is_ignored_when_timestamp_does_not_advance() {
-        assert!(!should_apply_hook_signal(Some(100), 100));
-        assert!(!should_apply_hook_signal(Some(101), 100));
+    fn identical_hook_signal_is_ignored_when_timestamp_does_not_advance() {
+        let fp = hook_signal_fingerprint("working", Some(CLI_TYPE_CLAUDE), None, None);
+        assert!(!should_apply_hook_signal(
+            Some(ProcessedHookSignal {
+                ts: 100,
+                fingerprint: fp,
+            }),
+            100,
+            fp,
+        ));
+        assert!(!should_apply_hook_signal(
+            Some(ProcessedHookSignal {
+                ts: 101,
+                fingerprint: fp,
+            }),
+            100,
+            fp,
+        ));
+    }
+
+    #[test]
+    fn changed_hook_signal_with_same_timestamp_is_still_applied() {
+        let old_fp = hook_signal_fingerprint("working", Some(CLI_TYPE_CLAUDE), None, None);
+        let new_fp = hook_signal_fingerprint("response_ready", Some(CLI_TYPE_CLAUDE), None, None);
+
+        assert!(should_apply_hook_signal(
+            Some(ProcessedHookSignal {
+                ts: 100,
+                fingerprint: old_fp,
+            }),
+            100,
+            new_fp,
+        ));
     }
 
     #[test]

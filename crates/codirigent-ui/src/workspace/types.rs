@@ -389,14 +389,20 @@ pub(super) struct PollingState {
     pub last_jsonl_check: Instant,
     /// Last time hook signal files were scanned (~1/second throttle).
     pub last_hook_signal_check: Instant,
-    /// Latest hook payload timestamp processed per signal file stem.
-    pub last_processed_hook_signal_ts: HashMap<String, u64>,
+    /// Latest hook payload marker processed per signal file stem.
+    pub last_processed_hook_signal_ts: HashMap<String, ProcessedHookSignal>,
     /// Generation counter for async project-root refreshes (file tree/worktree).
     pub project_refresh_generation: u64,
     /// Whether session restoration from disk is currently in-flight.
     pub restore_in_flight: bool,
     /// Best-effort shell command line capture per session while the shell is idle.
     pub shell_input_buffers: HashMap<SessionId, String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ProcessedHookSignal {
+    pub ts: u64,
+    pub fingerprint: u64,
 }
 
 impl PollingState {
