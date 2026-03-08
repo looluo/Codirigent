@@ -395,6 +395,8 @@ pub(super) struct PollingState {
     pub project_refresh_generation: u64,
     /// Whether session restoration from disk is currently in-flight.
     pub restore_in_flight: bool,
+    /// Last time the legacy fallback safety net drained pending_output_sessions.
+    pub last_legacy_fallback: Instant,
     /// Best-effort shell command line capture per session while the shell is idle.
     pub shell_input_buffers: HashMap<SessionId, String>,
 }
@@ -430,6 +432,7 @@ impl PollingState {
             last_processed_hook_signal_ts: HashMap::new(),
             project_refresh_generation: 0,
             restore_in_flight: false,
+            last_legacy_fallback: Instant::now(),
             shell_input_buffers: HashMap::new(),
         }
     }

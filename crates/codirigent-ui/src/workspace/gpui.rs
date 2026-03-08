@@ -414,10 +414,16 @@ impl WorkspaceView {
 
         // Take the SessionUpdate receiver from the session manager for the
         // event-driven output dispatcher.
-        let update_rx = session_manager
-            .lock()
-            .ok()
-            .and_then(|mgr| mgr.take_update_receiver());
+        let update_rx = match session_manager.lock() {
+            Ok(mgr) => mgr.take_update_receiver(),
+            Err(e) => {
+                tracing::warn!("Failed to take SessionUpdate receiver (mutex poisoned): {e}");
+                None
+            }
+        };
+        if update_rx.is_none() {
+            tracing::warn!("Event-driven output pipeline unavailable; using legacy polling");
+        }
 
         let (storage, task_manager) = Self::init_task_manager(event_bus.clone());
         let (file_tree, file_tree_model, project_root) = Self::init_file_tree();

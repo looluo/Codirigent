@@ -496,17 +496,24 @@ impl WorkspaceView {
 
         // Phase 1: Drain the event-driven mpsc channel into the dispatcher.
         if let Some(ref mut rx) = self.update_rx {
-            let _other_events = self.output_dispatcher.drain_updates(rx);
-            // TODO(Task 4): route non-OutputReady events to status providers
+            let other_events = self.output_dispatcher.drain_updates(rx);
+            // TODO(event-pipeline-phase-2): route non-OutputReady events to
+            // status providers. For now, log and discard.
+            if !other_events.is_empty() {
+                trace!(
+                    count = other_events.len(),
+                    "discarded non-OutputReady events (not yet routed)"
+                );
+            }
         }
 
         // Phase 2: Low-frequency legacy safety net — drain the
         // pending_output_sessions set at ~1s intervals to catch any sessions
         // that bypass the mpsc channel (e.g., manual mark_output_pending
         // calls). This is NOT the hot path — the dispatcher handles that.
-        // 1-second safety net interval (matches UI_SYNC_FALLBACK_INTERVAL)
         const LEGACY_FALLBACK_INTERVAL: Duration = Duration::from_secs(1);
-        if self.polling.last_ui_sync.elapsed() >= LEGACY_FALLBACK_INTERVAL {
+        if self.polling.last_legacy_fallback.elapsed() >= LEGACY_FALLBACK_INTERVAL {
+            self.polling.last_legacy_fallback = Instant::now();
             let legacy_ids =
                 self.with_session_manager(|manager| manager.sessions_with_pending_output());
             if !legacy_ids.is_empty() {
@@ -526,14 +533,12 @@ impl WorkspaceView {
             .take_ready_sessions(self.workspace.focused_session_id());
 
         // Filter: only schedule sessions that have a terminal view.
-        // Sessions without a terminal are re-marked ready for next cycle.
-        let (schedulable, no_terminal): (Vec<_>, Vec<_>) = session_ids
+        // Sessions without a terminal are NOT re-queued to avoid hot-loop
+        // spinning; the 1s legacy fallback will re-discover them if needed.
+        let schedulable: Vec<_> = session_ids
             .into_iter()
-            .partition(|id| self.terminals.contains_key(id));
-
-        for id in no_terminal {
-            self.output_dispatcher.mark_ready(id);
-        }
+            .filter(|id| self.terminals.contains_key(id))
+            .collect();
 
         let in_flight_count = self.output_dispatcher.in_flight_count();
         if !schedulable.is_empty() || in_flight_count > 0 {
@@ -751,27 +756,26 @@ impl WorkspaceView {
             )
         });
 
-        let (cached_status, cached_tool_name, cached_source, cache_age) =
-            if let Some((cs, tool)) = self.get_recent_cached_cli_status(session_id) {
-                let source = self
-                    .cli_readers
-                    .lock()
-                    .ok()
-                    .and_then(|r| r.cached_status.get(&session_id).map(|c| c.source))
-                    .map(|s| match s {
-                        CliStatusSource::Hook => HintSource::HookSignal,
-                        CliStatusSource::Jsonl => HintSource::Jsonl,
-                    })
-                    .unwrap_or(HintSource::Detector);
-                let age = self.cli_readers.lock().ok().and_then(|r| {
-                    r.cached_status
-                        .get(&session_id)
-                        .map(|c| c.status_since.elapsed())
-                });
-                (Some(cs), tool, source, age)
-            } else {
-                (None, None, HintSource::Detector, None)
-            };
+        // Gather cached CLI status in a single lock acquisition to ensure
+        // consistency between status, source, and age.
+        let (cached_status, cached_tool_name, cached_source, cache_age) = self
+            .cli_readers
+            .lock()
+            .ok()
+            .and_then(|mut readers| {
+                let cached = readers.cached_status.get(&session_id)?;
+                if cached.seen_at.elapsed() > cached.ttl {
+                    readers.cached_status.remove(&session_id);
+                    return None;
+                }
+                let source = match cached.source {
+                    CliStatusSource::Hook => HintSource::HookSignal,
+                    CliStatusSource::Jsonl => HintSource::Jsonl,
+                };
+                let age = Some(cached.status_since.elapsed());
+                Some((Some(cached.status), cached.tool_name.clone(), source, age))
+            })
+            .unwrap_or((None, None, HintSource::Detector, None));
 
         let previous_status = self.workspace.session(session_id).map(|s| s.status);
 
@@ -1645,6 +1649,7 @@ impl WorkspaceView {
             .is_some_and(|since| since.elapsed() > threshold)
     }
 
+    #[allow(dead_code)] // Logic inlined into sync_session_status for single-lock consistency
     fn get_recent_cached_cli_status(
         &mut self,
         session_id: SessionId,

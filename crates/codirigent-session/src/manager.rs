@@ -484,8 +484,14 @@ impl SessionManager for DefaultSessionManager {
                 .lock()
                 .unwrap_or_else(|p| p.into_inner())
                 .insert(id);
-            // New path: emit event for the output dispatcher
-            let _ = update_tx.try_send(SessionUpdate::OutputReady { session_id: id });
+            // New path: emit event for the output dispatcher.
+            // NOTE: This runs on a bare std::thread (PTY reader), not a tokio
+            // task. Use try_send(), NOT .send().await, as there is no async
+            // runtime here. Failure is non-fatal: the legacy path above ensures
+            // output is not lost.
+            if let Err(e) = update_tx.try_send(SessionUpdate::OutputReady { session_id: id }) {
+                trace!("SessionUpdate try_send for {}: {e}", id.0);
+            }
         });
 
         // Create session metadata
