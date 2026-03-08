@@ -34,10 +34,12 @@ const CLI_TYPE_CLAUDE: &str = "claude";
 const CLI_TYPE_GEMINI: &str = "gemini";
 const CLI_TYPE_CODEX: &str = "codex";
 
-/// Unix timestamp (seconds) recorded the first time it is read, acting as a
-/// per-process "run epoch".  Hook signals written before this moment belong to
+/// Unix timestamp (seconds) recorded at process startup, acting as a
+/// per-process "run epoch". Hook signals written before this moment belong to
 /// a previous Codirigent run and must be ignored, regardless of the 600-second
 /// recency window, to prevent stale signals from routing to re-used session IDs.
+///
+/// Eagerly initialized via `init_app_start_ts()` in `WorkspaceView::new`.
 static APP_START_TS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
 
 /// When `CODIRIGENT_LEGACY_PIPELINE=1` is set, the event-driven output
@@ -81,6 +83,15 @@ fn app_start_ts() -> u64 {
             .map(|d| d.as_secs())
             .unwrap_or(0)
     })
+}
+
+/// Eagerly initialize the hook-signal run epoch.
+///
+/// Must be called early in startup (e.g., `WorkspaceView::new`) so that
+/// hook signals emitted between app launch and the first scan are not
+/// incorrectly filtered as belonging to a previous run.
+pub(super) fn init_app_start_ts() {
+    let _ = app_start_ts();
 }
 
 fn prioritize_and_partition_output_sessions<F>(
@@ -507,21 +518,23 @@ impl WorkspaceView {
             }
         }
 
-        // Stale-cache sweep: sessions with cached NeedsAttention that are
+        // Stale-cache sweep: sessions with cached statuses that are
         // unchanged in the detector (not in `changed_ids`) still need
-        // periodic reconciliation so the 30s staleness check can fire.
+        // periodic reconciliation. This ensures:
+        // - NeedsAttention entries hit the 30s staleness check
+        // - Working/ResponseReady entries hit TTL eviction
         // This is cheap: only sessions with a cached status are checked.
-        if let Ok(readers) = self.cli_readers.lock() {
-            let stale_candidates: Vec<SessionId> = readers
-                .cached_status
-                .iter()
-                .filter(|(_, cached)| cached.status == SessionStatus::NeedsAttention)
-                .map(|(id, _)| *id)
-                .collect();
-            drop(readers);
-            for session_id in stale_candidates {
-                dirty |= self.sync_session_status(session_id);
-            }
+        //
+        // The lock is scoped to the collection phase so the mutable
+        // `sync_session_status` call below does not overlap the borrow.
+        let stale_candidates: Vec<SessionId> = self
+            .cli_readers
+            .lock()
+            .ok()
+            .map(|readers| readers.cached_status.keys().copied().collect())
+            .unwrap_or_default();
+        for session_id in stale_candidates {
+            dirty |= self.sync_session_status(session_id);
         }
 
         dirty
