@@ -137,14 +137,12 @@ impl OutputDispatcher {
         // Priority: focused session is dispatched first to minimize
         // perceived latency for the pane the user is looking at.
         if let Some(focused) = focused_session_id {
-            if self.ready_sessions.remove(&focused) {
-                if self.in_flight.contains(&focused) {
-                    // Deferred — re-insert immediately so it isn't lost.
-                    self.ready_sessions.insert(focused);
-                } else {
-                    result.push(focused);
-                }
+            if self.ready_sessions.contains(&focused) && !self.in_flight.contains(&focused) {
+                self.ready_sessions.remove(&focused);
+                result.push(focused);
             }
+            // If in-flight, the session stays in ready_sessions and the
+            // retain() loop below will keep it deferred for the next cycle.
         }
 
         // Remaining sessions: retain in-flight (deferred), take the rest.
@@ -210,6 +208,33 @@ mod tests {
         let ready = dispatcher.take_ready_sessions(Some(s2));
         assert_eq!(ready[0], s2);
         assert_eq!(ready.len(), 3);
+    }
+
+    #[test]
+    fn focused_session_deferred_when_in_flight() {
+        let mut dispatcher = OutputDispatcher::new();
+        let s1 = SessionId(1);
+        let s2 = SessionId(2);
+
+        dispatcher.mark_ready(s1);
+        dispatcher.mark_ready(s2);
+
+        // Mark s1 (focused) as in-flight
+        assert!(dispatcher.mark_in_flight(s1));
+
+        // New output arrives for s1 while in-flight
+        dispatcher.mark_ready(s1);
+
+        // s1 is focused but in-flight — should be deferred, only s2 returned
+        let ready = dispatcher.take_ready_sessions(Some(s1));
+        assert_eq!(ready, vec![s2]);
+        // s1 still in ready set, waiting for in-flight to complete
+        assert_eq!(dispatcher.ready_count(), 1);
+
+        // Complete in-flight, next cycle picks up s1
+        dispatcher.complete_in_flight(s1);
+        let ready = dispatcher.take_ready_sessions(Some(s1));
+        assert_eq!(ready, vec![s1]);
     }
 
     #[test]
