@@ -1041,11 +1041,16 @@ impl WorkspaceView {
         let manager_sessions = self.with_session_manager(|manager| manager.list_sessions());
         let jsonl_inputs: Vec<JsonlCheckInput> = manager_sessions
             .into_iter()
-            .map(|session| {
+            .filter_map(|session| {
                 let cli_type = self
                     .clipboard
                     .clipboard_service
                     .get_session_cli_type(session.id);
+                // ClaudeCode uses hook signals exclusively — skip JSONL collection
+                // to avoid unnecessary PID lookup and working dir copy.
+                if cli_type == codirigent_core::CliType::ClaudeCode {
+                    return None;
+                }
                 let child_pid =
                     self.with_session_manager(|manager| manager.get_child_pid(session.id));
                 let known_codex_session_id = session
@@ -1053,7 +1058,7 @@ impl WorkspaceView {
                     .as_ref()
                     .filter(|id| *id != &session.id.0.to_string())
                     .cloned();
-                JsonlCheckInput {
+                Some(JsonlCheckInput {
                     session_id: session.id,
                     working_dir: session.working_directory,
                     child_pid,
@@ -1070,7 +1075,7 @@ impl WorkspaceView {
                         .codex_started_at
                         .unwrap_or(session.created_at)
                         .timestamp_millis(),
-                }
+                })
             })
             .collect();
 
