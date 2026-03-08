@@ -37,21 +37,7 @@ use std::path::Component;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
-/// Normalize a path by canonicalizing and stripping the `\\?\` prefix on Windows.
-///
-/// On Windows, `std::fs::canonicalize` returns UNC-style paths like `\\?\C:\...`
-/// which break string comparisons with regular paths. This helper strips that prefix.
-fn normalize_path(path: &Path) -> PathBuf {
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    #[cfg(windows)]
-    {
-        let s = canonical.to_string_lossy();
-        if let Some(stripped) = s.strip_prefix(r"\\?\") {
-            return PathBuf::from(stripped);
-        }
-    }
-    canonical
-}
+use crate::normalize_path;
 
 fn normalize_nonexistent_path(path: &Path) -> PathBuf {
     // Find the deepest existing ancestor and canonicalize it, then append

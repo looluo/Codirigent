@@ -4,25 +4,13 @@
 //! and HEAD SHA for session working directories. Results are cached
 //! with a configurable TTL to avoid excessive git operations.
 
+use crate::normalize_path;
 use codirigent_core::{GitChangeKind, GitChangedFile, GitRepoInfo};
 use git2::{Repository, StatusOptions};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tracing::{debug, warn};
-
-/// Normalize a path by canonicalizing and stripping the `\\?\` prefix on Windows.
-fn normalize_path(path: &Path) -> PathBuf {
-    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
-    #[cfg(windows)]
-    {
-        let s = canonical.to_string_lossy();
-        if let Some(stripped) = s.strip_prefix(r"\\?\") {
-            return PathBuf::from(stripped);
-        }
-    }
-    canonical
-}
 
 /// Git status detection service with caching.
 ///
