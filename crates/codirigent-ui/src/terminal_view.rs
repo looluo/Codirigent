@@ -239,6 +239,10 @@ pub struct TerminalView {
     cached_terminal_bg: gpui::Hsla,
     /// Cached GPUI Hsla for terminal foreground (avoids per-frame conversion).
     cached_terminal_fg: gpui::Hsla,
+    /// Last known cursor (x, y) position when it was visible.
+    /// Used to anchor the IME preedit overlay even when the cursor is hidden
+    /// (e.g. during a Ink/Claude Code `\e[?25l` redraw cycle).
+    last_visible_cursor_pos: Option<(f32, f32)>,
 }
 
 impl TerminalView {
@@ -283,6 +287,7 @@ impl TerminalView {
             dimensions_initialized: false,
             cached_terminal_bg,
             cached_terminal_fg,
+            last_visible_cursor_pos: None,
         }
     }
 
@@ -474,7 +479,11 @@ impl TerminalView {
     /// Returns `None` if the cursor is not visible or is scrolled off-screen.
     /// Uses viewport-relative coordinates from `renderable_content()` so the
     /// cursor position is correct when the terminal is scrolled.
-    pub fn cursor_rect(&self) -> Option<CursorRect> {
+    ///
+    /// As a side effect, updates `last_visible_cursor_pos` whenever the cursor
+    /// is visible, so that `ime_anchor_pos` can return a stable position even
+    /// during `\e[?25l` redraw cycles.
+    pub fn cursor_rect(&mut self) -> Option<CursorRect> {
         if !self.terminal.cursor_visible() {
             return None;
         }
@@ -495,6 +504,9 @@ impl TerminalView {
         let x = col as f32 * self.cell_width;
         let y = row as f32 * self.cell_height;
 
+        // Keep the IME anchor up-to-date while the cursor is visible.
+        self.last_visible_cursor_pos = Some((x, y));
+
         let shape = if self.focused {
             self.cursor_shape
         } else {
@@ -509,6 +521,16 @@ impl TerminalView {
             color: self.theme.terminal_cursor,
             shape,
         })
+    }
+
+    /// Returns the cursor position to use as the IME preedit anchor.
+    ///
+    /// Unlike `cursor_rect`, this returns the *last known visible* position
+    /// even when the cursor is currently hidden (e.g. during a Claude Code /
+    /// Ink `\e[?25l` redraw cycle). This keeps the preedit overlay stable
+    /// instead of jumping around or disappearing mid-composition.
+    pub fn ime_anchor_pos(&self) -> Option<(f32, f32)> {
+        self.last_visible_cursor_pos
     }
 
     /// Calculate pixel dimensions for the current terminal size.

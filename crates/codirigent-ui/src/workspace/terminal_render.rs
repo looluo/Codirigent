@@ -33,7 +33,7 @@ impl WorkspaceView {
             None
         };
 
-        // Get the terminal view for this session
+        // Get the terminal view for this session.
         let Some(terminal_view) = self.terminals_mut().get_mut(&session_id) else {
             // No terminal yet, show placeholder
             let terminal_bg: gpui::Hsla = theme.terminal_background.into();
@@ -64,7 +64,12 @@ impl WorkspaceView {
         let cell_height = terminal_view.cell_height();
         let font_size = terminal_view.font_size();
         let font_family_str = terminal_view.font_family().to_owned();
+        // cursor_rect() also updates last_visible_cursor_pos as a side effect.
         let cursor_rect = terminal_view.cursor_rect();
+        // ime_anchor_pos() returns the last *visible* cursor position, so the
+        // preedit overlay stays anchored even during \e[?25l redraw cycles
+        // (e.g. while Claude Code / Ink is streaming output).
+        let ime_anchor = terminal_view.ime_anchor_pos();
 
         // Terminal runs/backgrounds are cached per row and only rebuilt when dirty.
         let cached_rows = terminal_view.render_rows();
@@ -79,8 +84,8 @@ impl WorkspaceView {
         let font_family: gpui::SharedString = font_family_str.into();
         let font_size_px = px(font_size);
 
-        let ime_preedit = if let (Some(preedit), Some((cursor, _))) =
-            (ime_preedit_text.as_ref(), cursor_data.as_ref())
+        let ime_preedit = if let (Some(preedit), Some((anchor_x, anchor_y))) =
+            (ime_preedit_text.as_ref(), ime_anchor)
         {
             if preedit.is_empty() {
                 None
@@ -111,7 +116,7 @@ impl WorkspaceView {
                     &[preedit_run],
                     None,
                 );
-                Some((cursor.x, cursor.y, shaped))
+                Some((anchor_x, anchor_y, shaped))
             }
         } else {
             None
