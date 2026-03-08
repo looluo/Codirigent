@@ -880,6 +880,14 @@ impl WorkspaceView {
                 if header.project_name != project_name {
                     header.project_name = project_name;
                 }
+                let git_branch = session.git_info.as_ref().map(|gi| gi.branch.as_str());
+                if header.git_branch.as_deref() != git_branch {
+                    header.git_branch = git_branch.map(str::to_owned);
+                }
+                let git_dirty_count = session.git_info.as_ref().map(|gi| gi.dirty_count);
+                if header.git_dirty_count != git_dirty_count {
+                    header.git_dirty_count = git_dirty_count;
+                }
 
                 let session_color = session
                     .color

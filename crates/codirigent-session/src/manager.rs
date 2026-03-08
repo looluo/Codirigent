@@ -294,27 +294,6 @@ impl DefaultSessionManager {
         true
     }
 
-    /// Invalidate the git cache for a specific session's repo root.
-    ///
-    /// Call this before `refresh_git_status()` when the working directory
-    /// changes (e.g. OSC 7) so the next refresh picks up fresh data
-    /// instead of hitting the 15-second cache.
-    pub fn invalidate_git_cache(&self, id: SessionId) {
-        let repo_root = {
-            let sessions = self.lock_sessions();
-            sessions
-                .get(&id)
-                .and_then(|s| s.session.git_info.as_ref())
-                .map(|gi| gi.repo_root.clone())
-        };
-        if let Some(root) = repo_root {
-            self.git_status
-                .lock()
-                .unwrap_or_else(|p| p.into_inner())
-                .invalidate(&root);
-        }
-    }
-
     /// Refresh git status for a session.
     ///
     /// Detects or refreshes git repository information for the session's
@@ -324,16 +303,32 @@ impl DefaultSessionManager {
     /// Returns the updated git info, or None if the session doesn't exist
     /// or isn't in a git repository.
     pub fn refresh_git_status(&self, id: SessionId) -> Option<GitRepoInfo> {
+        self.refresh_git_status_impl(id, false)
+    }
+
+    /// Refresh git status for a session, bypassing the TTL cache.
+    ///
+    /// Use this after an explicit working-directory change so the UI does not
+    /// inherit a stale cached snapshot from another session's recent visit to
+    /// the destination worktree.
+    pub fn refresh_git_status_fresh(&self, id: SessionId) -> Option<GitRepoInfo> {
+        self.refresh_git_status_impl(id, true)
+    }
+
+    fn refresh_git_status_impl(&self, id: SessionId, force_fresh: bool) -> Option<GitRepoInfo> {
         let working_dir = {
             let sessions = self.lock_sessions();
             sessions.get(&id)?.session.working_directory.clone()
         };
 
-        let info = self
-            .git_status
-            .lock()
-            .unwrap_or_else(|p| p.into_inner())
-            .detect_cached(&working_dir, Duration::from_secs(15));
+        let info = {
+            let mut git_status = self.git_status.lock().unwrap_or_else(|p| p.into_inner());
+            if force_fresh {
+                git_status.detect_fresh(&working_dir)
+            } else {
+                git_status.detect_cached(&working_dir, Duration::from_secs(15))
+            }
+        };
 
         // Update session
         let mut sessions = self.lock_sessions();
@@ -565,6 +560,11 @@ impl SessionManager for DefaultSessionManager {
 mod tests {
     use super::*;
     use codirigent_core::DefaultEventBus;
+    use git2::Repository;
+    use std::fs;
+    use std::io::Write;
+    use std::path::Path;
+    use tempfile::TempDir;
 
     fn create_manager() -> DefaultSessionManager {
         let event_bus = Arc::new(DefaultEventBus::new(16));
@@ -575,6 +575,53 @@ mod tests {
         let event_bus = Arc::new(DefaultEventBus::new(16));
         let manager = DefaultSessionManager::new(event_bus.clone());
         (manager, event_bus)
+    }
+
+    fn create_test_repo() -> TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let repo = Repository::init(dir.path()).unwrap();
+
+        {
+            let mut config = repo.config().unwrap();
+            config.set_str("user.name", "Test User").unwrap();
+            config.set_str("user.email", "test@example.com").unwrap();
+        }
+
+        let readme = dir.path().join("README.md");
+        let mut file = fs::File::create(&readme).unwrap();
+        file.write_all(b"hello").unwrap();
+
+        let sig = repo.signature().unwrap();
+        let tree_id = {
+            let mut index = repo.index().unwrap();
+            index.add_path(Path::new("README.md")).unwrap();
+            index.write().unwrap();
+            index.write_tree().unwrap()
+        };
+        let tree = repo.find_tree(tree_id).unwrap();
+        repo.commit(Some("HEAD"), &sig, &sig, "Initial commit", &tree, &[])
+            .unwrap();
+
+        dir
+    }
+
+    fn create_linked_worktree(repo_path: &Path, branch: &str) -> PathBuf {
+        let repo = Repository::open(repo_path).unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch(branch, &head, false).unwrap();
+
+        let worktree_path = repo_path.join("worktrees").join(branch);
+        fs::create_dir_all(worktree_path.parent().unwrap()).unwrap();
+
+        let reference = repo
+            .find_reference(&format!("refs/heads/{}", branch))
+            .unwrap();
+        let mut add_options = git2::WorktreeAddOptions::new();
+        add_options.reference(Some(&reference));
+        repo.worktree(branch, &worktree_path, Some(&add_options))
+            .unwrap();
+
+        worktree_path
     }
 
     #[test]
@@ -594,6 +641,31 @@ mod tests {
         assert!(manager.get_session(id).is_some());
         assert_eq!(manager.list_sessions().len(), 1);
         assert_eq!(manager.session_count(), 1);
+    }
+
+    #[test]
+    fn test_refresh_git_status_fresh_bypasses_stale_destination_worktree_cache() {
+        let manager = create_manager();
+        let repo_dir = create_test_repo();
+        let worktree_path = create_linked_worktree(repo_dir.path(), "feature-fresh");
+
+        let source_session = manager
+            .create_session("Source".to_string(), worktree_path.clone(), None)
+            .unwrap();
+        let cached_clean = manager.refresh_git_status(source_session).unwrap();
+        assert_eq!(cached_clean.branch, "feature-fresh");
+        assert_eq!(cached_clean.dirty_count, 0);
+
+        fs::write(worktree_path.join("dirty.txt"), "dirty").unwrap();
+
+        let switched_session = manager
+            .create_session("Switch".to_string(), repo_dir.path().to_path_buf(), None)
+            .unwrap();
+        assert!(manager.update_working_directory(switched_session, worktree_path.clone()));
+
+        let fresh = manager.refresh_git_status_fresh(switched_session).unwrap();
+        assert_eq!(fresh.branch, "feature-fresh");
+        assert_eq!(fresh.dirty_count, 1);
     }
 
     #[test]

@@ -25,7 +25,7 @@ use codirigent_session::CliSessionStatus;
 use gpui::Context;
 use serde::Deserialize;
 use std::collections::hash_map::DefaultHasher;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use tracing::{info, warn};
@@ -403,26 +403,13 @@ impl WorkspaceView {
 
         let had_output_activity = self.schedule_output_preparation(cx);
 
-        let mut session_ids: Vec<codirigent_core::SessionId> =
-            self.terminals.keys().copied().collect();
-        if let Some(focused_id) = self.workspace.focused_session_id() {
-            if let Some(index) = session_ids.iter().position(|id| *id == focused_id) {
-                session_ids.swap(0, index);
-            }
-        }
-        let mut any_dirty = false;
-
-        for session_id in session_ids {
-            let session_dirty = self.sync_session_status(session_id);
-            any_dirty |= session_dirty;
-        }
-
         // Track output activity for adaptive polling
+        //
+        // Sessions that actually produced output are synchronized in
+        // `apply_prepared_session_output()`. Detector-based status decay stays
+        // on the slower maintenance cadence to avoid O(all sessions) work on
+        // every active 16 ms poll.
         self.polling.last_poll_had_output = had_output_activity;
-
-        if any_dirty {
-            cx.notify();
-        }
     }
 
     pub(super) fn poll_maintenance(&mut self, cx: &mut Context<Self>) {
@@ -518,7 +505,6 @@ impl WorkspaceView {
                             let manager = session_manager.lock().ok()?;
                             let changed = manager.update_working_directory(session_id, new_cwd);
                             if changed {
-                                manager.invalidate_git_cache(session_id);
                                 manager.get_session(session_id)
                             } else {
                                 None
@@ -945,7 +931,7 @@ impl WorkspaceView {
             // Marshal results back to UI thread
             let _ = this.update(cx, |this, cx| {
                 this.polling.jsonl_check_in_flight = false;
-                let mut changed = false;
+                let mut any_dirty = false;
                 let (results, inputs, detected_types) = results;
                 let input_statuses: HashMap<SessionId, SessionStatus> = inputs
                     .iter()
@@ -956,6 +942,7 @@ impl WorkspaceView {
                     .map(|input| (input.session_id, input.codex_execution_mode))
                     .collect();
                 let cache_update_time = Instant::now();
+                let mut status_sync_ids = HashSet::new();
                 let mut cached_status = this.cli_readers.lock().ok();
                 let mut should_save_state = false;
                 let mut pending_mode_updates = Vec::new();
@@ -1102,7 +1089,7 @@ impl WorkspaceView {
                                 );
                             }
                         }
-                        changed = true;
+                        status_sync_ids.insert(result.session_id);
                     } else {
                         // No JSONL result — check if detector says idle and clear stale cache
                         let detector_idle = this.with_detector(|detector| {
@@ -1123,7 +1110,7 @@ impl WorkspaceView {
                                     .unwrap_or(false);
                                 if is_stale {
                                     readers.cached_status.remove(&result.session_id);
-                                    changed = true;
+                                    status_sync_ids.insert(result.session_id);
                                 }
                             }
                         }
@@ -1136,7 +1123,10 @@ impl WorkspaceView {
                 if should_save_state {
                     this.save_state_to_disk(cx);
                 }
-                if changed {
+                for session_id in status_sync_ids {
+                    any_dirty |= this.sync_session_status(session_id);
+                }
+                if any_dirty {
                     cx.notify();
                 }
             });
@@ -1330,7 +1320,7 @@ impl WorkspaceView {
                     Some((
                         session_id,
                         expected_cwd_for_bg,
-                        mgr.refresh_git_status(session_id),
+                        mgr.refresh_git_status_fresh(session_id),
                     ))
                 })
                 .await;
@@ -1740,6 +1730,10 @@ impl WorkspaceView {
                 &name,
                 None,
             );
+        }
+
+        if self.sync_session_status(session_id) {
+            cx.notify();
         }
     }
 

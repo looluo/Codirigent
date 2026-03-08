@@ -11,6 +11,19 @@ use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant};
 use tracing::{debug, warn};
 
+/// Normalize a path by canonicalizing and stripping the `\\?\` prefix on Windows.
+fn normalize_path(path: &Path) -> PathBuf {
+    let canonical = path.canonicalize().unwrap_or_else(|_| path.to_path_buf());
+    #[cfg(windows)]
+    {
+        let s = canonical.to_string_lossy();
+        if let Some(stripped) = s.strip_prefix(r"\\?\") {
+            return PathBuf::from(stripped);
+        }
+    }
+    canonical
+}
+
 /// Git status detection service with caching.
 ///
 /// Detects git repository information for working directories
@@ -55,7 +68,7 @@ impl GitStatusService {
             }
         };
 
-        let repo_root = repo.workdir()?.to_path_buf();
+        let repo_root = normalize_path(repo.workdir()?);
         let branch = Self::get_branch_name(&repo);
         let head_sha = Self::get_head_sha(&repo);
         let file_status = Self::collect_file_statuses(&repo);
@@ -90,6 +103,14 @@ impl GitStatusService {
         Some(info)
     }
 
+    /// Detect fresh git info and overwrite the cached entry for that repo/worktree.
+    pub fn detect_fresh(&mut self, working_dir: &Path) -> Option<GitRepoInfo> {
+        let info = self.detect(working_dir)?;
+        self.cache
+            .insert(info.repo_root.clone(), (Instant::now(), info.clone()));
+        Some(info)
+    }
+
     /// Invalidate the cache for a specific repo root.
     pub fn invalidate(&mut self, repo_root: &Path) {
         self.cache.remove(repo_root);
@@ -103,8 +124,8 @@ impl GitStatusService {
     /// repo's cache entry via `starts_with`.
     fn find_cached(&self, working_dir: &Path, ttl: Duration) -> Option<GitRepoInfo> {
         let repo = Repository::discover(working_dir).ok()?;
-        let repo_root = repo.workdir()?;
-        let (timestamp, info) = self.cache.get(repo_root)?;
+        let repo_root = normalize_path(repo.workdir()?);
+        let (timestamp, info) = self.cache.get(&repo_root)?;
         if timestamp.elapsed() < ttl {
             Some(info.clone())
         } else {
@@ -232,6 +253,25 @@ mod tests {
     use std::fs;
     use std::io::Write;
 
+    fn create_linked_worktree(repo_path: &Path, branch: &str) -> PathBuf {
+        let repo = Repository::open(repo_path).unwrap();
+        let head = repo.head().unwrap().peel_to_commit().unwrap();
+        repo.branch(branch, &head, false).unwrap();
+
+        let worktree_path = repo_path.join("worktrees").join(branch);
+        fs::create_dir_all(worktree_path.parent().unwrap()).unwrap();
+
+        let reference = repo
+            .find_reference(&format!("refs/heads/{}", branch))
+            .unwrap();
+        let mut add_options = git2::WorktreeAddOptions::new();
+        add_options.reference(Some(&reference));
+        repo.worktree(branch, &worktree_path, Some(&add_options))
+            .unwrap();
+
+        worktree_path
+    }
+
     /// Create a temporary git repository for testing.
     fn create_test_repo() -> (tempfile::TempDir, Repository) {
         let dir = tempfile::tempdir().unwrap();
@@ -349,6 +389,23 @@ mod tests {
     }
 
     #[test]
+    fn test_detect_linked_worktree_subdirectory_uses_worktree_root_and_branch() {
+        let (dir, _repo) = create_test_repo();
+        let worktree_path = create_linked_worktree(dir.path(), "feature-linked");
+        let subdir = worktree_path.join("src");
+        fs::create_dir_all(&subdir).unwrap();
+
+        let service = GitStatusService::new();
+        let info = service.detect(&subdir).unwrap();
+
+        assert_eq!(
+            info.repo_root.canonicalize().unwrap(),
+            worktree_path.canonicalize().unwrap()
+        );
+        assert_eq!(info.branch, "feature-linked");
+    }
+
+    #[test]
     fn test_detect_cached() {
         let (dir, _repo) = create_test_repo();
         let mut service = GitStatusService::new();
@@ -364,6 +421,30 @@ mod tests {
             .unwrap();
 
         assert_eq!(info1, info2);
+    }
+
+    #[test]
+    fn test_detect_cached_keeps_linked_worktree_distinct_from_main_repo() {
+        let (dir, _repo) = create_test_repo();
+        let worktree_path = create_linked_worktree(dir.path(), "feature-cache");
+        let mut service = GitStatusService::new();
+
+        let main_info = service
+            .detect_cached(dir.path(), Duration::from_secs(60))
+            .unwrap();
+        let linked_info = service
+            .detect_cached(&worktree_path, Duration::from_secs(60))
+            .unwrap();
+
+        assert_eq!(
+            main_info.repo_root.canonicalize().unwrap(),
+            dir.path().canonicalize().unwrap()
+        );
+        assert_eq!(
+            linked_info.repo_root.canonicalize().unwrap(),
+            worktree_path.canonicalize().unwrap()
+        );
+        assert_ne!(main_info.branch, linked_info.branch);
     }
 
     #[test]
