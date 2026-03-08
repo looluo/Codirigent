@@ -411,6 +411,10 @@ impl WorkspaceView {
         let mut workspace = Workspace::new();
         workspace.set_theme(theme);
 
+        // Eagerly initialize the hook-signal run epoch so that signals
+        // emitted between app start and the first scan are not dropped.
+        super::impl_output_polling::init_app_start_ts();
+
         Self::start_output_polling(cx);
         Self::start_maintenance_polling(cx);
         Self::start_modal_cursor_blink(cx);
