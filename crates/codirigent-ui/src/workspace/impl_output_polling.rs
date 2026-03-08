@@ -492,14 +492,33 @@ impl WorkspaceView {
         // lock acquisition for the common case where nothing changed.
         let changed_ids = self.with_detector(|detector| detector.tick());
 
-        if changed_ids.is_empty() {
-            return false;
+        let mut dirty = false;
+
+        if !changed_ids.is_empty() {
+            trace!(changed = changed_ids.len(), "tick_detector_statuses");
+            for session_id in changed_ids {
+                dirty |= self.sync_session_status(session_id);
+            }
         }
 
-        trace!(changed = changed_ids.len(), "tick_detector_statuses");
-        changed_ids.into_iter().fold(false, |dirty, session_id| {
-            dirty | self.sync_session_status(session_id)
-        })
+        // Stale-cache sweep: sessions with cached NeedsAttention that are
+        // unchanged in the detector (not in `changed_ids`) still need
+        // periodic reconciliation so the 30s staleness check can fire.
+        // This is cheap: only sessions with a cached status are checked.
+        if let Ok(readers) = self.cli_readers.lock() {
+            let stale_candidates: Vec<SessionId> = readers
+                .cached_status
+                .iter()
+                .filter(|(_, cached)| cached.status == SessionStatus::NeedsAttention)
+                .map(|(id, _)| *id)
+                .collect();
+            drop(readers);
+            for session_id in stale_candidates {
+                dirty |= self.sync_session_status(session_id);
+            }
+        }
+
+        dirty
     }
 
     fn schedule_output_preparation(&mut self, cx: &mut Context<Self>) -> bool {
@@ -572,12 +591,17 @@ impl WorkspaceView {
             .take_ready_sessions(self.workspace.focused_session_id());
 
         // Filter: only schedule sessions that have a terminal view.
-        // Sessions without a terminal are NOT re-queued to avoid hot-loop
-        // spinning; the 1s legacy fallback will re-discover them if needed.
-        let schedulable: Vec<_> = session_ids
-            .into_iter()
-            .filter(|id| self.terminals.contains_key(id))
-            .collect();
+        // Sessions without a terminal yet (gap between create_session and
+        // terminals.insert) are re-queued so the next poll cycle picks them
+        // up, avoiding a ~1s delay waiting for the legacy fallback.
+        let mut schedulable = Vec::with_capacity(session_ids.len());
+        for id in session_ids {
+            if self.terminals.contains_key(&id) {
+                schedulable.push(id);
+            } else {
+                self.output_dispatcher.mark_ready(id);
+            }
+        }
 
         let in_flight_count = self.output_dispatcher.in_flight_count();
         if !schedulable.is_empty() || in_flight_count > 0 {
@@ -726,6 +750,15 @@ impl WorkspaceView {
                 this.output_dispatcher.complete_in_flight(session_id);
                 if let Some(prepared) = prepared {
                     this.apply_prepared_session_output(prepared, cx);
+                } else {
+                    // No output to drain (e.g. ChildProcessExited with no
+                    // trailing bytes). Still run status reconciliation so
+                    // OSC133-driven sessions don't stick in Working after
+                    // the PTY exits.
+                    if this.sync_session_status(session_id) {
+                        this.sync_session_header(session_id);
+                        cx.notify();
+                    }
                 }
             });
         })
