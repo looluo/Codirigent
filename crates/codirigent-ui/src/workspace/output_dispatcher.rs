@@ -274,6 +274,38 @@ mod tests {
     }
 
     #[test]
+    fn has_more_re_queues_after_completion() {
+        // Simulates the has_more flow: session completes in-flight, then
+        // mark_ready re-queues it for the next poll cycle.
+        let mut dispatcher = OutputDispatcher::new();
+        let s1 = SessionId(1);
+        let s2 = SessionId(2);
+
+        dispatcher.mark_ready(s1);
+        dispatcher.mark_ready(s2);
+
+        // Dispatch both
+        let ready = dispatcher.take_ready_sessions(Some(s1));
+        assert_eq!(ready.len(), 2);
+        assert_eq!(ready[0], s1); // focused first
+
+        assert!(dispatcher.mark_in_flight(s1));
+        assert!(dispatcher.mark_in_flight(s2));
+
+        // s1 completes with has_more=true
+        dispatcher.complete_in_flight(s1);
+        dispatcher.mark_ready(s1); // has_more re-queue
+
+        // s2 completes normally
+        dispatcher.complete_in_flight(s2);
+
+        // Next cycle: only s1 should be ready
+        let ready = dispatcher.take_ready_sessions(Some(s1));
+        assert_eq!(ready, vec![s1]);
+        assert!(!dispatcher.has_activity());
+    }
+
+    #[test]
     fn remove_session_clears_all_state() {
         let mut dispatcher = OutputDispatcher::new();
         let s1 = SessionId(1);
@@ -284,6 +316,28 @@ mod tests {
 
         dispatcher.remove_session(s1);
         assert!(!dispatcher.has_activity());
+    }
+
+    #[test]
+    fn take_ready_sessions_empty_when_all_in_flight() {
+        let mut dispatcher = OutputDispatcher::new();
+        let s1 = SessionId(1);
+        let s2 = SessionId(2);
+
+        dispatcher.mark_ready(s1);
+        dispatcher.mark_ready(s2);
+        assert!(dispatcher.mark_in_flight(s1));
+        assert!(dispatcher.mark_in_flight(s2));
+
+        // New output arrives for both while in-flight
+        dispatcher.mark_ready(s1);
+        dispatcher.mark_ready(s2);
+
+        // take_ready_sessions should return empty (both deferred)
+        let ready = dispatcher.take_ready_sessions(None);
+        assert!(ready.is_empty());
+        // But they're still in the ready set for when in-flight completes
+        assert_eq!(dispatcher.ready_count(), 2);
     }
 
     #[test]
