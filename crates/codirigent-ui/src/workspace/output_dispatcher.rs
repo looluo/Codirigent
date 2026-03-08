@@ -17,12 +17,6 @@ use codirigent_core::{SessionId, SessionUpdate};
 use std::collections::HashSet;
 use tracing::{trace, warn};
 
-/// Maximum PTY chunks drained per session per poll cycle.
-const DEFAULT_MAX_CHUNKS_PER_POLL: usize = 64;
-
-/// Maximum bytes drained per session per poll cycle (256 KB).
-const DEFAULT_MAX_BYTES_PER_POLL: usize = 256 * 1024;
-
 /// Maximum events drained from the mpsc channel per poll cycle.
 /// Prevents unbounded loop in pathological flooding scenarios (e.g., `yes`).
 /// OutputReady events deduplicate into the HashSet, so this primarily caps
@@ -38,12 +32,6 @@ pub(super) struct OutputDispatcher {
     ready_sessions: HashSet<SessionId>,
     /// Sessions currently being processed (background task in-flight).
     in_flight: HashSet<SessionId>,
-    /// Maximum PTY chunks per session per poll cycle.
-    #[allow(dead_code)] // Tested; production uses WorkspaceView constants directly for now
-    pub max_chunks_per_poll: usize,
-    /// Maximum bytes per session per poll cycle.
-    #[allow(dead_code)] // Tested; production uses WorkspaceView constants directly for now
-    pub max_bytes_per_poll: usize,
 }
 
 impl Default for OutputDispatcher {
@@ -53,13 +41,11 @@ impl Default for OutputDispatcher {
 }
 
 impl OutputDispatcher {
-    /// Create a new dispatcher with default budgets.
+    /// Create a new dispatcher.
     pub fn new() -> Self {
         Self {
             ready_sessions: HashSet::new(),
             in_flight: HashSet::new(),
-            max_chunks_per_poll: DEFAULT_MAX_CHUNKS_PER_POLL,
-            max_bytes_per_poll: DEFAULT_MAX_BYTES_PER_POLL,
         }
     }
 
@@ -323,13 +309,6 @@ mod tests {
         // Non-OutputReady events returned
         assert_eq!(others.len(), 1);
         assert_eq!(others[0].session_id(), s2);
-    }
-
-    #[test]
-    fn default_budgets_match_constants() {
-        let dispatcher = OutputDispatcher::new();
-        assert_eq!(dispatcher.max_chunks_per_poll, DEFAULT_MAX_CHUNKS_PER_POLL);
-        assert_eq!(dispatcher.max_bytes_per_poll, DEFAULT_MAX_BYTES_PER_POLL);
     }
 
     #[test]

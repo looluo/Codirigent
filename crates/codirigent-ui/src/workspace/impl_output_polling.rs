@@ -423,13 +423,16 @@ impl WorkspaceView {
     /// Delay before sending a deferred Enter keypress after a task prompt (ms).
     const PENDING_ENTER_DELAY: Duration = Duration::from_millis(100);
     /// TTL for Claude Code hook signal cache. Matches the 600s stale-signal guard
-    /// in check_hook_signals so a long-running task never loses its "working" status
-    /// just because no hook fired recently.
+    /// so a long-running task never loses its "working" status just because no
+    /// hook fired recently.
     const HOOK_SIGNAL_CACHE_TTL: Duration = Duration::from_secs(600);
     /// Maximum output bytes to process from a session in one poll tick.
     const MAX_OUTPUT_BYTES_PER_POLL: usize = 256 * 1024;
     /// Maximum PTY chunks to process from a session in one poll tick.
     const MAX_OUTPUT_CHUNKS_PER_POLL: usize = 64;
+    /// How often the legacy fallback drains `pending_output_sessions` as a
+    /// safety net for sessions that bypass the mpsc channel.
+    const LEGACY_FALLBACK_INTERVAL: Duration = Duration::from_secs(1);
 
     pub(super) fn poll_output(&mut self, cx: &mut Context<Self>) {
         self.process_deferred_enters();
@@ -502,8 +505,7 @@ impl WorkspaceView {
         // pending_output_sessions set at ~1s intervals to catch any sessions
         // that bypass the mpsc channel (e.g., manual mark_output_pending
         // calls). This is NOT the hot path — the dispatcher handles that.
-        const LEGACY_FALLBACK_INTERVAL: Duration = Duration::from_secs(1);
-        if self.polling.last_legacy_fallback.elapsed() >= LEGACY_FALLBACK_INTERVAL {
+        if self.polling.last_legacy_fallback.elapsed() >= Self::LEGACY_FALLBACK_INTERVAL {
             self.polling.last_legacy_fallback = Instant::now();
             let legacy_ids =
                 self.with_session_manager(|manager| manager.sessions_with_pending_output());
@@ -1060,7 +1062,7 @@ impl WorkspaceView {
                             ) = match effective_type {
                                 codirigent_core::CliType::ClaudeCode => {
                                     // Claude Code status is handled by hook signal files
-                                    // (check_hook_signals) — no JSONL reader needed here.
+                                    // (spawn_background_hook_signal_check) — no JSONL reader needed here.
                                     (None, None, None)
                                 }
                                 codirigent_core::CliType::CodexCli => {
@@ -1912,251 +1914,6 @@ impl WorkspaceView {
         }
     }
 
-    /// Check Claude Code hook signal files and update session status.
-    ///
-    /// Signal files are written by `codirigent-hook` for Claude and Codex sessions.
-    /// Each file is tiny
-    /// (<100 bytes) so this runs synchronously on the UI thread without a
-    /// background task.
-    ///
-    /// Matching is exact: each signal file contains `codirigent_session_id`
-    /// which is injected via the `CODIRIGENT_SESSION_ID` environment variable
-    /// when Codirigent spawns the Claude Code process. Signal files without
-    /// this field are ignored (Claude Code started outside Codirigent).
-    #[allow(dead_code)]
-    fn check_hook_signals(&mut self) {
-        let signals_dir = match hook_signals_dir() {
-            Some(d) => d,
-            None => return,
-        };
-
-        let entries = match std::fs::read_dir(&signals_dir) {
-            Ok(e) => e,
-            Err(_) => return,
-        };
-
-        let now_ts = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .map(|d| d.as_secs())
-            .unwrap_or(0);
-
-        for entry in entries.flatten() {
-            let path = entry.path();
-            if path.extension().and_then(|e| e.to_str()) != Some("json") {
-                continue;
-            }
-            // The filename stem is the hook signal identifier.
-            let signal_file_id = match path.file_stem().and_then(|s| s.to_str()) {
-                Some(s) => s.to_owned(),
-                None => continue,
-            };
-            let content = match std::fs::read_to_string(&path) {
-                Ok(c) => c,
-                Err(_) => continue,
-            };
-            let signal: HookSignal = match serde_json::from_str(&content) {
-                Ok(s) => s,
-                Err(_) => continue,
-            };
-            // Ignore stale signals (older than 10 minutes).
-            if now_ts.saturating_sub(signal.ts) > 600 {
-                continue;
-            }
-            // Ignore signals from Claude Code sessions not spawned by Codirigent.
-            let codirigent_id_str = match &signal.codirigent_session_id {
-                Some(id) => id,
-                None => continue,
-            };
-            let session_id = match codirigent_id_str.parse::<u64>() {
-                Ok(n) => SessionId(n),
-                Err(_) => continue,
-            };
-
-            let signal_fingerprint = hook_signal_fingerprint(
-                &signal.status,
-                signal.cli_type.as_deref(),
-                signal.cli_session_id.as_deref(),
-                codex_execution_mode_from_approval_and_sandbox(
-                    signal.approval_policy.as_deref(),
-                    signal.sandbox_policy_type.as_deref(),
-                ),
-            );
-            let last_seen = self
-                .polling
-                .last_processed_hook_signal_ts
-                .get(&signal_file_id)
-                .copied();
-            if !should_apply_hook_signal(last_seen, signal.ts, signal_fingerprint) {
-                continue;
-            }
-            self.polling.last_processed_hook_signal_ts.insert(
-                signal_file_id.clone(),
-                ProcessedHookSignal {
-                    ts: signal.ts,
-                    fingerprint: signal_fingerprint,
-                },
-            );
-
-            // Store the Claude/Gemini/Codex session_id on the Session for resume on next startup.
-            // Persist to disk whenever it changes (first assignment or new session
-            // started in the same terminal) so a clean app quit never loses the ID.
-            let mut id_changed = false;
-
-            let cli_type = signal.cli_type.as_deref().unwrap_or(CLI_TYPE_CLAUDE);
-            if let Some(cli_type) = cli_type_from_hook_signal_name(cli_type) {
-                self.clipboard
-                    .clipboard_service
-                    .set_session_cli_type(session_id, cli_type);
-            }
-            let resolved_cli_session_id = resolve_hook_cli_session_id(
-                &signal_file_id,
-                signal.cli_session_id.as_deref(),
-                session_id,
-            );
-            match cli_type {
-                CLI_TYPE_CLAUDE => {
-                    if let Some(cli_session_id) = resolved_cli_session_id.as_deref() {
-                        id_changed = self
-                            .session_manager
-                            .lock()
-                            .ok()
-                            .and_then(|mgr| {
-                                mgr.with_session_state_mut(session_id, |state| {
-                                    let changed = state.session.claude_session_id.as_deref()
-                                        != Some(cli_session_id);
-                                    state.session.claude_session_id =
-                                        Some(cli_session_id.to_owned());
-                                    changed
-                                })
-                            })
-                            .unwrap_or(false);
-                    }
-                }
-                CLI_TYPE_GEMINI => {
-                    if let Some(cli_session_id) = resolved_cli_session_id.as_deref() {
-                        id_changed = self
-                            .session_manager
-                            .lock()
-                            .ok()
-                            .and_then(|mgr| {
-                                mgr.with_session_state_mut(session_id, |state| {
-                                    let changed = state.session.gemini_session_id.as_deref()
-                                        != Some(cli_session_id);
-                                    state.session.gemini_session_id =
-                                        Some(cli_session_id.to_owned());
-                                    changed
-                                })
-                            })
-                            .unwrap_or(false);
-                    }
-                }
-                CLI_TYPE_CODEX => {
-                    if let Some(cli_session_id) = resolved_cli_session_id.as_deref() {
-                        id_changed = self
-                            .session_manager
-                            .lock()
-                            .ok()
-                            .and_then(|mgr| {
-                                mgr.with_session_state_mut(session_id, |state| {
-                                    let changed = state.session.codex_session_id.as_deref()
-                                        != Some(cli_session_id);
-                                    state.session.codex_session_id =
-                                        Some(cli_session_id.to_owned());
-                                    changed
-                                })
-                            })
-                            .unwrap_or(false);
-                    }
-                }
-                _ => {}
-            }
-
-            let _ = id_changed;
-
-            let focused_id = self.workspace.focused_session_id();
-            let new_status = match signal.status.as_str() {
-                "working" => SessionStatus::Working,
-                "needs_attention" => SessionStatus::NeedsAttention,
-                // response_ready: use ResponseReady only for non-focused sessions.
-                // If the session is already in view, the user is seeing the response,
-                // so treat it as plain Idle to avoid a spurious badge.
-                "response_ready" => {
-                    if Some(session_id) == focused_id {
-                        SessionStatus::Idle
-                    } else {
-                        SessionStatus::ResponseReady
-                    }
-                }
-                _ => SessionStatus::Idle,
-            };
-
-            if let Ok(mut readers) = self.cli_readers.lock() {
-                let status_since = readers
-                    .cached_status
-                    .get(&session_id)
-                    .filter(|c| c.status == new_status)
-                    .map(|c| c.status_since)
-                    .unwrap_or_else(Instant::now);
-                readers.cached_status.insert(
-                    session_id,
-                    CachedCliStatus {
-                        status: new_status,
-                        tool_name: signal.cli_type.clone(),
-                        seen_at: Instant::now(),
-                        source: CliStatusSource::Hook,
-                        status_since,
-                        ttl: Self::HOOK_SIGNAL_CACHE_TTL,
-                    },
-                );
-            }
-
-            let prev_status = self
-                .workspace
-                .session(session_id)
-                .map(|s| s.status)
-                .unwrap_or(SessionStatus::Idle);
-
-            // Fire AttentionRequired on transition to NeedsAttention.
-            if new_status == SessionStatus::NeedsAttention
-                && prev_status != SessionStatus::NeedsAttention
-            {
-                self.event_bus.publish(CodirigentEvent::AttentionRequired {
-                    session_id,
-                    detail: None,
-                });
-                let name = self
-                    .workspace
-                    .session(session_id)
-                    .map(|s| s.name.clone())
-                    .unwrap_or_else(|| format!("Session {}", session_id.0));
-                // Hook signals carry no tool detail — treat as InputRequired.
-                // If the hook protocol is later extended with a tool name, this
-                // can be dispatched as PermissionPrompt with detail.
-                self.notification_manager.notify(
-                    NotificationType::InputRequired,
-                    session_id,
-                    &name,
-                    None,
-                );
-            }
-
-            // Fire ResponseReady notification on transition from Working → ResponseReady.
-            if new_status == SessionStatus::ResponseReady && prev_status == SessionStatus::Working {
-                let name = self
-                    .workspace
-                    .session(session_id)
-                    .map(|s| s.name.clone())
-                    .unwrap_or_else(|| format!("Session {}", session_id.0));
-                self.notification_manager.notify(
-                    NotificationType::ResponseReady,
-                    session_id,
-                    &name,
-                    None,
-                );
-            }
-        }
-    }
-
     /// Try to compact a session before verification.
     /// Returns true if compaction was started, false if skipped.
     fn try_compact(&mut self, session_id: SessionId) -> bool {
@@ -2347,7 +2104,7 @@ mod tests {
 
     #[test]
     fn hook_signal_invalid_codirigent_id_not_parseable() {
-        // Non-numeric IDs are rejected at parse time in check_hook_signals.
+        // Non-numeric IDs are rejected at parse time in hook signal processing.
         let bad_id = "not-a-number".to_owned();
         assert!(bad_id.parse::<u64>().is_err());
     }
