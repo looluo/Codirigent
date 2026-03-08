@@ -64,19 +64,14 @@ impl WorkspaceView {
         let cell_height = terminal_view.cell_height();
         let font_size = terminal_view.font_size();
         let font_family_str = terminal_view.font_family().to_owned();
-        let cursor_rect = terminal_view.cursor_rect();
-        // Derive the IME anchor from cursor_rect when the cursor is visible
-        // (zero extra cost — position already read). Only call ime_anchor_pos()
-        // when the cursor is hidden (\e[?25l), which acquires the lock once more
-        // but avoids a double-acquisition on every frame where cursor is visible.
-        let ime_anchor = cursor_rect
-            .as_ref()
-            .map(|c| (c.x, c.y))
-            .or_else(|| terminal_view.ime_anchor_pos());
 
-        // Terminal runs/backgrounds are cached per row and only rebuilt when dirty.
+        // Rebuild row caches first — this also refreshes cached_cursor_viewport_pos.
         let cached_rows = terminal_view.render_rows();
         let shaped_rows = terminal_view.shaped_rows(window.text_system());
+
+        // Both read from cache — pure field access, no terminal state touch.
+        let cursor_rect = terminal_view.cursor_rect();
+        let ime_anchor = terminal_view.ime_anchor_pos();
 
         // Pre-convert cursor color (cursor position changes per-frame so not cacheable in content)
         let cursor_data = cursor_rect.map(|c| {

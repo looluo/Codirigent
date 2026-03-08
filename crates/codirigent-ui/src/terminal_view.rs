@@ -239,6 +239,10 @@ pub struct TerminalView {
     cached_terminal_bg: gpui::Hsla,
     /// Cached GPUI Hsla for terminal foreground (avoids per-frame conversion).
     cached_terminal_fg: gpui::Hsla,
+    /// Cached viewport-relative cursor (x, y) in pixels.
+    /// Updated alongside row caches in `ensure_row_caches()` so the render
+    /// pass never calls `renderable_content()` for cursor/IME positioning.
+    cached_cursor_viewport_pos: Option<(f32, f32)>,
 }
 
 impl TerminalView {
@@ -283,6 +287,7 @@ impl TerminalView {
             dimensions_initialized: false,
             cached_terminal_bg,
             cached_terminal_fg,
+            cached_cursor_viewport_pos: None,
         }
     }
 
@@ -474,12 +479,17 @@ impl TerminalView {
     /// Returns `None` if the cursor is not visible or is scrolled off-screen.
     /// Uses viewport-relative coordinates from `renderable_content()` so the
     /// cursor position is correct when the terminal is scrolled.
+    /// Get cursor rendering information from cached state.
+    ///
+    /// Returns `None` if the cursor is hidden (`\e[?25l`) or off-screen.
+    /// The underlying position is cached in `ensure_row_caches()` so this
+    /// is a pure field read — no terminal state access in the render pass.
     pub fn cursor_rect(&self) -> Option<CursorRect> {
         if !self.terminal.cursor_visible() {
             return None;
         }
 
-        let (x, y) = self.cursor_pos_in_viewport()?;
+        let (x, y) = self.cached_cursor_viewport_pos?;
 
         let shape = if self.focused {
             self.cursor_shape
@@ -497,34 +507,13 @@ impl TerminalView {
         })
     }
 
-    /// Returns the cursor (x, y) position for IME preedit anchoring.
+    /// Returns the cached cursor (x, y) for IME preedit anchoring.
     ///
-    /// Unlike `cursor_rect`, this ignores `\e[?25l` cursor-hide mode so the
-    /// preedit overlay always tracks the real cursor location — even during
-    /// Claude Code / Ink redraw cycles. The hide/show sequence completes
-    /// within a single PTY poll batch, so by the time GPUI renders the next
-    /// frame the cursor is already back at the input row.
+    /// Unlike `cursor_rect`, this ignores `\e[?25l` visibility so the
+    /// preedit overlay tracks the real cursor location even during
+    /// Claude Code / Ink redraw cycles.
     pub fn ime_anchor_pos(&self) -> Option<(f32, f32)> {
-        self.cursor_pos_in_viewport()
-    }
-
-    /// Computes viewport-relative (x, y) pixel position of the cursor.
-    /// Returns `None` if the cursor is scrolled off-screen.
-    fn cursor_pos_in_viewport(&self) -> Option<(f32, f32)> {
-        let content = self.terminal.term().renderable_content();
-        let display_offset = content.display_offset;
-        let cursor_point = content.cursor.point;
-
-        // Convert grid-relative cursor line to viewport-relative row.
-        let viewport_line = cursor_point.line.0 + display_offset as i32;
-        let rows = self.terminal.rows() as usize;
-        if viewport_line < 0 || viewport_line as usize >= rows {
-            return None;
-        }
-
-        let row = viewport_line as usize;
-        let col = cursor_point.column.0;
-        Some((col as f32 * self.cell_width, row as f32 * self.cell_height))
+        self.cached_cursor_viewport_pos
     }
 
     /// Calculate pixel dimensions for the current terminal size.
@@ -648,6 +637,7 @@ impl TerminalView {
                 self.dirty_rows = Some(dirty_rows);
                 self.cached_content = None;
                 self.content_dirty = false;
+                self.refresh_cursor_cache(rows);
                 return;
             }
         }
@@ -664,6 +654,7 @@ impl TerminalView {
         self.dirty_rows = None;
         self.content_dirty = false;
         self.partial_rebuild_allowed = false;
+        self.refresh_cursor_cache(rows);
     }
 
     /// Get cached terminal content, flattening row caches only when requested.
@@ -963,6 +954,24 @@ impl TerminalView {
         };
 
         (row, col, scroll_dir)
+    }
+
+    /// Snapshot the cursor viewport position into `cached_cursor_viewport_pos`.
+    ///
+    /// Called at the end of `ensure_row_caches()` so the render pass can read
+    /// cursor/IME positions without touching terminal state.
+    fn refresh_cursor_cache(&mut self, viewport_rows: usize) {
+        let content = self.terminal.term().renderable_content();
+        let viewport_line = content.cursor.point.line.0 + content.display_offset as i32;
+        if viewport_line >= 0 && (viewport_line as usize) < viewport_rows {
+            let col = content.cursor.point.column.0;
+            self.cached_cursor_viewport_pos = Some((
+                col as f32 * self.cell_width,
+                viewport_line as f32 * self.cell_height,
+            ));
+        } else {
+            self.cached_cursor_viewport_pos = None;
+        }
     }
 
     fn mark_output_dirty(&mut self) {
