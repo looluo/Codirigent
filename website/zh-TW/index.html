@@ -1,25 +1,18 @@
 <!DOCTYPE html>
-<html lang="en">
+<html lang="zh-TW">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Codirigent — The Native Workspace for AI Coding CLIs</title>
-  <meta name="description" content="Run Claude Code, Codex, and Gemini in parallel. Session persistence, status detection, and grid layouts — all from one Rust-native workspace.">
-  <meta property="og:title" content="Codirigent — The Native Workspace for AI Coding CLIs">
-  <meta property="og:description" content="Run Claude Code, Codex, and Gemini in parallel. Session persistence, status detection, and grid layouts.">
+  <title>Codirigent — AI Coding CLI 的專屬工作空間</title>
+  <meta name="description" content="並行執行 Claude Code、Codex 與 Gemini。Session 保存、狀態偵測、網格版面——全在一個以 Rust 打造的工作空間中。">
+  <meta property="og:title" content="Codirigent — AI Coding CLI 的專屬工作空間">
+  <meta property="og:description" content="並行執行 Claude Code、Codex 與 Gemini。Session 保存、狀態偵測、網格版面。">
   <meta property="og:type" content="website">
-  <meta property="og:url" content="https://codirigent.dev">
-  <link rel="icon" href="favicon.svg" type="image/svg+xml">
-  <script>
-    (function(){
-      if(localStorage.getItem('lang')==='en')return;
-      var l=navigator.language||navigator.userLanguage||'';
-      if(/^zh/i.test(l))window.location.replace('/zh-TW/');
-    })();
-  </script>
+  <meta property="og:url" content="https://codirigent.dev/zh-TW/">
+  <link rel="icon" href="../favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Noto+Sans+TC:wght@400;500;700&display=swap" rel="stylesheet">
   <style>
     :root{
       --bg:#040404;--bg-card:#0a0a0c;--bg-elevated:#111114;
@@ -27,7 +20,7 @@
       --soft:rgba(245,245,246,.74);--muted:rgba(245,245,246,.36);--dim:rgba(245,245,246,.5);
       --text:#f5f5f6;--text-secondary:#a1a1aa;--text-muted:#52525b;
       --mint:#8df7c1;--green:#39d353;--red:#ff6b6b;--yellow:#fbbf24;
-      --display:"Space Grotesk",sans-serif;--body:"Plus Jakarta Sans",sans-serif;--mono:"IBM Plex Mono",monospace;
+      --display:"Space Grotesk",sans-serif;--body:"Noto Sans TC","Plus Jakarta Sans",sans-serif;--mono:"IBM Plex Mono",monospace;
       --ease:cubic-bezier(.22,1,.36,1);--max-w:1100px;--gutter:24px
     }
     *{box-sizing:border-box;margin:0;padding:0}
@@ -87,7 +80,7 @@
     .badges-right .badge:nth-child(1){--d:.15s}.badges-right .badge:nth-child(2){--d:.25s}.badges-right .badge:nth-child(3){--d:.35s}
     @keyframes badgeFadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 
-    /* ─── MAIN SECTIONS (semi-transparent, canvas bleeds through) ─── */
+    /* ─── MAIN SECTIONS ─── */
     .main-sections{position:relative;z-index:5;background:rgba(4,4,4,.86)}
     .main-sections::before{content:"";position:absolute;top:-200px;left:0;right:0;height:200px;background:linear-gradient(to bottom,transparent,rgba(4,4,4,.86));pointer-events:none;z-index:5}
     .main-sections::after{content:"";position:absolute;top:0;left:8%;right:8%;height:1px;background:linear-gradient(90deg,transparent,rgba(141,247,193,.15),transparent);z-index:6}
@@ -95,7 +88,7 @@
     .section-label{font-family:var(--mono);font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--mint);margin-bottom:12px;opacity:.7}
     .section-title{margin-bottom:48px;font-size:clamp(1.8rem,3.5vw,2.6rem)}
 
-    /* ─── FEATURES (bento grid) ─── */
+    /* ─── FEATURES ─── */
     #features{background:radial-gradient(ellipse 900px 700px at 10% 40%,rgba(141,247,193,.045),transparent)}
     .bento{display:grid;grid-template-columns:1.2fr 1fr;gap:12px}
     .bento-card{padding:32px 28px;border-radius:16px;border:1px solid rgba(141,247,193,.06);background:rgba(255,255,255,.02);backdrop-filter:blur(12px);transition:background .3s,border-color .3s,box-shadow .3s,transform .3s var(--ease)}
@@ -108,7 +101,7 @@
     .bento-hero h3{font-size:1.4rem;margin-bottom:12px}
     .bento-card p{font-size:.88rem;line-height:1.6}
 
-    /* ─── GALLERY (3D showcase) ─── */
+    /* ─── GALLERY ─── */
     #screenshots{background:radial-gradient(ellipse 900px 700px at 85% 60%,rgba(141,247,193,.04),transparent)}
     .showcase{margin-top:40px}
     .showcase-frame{border-radius:16px;overflow:hidden;border:1px solid rgba(141,247,193,.08);box-shadow:24px 20px 80px rgba(0,0,0,.5),0 0 40px rgba(141,247,193,.03);transform:perspective(1400px) rotateY(-2deg) rotateX(1.5deg);transition:transform .6s var(--ease),box-shadow .6s var(--ease)}
@@ -121,7 +114,7 @@
     .showcase-dot:hover:not(.active){color:var(--text-secondary);border-color:rgba(255,255,255,.12)}
     .showcase-caption{text-align:center;font-size:.8rem;color:var(--mint);margin-top:18px;opacity:.6}
 
-    /* ─── PERFORMANCE (editorial stats) ─── */
+    /* ─── PERFORMANCE ─── */
     #performance{background:radial-gradient(ellipse 900px 700px at 75% 30%,rgba(141,247,193,.045),transparent)}
     .section-sub{max-width:520px;font-size:1rem;line-height:1.7;color:var(--text-secondary);margin-top:12px}
     .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:56px}
@@ -134,7 +127,7 @@
     .stat-vs{font:400 .62rem/1 var(--mono);color:var(--text-muted);margin-top:6px}
     .perf-note{text-align:center;font:400 .7rem/1 var(--mono);color:var(--text-muted);margin-top:28px;letter-spacing:.03em}
 
-    /* ─── INSTALL (terminal centerpiece) ─── */
+    /* ─── INSTALL ─── */
     #install{background:radial-gradient(ellipse 900px 700px at 15% 50%,rgba(141,247,193,.04),transparent)}
     #install .section-title,#install .section-label{text-align:center}
     .install-sub{max-width:480px;margin:12px auto 0;text-align:center;font-size:1rem;line-height:1.7;color:var(--text-secondary)}
@@ -185,48 +178,48 @@
   <canvas id="field"></canvas>
 
   <nav class="nav" id="nav">
-    <a class="brand" href="/">
+    <a class="brand" href="/zh-TW/">
       <svg width="26" height="26" viewBox="0 0 120 120" fill="none"><rect x="15" y="15" width="25" height="25" rx="5" fill="#39d353"/><rect x="47" y="15" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="79" y="15" width="25" height="25" rx="5" fill="#39d353" opacity=".4"/><rect x="15" y="47" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="47" y="47" width="25" height="25" rx="5" fill="#FF6B6B"/><rect x="79" y="47" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="15" y="79" width="25" height="25" rx="5" fill="#39d353" opacity=".4"/><rect x="47" y="79" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="79" y="79" width="25" height="25" rx="5" fill="#39d353"/><path d="M55 55L62 60L55 65" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><line x1="62" y1="60" x2="72" y2="60" stroke="#fff" stroke-width="3" stroke-linecap="round"/></svg>
       <span>Codirigent</span>
     </a>
     <div class="links">
-      <a href="#screenshots">Preview</a>
-      <a href="#features">Features</a>
-      <a href="#performance">Performance</a>
+      <a href="#screenshots">預覽</a>
+      <a href="#features">功能特色</a>
+      <a href="#performance">效能</a>
     </div>
     <div class="nav-right">
-      <a class="nav-lang" href="/zh-TW/" onclick="localStorage.setItem('lang','zh-TW')">繁體中文</a>
+      <a class="nav-lang" href="/" onclick="localStorage.setItem('lang','en')">EN</a>
       <a class="nav-gh" href="https://github.com/oso95/Codirigent" target="_blank" rel="noopener" aria-label="GitHub">
         <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
       </a>
-      <a class="nav-cta" href="https://github.com/oso95/Codirigent/releases/latest" id="nav-dl">Download</a>
+      <a class="nav-cta" href="https://github.com/oso95/Codirigent/releases/latest" id="nav-dl">下載</a>
     </div>
   </nav>
 
   <div class="badges-left">
-    <span class="badge">Built on Rust</span>
-    <span class="badge">Session persistence</span>
-    <span class="badge">Status detection</span>
+    <span class="badge">以 Rust 打造</span>
+    <span class="badge">Session 保存</span>
+    <span class="badge">狀態偵測</span>
   </div>
   <div class="badges-right">
-    <span class="badge">PTY-native sessions</span>
-    <span class="badge">Custom pane layouts</span>
-    <span class="badge">Clipboard handoff</span>
+    <span class="badge">PTY 原生 Session</span>
+    <span class="badge">自訂面板版面</span>
+    <span class="badge">剪貼簿傳遞</span>
   </div>
 
   <section class="hero">
-    <div class="eyebrow hero-in hero-in-1">Open source &middot; Rust-native multi-agent workspace</div>
-    <h1 class="hero-in hero-in-2"><span class="h-dim">The native workspace</span><span class="h-bright">for AI coding CLIs</span></h1>
-    <p class="sub hero-in hero-in-3">Run Claude Code, Codex, and Gemini in parallel from one persistent workspace. Shape the grid, track status at a glance, and stay inside the flow.</p>
+    <div class="eyebrow hero-in hero-in-1">開源 &middot; 以 Rust 打造的多代理工作空間</div>
+    <h1 class="hero-in hero-in-2"><span class="h-dim">AI Coding CLI 的</span><span class="h-bright">專屬工作空間</span></h1>
+    <p class="sub hero-in hero-in-3">在同一個工作空間中並行執行 Claude Code、Codex 與 Gemini。自訂網格版面、一眼掌握狀態，保持在心流之中。</p>
     <div class="hero-actions hero-in hero-in-4">
       <div class="downloads">
         <a class="btn btn-primary" href="https://github.com/oso95/Codirigent/releases/latest" id="dl-win" target="_blank" rel="noopener">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
-          Download for Windows
+          下載 Windows 版
         </a>
         <a class="btn btn-secondary" href="https://github.com/oso95/Codirigent/releases/latest" id="dl-mac" target="_blank" rel="noopener">
           <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
-          Download for macOS
+          下載 macOS 版
         </a>
       </div>
     </div>
@@ -234,156 +227,156 @@
 
   <main class="main-sections">
 
-    <!-- Screenshots -->
+    <!-- 預覽 -->
     <section class="section" id="screenshots">
       <div class="container">
         <div class="reveal">
-          <div class="section-label">Preview</div>
-          <h2 class="section-title">See it in action</h2>
+          <div class="section-label">預覽</div>
+          <h2 class="section-title">實際運作展示</h2>
         </div>
         <div class="showcase reveal r-d1">
           <div class="showcase-frame">
-            <div class="showcase-slide active" data-caption="Multi-session grid &mdash; run Claude Code, Codex, and Gemini side by side">
+            <div class="showcase-slide active" data-caption="多 Session 網格 — 並排執行 Claude Code、Codex 與 Gemini">
               <video autoplay loop muted playsinline>
-                <source src="video/workspace.mp4" type="video/mp4">
+                <source src="../video/workspace.mp4" type="video/mp4">
               </video>
             </div>
-            <div class="showcase-slide" data-caption="Split panes horizontally or vertically and preview your layout before applying">
+            <div class="showcase-slide" data-caption="水平或垂直分割面板，套用前可預覽版面配置">
               <video autoplay loop muted playsinline>
-                <source src="video/customLayout.mp4" type="video/mp4">
+                <source src="../video/customLayout.mp4" type="video/mp4">
               </video>
             </div>
-            <div class="showcase-slide" data-caption="Configure your default shell, editor, working directory, and startup behaviour">
+            <div class="showcase-slide" data-caption="設定預設 Shell、編輯器、工作目錄與啟動行為">
               <video autoplay loop muted playsinline>
-                <source src="video/settings.mp4" type="video/mp4">
+                <source src="../video/settings.mp4" type="video/mp4">
               </video>
             </div>
-            <div class="showcase-slide" data-caption="Project-aware file tree that syncs to the focused session">
+            <div class="showcase-slide" data-caption="專案感知的檔案樹，隨時同步至聚焦的 Session">
               <video autoplay loop muted playsinline>
-                <source src="video/fileExplorer.mp4" type="video/mp4">
+                <source src="../video/fileExplorer.mp4" type="video/mp4">
               </video>
             </div>
-            <div class="showcase-slide" data-caption="Manage branches and worktrees without leaving the workspace">
-              <img src="images/gitWorktree.png" alt="Codirigent git worktrees panel" loading="lazy">
+            <div class="showcase-slide" data-caption="不離開工作空間即可管理分支與 Worktree">
+              <img src="../images/gitWorktree.png" alt="Codirigent git worktrees 面板" loading="lazy">
             </div>
           </div>
           <nav class="showcase-nav">
-            <button class="showcase-dot active" data-slide="0">Workspace</button>
-            <button class="showcase-dot" data-slide="1">Custom Layout</button>
-            <button class="showcase-dot" data-slide="2">Settings</button>
-            <button class="showcase-dot" data-slide="3">File Explorer</button>
-            <button class="showcase-dot" data-slide="4">Git Worktrees</button>
+            <button class="showcase-dot active" data-slide="0">工作空間</button>
+            <button class="showcase-dot" data-slide="1">自訂版面</button>
+            <button class="showcase-dot" data-slide="2">設定</button>
+            <button class="showcase-dot" data-slide="3">檔案瀏覽器</button>
+            <button class="showcase-dot" data-slide="4">Git Worktree</button>
           </nav>
-          <div class="showcase-caption" id="showcase-caption">Multi-session grid &mdash; run Claude Code, Codex, and Gemini side by side</div>
+          <div class="showcase-caption" id="showcase-caption">多 Session 網格 — 並排執行 Claude Code、Codex 與 Gemini</div>
         </div>
       </div>
     </section>
 
-    <!-- Features -->
+    <!-- 功能特色 -->
     <section class="section" id="features">
       <div class="container">
         <div class="reveal">
-          <div class="section-label">Features</div>
-          <h2 class="section-title">Built for multi-CLI workflows</h2>
+          <div class="section-label">功能特色</div>
+          <h2 class="section-title">專為多 CLI 工作流程打造</h2>
         </div>
         <div class="bento reveal r-d1">
           <div class="bento-card bento-hero">
             <div class="bento-icon">
               <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
             </div>
-            <h3>Multi-Session Grid</h3>
-            <p>Run Claude Code, Codex, and Gemini simultaneously in a tiled terminal. Each session gets its own PTY &mdash; fully isolated, fully parallel.</p>
+            <h3>多 Session 網格</h3>
+            <p>在分割終端中同時執行 Claude Code、Codex 與 Gemini。每個 Session 擁有獨立的 PTY——完全隔離，完全並行。</p>
           </div>
           <div class="bento-card">
             <div class="bento-icon">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
             </div>
-            <h3>Session Persistence</h3>
-            <p>Sessions survive restarts with working directories, scroll history, and state.</p>
+            <h3>Session 保存</h3>
+            <p>重新啟動後 Session 依然存在，工作目錄、捲動記錄與狀態完整保留。</p>
           </div>
           <div class="bento-card">
             <div class="bento-icon">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
             </div>
-            <h3>Status Detection</h3>
-            <p>Working, Idle, or Needs Attention &mdash; know which CLI needs you at a glance.</p>
+            <h3>狀態偵測</h3>
+            <p>工作中、閒置或需要注意——一眼就知道哪個 CLI 需要你。</p>
           </div>
           <div class="bento-card bento-wide">
             <div class="bento-icon">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 14l2 2 4-4"/></svg>
             </div>
-            <h3>Clipboard Integration</h3>
-            <p>Paste screenshots and text across sessions. Share context between CLIs without leaving the workspace.</p>
+            <h3>剪貼簿整合</h3>
+            <p>在各 Session 之間貼上截圖與文字，不離開工作空間即可在 CLI 間共享情境。</p>
           </div>
           <div class="bento-card bento-wide">
             <div class="bento-icon">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="3" y="3" width="8" height="11" rx="1"/><rect x="13" y="3" width="8" height="5" rx="1"/><rect x="13" y="11" width="8" height="10" rx="1"/><rect x="3" y="17" width="8" height="4" rx="1"/></svg>
             </div>
-            <h3>Custom Layout</h3>
-            <p>Split any pane horizontally or vertically, remove panes, and preview the result &mdash; build exactly the layout you need.</p>
+            <h3>自訂版面</h3>
+            <p>水平或垂直分割任意面板、移除面板，並預覽結果——打造完全符合需求的版面配置。</p>
           </div>
         </div>
       </div>
     </section>
 
-    <!-- Performance -->
+    <!-- 效能 -->
     <section class="section" id="performance">
       <div class="container">
         <div class="reveal">
-          <div class="section-label">Performance</div>
-          <h2 class="section-title">Native Rust. No Electron.</h2>
-          <p class="section-sub">Built with GPUI rendering &mdash; the same GPU-accelerated framework behind Zed. Every byte counts.</p>
+          <div class="section-label">效能</div>
+          <h2 class="section-title">原生 Rust。無 Electron。</h2>
+          <p class="section-sub">以 GPUI 渲染引擎打造——與 Zed 相同的 GPU 加速框架。每一個位元組都有其價值。</p>
         </div>
         <div class="stats reveal r-d1">
           <div class="stat">
             <div class="stat-val"><span class="stat-num">~40</span><span class="stat-unit">MB</span></div>
-            <div class="stat-label">Memory</div>
-            <div class="stat-vs">vs ~500 MB (Electron)</div>
+            <div class="stat-label">記憶體用量</div>
+            <div class="stat-vs">對比 ~500 MB（Electron）</div>
           </div>
           <div class="stat">
             <div class="stat-val"><span class="stat-num">&lt;1</span><span class="stat-unit">%</span></div>
-            <div class="stat-label">CPU at idle</div>
-            <div class="stat-vs">vs ~3% (Electron)</div>
+            <div class="stat-label">閒置 CPU</div>
+            <div class="stat-vs">對比 ~3%（Electron）</div>
           </div>
           <div class="stat">
             <div class="stat-val"><span class="stat-num">&lt;0.5</span><span class="stat-unit">s</span></div>
-            <div class="stat-label">Startup</div>
-            <div class="stat-vs">vs ~3s (Electron)</div>
+            <div class="stat-label">啟動時間</div>
+            <div class="stat-vs">對比 ~3s（Electron）</div>
           </div>
           <div class="stat">
             <div class="stat-val"><span class="stat-num">22</span><span class="stat-unit">MB</span></div>
-            <div class="stat-label">Disk footprint</div>
-            <div class="stat-vs">vs ~500 MB (Electron)</div>
+            <div class="stat-label">磁碟佔用</div>
+            <div class="stat-vs">對比 ~500 MB（Electron）</div>
           </div>
         </div>
-        <p class="perf-note reveal r-d2">Measured on Windows 11 &middot; 5 sessions open &middot; Codirigent v0.1.0-alpha</p>
+        <p class="perf-note reveal r-d2">測量環境：Windows 11 &middot; 5 個 Session 開啟中 &middot; Codirigent v0.1.0-alpha</p>
       </div>
     </section>
 
-    <!-- Install -->
+    <!-- 從原始碼建置 -->
     <section class="section" id="install">
       <div class="container">
         <div class="reveal">
-          <div class="section-label" style="text-align:center">Build from source</div>
-          <h2 class="section-title" style="text-align:center">Open source &amp; self-hostable</h2>
-          <p class="install-sub">GPL-3.0 licensed. Clone the repo and run with Cargo &mdash; no build system beyond Rust required.</p>
+          <div class="section-label" style="text-align:center">從原始碼建置</div>
+          <h2 class="section-title" style="text-align:center">開源 &amp; 可自行架設</h2>
+          <p class="install-sub">GPL-3.0 授權。Clone 後以 Cargo 執行——除 Rust 外無需其他建置系統。</p>
         </div>
         <div class="reveal r-d1">
           <div class="terminal-block">
             <div class="terminal-chrome">
               <div class="term-dots"><span></span><span></span><span></span></div>
               <span class="terminal-title">Terminal</span>
-              <button class="copy-btn" id="copy-btn">Copy</button>
+              <button class="copy-btn" id="copy-btn">複製</button>
             </div>
             <div class="terminal-body" id="code-content">
-              <span class="cdim"># Requires Rust 1.75+ (rustup.rs)</span><br><br>
+              <span class="cdim"># 需要 Rust 1.75+（rustup.rs）</span><br><br>
               <span class="chl">git clone</span> https://github.com/oso95/Codirigent.git<br>
               <span class="chl">cd</span> Codirigent<br>
               <span class="chl">cargo install</span> --path . --all-features<br>
               <span class="chl">cargo install</span> --path crates/codirigent-hook
             </div>
           </div>
-          <div class="install-req">Requires Rust 1.75+ &middot; Windows or macOS</div>
+          <div class="install-req">需要 Rust 1.75+ &middot; Windows 或 macOS</div>
         </div>
       </div>
     </section>
@@ -394,12 +387,12 @@
         <div class="footer-inner">
           <div class="footer-left">
             <svg width="18" height="18" viewBox="0 0 120 120" fill="none"><rect x="15" y="15" width="25" height="25" rx="5" fill="#39d353"/><rect x="47" y="15" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="79" y="15" width="25" height="25" rx="5" fill="#39d353" opacity=".4"/><rect x="15" y="47" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="47" y="47" width="25" height="25" rx="5" fill="#FF6B6B"/><rect x="79" y="47" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="15" y="79" width="25" height="25" rx="5" fill="#39d353" opacity=".4"/><rect x="47" y="79" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="79" y="79" width="25" height="25" rx="5" fill="#39d353"/></svg>
-            <span class="footer-text">GPL-3.0 &middot; Built with Rust &amp; GPUI</span>
+            <span class="footer-text">GPL-3.0 &middot; 以 Rust &amp; GPUI 打造</span>
           </div>
           <div class="footer-links">
             <a href="https://github.com/oso95/Codirigent" target="_blank" rel="noopener">GitHub</a>
-            <a href="https://github.com/oso95/Codirigent/releases" target="_blank" rel="noopener">Releases</a>
-            <a href="https://github.com/oso95/Codirigent/blob/main/LICENSE" target="_blank" rel="noopener">License</a>
+            <a href="https://github.com/oso95/Codirigent/releases" target="_blank" rel="noopener">版本發布</a>
+            <a href="https://github.com/oso95/Codirigent/blob/main/LICENSE" target="_blank" rel="noopener">授權條款</a>
           </div>
         </div>
       </div>
@@ -665,8 +658,8 @@
     var btn = this;
     var code = document.getElementById('code-content').textContent;
     navigator.clipboard.writeText(code.trim()).then(function () {
-      btn.textContent = 'Copied!';
-      setTimeout(function () { btn.textContent = 'Copy'; }, 2000);
+      btn.textContent = '已複製！';
+      setTimeout(function () { btn.textContent = '複製'; }, 2000);
     });
   });
 
