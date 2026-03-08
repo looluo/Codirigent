@@ -423,9 +423,14 @@ impl InputDetector {
     /// pending pattern match) are skipped because their status only changes
     /// through [`set_shell_state`] or [`process_output`], not from
     /// time-based heuristics. This avoids unnecessary work per tick.
-    pub fn tick(&mut self) {
+    /// Advance status decay for eligible sessions.
+    ///
+    /// Returns the IDs of sessions whose detector status actually changed,
+    /// allowing the caller to skip reconciliation for unchanged sessions.
+    pub fn tick(&mut self) -> Vec<SessionId> {
         let session_ids: Vec<SessionId> = self.sessions.keys().copied().collect();
         let mut skipped = 0usize;
+        let mut changed = Vec::new();
         for session_id in &session_ids {
             let needs_tick = self
                 .sessions
@@ -433,12 +438,23 @@ impl InputDetector {
                 .map(|s| s.shell_state.is_none() || s.pattern_matched.is_some())
                 .unwrap_or(false);
             if needs_tick {
+                let old_status = self.sessions.get(session_id).map(|s| s.current_status);
                 self.update_session_status(*session_id);
+                let new_status = self.sessions.get(session_id).map(|s| s.current_status);
+                if old_status != new_status {
+                    changed.push(*session_id);
+                }
             } else {
                 skipped += 1;
             }
         }
-        trace!(total = session_ids.len(), skipped, "detector_tick");
+        trace!(
+            total = session_ids.len(),
+            skipped,
+            changed = changed.len(),
+            "detector_tick"
+        );
+        changed
     }
 
     /// Get the configuration.

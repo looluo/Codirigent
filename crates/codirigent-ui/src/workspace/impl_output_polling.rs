@@ -482,16 +482,22 @@ impl WorkspaceView {
     /// Windows PTY path), where `process_output()` can move a session into
     /// `Working` but only `tick()` can later decay it back to `Idle`.
     fn tick_detector_statuses(&mut self) -> bool {
-        let session_ids: Vec<SessionId> = self.terminals.keys().copied().collect();
-        if session_ids.is_empty() {
+        let has_sessions = !self.terminals.is_empty();
+        if !has_sessions {
             return false;
         }
 
-        let session_count = session_ids.len();
-        trace!(session_count, "tick_detector_statuses");
-        self.with_detector(|detector| detector.tick());
+        // tick() returns only sessions whose detector status actually changed,
+        // so we only run the full reconciler for those — avoiding per-session
+        // lock acquisition for the common case where nothing changed.
+        let changed_ids = self.with_detector(|detector| detector.tick());
 
-        session_ids.into_iter().fold(false, |dirty, session_id| {
+        if changed_ids.is_empty() {
+            return false;
+        }
+
+        trace!(changed = changed_ids.len(), "tick_detector_statuses");
+        changed_ids.into_iter().fold(false, |dirty, session_id| {
             dirty | self.sync_session_status(session_id)
         })
     }
