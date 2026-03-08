@@ -766,14 +766,14 @@ mod tests {
 
     #[test]
     fn test_get_status_if_recent_applies_age_gate() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("temp dir should be created");
         let sessions_dir = tmp
             .path()
             .join("sessions")
             .join("2026")
             .join("02")
             .join("14");
-        std::fs::create_dir_all(&sessions_dir).unwrap();
+        std::fs::create_dir_all(&sessions_dir).expect("sessions dir should be created");
 
         let rollout_path = sessions_dir.join("rollout-recent.jsonl");
         std::fs::write(
@@ -781,7 +781,7 @@ mod tests {
             r#"{"type":"session_meta","payload":{"cwd":"/Users/test/project","approval_mode":"suggest"}}
 {"type":"event_msg","payload":{"type":"turn_complete"}}"#,
         )
-        .unwrap();
+        .expect("rollout file should be written");
 
         let mut reader = CodexSessionReader {
             codex_home: tmp.path().to_path_buf(),
@@ -826,14 +826,14 @@ mod tests {
 
     #[test]
     fn test_saved_bypass_mode_keeps_pending_tool_working_without_rollout_approval_mode() {
-        let tmp = TempDir::new().unwrap();
+        let tmp = TempDir::new().expect("temp dir should be created");
         let sessions_dir = tmp
             .path()
             .join("sessions")
             .join("2026")
             .join("03")
             .join("07");
-        fs::create_dir_all(&sessions_dir).unwrap();
+        fs::create_dir_all(&sessions_dir).expect("sessions dir should be created");
 
         let rollout_path = sessions_dir.join("rollout-123456-codex-session.jsonl");
         fs::write(
@@ -841,7 +841,7 @@ mod tests {
             r#"{"type":"session_meta","payload":{"id":"codex-session","cwd":"/Users/test/project"}}
 {"type":"response_item","payload":{"type":"function_call","call_id":"c1","name":"shell"}}"#,
         )
-        .unwrap();
+        .expect("rollout file should be written");
 
         let mut reader = CodexSessionReader {
             codex_home: tmp.path().to_path_buf(),
@@ -857,7 +857,7 @@ mod tests {
                 None,
                 Some(CodexExecutionMode::Bypass),
             )
-            .unwrap();
+            .expect("snapshot should be found");
 
         assert_eq!(snapshot.status, CodexSessionStatus::Working);
         assert_eq!(snapshot.session_id.as_deref(), Some("codex-session"));

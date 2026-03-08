@@ -733,7 +733,7 @@ mod tests {
         let mut detector = create_test_detector();
         detector
             .start_monitoring(SessionId(1), std::process::id())
-            .unwrap();
+            .expect("monitoring should start");
 
         detector.process_output(SessionId(1), b"streaming output");
 
@@ -746,7 +746,9 @@ mod tests {
     #[test]
     fn test_process_output_preserves_shell_state_priority() {
         let mut detector = create_test_detector();
-        detector.start_monitoring(SessionId(1), 1234).unwrap();
+        detector
+            .start_monitoring(SessionId(1), 1234)
+            .expect("monitoring should start");
         detector.set_shell_state(SessionId(1), ShellState::CommandInputStart);
 
         detector.process_output(SessionId(1), b"echoed prompt text");
@@ -942,7 +944,7 @@ mod tests {
 
         detector
             .start_monitoring(SessionId(1), std::process::id())
-            .unwrap();
+            .expect("monitoring should start");
         detector.process_output(SessionId(1), b"streaming output");
         assert_eq!(
             detector.get_status(SessionId(1)),

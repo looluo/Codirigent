@@ -54,6 +54,33 @@ fn normalize_path(path: &Path) -> PathBuf {
 }
 
 fn normalize_nonexistent_path(path: &Path) -> PathBuf {
+    // Find the deepest existing ancestor and canonicalize it, then append
+    // the non-existent suffix. This resolves symlinks (e.g. /var → /private/var
+    // on macOS) for the existing portion of the path.
+    let mut ancestor: &Path = path;
+    loop {
+        if ancestor.exists() {
+            let canonical = ancestor
+                .canonicalize()
+                .unwrap_or_else(|_| ancestor.to_path_buf());
+            let suffix = path.strip_prefix(ancestor).unwrap_or(Path::new(""));
+            let result = canonical.join(suffix);
+            #[cfg(windows)]
+            {
+                let s = result.to_string_lossy();
+                if let Some(stripped) = s.strip_prefix(r"\\?\") {
+                    return PathBuf::from(stripped);
+                }
+            }
+            return result;
+        }
+        match ancestor.parent() {
+            Some(parent) => ancestor = parent,
+            None => break,
+        }
+    }
+
+    // Fallback: resolve . and .. without canonicalization
     let mut normalized = PathBuf::new();
     for component in path.components() {
         match component {
@@ -851,7 +878,7 @@ mod tests {
     #[test]
     fn test_create_worktree_rejects_path_outside_repo() {
         let (_temp, path) = setup_test_repo();
-        let mut manager = WorktreeManager::new(&path).unwrap();
+        let mut manager = WorktreeManager::new(&path).expect("manager should open test repo");
 
         let external = std::env::temp_dir().join("codirigent-external-worktree");
         let options =
