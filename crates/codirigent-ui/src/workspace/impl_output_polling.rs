@@ -545,10 +545,7 @@ impl WorkspaceView {
                         // not appear here, but handle gracefully.
                     }
                     SessionUpdate::ShellStateChanged { session_id, .. }
-                    | SessionUpdate::WorkingDirectoryChanged { session_id, .. }
-                    | SessionUpdate::OutputDrained { session_id, .. }
-                    | SessionUpdate::StatusHintChanged { session_id, .. }
-                    | SessionUpdate::GitInfoChanged { session_id, .. } => {
+                    | SessionUpdate::WorkingDirectoryChanged { session_id, .. } => {
                         // Phase-2: handled inline during output preparation
                         // (dual-path). Channel copies are informational only
                         // until phase-2 routing replaces the inline path.
