@@ -931,6 +931,30 @@ mod tests {
         detector.tick();
     }
 
+    #[test]
+    fn test_tick_can_clear_stale_working_status() {
+        let event_bus = Arc::new(DefaultEventBus::new(16));
+        let config = DetectorConfig {
+            idle_threshold: Duration::from_millis(0),
+            ..Default::default()
+        };
+        let mut detector = InputDetector::new(config, event_bus);
+
+        detector
+            .start_monitoring(SessionId(1), std::process::id())
+            .unwrap();
+        detector.process_output(SessionId(1), b"streaming output");
+        assert_eq!(
+            detector.get_status(SessionId(1)),
+            Some(SessionStatus::Working)
+        );
+
+        std::thread::sleep(Duration::from_millis(10));
+        detector.tick();
+
+        assert_eq!(detector.get_status(SessionId(1)), Some(SessionStatus::Idle));
+    }
+
     // MonitoredSession tests
     #[test]
     fn test_monitored_session_new() {
