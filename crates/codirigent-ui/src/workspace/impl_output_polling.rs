@@ -778,6 +778,9 @@ impl WorkspaceView {
             // re-entering schedule_session_output_preparation which bypasses
             // the dispatcher's focused-first prioritization.
             self.output_dispatcher.mark_ready(session_id);
+            // Also mark in the legacy pending set so the legacy path picks
+            // it up when CODIRIGENT_LEGACY_PIPELINE=1 is active.
+            self.with_session_manager(|manager| manager.mark_output_pending(session_id));
         }
     }
 
