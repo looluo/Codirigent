@@ -15,7 +15,7 @@ use super::gpui::WorkspaceView;
 use super::types::{CachedCliStatus, CliStatusSource, ProcessedHookSignal};
 use codirigent_core::{
     hook_signals_dir, AssignmentAction, CliType, CodexExecutionMode, CodirigentEvent, EventBus,
-    ProcessMonitor, Session, SessionId, SessionManager, SessionStatus, TaskStatus,
+    ProcessMonitor, Session, SessionId, SessionManager, SessionStatus, SessionUpdate, TaskStatus,
 };
 use codirigent_detector::NotificationType;
 use codirigent_session::cli_detector::CliDetector;
@@ -491,13 +491,24 @@ impl WorkspaceView {
         // Phase 1: Drain the event-driven mpsc channel into the dispatcher.
         if let Some(ref mut rx) = self.update_rx {
             let other_events = self.output_dispatcher.drain_updates(rx);
-            // TODO(event-pipeline-phase-2): route non-OutputReady events to
-            // status providers. For now, log and discard.
-            if !other_events.is_empty() {
-                trace!(
-                    count = other_events.len(),
-                    "discarded non-OutputReady events (not yet routed)"
-                );
+            for event in other_events {
+                match event {
+                    SessionUpdate::ChildProcessExited { session_id } => {
+                        // PTY child exited — mark session ready so it gets a
+                        // final output drain and status re-evaluation.
+                        trace!(
+                            ?session_id,
+                            "ChildProcessExited: marking ready for final drain"
+                        );
+                        self.output_dispatcher.mark_ready(session_id);
+                    }
+                    _ => {
+                        // Phase-2: ShellStateChanged, WorkingDirectoryChanged,
+                        // etc. are handled inline during output preparation
+                        // (dual-path). Channel copies are informational only
+                        // until phase-2 routing replaces the inline path.
+                    }
+                }
             }
         }
 
