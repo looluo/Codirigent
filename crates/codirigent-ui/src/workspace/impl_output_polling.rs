@@ -804,7 +804,7 @@ impl WorkspaceView {
 
         // Gather cached CLI status in a single lock acquisition to ensure
         // consistency between status, source, and age.
-        let (cached_status, cached_tool_name, cached_source, cache_age) = self
+        let (cached_status, cached_source, cache_age) = self
             .cli_readers
             .lock()
             .ok()
@@ -819,10 +819,9 @@ impl WorkspaceView {
                     CliStatusSource::Jsonl => HintSource::Jsonl,
                 };
                 let age = Some(cached.status_since.elapsed());
-                // tool_name not yet consumed by reconciler — skip clone
-                Some((Some(cached.status), None, source, age))
+                Some((Some(cached.status), source, age))
             })
-            .unwrap_or((None, None, HintSource::Detector, None));
+            .unwrap_or((None, HintSource::Detector, None));
 
         let previous_status = self.workspace.session(session_id).map(|s| s.status);
 
@@ -831,7 +830,6 @@ impl WorkspaceView {
             session_id,
             detector_status,
             cached_status,
-            cached_tool_name,
             cached_source,
             cache_age,
             previous_status,
@@ -1857,7 +1855,7 @@ impl WorkspaceView {
         }
 
         let focused_id = self.workspace.focused_session_id();
-        let raw_status = match status.as_str() {
+        let new_status = match status.as_str() {
             "working" => SessionStatus::Working,
             "needs_attention" => SessionStatus::NeedsAttention,
             "response_ready" => {
@@ -1869,7 +1867,6 @@ impl WorkspaceView {
             }
             _ => SessionStatus::Idle,
         };
-        let new_status = raw_status;
 
         if let Ok(mut readers) = self.cli_readers.lock() {
             let status_since = readers

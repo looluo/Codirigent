@@ -58,7 +58,7 @@ impl OutputDispatcher {
         &mut self,
         rx: &mut tokio::sync::mpsc::Receiver<SessionUpdate>,
     ) -> Vec<SessionUpdate> {
-        let mut other_events = Vec::new();
+        let mut other_events = Vec::with_capacity(8);
         let mut drained = 0usize;
         loop {
             if drained >= MAX_EVENTS_PER_DRAIN {
@@ -395,8 +395,8 @@ mod tests {
 
         let _others = dispatcher.drain_updates(&mut rx);
 
-        // Should have drained at most MAX_EVENTS_PER_DRAIN events
-        assert!(dispatcher.ready_count() <= MAX_EVENTS_PER_DRAIN);
+        // Should have drained exactly MAX_EVENTS_PER_DRAIN events (all unique IDs)
+        assert_eq!(dispatcher.ready_count(), MAX_EVENTS_PER_DRAIN);
         // Remaining events should still be in the channel
         assert!(rx.try_recv().is_ok());
     }

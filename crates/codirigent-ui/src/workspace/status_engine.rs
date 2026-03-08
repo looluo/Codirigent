@@ -30,7 +30,6 @@ const STALE_ATTENTION_THRESHOLD: Duration = Duration::from_secs(30);
 /// * `session_id` — The session being reconciled.
 /// * `detector_status` — Status from the process-state / OSC 133 detector.
 /// * `cached_status` — Optional cached status from hook signals or JSONL.
-/// * `cached_tool_name` — Optional tool name from the cached status.
 /// * `cached_source` — Source of the cached status.
 /// * `cache_age` — How long the cached status has been unchanged.
 /// * `previous_status` — The session's current status before reconciliation.
@@ -39,7 +38,6 @@ pub(super) fn reconcile(
     session_id: SessionId,
     detector_status: Option<SessionStatus>,
     cached_status: Option<SessionStatus>,
-    cached_tool_name: Option<String>,
     cached_source: HintSource,
     cache_age: Option<Duration>,
     previous_status: Option<SessionStatus>,
@@ -84,7 +82,7 @@ pub(super) fn reconcile(
         Some(ReconciledStatus {
             status: cached,
             source: cached_source,
-            tool_name: cached_tool_name,
+            tool_name: None,
             changed: previous_status != Some(cached),
             previous_status,
         }),
@@ -101,7 +99,6 @@ mod tests {
         let (result, stale) = reconcile(
             SessionId(1),
             Some(SessionStatus::Working),
-            None,
             None,
             HintSource::Detector,
             None,
@@ -120,7 +117,6 @@ mod tests {
             SessionId(1),
             Some(SessionStatus::Idle),
             Some(SessionStatus::ResponseReady),
-            None,
             HintSource::HookSignal,
             Some(Duration::from_secs(5)),
             Some(SessionStatus::Working),
@@ -138,7 +134,6 @@ mod tests {
             SessionId(1),
             Some(SessionStatus::Working),
             Some(SessionStatus::ResponseReady),
-            None,
             HintSource::HookSignal,
             Some(Duration::from_secs(5)),
             Some(SessionStatus::ResponseReady),
@@ -155,7 +150,6 @@ mod tests {
             SessionId(42),
             Some(SessionStatus::Idle),
             Some(SessionStatus::NeedsAttention),
-            None,
             HintSource::HookSignal,
             Some(Duration::from_secs(60)),
             Some(SessionStatus::NeedsAttention),
@@ -176,7 +170,6 @@ mod tests {
             SessionId(1),
             Some(SessionStatus::Idle),
             Some(SessionStatus::NeedsAttention),
-            None,
             HintSource::HookSignal,
             Some(Duration::from_secs(10)),
             Some(SessionStatus::Working),
@@ -192,7 +185,6 @@ mod tests {
             SessionId(1),
             None,
             Some(SessionStatus::Working),
-            None,
             HintSource::Jsonl,
             None,
             None,
@@ -206,7 +198,6 @@ mod tests {
         let (result, _) = reconcile(
             SessionId(1),
             Some(SessionStatus::Idle),
-            None,
             None,
             HintSource::Detector,
             None,
@@ -224,7 +215,6 @@ mod tests {
             SessionId(1),
             Some(SessionStatus::Working),
             Some(SessionStatus::Working),
-            Some("bash".to_string()),
             HintSource::Jsonl,
             Some(Duration::from_secs(2)),
             Some(SessionStatus::Idle),
@@ -244,7 +234,6 @@ mod tests {
             SessionId(1),
             Some(SessionStatus::Idle),
             Some(SessionStatus::NeedsAttention),
-            None,
             HintSource::HookSignal,
             None, // no age info
             Some(SessionStatus::Working),
@@ -260,7 +249,6 @@ mod tests {
             SessionId(1),
             Some(SessionStatus::Idle),
             Some(SessionStatus::NeedsAttention),
-            None,
             HintSource::HookSignal,
             Some(STALE_ATTENTION_THRESHOLD), // exactly 30s
             Some(SessionStatus::NeedsAttention),
@@ -275,7 +263,6 @@ mod tests {
             SessionId(1),
             Some(SessionStatus::Working),
             Some(SessionStatus::Error),
-            None,
             HintSource::Jsonl,
             Some(Duration::from_secs(5)),
             Some(SessionStatus::Error),
@@ -294,7 +281,6 @@ mod tests {
             SessionId(1),
             Some(SessionStatus::Idle),
             Some(SessionStatus::Error),
-            None,
             HintSource::HookSignal,
             Some(Duration::from_secs(120)),
             Some(SessionStatus::Error),
