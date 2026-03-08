@@ -419,13 +419,26 @@ impl InputDetector {
     /// Tick the detector (called periodically).
     ///
     /// Updates the status of all monitored sessions based on current
-    /// process state and timing.
+    /// process state and timing. Sessions with OSC 133 shell state (and no
+    /// pending pattern match) are skipped because their status only changes
+    /// through [`set_shell_state`] or [`process_output`], not from
+    /// time-based heuristics. This avoids unnecessary work per tick.
     pub fn tick(&mut self) {
         let session_ids: Vec<SessionId> = self.sessions.keys().copied().collect();
-        trace!(session_count = session_ids.len(), "detector_tick");
-        for session_id in session_ids {
-            self.update_session_status(session_id);
+        let mut skipped = 0usize;
+        for session_id in &session_ids {
+            let needs_tick = self
+                .sessions
+                .get(session_id)
+                .map(|s| s.shell_state.is_none() || s.pattern_matched.is_some())
+                .unwrap_or(false);
+            if needs_tick {
+                self.update_session_status(*session_id);
+            } else {
+                skipped += 1;
+            }
         }
+        trace!(total = session_ids.len(), skipped, "detector_tick");
     }
 
     /// Get the configuration.
