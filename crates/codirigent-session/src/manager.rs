@@ -32,22 +32,7 @@ pub struct DrainedOutput {
     pub has_more: bool,
 }
 
-/// Canonicalize a path and strip the `\\?\` extended-length prefix on Windows.
-///
-/// `std::fs::canonicalize` on Windows returns UNC paths like `\\?\C:\Users\...`
-/// which cause PowerShell to display `Microsoft.PowerShell.Core\FileSystem::\\?\C:\...`
-/// in its prompt instead of the normal `C:\Users\...` form.
-fn normalize_path(path: &std::path::Path) -> PathBuf {
-    let canonical = std::fs::canonicalize(path).unwrap_or_else(|_| path.to_path_buf());
-    #[cfg(windows)]
-    {
-        let s = canonical.to_string_lossy();
-        if let Some(stripped) = s.strip_prefix(r"\\?\") {
-            return PathBuf::from(stripped);
-        }
-    }
-    canonical
-}
+use crate::normalize_path;
 
 /// Channel capacity for the `SessionUpdate` mpsc channel.
 ///
@@ -246,6 +231,13 @@ impl DefaultSessionManager {
 
             // Reset the producer-side dedup flag so the PTY reader sends a
             // new OutputReady notification for any subsequent output.
+            //
+            // Race window: a PTY chunk may arrive between this reset and the
+            // `is_empty()` check below. If so, the producer's swap(true) succeeds
+            // and sends OutputReady to the channel, but `has_more` may be false
+            // for this cycle. Data is NOT lost — the OutputReady event in the
+            // channel is drained on the next poll_output cycle (~16ms). The 1s
+            // legacy fallback poll acts as an additional safety net.
             state
                 .output_notified
                 .store(false, std::sync::atomic::Ordering::Relaxed);
@@ -524,11 +516,17 @@ impl SessionManager for DefaultSessionManager {
             },
             move || {
                 // Notify the event-driven pipeline that the PTY child exited.
+                // If the channel is full, the fallback inserts into
+                // pending_output_sessions which is drained every ~1s. The exit
+                // semantic (ChildProcessExited) is lost in this case, but the
+                // consumer's `prepared == None` handler in
+                // schedule_session_output_preparation still runs
+                // sync_session_status(), ensuring the session does not get
+                // stuck in Working indefinitely.
                 if let Err(e) =
                     exit_tx.try_send(SessionUpdate::ChildProcessExited { session_id: id })
                 {
                     tracing::warn!("ChildProcessExited channel full for session {}: {e}", id.0);
-                    // Fallback: ensure the session gets one more drain via legacy poll
                     pending_output_for_exit
                         .lock()
                         .unwrap_or_else(|p| p.into_inner())

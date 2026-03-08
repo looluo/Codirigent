@@ -430,7 +430,10 @@ impl WorkspaceView {
             }
         };
         if update_rx.is_none() {
-            tracing::warn!("Event-driven output pipeline unavailable; using legacy polling");
+            tracing::error!(
+                "Event-driven output pipeline unavailable; \
+                 falling back to 1s legacy polling for all sessions"
+            );
         }
 
         let (storage, task_manager) = Self::init_task_manager(event_bus.clone());
@@ -789,7 +792,8 @@ impl WorkspaceView {
     /// Synchronize UI component states with workspace state.
     ///
     /// This should be called before rendering to ensure all UI components
-    /// reflect the current workspace state.
+    /// reflect the current workspace state. For hot-path per-session updates,
+    /// see [`Self::sync_session_header`] which does targeted delta updates.
     fn sync_ui_state(&mut self) {
         let (task_titles, task_counts, task_snapshot) = if let Ok(manager) =
             self.task_manager.lock()
