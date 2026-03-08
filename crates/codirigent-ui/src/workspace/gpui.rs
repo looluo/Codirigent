@@ -963,6 +963,10 @@ impl WorkspaceView {
     /// This is a targeted delta update for the common case where only one
     /// session's status changed. Avoids the O(all sessions) cost of
     /// `sync_ui_state()` for each output poll.
+    ///
+    /// Note: `task` field is intentionally deferred to the 1s fallback
+    /// `sync_ui_state()` because resolving task titles requires iterating
+    /// the task manager, which is not worth the cost on the hot path.
     pub(super) fn sync_session_header(&mut self, session_id: SessionId) {
         let Some(session) = self.workspace.session(session_id) else {
             return;
@@ -988,6 +992,15 @@ impl WorkspaceView {
             let git_dirty_count = session.git_info.as_ref().map(|gi| gi.dirty_count);
             if header.git_dirty_count != git_dirty_count {
                 header.git_dirty_count = git_dirty_count;
+            }
+
+            let session_color = session
+                .color
+                .as_deref()
+                .map(crate::sidebar::Color::from_hex)
+                .unwrap_or_else(|| crate::sidebar::Color::from_hex("#6366f1"));
+            if header.session_color != session_color {
+                header.session_color = session_color;
             }
         }
     }
