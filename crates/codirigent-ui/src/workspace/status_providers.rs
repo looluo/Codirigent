@@ -4,18 +4,14 @@
 //! source. The reconciler in [`super::status_engine`] combines hints using
 //! explicit precedence rules.
 
-use codirigent_core::{SessionId, SessionStatus};
+use codirigent_core::{SessionId, SessionStatus, StatusHintSource};
 
-/// Source of a status hint, used for reconciler precedence.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum HintSource {
-    /// Process-tree / heuristic detector (OSC 133 + idle timeout).
-    Detector,
-    /// Claude Code hook signal files (TTL: 600s).
-    HookSignal,
-    /// Codex/Gemini JSONL log files (TTL: 120s).
-    Jsonl,
-}
+/// Re-export the core hint source type for use throughout the workspace.
+///
+/// This avoids duplicate enum definitions between `codirigent_core` and the
+/// UI layer. The reconciler uses only `Detector`, `HookSignal`, and `Jsonl`
+/// variants; `Osc133` flows through the detector.
+pub(super) type HintSource = StatusHintSource;
 
 /// The result of reconciling multiple status hints for a single session.
 #[derive(Debug)]
