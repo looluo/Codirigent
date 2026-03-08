@@ -423,7 +423,6 @@ impl InputDetector {
     /// pending pattern match) are skipped because their status only changes
     /// through [`set_shell_state`] or [`process_output`], not from
     /// time-based heuristics. This avoids unnecessary work per tick.
-    /// Advance status decay for eligible sessions.
     ///
     /// Returns the IDs of sessions whose detector status actually changed,
     /// allowing the caller to skip reconciliation for unchanged sessions.
