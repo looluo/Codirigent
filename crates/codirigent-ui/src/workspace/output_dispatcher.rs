@@ -208,7 +208,6 @@ impl OutputDispatcher {
     }
 
     /// Remove a session from all tracking (e.g., when session is closed).
-    #[allow(dead_code)] // Called when session close wiring is added
     pub fn remove_session(&mut self, session_id: SessionId) {
         self.ready_sessions.remove(&session_id);
         self.in_flight.remove(&session_id);

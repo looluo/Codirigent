@@ -906,6 +906,9 @@ impl WorkspaceView {
         }
         self.polling.shell_input_buffers.remove(&id);
 
+        // Remove from output dispatcher tracking (ready/in-flight sets)
+        self.output_dispatcher.remove_session(id);
+
         // Remove the terminal header for this session
         self.terminal_headers.remove(&id);
 
