@@ -91,8 +91,9 @@ impl OutputDispatcher {
     ///
     /// Used by the legacy fallback poll path and when `has_more` is true
     /// after a bounded drain.
-    pub fn mark_ready(&mut self, session_id: SessionId) {
-        self.ready_sessions.insert(session_id);
+    /// Returns `true` if the session was newly inserted (not already ready).
+    pub fn mark_ready(&mut self, session_id: SessionId) -> bool {
+        self.ready_sessions.insert(session_id)
     }
 
     /// Mark a session as in-flight (background task started).

@@ -546,16 +546,15 @@ impl WorkspaceView {
                     "legacy fallback drain (safety net)"
                 );
                 for id in &legacy_ids {
-                    // Shadow mode: log sessions discovered by the legacy
-                    // fallback that weren't already in the dispatcher's ready
-                    // set, indicating the mpsc channel missed an event.
-                    if is_shadow_status() {
+                    let was_new = self.output_dispatcher.mark_ready(*id);
+                    // Shadow mode: log only genuinely missed events — sessions
+                    // the mpsc channel didn't deliver to the dispatcher.
+                    if is_shadow_status() && was_new {
                         info!(
                             ?id,
                             "shadow: legacy fallback discovered session not in dispatcher"
                         );
                     }
-                    self.output_dispatcher.mark_ready(*id);
                 }
             }
         }
