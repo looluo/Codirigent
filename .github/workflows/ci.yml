@@ -53,12 +53,13 @@ jobs:
         with:
           fetch-depth: 0
       - name: Check for new unwrap() calls
+        shell: bash
         run: |
           # Count unwraps in production code only (exclude #[cfg(test)] blocks and test dirs).
           count_prod_unwraps() {
             local ref="$1"
             local total=0
-            for file in $(git ls-tree -r --name-only "$ref" -- crates/ | grep '/src/.*\.rs$' | grep -v '/tests/'); do
+            while IFS= read -r file; do
               # Find the first #[cfg(test)] line; count unwraps only before it
               test_line=$(git show "$ref:$file" | grep -n '#\[cfg(test)\]' | head -1 | cut -d: -f1)
               if [ -n "$test_line" ]; then
@@ -67,7 +68,7 @@ jobs:
                 count=$(git show "$ref:$file" | grep -v '///' | grep -c '\.unwrap()' || true)
               fi
               total=$((total + count))
-            done
+            done < <(git ls-tree -r --name-only "$ref" -- crates/ | grep '/src/.*\.rs$' | grep -v '/tests/')
             echo "$total"
           }
 
