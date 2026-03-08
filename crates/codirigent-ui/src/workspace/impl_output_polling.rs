@@ -45,11 +45,17 @@ static APP_START_TS: std::sync::OnceLock<u64> = std::sync::OnceLock::new();
 /// polling path runs exclusively. This is a temporary kill switch for the
 /// pipeline transition — it will be removed once shadow-mode validation
 /// confirms zero diffs.
+///
+/// Read once at first access and cached for the process lifetime.
+/// Changing the env var after startup has no effect.
 static LEGACY_PIPELINE: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 /// When `CODIRIGENT_SHADOW_STATUS=1` is set, the reconciler logs full
 /// input/output detail for every status change and the legacy fallback
 /// logs sessions that the event-driven path missed. Used to validate
 /// correctness during the pipeline transition.
+///
+/// Read once at first access and cached for the process lifetime.
+/// Changing the env var after startup has no effect.
 static SHADOW_STATUS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
 
 fn is_legacy_pipeline() -> bool {
@@ -665,6 +671,12 @@ impl WorkspaceView {
         // CODIRIGENT_LEGACY_PIPELINE and schedule_output_preparation_legacy
         // are removed. Both sets are always updated together.
         self.polling.output_prepare_in_flight.insert(session_id);
+        debug_assert_eq!(
+            self.polling.output_prepare_in_flight.len(),
+            self.output_dispatcher.in_flight_count(),
+            "dual in-flight sets desynchronized after marking session {} in-flight",
+            session_id.0,
+        );
 
         let session_manager = self.session_manager.clone();
         let detector = self.detector.clone();
@@ -745,6 +757,12 @@ impl WorkspaceView {
             let _ = this.update(cx, |this, cx| {
                 this.polling.output_prepare_in_flight.remove(&session_id);
                 this.output_dispatcher.complete_in_flight(session_id);
+                debug_assert_eq!(
+                    this.polling.output_prepare_in_flight.len(),
+                    this.output_dispatcher.in_flight_count(),
+                    "dual in-flight sets desynchronized after completing session {}",
+                    session_id.0,
+                );
                 if let Some(prepared) = prepared {
                     this.apply_prepared_session_output(prepared, cx);
                 } else {
@@ -1363,7 +1381,6 @@ impl WorkspaceView {
                                 result.session_id,
                                 CachedCliStatus {
                                     status: *new_status,
-                                    tool_name: tool_name.clone(),
                                     seen_at: cache_update_time,
                                     source: CliStatusSource::Jsonl,
                                     status_since,
@@ -1965,7 +1982,6 @@ impl WorkspaceView {
                 session_id,
                 CachedCliStatus {
                     status: new_status,
-                    tool_name: cli_type.clone(),
                     seen_at: Instant::now(),
                     source: CliStatusSource::Hook,
                     status_since,
