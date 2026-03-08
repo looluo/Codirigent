@@ -37,6 +37,7 @@ pub enum SessionUpdate {
     },
 
     /// Output was drained and applied to the terminal emulator.
+    #[allow(dead_code)] // Wired when budget enforcement tracks bytes drained
     OutputDrained {
         /// The session whose output was consumed.
         session_id: SessionId,
@@ -45,6 +46,7 @@ pub enum SessionUpdate {
     },
 
     /// Shell state changed (via OSC 133 markers).
+    #[allow(dead_code)] // Wired when OSC 133 parser emits events directly
     ShellStateChanged {
         /// The session whose shell state changed.
         session_id: SessionId,
@@ -53,6 +55,7 @@ pub enum SessionUpdate {
     },
 
     /// Working directory changed (via OSC 7).
+    #[allow(dead_code)] // Wired when OSC 7 parser emits events directly
     WorkingDirectoryChanged {
         /// The session whose CWD changed.
         session_id: SessionId,
@@ -61,6 +64,7 @@ pub enum SessionUpdate {
     },
 
     /// A status hint arrived from a specific source.
+    #[allow(dead_code)] // Wired when status providers emit via channel
     StatusHintChanged {
         /// The session whose status hint changed.
         session_id: SessionId,
@@ -77,11 +81,12 @@ pub enum SessionUpdate {
     },
 
     /// Git repository info changed for this session.
+    #[allow(dead_code)] // Wired when git refresh emits events directly
     GitInfoChanged {
         /// The session whose git info changed.
         session_id: SessionId,
         /// New git repository info, or `None` if no longer in a git repo.
-        git_info: Option<GitRepoInfo>,
+        git_info: Option<Box<GitRepoInfo>>,
     },
 }
 

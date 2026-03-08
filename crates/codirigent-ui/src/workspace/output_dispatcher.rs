@@ -381,4 +381,25 @@ mod tests {
         assert_eq!(dispatcher.ready_count(), 1);
         assert!(others.is_empty());
     }
+
+    #[test]
+    fn drain_updates_respects_event_cap() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(2048);
+        let mut dispatcher = OutputDispatcher::new();
+
+        // Send more events than MAX_EVENTS_PER_DRAIN (1024)
+        for i in 0..1200 {
+            tx.try_send(SessionUpdate::OutputReady {
+                session_id: SessionId(i as u64),
+            })
+            .unwrap();
+        }
+
+        let _others = dispatcher.drain_updates(&mut rx);
+
+        // Should have drained at most MAX_EVENTS_PER_DRAIN events
+        assert!(dispatcher.ready_count() <= MAX_EVENTS_PER_DRAIN);
+        // Remaining events should still be in the channel
+        assert!(rx.try_recv().is_ok());
+    }
 }

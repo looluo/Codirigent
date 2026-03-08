@@ -253,4 +253,54 @@ mod tests {
         let r = result.unwrap();
         assert_eq!(r.status, SessionStatus::NeedsAttention);
     }
+
+    #[test]
+    fn needs_attention_at_exact_threshold_not_stale() {
+        let (_, stale) = reconcile(
+            SessionId(1),
+            Some(SessionStatus::Idle),
+            Some(SessionStatus::NeedsAttention),
+            None,
+            HintSource::HookSignal,
+            Some(STALE_ATTENTION_THRESHOLD), // exactly 30s
+            Some(SessionStatus::NeedsAttention),
+        );
+        // Strict `>` means exactly 30s is NOT stale
+        assert!(matches!(stale, StaleAction::None));
+    }
+
+    #[test]
+    fn detector_working_beats_cached_error() {
+        let (result, stale) = reconcile(
+            SessionId(1),
+            Some(SessionStatus::Working),
+            Some(SessionStatus::Error),
+            None,
+            HintSource::Jsonl,
+            Some(Duration::from_secs(5)),
+            Some(SessionStatus::Error),
+        );
+        assert!(matches!(stale, StaleAction::None));
+        let r = result.unwrap();
+        assert_eq!(r.status, SessionStatus::Working);
+        assert_eq!(r.source, HintSource::Detector);
+    }
+
+    #[test]
+    fn stale_error_not_auto_cleared() {
+        // Unlike NeedsAttention, stale Error is NOT auto-cleared.
+        // Error status staleness is handled by TTL eviction in the caller.
+        let (result, stale) = reconcile(
+            SessionId(1),
+            Some(SessionStatus::Idle),
+            Some(SessionStatus::Error),
+            None,
+            HintSource::HookSignal,
+            Some(Duration::from_secs(120)),
+            Some(SessionStatus::Error),
+        );
+        assert!(matches!(stale, StaleAction::None));
+        let r = result.unwrap();
+        assert_eq!(r.status, SessionStatus::Error);
+    }
 }

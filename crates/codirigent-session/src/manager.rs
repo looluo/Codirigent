@@ -139,7 +139,8 @@ impl DefaultSessionManager {
     ///
     /// Used by external components that need to emit `SessionUpdate` events
     /// (e.g., hook signal readers, JSONL parsers).
-    pub fn update_sender(&self) -> tokio::sync::mpsc::Sender<SessionUpdate> {
+    #[allow(dead_code)] // Wired when hook/JSONL readers emit via channel
+    pub(crate) fn update_sender(&self) -> tokio::sync::mpsc::Sender<SessionUpdate> {
         self.update_tx.clone()
     }
 
@@ -490,7 +491,7 @@ impl SessionManager for DefaultSessionManager {
             // runtime here. Failure is non-fatal: the legacy path above ensures
             // output is not lost.
             if let Err(e) = update_tx.try_send(SessionUpdate::OutputReady { session_id: id }) {
-                trace!("SessionUpdate try_send for {}: {e}", id.0);
+                tracing::warn!("SessionUpdate channel full for session {}: {e}", id.0);
             }
         });
 
