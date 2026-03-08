@@ -102,3 +102,49 @@ impl SessionUpdate {
         }
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Constructs every `SessionUpdate` variant and verifies `session_id()`
+    /// returns the correct ID. This also serves as a compile-time exhaustiveness
+    /// check: adding a new variant without updating this test will fail to compile.
+    #[test]
+    fn session_id_returns_correct_id_for_all_variants() {
+        let id = SessionId(42);
+        let variants: Vec<SessionUpdate> = vec![
+            SessionUpdate::OutputReady { session_id: id },
+            SessionUpdate::OutputDrained {
+                session_id: id,
+                bytes: 100,
+            },
+            SessionUpdate::ShellStateChanged {
+                session_id: id,
+                state: ShellState::PromptStart,
+            },
+            SessionUpdate::WorkingDirectoryChanged {
+                session_id: id,
+                cwd: std::path::PathBuf::from("/tmp"),
+            },
+            SessionUpdate::StatusHintChanged {
+                session_id: id,
+                source: StatusHintSource::Osc133,
+                status: SessionStatus::Idle,
+            },
+            SessionUpdate::ChildProcessExited { session_id: id },
+            SessionUpdate::GitInfoChanged {
+                session_id: id,
+                git_info: None,
+            },
+        ];
+        for variant in &variants {
+            assert_eq!(
+                variant.session_id(),
+                id,
+                "session_id() mismatch for {:?}",
+                variant
+            );
+        }
+    }
+}
