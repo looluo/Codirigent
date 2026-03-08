@@ -352,6 +352,35 @@ mod tests {
     }
 
     #[test]
+    fn child_process_exited_can_be_routed_to_mark_ready() {
+        let (tx, mut rx) = tokio::sync::mpsc::channel(16);
+        let mut dispatcher = OutputDispatcher::new();
+
+        let s1 = SessionId(1);
+
+        // Send a ChildProcessExited event (not OutputReady)
+        tx.try_send(SessionUpdate::ChildProcessExited { session_id: s1 })
+            .unwrap();
+
+        let others = dispatcher.drain_updates(&mut rx);
+
+        // ChildProcessExited is NOT consumed by drain_updates — it's returned
+        assert_eq!(dispatcher.ready_count(), 0);
+        assert_eq!(others.len(), 1);
+
+        // The caller routes it by calling mark_ready
+        for event in others {
+            if let SessionUpdate::ChildProcessExited { session_id } = event {
+                dispatcher.mark_ready(session_id);
+            }
+        }
+
+        assert_eq!(dispatcher.ready_count(), 1);
+        let ready = dispatcher.take_ready_sessions(None);
+        assert_eq!(ready, vec![s1]);
+    }
+
+    #[test]
     fn drain_updates_respects_event_cap() {
         let (tx, mut rx) = tokio::sync::mpsc::channel(2048);
         let mut dispatcher = OutputDispatcher::new();

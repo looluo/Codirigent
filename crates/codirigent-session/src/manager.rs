@@ -1384,4 +1384,24 @@ mod tests {
         let manager = create_manager();
         manager.update_context_usage(SessionId(999), Some(0.5));
     }
+
+    #[test]
+    fn test_take_update_receiver_returns_some_then_none() {
+        let manager = create_manager();
+        let rx1 = manager.take_update_receiver();
+        assert!(rx1.is_some(), "first call should return Some");
+        let rx2 = manager.take_update_receiver();
+        assert!(rx2.is_none(), "second call should return None");
+    }
+
+    #[test]
+    fn test_update_sender_returns_working_sender() {
+        let manager = create_manager();
+        let tx = manager.update_sender();
+        // Should be able to send without error (receiver still held by manager)
+        tx.try_send(SessionUpdate::OutputReady {
+            session_id: SessionId(1),
+        })
+        .expect("send should succeed while receiver exists");
+    }
 }
