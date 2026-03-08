@@ -11,6 +11,92 @@ use anyhow::{Context, Result};
 #[cfg(unix)]
 use tracing::warn;
 
+/// Windows process creation flag: suppress console window for spawned processes.
+#[cfg(windows)]
+const CREATE_NO_WINDOW: u32 = 0x08000000;
+
+#[cfg(windows)]
+fn system32_executable(name: &str) -> std::path::PathBuf {
+    std::env::var_os("SystemRoot")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| std::path::PathBuf::from(r"C:\Windows"))
+        .join("System32")
+        .join(name)
+}
+
+#[cfg(windows)]
+fn command_exists(program: &std::path::Path, args: &[&str]) -> bool {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    let mut cmd = Command::new(program);
+    cmd.args(args)
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null());
+    cmd.status().map(|status| status.success()).unwrap_or(false)
+}
+
+#[cfg(windows)]
+fn resolve_on_path(executable: &str) -> Option<String> {
+    use std::os::windows::process::CommandExt;
+    use std::process::Command;
+
+    let where_exe = system32_executable("where.exe");
+    let output = Command::new(where_exe)
+        .arg(executable)
+        .creation_flags(CREATE_NO_WINDOW)
+        .output()
+        .ok()?;
+    if !output.status.success() {
+        return None;
+    }
+
+    String::from_utf8_lossy(&output.stdout)
+        .lines()
+        .map(str::trim)
+        .find(|line| !line.is_empty())
+        .map(str::to_owned)
+}
+
+#[cfg(windows)]
+fn resolve_pwsh_path() -> Option<String> {
+    let candidates = [
+        std::env::var_os("ProgramFiles").map(std::path::PathBuf::from),
+        std::env::var_os("ProgramW6432").map(std::path::PathBuf::from),
+    ];
+
+    for base in candidates.into_iter().flatten() {
+        let path = base.join("PowerShell").join("7").join("pwsh.exe");
+        if command_exists(&path, &["--version"]) {
+            return Some(path.to_string_lossy().to_string());
+        }
+    }
+
+    resolve_on_path("pwsh.exe")
+        .filter(|path| command_exists(std::path::Path::new(path), &["--version"]))
+}
+
+#[cfg(windows)]
+fn resolve_windows_powershell_path() -> Option<String> {
+    let path = system32_executable(r"WindowsPowerShell\v1.0\powershell.exe");
+    if command_exists(&path, &["-Command", "exit"]) {
+        Some(path.to_string_lossy().to_string())
+    } else {
+        None
+    }
+}
+
+#[cfg(windows)]
+fn resolve_cmd_path() -> String {
+    let path = system32_executable("cmd.exe");
+    if path.is_file() {
+        path.to_string_lossy().to_string()
+    } else {
+        std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string())
+    }
+}
+
 /// Shell command and arguments selected for a PTY session.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ShellCommand {
@@ -108,32 +194,16 @@ pub(crate) fn detect_shell_command() -> ShellCommand {
 /// Probe for available Windows shells in preference order.
 #[cfg(windows)]
 fn detect_windows_shell() -> ShellCommand {
-    use std::os::windows::process::CommandExt;
-    use std::process::Command;
-
-    const CREATE_NO_WINDOW: u32 = 0x08000000;
-
     // Try PowerShell 7 first
-    if Command::new("pwsh.exe")
-        .arg("--version")
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .is_ok()
-    {
-        return setup_powershell_command("pwsh.exe");
+    if let Some(pwsh_path) = resolve_pwsh_path() {
+        return setup_powershell_command(&pwsh_path);
     }
     // Try Windows PowerShell
-    if Command::new("powershell.exe")
-        .arg("-Command")
-        .arg("exit")
-        .creation_flags(CREATE_NO_WINDOW)
-        .output()
-        .is_ok()
-    {
-        return setup_powershell_command("powershell.exe");
+    if let Some(powershell_path) = resolve_windows_powershell_path() {
+        return setup_powershell_command(&powershell_path);
     }
     // Fall back to cmd.exe
-    let program = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
+    let program = resolve_cmd_path();
     ShellCommand {
         program,
         args: vec!["/K".to_string(), "chcp".to_string(), "65001".to_string()],
@@ -173,26 +243,10 @@ pub fn detect_available_shells() -> Vec<String> {
 
     #[cfg(windows)]
     {
-        use std::os::windows::process::CommandExt;
-        use std::process::Command;
-
-        const CREATE_NO_WINDOW: u32 = 0x08000000;
-
-        if Command::new("pwsh.exe")
-            .arg("--version")
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-            .is_ok()
-        {
+        if resolve_pwsh_path().is_some() {
             shells.push("pwsh".to_string());
         }
-        if Command::new("powershell.exe")
-            .arg("-Command")
-            .arg("exit")
-            .creation_flags(CREATE_NO_WINDOW)
-            .output()
-            .is_ok()
-        {
+        if resolve_windows_powershell_path().is_some() {
             shells.push("powershell".to_string());
         }
         shells.push("cmd".to_string());
@@ -281,10 +335,14 @@ fn resolve_unix_shell(shell_name: &str) -> ShellCommand {
 #[cfg(windows)]
 fn resolve_windows_shell(shell_name: &str) -> ShellCommand {
     match shell_name {
-        "pwsh" => setup_powershell_command("pwsh.exe"),
-        "powershell" => setup_powershell_command("powershell.exe"),
+        "pwsh" => resolve_pwsh_path()
+            .map(|path| setup_powershell_command(&path))
+            .unwrap_or_else(detect_windows_shell),
+        "powershell" => resolve_windows_powershell_path()
+            .map(|path| setup_powershell_command(&path))
+            .unwrap_or_else(detect_windows_shell),
         "cmd" => {
-            let program = std::env::var("COMSPEC").unwrap_or_else(|_| "cmd.exe".to_string());
+            let program = resolve_cmd_path();
             ShellCommand {
                 program,
                 args: vec!["/K".to_string(), "chcp".to_string(), "65001".to_string()],

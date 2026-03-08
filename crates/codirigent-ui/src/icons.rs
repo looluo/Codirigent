@@ -47,10 +47,6 @@ pub fn icon_str(icon: Icon) -> String {
 
 // Re-export commonly used icons for convenience.
 
-/// Zap icon - used for logo/branding.
-pub fn zap() -> String {
-    icon_str(Icon::Zap)
-}
 /// FolderTree icon - file explorer.
 pub fn folder_tree() -> String {
     icon_str(Icon::FolderTree)
@@ -63,17 +59,9 @@ pub fn git_branch() -> String {
 pub fn settings() -> String {
     icon_str(Icon::Settings)
 }
-/// Send icon - broadcast send.
-pub fn send() -> String {
-    icon_str(Icon::Send)
-}
 /// Columns icon - right panel toggle (split columns).
 pub fn columns_3() -> String {
     icon_str(Icon::Columns3)
-}
-/// Cpu icon - token counter.
-pub fn cpu() -> String {
-    icon_str(Icon::Cpu)
 }
 /// ListTodo icon - task board.
 pub fn list_todo() -> String {
@@ -82,14 +70,6 @@ pub fn list_todo() -> String {
 /// Terminal icon - session reference.
 pub fn terminal() -> String {
     icon_str(Icon::Terminal)
-}
-/// Sparkles icon - AI/CLI indicator.
-pub fn sparkles() -> String {
-    icon_str(Icon::Sparkles)
-}
-/// AlertTriangle icon - input required warning.
-pub fn alert_triangle() -> String {
-    icon_str(Icon::TriangleAlert)
 }
 /// CheckCircle2 icon - completed/done.
 pub fn check_circle() -> String {
@@ -107,41 +87,17 @@ pub fn chevron_right() -> String {
 pub fn chevron_down() -> String {
     icon_str(Icon::ChevronDown)
 }
-/// FileCode icon - source file.
-pub fn file_code() -> String {
-    icon_str(Icon::FileCode)
-}
-/// Search icon - search.
-pub fn search() -> String {
-    icon_str(Icon::Search)
-}
 /// LayoutGrid icon - grid layout.
 pub fn layout_grid() -> String {
     icon_str(Icon::LayoutGrid)
-}
-/// Maximize2 icon - focus/single layout.
-pub fn maximize() -> String {
-    icon_str(Icon::Maximize2)
 }
 /// RefreshCw icon - refresh.
 pub fn refresh() -> String {
     icon_str(Icon::RefreshCw)
 }
-/// GitCommit icon - git commit.
-pub fn git_commit() -> String {
-    icon_str(Icon::GitCommitHorizontal)
-}
 /// Play icon - working/running.
 pub fn play() -> String {
     icon_str(Icon::Play)
-}
-/// Pause icon - paused.
-pub fn pause() -> String {
-    icon_str(Icon::Pause)
-}
-/// Square icon - stopped/idle.
-pub fn square() -> String {
-    icon_str(Icon::Square)
 }
 /// Clock icon - waiting.
 pub fn clock() -> String {
@@ -154,22 +110,6 @@ pub fn more_horizontal() -> String {
 /// Plus icon - add/new.
 pub fn plus() -> String {
     icon_str(Icon::Plus)
-}
-/// Wand2 icon - magic/AI.
-pub fn wand() -> String {
-    icon_str(Icon::Wand)
-}
-/// Lock icon - locked state.
-pub fn lock() -> String {
-    icon_str(Icon::Lock)
-}
-/// ArrowRight icon - arrow indicator.
-pub fn arrow_right() -> String {
-    icon_str(Icon::ArrowRight)
-}
-/// Command icon - keyboard shortcut.
-pub fn command() -> String {
-    icon_str(Icon::Command)
 }
 /// Pencil icon - rename/edit.
 pub fn pencil() -> String {
@@ -191,14 +131,6 @@ pub fn x_circle() -> String {
 pub fn check() -> String {
     icon_str(Icon::Check)
 }
-/// GitFork icon - existing branch.
-pub fn git_fork() -> String {
-    icon_str(Icon::GitFork)
-}
-/// Radio icon - broadcast.
-pub fn radio() -> String {
-    icon_str(Icon::Radio)
-}
 /// CirclePlus icon - add new (circle variant).
 pub fn circle_plus() -> String {
     icon_str(Icon::CirclePlus)
@@ -210,14 +142,6 @@ pub fn clipboard_plus() -> String {
 /// Folder icon - closed directory.
 pub fn folder() -> String {
     icon_str(Icon::Folder)
-}
-/// FolderOpen icon - expanded directory.
-pub fn folder_open() -> String {
-    icon_str(Icon::FolderOpen)
-}
-/// File icon - generic file.
-pub fn file() -> String {
-    icon_str(Icon::File)
 }
 /// Eye icon - visible/show.
 pub fn eye() -> String {
@@ -246,49 +170,30 @@ mod tests {
 
     #[test]
     fn test_all_icon_helpers_return_non_empty() {
-        assert!(!zap().is_empty());
         assert!(!folder_tree().is_empty());
         assert!(!git_branch().is_empty());
         assert!(!settings().is_empty());
-        assert!(!send().is_empty());
         assert!(!columns_3().is_empty());
-        assert!(!cpu().is_empty());
         assert!(!list_todo().is_empty());
         assert!(!terminal().is_empty());
-        assert!(!sparkles().is_empty());
-        assert!(!alert_triangle().is_empty());
         assert!(!check_circle().is_empty());
         assert!(!x().is_empty());
         assert!(!chevron_right().is_empty());
         assert!(!chevron_down().is_empty());
-        assert!(!file_code().is_empty());
-        assert!(!search().is_empty());
         assert!(!layout_grid().is_empty());
-        assert!(!maximize().is_empty());
         assert!(!refresh().is_empty());
-        assert!(!git_commit().is_empty());
         assert!(!play().is_empty());
-        assert!(!pause().is_empty());
-        assert!(!square().is_empty());
         assert!(!clock().is_empty());
         assert!(!more_horizontal().is_empty());
         assert!(!plus().is_empty());
-        assert!(!wand().is_empty());
-        assert!(!lock().is_empty());
-        assert!(!arrow_right().is_empty());
-        assert!(!command().is_empty());
         assert!(!pencil().is_empty());
         assert!(!users().is_empty());
         assert!(!user_minus().is_empty());
         assert!(!x_circle().is_empty());
         assert!(!check().is_empty());
-        assert!(!git_fork().is_empty());
-        assert!(!radio().is_empty());
         assert!(!circle_plus().is_empty());
         assert!(!clipboard_plus().is_empty());
         assert!(!folder().is_empty());
-        assert!(!folder_open().is_empty());
-        assert!(!file().is_empty());
         assert!(!eye().is_empty());
         assert!(!eye_off().is_empty());
     }

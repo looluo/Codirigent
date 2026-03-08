@@ -96,13 +96,20 @@ impl GitStatusService {
     }
 
     /// Find a cached entry for a working directory.
+    ///
+    /// Uses `Repository::discover()` to resolve the actual repo/worktree root,
+    /// then does an exact cache key lookup. This prevents worktree paths (which
+    /// are physically under the main repo) from incorrectly matching the main
+    /// repo's cache entry via `starts_with`.
     fn find_cached(&self, working_dir: &Path, ttl: Duration) -> Option<GitRepoInfo> {
-        for (root, (timestamp, info)) in &self.cache {
-            if working_dir.starts_with(root) && timestamp.elapsed() < ttl {
-                return Some(info.clone());
-            }
+        let repo = Repository::discover(working_dir).ok()?;
+        let repo_root = repo.workdir()?;
+        let (timestamp, info) = self.cache.get(repo_root)?;
+        if timestamp.elapsed() < ttl {
+            Some(info.clone())
+        } else {
+            None
         }
-        None
     }
 
     /// Get the current branch name.

@@ -334,7 +334,7 @@ impl Default for RiskAssessment {
 /// use codirigent_core::{SessionId, TaskId};
 /// use std::path::Path;
 ///
-/// // Trait is typically implemented by dirigent-verification crate
+/// // Trait is typically implemented by codirigent-verification crate
 /// fn example_usage<T: ChangeDetector>(detector: &T, dir: &Path) {
 ///     let changes = detector.detect_changes(dir, None).unwrap();
 ///     println!("Found {} changes", changes.len());
@@ -389,7 +389,7 @@ pub trait ChangeDetector: Send + Sync {
 /// use codirigent_core::change_summary::{RiskAssessor, ChangeType, RiskLevel, FileCategory};
 /// use std::path::Path;
 ///
-/// // Trait is typically implemented by dirigent-verification crate
+/// // Trait is typically implemented by codirigent-verification crate
 /// fn example_usage<T: RiskAssessor>(assessor: &T) {
 ///     let risk = assessor.assess_file(Path::new("src/auth.rs"), ChangeType::Modified);
 ///     println!("Risk level: {:?}", risk);

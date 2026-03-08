@@ -228,6 +228,7 @@ impl WorkspaceView {
             }
         }
 
+        self.mark_ui_sync_dirty();
         self.close_task_creation_modal();
         cx.notify();
     }
@@ -271,7 +272,8 @@ impl WorkspaceView {
             self.workspace
                 .sync_sessions_from_manager(&manager.list_sessions());
         }
-        self.save_state_to_disk();
+        self.mark_ui_sync_dirty();
+        self.save_state_to_disk(cx);
         self.close_session_action_modal();
         cx.notify();
     }
@@ -523,14 +525,14 @@ impl WorkspaceView {
 
         // Ctrl+V / Cmd+V — paste from system clipboard
         if (event.keystroke.modifiers.control || event.keystroke.modifiers.platform) && key == "v" {
-            if let Ok(content) = self.clipboard.smart_clipboard.read_content() {
-                if let codirigent_core::ClipboardContent::Text(text) = content {
-                    if let Some((field, cursor)) = Self::focused_field_and_cursor_mut(modal) {
-                        Self::insert_at_cursor(field, cursor, &text);
-                    }
-                    modal.error = None;
-                    cx.notify();
+            if let Ok(codirigent_core::ClipboardContent::Text(text)) =
+                self.clipboard.smart_clipboard.read_content()
+            {
+                if let Some((field, cursor)) = Self::focused_field_and_cursor_mut(modal) {
+                    Self::insert_at_cursor(field, cursor, &text);
                 }
+                modal.error = None;
+                cx.notify();
             }
             return true;
         }

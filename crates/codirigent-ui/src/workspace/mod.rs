@@ -110,9 +110,6 @@ mod project_state;
 #[cfg(feature = "gpui-full")]
 mod persistence_state;
 
-#[cfg(feature = "gpui-full")]
-mod ui_primitives;
-
 #[cfg(test)]
 mod tests;
 

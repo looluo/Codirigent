@@ -293,6 +293,11 @@ impl Workspace {
                 dst.group = src.group.clone();
                 dst.color = src.color.clone();
                 dst.git_info = src.git_info.clone();
+                dst.claude_session_id = src.claude_session_id.clone();
+                dst.codex_session_id = src.codex_session_id.clone();
+                dst.codex_execution_mode = src.codex_execution_mode;
+                dst.codex_started_at = src.codex_started_at;
+                dst.gemini_session_id = src.gemini_session_id.clone();
                 // `status` is NOT synced — the detector is the authority.
                 // `id` and `created_at` are immutable.
             }
@@ -648,6 +653,19 @@ impl Workspace {
         }
     }
 
+    /// Swap two sessions by their cell/slot index.
+    ///
+    /// This only changes which session is assigned to which position —
+    /// the layout structure (grid dimensions or split tree shape) is unchanged.
+    ///
+    /// Returns `true` if the swap was performed.
+    pub fn swap_sessions(&mut self, index_a: usize, index_b: usize) -> bool {
+        match &mut self.layout_state {
+            WorkspaceLayoutState::Grid(s) => s.swap_assignments(index_a, index_b),
+            WorkspaceLayoutState::SplitTree(s) => s.swap_assignments(index_a, index_b),
+        }
+    }
+
     // --- State for Rendering ---
 
     /// Get information about each visible cell for rendering.
@@ -664,21 +682,16 @@ impl Workspace {
 
     fn grid_cell_info(&self, state: &LayoutState) -> Vec<CellInfo> {
         let layout = self.grid_layout();
-        let focused_id = state.focused_session();
 
         // Special handling for Single layout: only show the focused session
         if state.profile() == LayoutProfile::Single {
-            if let Some(focused_session_id) = focused_id {
-                if let Some(session) = self.session(focused_session_id) {
-                    // Get bounds for the single cell (index 0)
+            if let Some(focused_session_id) = state.focused_session() {
+                if self.session(focused_session_id).is_some() {
                     if let Some(bounds) = layout.cell_bounds_for_index(0) {
                         return vec![CellInfo {
                             session_id: focused_session_id,
                             index: 0,
                             bounds,
-                            name: session.name.clone(),
-                            status: session.status,
-                            is_focused: true,
                         }];
                     }
                 }
@@ -694,15 +707,11 @@ impl Workspace {
             .enumerate()
             .filter_map(|(index, &session_id)| {
                 let bounds = layout.cell_bounds_for_index(index)?;
-                let session = self.session(session_id)?;
-
+                self.session(session_id)?;
                 Some(CellInfo {
                     session_id,
                     index,
                     bounds,
-                    name: session.name.clone(),
-                    status: session.status,
-                    is_focused: focused_id == Some(session_id),
                 })
             })
             .collect()
@@ -712,7 +721,6 @@ impl Workspace {
         let Some(layout) = self.split_layout() else {
             return vec![];
         };
-        let focused_id = state.focused_session();
         let leaf_bounds = layout.leaf_bounds();
 
         leaf_bounds
@@ -720,15 +728,11 @@ impl Workspace {
             .enumerate()
             .filter_map(|(index, (slot, bounds))| {
                 let session_id = state.session_at_slot(slot)?;
-                let session = self.session(session_id)?;
-
+                self.session(session_id)?;
                 Some(CellInfo {
                     session_id,
                     index,
                     bounds,
-                    name: session.name.clone(),
-                    status: session.status,
-                    is_focused: focused_id == Some(session_id),
                 })
             })
             .collect()
@@ -736,7 +740,7 @@ impl Workspace {
 }
 
 /// Information about a grid cell for rendering.
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, Copy)]
 pub struct CellInfo {
     /// Session ID.
     pub session_id: SessionId,
@@ -744,10 +748,4 @@ pub struct CellInfo {
     pub index: usize,
     /// Cell bounds.
     pub bounds: Bounds,
-    /// Session name.
-    pub name: String,
-    /// Session status.
-    pub status: SessionStatus,
-    /// Whether this cell is focused.
-    pub is_focused: bool,
 }

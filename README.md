@@ -23,7 +23,7 @@
 
 ---
 
-<video src="website/video/demo.mp4" autoplay loop muted playsinline width="100%"></video>
+https://github.com/user-attachments/assets/e6ee6a6e-24a2-4309-aacf-33bfaebcfde6
 
 ---
 
@@ -35,13 +35,20 @@ Codirigent is a Tmux-style workspace built for this workflow. Open it once, and 
 
 <img src="website/images/main.png" alt="Multiple AI coding CLIs running in parallel" width="100%" />
 
-**Multiple sessions, one view** — run Claude Code, Codex, and Gemini side by side. Status indicators show which agent is Working, Needs Attention, or Idle.
+**Multiple sessions, one view** — run Claude Code, Codex, and Gemini side by side. Each session shows a real-time status indicator:
+
+| Status | | Meaning |
+|--------|---|---------|
+| Idle | ![gray](https://img.shields.io/badge/●-gray) | Shell idle, no agent activity |
+| Working | ![amber](https://img.shields.io/badge/●-f59e0b) | Agent is generating a response |
+| Attention | ![rose](https://img.shields.io/badge/●-f43f5e) | Agent is waiting for user input or permission |
+| Ready | ![green](https://img.shields.io/badge/●-22c55e) | Agent finished, response is waiting in an unfocused session |
 
 ---
 
-<img src="website/images/customLayout.png" alt="Custom layout" width="100%" />
+https://github.com/user-attachments/assets/36d38a89-ac41-48bb-856e-4330efb65f45
 
-**Custom layouts** — arrange sessions in any grid configuration and save them. Restore your exact setup instantly.
+**Custom layouts** — arrange sessions in any grid configuration and save them. Drag and drop session headers to rearrange positions on the fly.
 
 ---
 
@@ -54,6 +61,14 @@ Codirigent is a Tmux-style workspace built for this workflow. Open it once, and 
 <img src="website/images/gitWorktree.png" alt="Git worktree" width="100%" />
 
 **Git worktree support** — run agents on isolated branches simultaneously without conflicts.
+
+---
+
+**Session resume** — Codirigent detects and resumes previous Claude Code and Codex sessions automatically, so you pick up right where you left off.
+
+---
+
+**Smart clipboard** — paste text, files, or images into any session. File paths are automatically converted to shell-friendly formats for the target CLI.
 
 ## Download
 
@@ -69,7 +84,19 @@ Download the `.msi` installer from the [latest release](https://github.com/oso95
 
 Download the `.dmg` from the [latest release](https://github.com/oso95/Codirigent/releases/latest).
 
-> **Gatekeeper warning:** macOS code signing is pending Apple Developer approval. To open: right-click the app → **Open** → **Open** again.
+## Hook Setup (Recommended)
+
+Codirigent uses lightweight hooks to track agent status in real time — showing whether each session is Working, Needs Attention, or has a Response Ready. If hooks are unavailable, Codirigent falls back to its reader/detector path, which is less precise.
+
+**Hooks are installed automatically** on first launch for supported CLIs. Codirigent registers its `codirigent-hook` binary into each CLI's configuration:
+
+| CLI | Config file | Auto-installed |
+|-----|-------------|----------------|
+| Claude Code | `~/.claude/settings.json` | Yes |
+| Codex CLI | `~/.codex/config.toml` | Yes |
+| Gemini CLI | `~/.gemini/settings.json` | Yes |
+
+To verify hooks are installed, check that `codirigent-hook` appears in your CLI's config file. If you move or reinstall Codirigent, relaunch it once to re-register the hooks with the updated binary path.
 
 ## Build from Source
 
@@ -78,6 +105,15 @@ Download the `.dmg` from the [latest release](https://github.com/oso95/Codirigen
 ```bash
 git clone https://github.com/oso95/Codirigent.git
 cd Codirigent
+cargo install --path . --all-features
+cargo install --path crates/codirigent-hook
+```
+
+This installs both `codirigent` and `codirigent-hook` to `~/.cargo/bin/`. The hook binary is required for real-time agent status tracking (see [Hook Setup](#hook-setup-recommended)).
+
+To run without installing:
+
+```bash
 cargo run --all-features
 ```
 

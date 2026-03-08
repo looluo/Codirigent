@@ -422,7 +422,7 @@ pub struct GenerateNoteParams {
 /// use codirigent_core::verification::VerificationStatus;
 /// use std::path::Path;
 ///
-/// // Trait is typically implemented by dirigent-verification crate
+/// // Trait is typically implemented by codirigent-verification crate
 /// fn example_usage<T: NotesGenerator>(generator: &T) {
 ///     let params = GenerateNoteParams {
 ///         task_id: TaskId::from("task-001"),
@@ -485,7 +485,7 @@ pub trait NotesGenerator: Send + Sync {
 /// ```
 /// use codirigent_core::session_notes::{LearningsExtractor, Learning};
 ///
-/// // Trait is typically implemented by dirigent-verification crate
+/// // Trait is typically implemented by codirigent-verification crate
 /// fn example_usage<T: LearningsExtractor>(extractor: &T) {
 ///     let output = "I recommend using jose instead of jsonwebtoken";
 ///     let learnings = extractor.extract(output);

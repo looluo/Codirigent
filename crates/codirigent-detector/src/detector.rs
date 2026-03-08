@@ -243,12 +243,12 @@ impl InputDetector {
     /// * `session_id` - The session that produced the output
     /// * `data` - Raw output bytes
     pub fn process_output(&mut self, session_id: SessionId, data: &[u8]) {
-        if let Some(session) = self.sessions.get_mut(&session_id) {
+        let new_status = if let Some(session) = self.sessions.get_mut(&session_id) {
             session.last_output_time = Instant::now();
 
             // Append to buffer (keep limited size)
             let text = String::from_utf8_lossy(data);
-            session.output_buffer.push_str(&text);
+            session.output_buffer.push_str(text.as_ref());
 
             // Trim buffer if too large
             if session.output_buffer.len() > self.config.max_buffer_size {
@@ -260,7 +260,7 @@ impl InputDetector {
                     .find(|(i, _)| *i >= target_start)
                     .map(|(i, _)| i)
                     .unwrap_or(session.output_buffer.len());
-                session.output_buffer = session.output_buffer[start..].to_string();
+                session.output_buffer.drain(..start);
             }
 
             // Check for patterns
@@ -270,8 +270,15 @@ impl InputDetector {
                 self.config.recent_lines_to_check,
             );
 
-            // Update status
-            self.update_session_status(session_id);
+            // Active output is enough to treat the session as working unless a
+            // prompt pattern or OSC 133 shell state says otherwise.
+            Some(Self::status_while_processing_output(session))
+        } else {
+            None
+        };
+
+        if let Some(new_status) = new_status {
+            self.apply_session_status(session_id, new_status);
         }
     }
 
@@ -280,51 +287,15 @@ impl InputDetector {
     /// Determines the new status based on process state and patterns,
     /// then publishes an event if the status changed.
     fn update_session_status(&mut self, session_id: SessionId) {
-        // Get the new status
-        let (new_status, pattern_matched) = {
+        let new_status = {
             let session = match self.sessions.get(&session_id) {
                 Some(s) => s,
                 None => return,
             };
-            (
-                self.determine_status(session),
-                session.pattern_matched.clone(),
-            )
+            self.determine_status(session)
         };
 
-        // Update and publish if changed
-        if let Some(session) = self.sessions.get_mut(&session_id) {
-            if new_status != session.current_status {
-                let old = session.current_status;
-                session.current_status = new_status;
-
-                debug!(%session_id, ?old, ?new_status, "Session status changed");
-
-                self.event_bus
-                    .publish(CodirigentEvent::SessionStatusChanged {
-                        id: session_id,
-                        old,
-                        new: new_status,
-                    });
-
-                // Send AttentionRequired event if needs attention
-                if new_status == SessionStatus::NeedsAttention {
-                    self.event_bus.publish(CodirigentEvent::AttentionRequired {
-                        session_id,
-                        detail: pattern_matched,
-                    });
-                }
-
-                // Clear pattern match when status changes away from NeedsAttention
-                if old == SessionStatus::NeedsAttention
-                    && new_status != SessionStatus::NeedsAttention
-                {
-                    session.pattern_matched = None;
-                    self.event_bus
-                        .publish(CodirigentEvent::InputProvided { session_id });
-                }
-            }
-        }
+        self.apply_session_status(session_id, new_status);
     }
 
     /// Determine status based on pattern matching, OSC 133, and process state.
@@ -341,11 +312,7 @@ impl InputDetector {
 
         // 2. OSC 133 shell state — reliable, if available
         if let Some(ref shell_state) = session.shell_state {
-            return match shell_state {
-                ShellState::PromptStart | ShellState::CommandInputStart => SessionStatus::Idle,
-                ShellState::CommandExecuted => SessionStatus::Working,
-                ShellState::CommandFinished { .. } => SessionStatus::Idle,
-            };
+            return Self::status_from_shell_state(shell_state);
         }
 
         // 3. Fallback: process state heuristic (legacy/unsupported shells)
@@ -366,6 +333,75 @@ impl InputDetector {
                 }
             }
             ProcessState::Stopped | ProcessState::Unknown => SessionStatus::Idle,
+        }
+    }
+
+    fn apply_session_status(&mut self, session_id: SessionId, new_status: SessionStatus) {
+        let (old, attention_detail, input_provided) = {
+            let session = match self.sessions.get_mut(&session_id) {
+                Some(session) => session,
+                None => return,
+            };
+
+            if new_status == session.current_status {
+                return;
+            }
+
+            let old = session.current_status;
+            session.current_status = new_status;
+
+            let attention_detail = if new_status == SessionStatus::NeedsAttention {
+                session.pattern_matched.clone()
+            } else {
+                None
+            };
+
+            let input_provided =
+                old == SessionStatus::NeedsAttention && new_status != SessionStatus::NeedsAttention;
+            if input_provided {
+                session.pattern_matched = None;
+            }
+
+            (old, attention_detail, input_provided)
+        };
+
+        debug!(%session_id, ?old, ?new_status, "Session status changed");
+
+        self.event_bus
+            .publish(CodirigentEvent::SessionStatusChanged {
+                id: session_id,
+                old,
+                new: new_status,
+            });
+
+        if new_status == SessionStatus::NeedsAttention {
+            self.event_bus.publish(CodirigentEvent::AttentionRequired {
+                session_id,
+                detail: attention_detail,
+            });
+        }
+
+        if input_provided {
+            self.event_bus
+                .publish(CodirigentEvent::InputProvided { session_id });
+        }
+    }
+
+    fn status_while_processing_output(session: &MonitoredSession) -> SessionStatus {
+        if session.pattern_matched.is_some() {
+            SessionStatus::NeedsAttention
+        } else if let Some(ref shell_state) = session.shell_state {
+            Self::status_from_shell_state(shell_state)
+        } else {
+            SessionStatus::Working
+        }
+    }
+
+    fn status_from_shell_state(shell_state: &ShellState) -> SessionStatus {
+        match shell_state {
+            ShellState::PromptStart | ShellState::CommandInputStart => SessionStatus::Idle,
+            ShellState::CommandExecuted => SessionStatus::Working,
+            ShellState::CommandFinished { .. } => SessionStatus::Idle,
         }
     }
 
@@ -688,8 +724,36 @@ mod tests {
 
         // Status should not be NeedsAttention (pattern-based)
         let status = detector.get_status(SessionId(1));
-        // The actual status depends on process state, but not pattern-triggered
+        // The active-output fast path should still produce a valid status.
         assert!(status.is_some());
+    }
+
+    #[test]
+    fn test_process_output_without_shell_state_sets_working() {
+        let mut detector = create_test_detector();
+        detector
+            .start_monitoring(SessionId(1), std::process::id())
+            .expect("monitoring should start");
+
+        detector.process_output(SessionId(1), b"streaming output");
+
+        assert_eq!(
+            detector.get_status(SessionId(1)),
+            Some(SessionStatus::Working)
+        );
+    }
+
+    #[test]
+    fn test_process_output_preserves_shell_state_priority() {
+        let mut detector = create_test_detector();
+        detector
+            .start_monitoring(SessionId(1), 1234)
+            .expect("monitoring should start");
+        detector.set_shell_state(SessionId(1), ShellState::CommandInputStart);
+
+        detector.process_output(SessionId(1), b"echoed prompt text");
+
+        assert_eq!(detector.get_status(SessionId(1)), Some(SessionStatus::Idle));
     }
 
     #[test]
@@ -867,6 +931,30 @@ mod tests {
 
         // Should not panic
         detector.tick();
+    }
+
+    #[test]
+    fn test_tick_can_clear_stale_working_status() {
+        let event_bus = Arc::new(DefaultEventBus::new(16));
+        let config = DetectorConfig {
+            idle_threshold: Duration::from_millis(0),
+            ..Default::default()
+        };
+        let mut detector = InputDetector::new(config, event_bus);
+
+        detector
+            .start_monitoring(SessionId(1), std::process::id())
+            .expect("monitoring should start");
+        detector.process_output(SessionId(1), b"streaming output");
+        assert_eq!(
+            detector.get_status(SessionId(1)),
+            Some(SessionStatus::Working)
+        );
+
+        std::thread::sleep(Duration::from_millis(10));
+        detector.tick();
+
+        assert_eq!(detector.get_status(SessionId(1)), Some(SessionStatus::Idle));
     }
 
     // MonitoredSession tests

@@ -139,7 +139,7 @@ impl CodirigentIntegration {
     pub fn with_config(project_dir: PathBuf, config: IntegrationConfig) -> Result<Self> {
         info!(?project_dir, "Initializing Codirigent integration");
 
-        let event_bus = Arc::new(DefaultEventBus::new(64));
+        let event_bus = Arc::new(DefaultEventBus::with_default_capacity());
 
         let storage = Arc::new(
             FileStorageService::new(&project_dir).context("Failed to create storage service")?,
@@ -356,6 +356,7 @@ impl CodirigentIntegration {
                 sessions,
                 layout: codirigent_core::LayoutMode::default(),
                 updated_at: Some(chrono::Utc::now()),
+                window_bounds: None,
             };
 
             if let Err(e) = storage.save_state(&state) {
@@ -562,6 +563,7 @@ impl CodirigentIntegration {
             sessions,
             layout: codirigent_core::LayoutMode::default(),
             updated_at: Some(chrono::Utc::now()),
+            window_bounds: None,
         };
         self.storage.save_state(&state)?;
         Ok(())

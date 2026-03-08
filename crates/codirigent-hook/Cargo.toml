@@ -1,0 +1,17 @@
+[package]
+name = "codirigent-hook"
+description = "Claude Code hook handler — receives hook events and writes signal files for Codirigent"
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "codirigent-hook"
+path = "src/main.rs"
+
+[dependencies]
+serde = { workspace = true, features = ["derive"] }
+serde_json = { workspace = true }

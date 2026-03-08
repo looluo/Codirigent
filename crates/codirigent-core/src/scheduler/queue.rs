@@ -10,8 +10,7 @@ use anyhow::{anyhow, Result};
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use super::config::{SchedulerConfig, SchedulerMode};
-use super::selection::priority_to_value;
+use super::config::SchedulerConfig;
 
 /// Task queue manager handles task ordering and scheduling.
 ///
@@ -55,7 +54,7 @@ use super::selection::priority_to_value;
 /// queue.enqueue(high_task).unwrap();
 ///
 /// // High priority task should be selected first
-/// let next = queue.next_task(&[]).unwrap();
+/// let next = queue.next_task().unwrap();
 /// assert_eq!(next.id, TaskId::from("high"));
 /// ```
 pub struct TaskQueue {
@@ -424,6 +423,20 @@ impl TaskQueue {
             .get_mut(task_id)
             .ok_or_else(|| anyhow!("Task {} not found", task_id))?;
 
+        match task.status {
+            TaskStatus::Assigned
+            | TaskStatus::Working
+            | TaskStatus::Verifying
+            | TaskStatus::Review => {}
+            other => {
+                return Err(anyhow!(
+                    "Task {} cannot be completed from {:?} state",
+                    task_id,
+                    other
+                ));
+            }
+        }
+
         task.status = TaskStatus::Done;
         task.completed_at = Some(chrono::Utc::now());
 
@@ -483,6 +496,21 @@ impl TaskQueue {
             .get_mut(task_id)
             .ok_or_else(|| anyhow!("Task {} not found", task_id))?;
 
+        match task.status {
+            TaskStatus::Assigned
+            | TaskStatus::Working
+            | TaskStatus::Verifying
+            | TaskStatus::Review
+            | TaskStatus::Blocked => {}
+            other => {
+                return Err(anyhow!(
+                    "Task {} cannot be requeued from {:?} state",
+                    task_id,
+                    other
+                ));
+            }
+        }
+
         if !task.can_retry() {
             return Err(anyhow!("Task {} has exceeded max retries", task_id));
         }
@@ -532,19 +560,15 @@ impl TaskQueue {
     /// // After marking task1 as complete, update blocked status
     /// queue.update_blocked_status(&[TaskId::from("first")]);
     /// ```
-    pub fn update_blocked_status(&mut self, completed_tasks: &[TaskId]) {
+    pub fn update_blocked_status(&mut self, _completed_tasks: &[TaskId]) {
+        // `update_blocked_for_task` rebuilds each task's blocking list from
+        // scratch using the live task map (Done tasks are in the map and are
+        // not treated as blocking). A separate completed_tasks pass is therefore
+        // redundant — the map is the single source of truth.
         let task_ids: Vec<TaskId> = self.tasks.keys().cloned().collect();
         for id in task_ids {
             self.update_blocked_for_task(&id);
         }
-
-        // Also check against provided completed list
-        for blocking in self.state.blocked.values_mut() {
-            blocking.retain(|b| !completed_tasks.contains(b));
-        }
-
-        // Remove entries with no blockers
-        self.state.blocked.retain(|_, v| !v.is_empty());
 
         // Update timestamp
         self.state.updated_at = Some(chrono::Utc::now());
@@ -642,35 +666,14 @@ impl TaskQueue {
         self.state.blocked.contains_key(id)
     }
 
-    /// Insert a task into the queue order based on priority.
+    /// Insert a task into the queue order.
+    ///
+    /// All modes simply append — `next_task` uses `max_by` scoring to select
+    /// the best task regardless of insertion order, so pre-sorting on enqueue
+    /// provides no benefit and would cost O(n) per insertion.
     pub(crate) fn insert_by_priority(&mut self, id: &TaskId) {
-        let task = match self.tasks.get(id) {
-            Some(t) => t,
-            None => return,
-        };
-
-        match self.config.mode {
-            SchedulerMode::Fifo => {
-                self.state.order.push(id.clone());
-            }
-            SchedulerMode::Priority | SchedulerMode::Smart => {
-                // Find insertion point based on priority
-                let priority_value = priority_to_value(&task.priority);
-                let pos = self.state.order.iter().position(|other_id| {
-                    self.tasks
-                        .get(other_id)
-                        .map(|t| priority_to_value(&t.priority) < priority_value)
-                        .unwrap_or(false)
-                });
-
-                match pos {
-                    Some(p) => self.state.order.insert(p, id.clone()),
-                    None => self.state.order.push(id.clone()),
-                }
-            }
-            SchedulerMode::Dependency => {
-                self.state.order.push(id.clone());
-            }
+        if self.tasks.contains_key(id) {
+            self.state.order.push(id.clone());
         }
     }
 
@@ -733,7 +736,7 @@ pub trait TaskQueueService: Send + Sync {
     fn enqueue(&mut self, task: Task) -> Result<()>;
 
     /// Get next task to assign.
-    fn next_task(&self, completed_tasks: &[TaskId]) -> Option<&Task>;
+    fn next_task(&self) -> Option<&Task>;
 
     /// Assign a task to a session.
     fn assign(&mut self, task_id: &TaskId, session_id: SessionId) -> Result<()>;
@@ -753,8 +756,8 @@ impl TaskQueueService for TaskQueue {
         TaskQueue::enqueue(self, task)
     }
 
-    fn next_task(&self, completed_tasks: &[TaskId]) -> Option<&Task> {
-        TaskQueue::next_task(self, completed_tasks)
+    fn next_task(&self) -> Option<&Task> {
+        TaskQueue::next_task(self)
     }
 
     fn assign(&mut self, task_id: &TaskId, session_id: SessionId) -> Result<()> {
@@ -778,7 +781,7 @@ impl TaskQueueService for TaskQueue {
 mod tests {
     use super::*;
     use crate::event_bus::DefaultEventBus;
-    use crate::scheduler::config::SchedulerConfig;
+    use crate::scheduler::config::{SchedulerConfig, SchedulerMode};
 
     fn create_queue() -> TaskQueue {
         let event_bus = Arc::new(DefaultEventBus::new(16));
@@ -1086,8 +1089,14 @@ mod tests {
         // Initially blocked
         assert!(queue.is_blocked(&TaskId::from("task-2")));
 
-        // Update with completed task
-        queue.update_blocked_status(&[TaskId::from("task-1")]);
+        // Complete task1 so the dependency is satisfied
+        queue
+            .assign_task(&TaskId::from("task-1"), SessionId(1))
+            .unwrap();
+        queue.complete_task(&TaskId::from("task-1"), true).unwrap();
+
+        // Rebuild blocked status from current task states
+        queue.update_blocked_status(&[]);
 
         // No longer blocked
         assert!(!queue.is_blocked(&TaskId::from("task-2")));
@@ -1209,7 +1218,7 @@ mod tests {
         let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         queue.enqueue(task).unwrap();
 
-        let next = TaskQueueService::next_task(&queue, &[]);
+        let next = TaskQueueService::next_task(&queue);
         assert!(next.is_some());
     }
 

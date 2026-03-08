@@ -8,12 +8,15 @@
 //! - Session row and group header components
 
 use super::gpui::WorkspaceView;
+use super::types::{
+    git_colors, DRAWER_HEADER_HEIGHT, HEADER_HEIGHT, MODAL_FIELD_HEIGHT, SESSION_ROW_HEIGHT,
+};
 use crate::icons;
 use crate::theme::CodirigentTheme;
 use codirigent_core::{Session, SessionId};
 use gpui::{
-    div, prelude::FluentBuilder, px, ClickEvent, Context, FontWeight, InteractiveElement,
-    IntoElement, MouseButton, MouseDownEvent, ParentElement, SharedString,
+    div, prelude::FluentBuilder, px, ClickEvent, Context, Focusable, FontWeight,
+    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, SharedString,
     StatefulInteractiveElement, Styled,
 };
 
@@ -71,7 +74,7 @@ impl WorkspaceView {
             // Header
             .child(
                 div()
-                    .h(px(40.0))
+                    .h(px(DRAWER_HEADER_HEIGHT))
                     .w_full()
                     .bg(header_bg)
                     .border_b_1()
@@ -116,7 +119,6 @@ impl WorkspaceView {
     fn render_drawer_sessions_content(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.workspace().theme().clone();
         let muted: gpui::Hsla = theme.muted.into();
-        let _fg: gpui::Hsla = theme.foreground.into();
         let border_color: gpui::Hsla = theme.border.into();
         let header_bg: gpui::Hsla = theme.header_background.into();
 
@@ -196,30 +198,10 @@ impl WorkspaceView {
         let fg: gpui::Hsla = theme.foreground.into();
         let border_color: gpui::Hsla = theme.border.into();
         let header_bg: gpui::Hsla = theme.header_background.into();
-        let green = gpui::Hsla {
-            h: 0.35,
-            s: 0.6,
-            l: 0.5,
-            a: 1.0,
-        };
-        let orange = gpui::Hsla {
-            h: 0.1,
-            s: 0.8,
-            l: 0.6,
-            a: 1.0,
-        };
-        let red = gpui::Hsla {
-            h: 0.0,
-            s: 0.7,
-            l: 0.55,
-            a: 1.0,
-        };
-        let blue = gpui::Hsla {
-            h: 0.58,
-            s: 0.5,
-            l: 0.6,
-            a: 1.0,
-        };
+        let green = git_colors::STAGED;
+        let orange = git_colors::MODIFIED;
+        let red = git_colors::DELETED;
+        let blue = git_colors::RENAMED;
 
         // Show focused session git info, or first session if none focused
         let focused_id = self.workspace().focused_session_id();
@@ -228,18 +210,14 @@ impl WorkspaceView {
             .and_then(|id| sessions.iter().find(|s| s.id == id))
             .or_else(|| sessions.first());
 
-        let (dir_name, _has_git_info) = match session {
-            Some(s) => {
-                let dir_name = s
-                    .working_directory
-                    .file_name()
-                    .and_then(|n| n.to_str())
-                    .unwrap_or("unknown")
-                    .to_string();
-                let has_git = s.git_info.is_some();
-                (dir_name, has_git)
-            }
-            None => ("No session".to_string(), false),
+        let dir_name = match session {
+            Some(s) => s
+                .working_directory
+                .file_name()
+                .and_then(|n| n.to_str())
+                .unwrap_or("unknown")
+                .to_string(),
+            None => "No session".to_string(),
         };
 
         let mut content = div()
@@ -259,7 +237,7 @@ impl WorkspaceView {
                 // Sub-header showing current location
                 .child(
                     div()
-                        .h(px(32.0))
+                        .h(px(HEADER_HEIGHT))
                         .w_full()
                         .bg(header_bg)
                         .border_b_1()
@@ -298,7 +276,7 @@ impl WorkspaceView {
                     // Sub-header showing current location
                     .child(
                         div()
-                            .h(px(32.0))
+                            .h(px(HEADER_HEIGHT))
                             .w_full()
                             .bg(header_bg)
                             .border_b_1()
@@ -328,12 +306,7 @@ impl WorkspaceView {
         };
 
         // Branch + HEAD
-        let branch_color = gpui::Hsla {
-            h: 0.0,
-            s: 0.0,
-            l: 0.75,
-            a: 1.0,
-        };
+        let branch_color = super::types::BRANCH_NAME_COLOR;
         content = content.child(
             div()
                 .flex()
@@ -613,7 +586,7 @@ impl WorkspaceView {
             // Sub-header showing current location
             .child(
                 div()
-                    .h(px(32.0))
+                    .h(px(HEADER_HEIGHT))
                     .w_full()
                     .bg(header_bg)
                     .border_b_1()
@@ -703,7 +676,7 @@ impl WorkspaceView {
             // Sub-header toolbar
             .child(
                 div()
-                    .h(px(32.0))
+                    .h(px(HEADER_HEIGHT))
                     .w_full()
                     .bg(header_bg)
                     .border_b_1()
@@ -841,12 +814,7 @@ impl WorkspaceView {
         let row_bg = if is_selected {
             active_bg
         } else {
-            gpui::Hsla {
-                h: 0.0,
-                s: 0.0,
-                l: 0.0,
-                a: 0.0,
-            }
+            gpui::Hsla::transparent_black()
         };
 
         // Chevron for directories, spacer for files
@@ -963,7 +931,7 @@ impl WorkspaceView {
         // Menu items
         let insert_item = div()
             .id("ctx-insert-path")
-            .h(px(28.0))
+            .h(px(SESSION_ROW_HEIGHT))
             .px_3()
             .flex()
             .items_center()
@@ -983,7 +951,7 @@ impl WorkspaceView {
 
         let copy_item = div()
             .id("ctx-copy-path")
-            .h(px(28.0))
+            .h(px(SESSION_ROW_HEIGHT))
             .px_3()
             .flex()
             .items_center()
@@ -1003,7 +971,7 @@ impl WorkspaceView {
 
         let create_task_item = div()
             .id("ctx-create-task")
-            .h(px(28.0))
+            .h(px(SESSION_ROW_HEIGHT))
             .px_3()
             .flex()
             .items_center()
@@ -1085,7 +1053,7 @@ impl WorkspaceView {
 
         div()
             .id(SharedString::from(format!("session-row-{}", session_id.0)))
-            .h(px(36.0))
+            .h(px(MODAL_FIELD_HEIGHT))
             .w_full()
             .px_3()
             .flex()
@@ -1096,8 +1064,9 @@ impl WorkspaceView {
             .hover(move |style| style.bg(hover_bg))
             .on_mouse_down(
                 MouseButton::Left,
-                cx.listener(move |this, _, _, cx| {
+                cx.listener(move |this, _, window, cx| {
                     this.select_session_with_cx(session_id, cx);
+                    window.focus(&this.focus_handle(cx));
                     cx.notify();
                 }),
             )
@@ -1137,12 +1106,7 @@ impl WorkspaceView {
                             el.child(
                                 div()
                                     .text_xs()
-                                    .text_color(gpui::Hsla {
-                                        h: 0.1,
-                                        s: 0.8,
-                                        l: 0.6,
-                                        a: 1.0,
-                                    })
+                                    .text_color(super::types::DIRTY_INDICATOR_COLOR)
                                     .child(format!("\u{25CF}{}", gi.dirty_count)),
                             )
                         }),
@@ -1174,14 +1138,7 @@ impl WorkspaceView {
                     .justify_center()
                     .flex_shrink_0()
                     .cursor_pointer()
-                    .hover(|style| {
-                        style.bg(gpui::Hsla {
-                            h: 0.0,
-                            s: 0.0,
-                            l: 1.0,
-                            a: 0.1,
-                        })
-                    })
+                    .hover(|style| style.bg(super::types::CANCEL_BUTTON_HOVER))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, _, _, cx| {
@@ -1211,22 +1168,9 @@ impl WorkspaceView {
         let muted: gpui::Hsla = theme.muted.into();
 
         // Parse group color or use a default
-        let bar_color = color
-            .and_then(|c| {
-                if c.starts_with('#') && c.len() == 7 {
-                    let r = u8::from_str_radix(&c[1..3], 16).ok()?;
-                    let g = u8::from_str_radix(&c[3..5], 16).ok()?;
-                    let b = u8::from_str_radix(&c[5..7], 16).ok()?;
-                    Some(gpui::Hsla::from(gpui::Rgba {
-                        r: r as f32 / 255.0,
-                        g: g as f32 / 255.0,
-                        b: b as f32 / 255.0,
-                        a: 1.0,
-                    }))
-                } else {
-                    None
-                }
-            })
+        let bar_color: gpui::Hsla = color
+            .and_then(crate::theme::hex_to_hsla)
+            .map(|h| h.into())
             .unwrap_or(muted);
 
         let chevron = if expanded {
@@ -1244,7 +1188,7 @@ impl WorkspaceView {
                 "group-header-{}",
                 group_name_owned
             )))
-            .h(px(28.0))
+            .h(px(SESSION_ROW_HEIGHT))
             .w_full()
             .px_3()
             .flex()

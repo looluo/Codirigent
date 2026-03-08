@@ -4,7 +4,7 @@
 //! and global user preferences. Configuration is stored in JSON files:
 //!
 //! - Project config: `.codirigent/config.json`
-//! - User settings: `~/.config/dirigent/settings.json`
+//! - User settings: `~/.config/codirigent/settings.json`
 //!
 //! ## Project Configuration
 //!
@@ -17,6 +17,7 @@
 //! and module-specific preferences.
 
 use crate::scheduler::SchedulerConfig;
+use crate::session_notes::SessionNotesConfig;
 use crate::LayoutMode;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -104,61 +105,6 @@ impl Default for VerificationSettings {
             auto_detect: true,
             max_retries: 3,
             commands: HashMap::new(),
-        }
-    }
-}
-
-/// Session notes configuration.
-///
-/// Controls the session notes feature for tracking work history.
-///
-/// # Example
-///
-/// ```
-/// use codirigent_core::config::{SessionNotesConfig, SummaryMode};
-///
-/// let config = SessionNotesConfig::default();
-/// assert!(config.enabled);
-/// assert_eq!(config.summary_mode, SummaryMode::Manual);
-/// ```
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
-pub struct SessionNotesConfig {
-    /// Enable session notes.
-    pub enabled: bool,
-    /// Summary generation mode: auto, manual, none.
-    pub summary_mode: SummaryMode,
-    /// Only record structured data (no AI summary).
-    pub structured_data_only: bool,
-}
-
-impl Default for SessionNotesConfig {
-    fn default() -> Self {
-        Self {
-            enabled: true,
-            summary_mode: SummaryMode::Manual,
-            structured_data_only: false,
-        }
-    }
-}
-
-/// Summary generation mode for session notes.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
-pub enum SummaryMode {
-    /// AI-generated summaries (uses tokens).
-    Auto,
-    /// Manual summaries only.
-    #[default]
-    Manual,
-    /// No summaries.
-    None,
-}
-
-impl std::fmt::Display for SummaryMode {
-    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
-        match self {
-            SummaryMode::Auto => write!(f, "Auto"),
-            SummaryMode::Manual => write!(f, "Manual"),
-            SummaryMode::None => write!(f, "None"),
         }
     }
 }
@@ -265,23 +211,20 @@ pub struct TerminalSettings {
     /// Font family for terminal rendering.
     pub font_family: String,
     /// Font size in points.
-    pub font_size: u32,
+    pub font_size: f32,
     /// Cursor style (block, underline, bar).
     pub cursor_style: String,
-    /// Line height multiplier.
+    /// Line height multiplier (1.0 = natural font height).
     pub line_height: f32,
-    /// Color scheme name.
-    pub color_scheme: String,
 }
 
 impl Default for TerminalSettings {
     fn default() -> Self {
         Self {
             font_family: "JetBrains Mono".to_string(),
-            font_size: 13,
+            font_size: 13.0,
             cursor_style: "block".to_string(),
             line_height: 1.0,
-            color_scheme: "default".to_string(),
         }
     }
 }
@@ -304,7 +247,7 @@ pub struct SavedLayout {
     pub layout: LayoutMode,
 }
 
-/// Global user settings stored in `~/.config/dirigent/settings.json`.
+/// Global user settings stored in `~/.config/codirigent/settings.json`.
 ///
 /// These settings apply across all projects and control user preferences.
 ///
@@ -358,23 +301,30 @@ impl UserSettings {
     ///
     /// Returns a map of action names to key combinations.
     pub fn default_keybindings() -> HashMap<String, String> {
+        // Use platform modifier key: Cmd on macOS, Ctrl elsewhere.
+        #[cfg(target_os = "macos")]
+        let m = "Cmd";
+        #[cfg(not(target_os = "macos"))]
+        let m = "Ctrl";
+
         let mut bindings = HashMap::new();
-        bindings.insert("switch_session_1".to_string(), "Cmd+1".to_string());
-        bindings.insert("switch_session_2".to_string(), "Cmd+2".to_string());
-        bindings.insert("switch_session_3".to_string(), "Cmd+3".to_string());
-        bindings.insert("switch_session_4".to_string(), "Cmd+4".to_string());
-        bindings.insert("new_session".to_string(), "Cmd+N".to_string());
-        bindings.insert("close_session".to_string(), "Cmd+W".to_string());
-        bindings.insert("quick_switch".to_string(), "Cmd+K".to_string());
-        bindings.insert("toggle_layout".to_string(), "Cmd+\\".to_string());
-        bindings.insert("toggle_task_board".to_string(), "Cmd+B".to_string());
+        bindings.insert("switch_session_1".to_string(), format!("{m}+1"));
+        bindings.insert("switch_session_2".to_string(), format!("{m}+2"));
+        bindings.insert("switch_session_3".to_string(), format!("{m}+3"));
+        bindings.insert("switch_session_4".to_string(), format!("{m}+4"));
+        bindings.insert("new_session".to_string(), format!("{m}+N"));
+        bindings.insert("close_session".to_string(), format!("{m}+W"));
+        bindings.insert("quick_switch".to_string(), format!("{m}+K"));
+        bindings.insert("toggle_layout".to_string(), format!("{m}+\\"));
+        bindings.insert("toggle_task_board".to_string(), format!("{m}+B"));
         bindings
     }
 }
 
 /// Appearance settings.
 ///
-/// Controls the visual appearance of the application.
+/// Controls the visual appearance of the application. Terminal-specific
+/// font settings (family, size) live in [`TerminalSettings`].
 ///
 /// # Example
 ///
@@ -383,26 +333,31 @@ impl UserSettings {
 ///
 /// let settings = AppearanceSettings::default();
 /// assert_eq!(settings.theme, "dark");
-/// assert_eq!(settings.font_size, 14);
+/// assert_eq!(settings.font_size, 13.0);
+/// assert_eq!(settings.grid_gap, 4);
 /// ```
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AppearanceSettings {
     /// Theme name: dark, light, or custom.
     pub theme: String,
-    /// Font family for terminals.
-    pub font_family: String,
-    /// Font size in points.
-    pub font_size: u32,
+    /// UI font size in points (10–24).
+    #[serde(default = "AppearanceSettings::default_font_size")]
+    pub font_size: f32,
     /// Grid gap in pixels.
     pub grid_gap: u32,
+}
+
+impl AppearanceSettings {
+    fn default_font_size() -> f32 {
+        13.0
+    }
 }
 
 impl Default for AppearanceSettings {
     fn default() -> Self {
         Self {
             theme: "dark".to_string(),
-            font_family: "JetBrains Mono".to_string(),
-            font_size: 14,
+            font_size: 13.0,
             grid_gap: 4,
         }
     }
@@ -444,6 +399,9 @@ pub struct NotificationSettings {
     /// Enable "permission prompt" notifications.
     #[serde(default = "default_true")]
     pub permission_prompt: bool,
+    /// Enable "response ready" notifications (Claude finished responding in a background session).
+    #[serde(default = "default_true")]
+    pub response_ready: bool,
     /// Enable "error" notifications.
     #[serde(default = "default_true")]
     pub error: bool,
@@ -470,6 +428,7 @@ impl Default for NotificationSettings {
             task_completed: true,
             task_failed: true,
             permission_prompt: true,
+            response_ready: true,
             error: true,
             cooldown_seconds: 30,
         }
@@ -535,6 +494,20 @@ impl Default for ContextTrackerSettings {
     }
 }
 
+impl ContextTrackerSettings {
+    /// Clamp thresholds to valid range and ensure warning < critical.
+    ///
+    /// Called after deserialization to guard against misconfigured values.
+    pub fn sanitize(&mut self) {
+        self.warning_threshold = self.warning_threshold.clamp(0.0, 1.0);
+        self.critical_threshold = self.critical_threshold.clamp(0.0, 1.0);
+        // Ensure warning is always strictly below critical
+        if self.warning_threshold >= self.critical_threshold {
+            self.warning_threshold = (self.critical_threshold - 0.05).max(0.0);
+        }
+    }
+}
+
 // ============================================================================
 // Tests
 // ============================================================================
@@ -542,6 +515,7 @@ impl Default for ContextTrackerSettings {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::session_notes::SummaryMode;
 
     // ProjectConfig tests
 
@@ -690,7 +664,7 @@ mod tests {
         let config = SessionNotesConfig::default();
         assert!(config.enabled);
         assert_eq!(config.summary_mode, SummaryMode::Manual);
-        assert!(!config.structured_data_only);
+        assert!(config.structured_data_only);
     }
 
     #[test]
@@ -698,13 +672,14 @@ mod tests {
         let config = SessionNotesConfig {
             enabled: false,
             summary_mode: SummaryMode::Auto,
-            structured_data_only: true,
+            structured_data_only: false,
+            output_dir: None,
         };
         let json = serde_json::to_string(&config).unwrap();
         let parsed: SessionNotesConfig = serde_json::from_str(&json).unwrap();
         assert!(!parsed.enabled);
         assert_eq!(parsed.summary_mode, SummaryMode::Auto);
-        assert!(parsed.structured_data_only);
+        assert!(!parsed.structured_data_only);
     }
 
     // SummaryMode tests
@@ -798,9 +773,18 @@ mod tests {
     #[test]
     fn test_default_keybindings() {
         let bindings = UserSettings::default_keybindings();
-        assert_eq!(bindings.get("new_session"), Some(&"Cmd+N".to_string()));
-        assert_eq!(bindings.get("close_session"), Some(&"Cmd+W".to_string()));
-        assert_eq!(bindings.get("quick_switch"), Some(&"Cmd+K".to_string()));
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(bindings.get("new_session"), Some(&"Cmd+N".to_string()));
+            assert_eq!(bindings.get("close_session"), Some(&"Cmd+W".to_string()));
+            assert_eq!(bindings.get("quick_switch"), Some(&"Cmd+K".to_string()));
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(bindings.get("new_session"), Some(&"Ctrl+N".to_string()));
+            assert_eq!(bindings.get("close_session"), Some(&"Ctrl+W".to_string()));
+            assert_eq!(bindings.get("quick_switch"), Some(&"Ctrl+K".to_string()));
+        }
         assert!(bindings.contains_key("toggle_task_board"));
     }
 
@@ -821,8 +805,7 @@ mod tests {
     fn test_appearance_settings_default() {
         let settings = AppearanceSettings::default();
         assert_eq!(settings.theme, "dark");
-        assert_eq!(settings.font_family, "JetBrains Mono");
-        assert_eq!(settings.font_size, 14);
+        assert_eq!(settings.font_size, 13.0);
         assert_eq!(settings.grid_gap, 4);
     }
 
@@ -830,14 +813,14 @@ mod tests {
     fn test_appearance_settings_serialization() {
         let settings = AppearanceSettings {
             theme: "light".to_string(),
-            font_family: "Fira Code".to_string(),
-            font_size: 16,
+            font_size: 14.0,
             grid_gap: 8,
         };
         let json = serde_json::to_string(&settings).unwrap();
         let parsed: AppearanceSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.theme, "light");
-        assert_eq!(parsed.font_size, 16);
+        assert_eq!(parsed.font_size, 14.0);
+        assert_eq!(parsed.grid_gap, 8);
     }
 
     // NotificationSettings tests
@@ -884,6 +867,7 @@ mod tests {
             task_completed: true,
             task_failed: false,
             permission_prompt: true,
+            response_ready: true,
             error: false,
             cooldown_seconds: 60,
         };

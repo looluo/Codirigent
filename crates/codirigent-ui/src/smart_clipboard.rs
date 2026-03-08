@@ -129,6 +129,22 @@ pub trait SmartClipboardProvider: Send + Sync {
     /// `true` if the clipboard contains image data, `false` otherwise.
     fn has_image(&self) -> bool;
 
+    /// Check if clipboard has text content available.
+    ///
+    /// Implementations may override this to expose lightweight format
+    /// availability checks without reading the full clipboard payload.
+    fn has_text(&self) -> bool {
+        false
+    }
+
+    /// Check if clipboard has file-list content available.
+    ///
+    /// Implementations may override this to expose lightweight format
+    /// availability checks without reading the full clipboard payload.
+    fn has_files(&self) -> bool {
+        false
+    }
+
     /// Check if clipboard content has changed since the last call.
     ///
     /// Uses platform-specific mechanisms (e.g., clipboard sequence numbers on Windows)

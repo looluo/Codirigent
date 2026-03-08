@@ -1,6 +1,7 @@
 //! Task board panel component.
 
 use crate::sidebar::Color;
+use crate::task_board::TaskItem;
 
 /// Three-state auto-assign mode.
 ///
@@ -248,6 +249,8 @@ pub struct TaskBoardPanel {
     pending_events: Vec<TaskBoardEvent>,
     /// Task counts per tab.
     task_counts: [usize; 4],
+    /// Cached render snapshot for the right-side task board.
+    snapshot: TaskBoardSnapshot,
 }
 
 impl Default for TaskBoardPanel {
@@ -277,6 +280,7 @@ impl TaskBoardPanel {
             collapsed_height: Self::DEFAULT_COLLAPSED_HEIGHT,
             pending_events: Vec::new(),
             task_counts,
+            snapshot: TaskBoardSnapshot::default(),
         }
     }
 
@@ -412,6 +416,16 @@ impl TaskBoardPanel {
         self.tabs = Self::create_tabs(self.active_tab, &self.task_counts);
     }
 
+    /// Replace the cached render snapshot.
+    pub fn set_snapshot(&mut self, snapshot: TaskBoardSnapshot) {
+        self.snapshot = snapshot;
+    }
+
+    /// Read the cached render snapshot.
+    pub fn snapshot(&self) -> &TaskBoardSnapshot {
+        &self.snapshot
+    }
+
     /// Get task count for a tab.
     pub fn task_count(&self, tab: TaskBoardTab) -> usize {
         match tab {
@@ -457,6 +471,34 @@ pub struct TaskBoardRenderHints {
     pub height: f32,
     /// Header height.
     pub header_height: f32,
+}
+
+/// Cached summary of a pending task assignment proposal.
+#[derive(Debug, Clone, Default)]
+pub struct PendingAssignmentSummary {
+    /// Task ID associated with the proposal.
+    pub task_id: String,
+    /// Numeric session identifier of the proposed assignee.
+    pub session_number: u64,
+    /// Display title for the proposed task.
+    pub task_title: String,
+}
+
+/// Cached task board data used by the right-side panel render path.
+#[derive(Debug, Clone, Default)]
+pub struct TaskBoardSnapshot {
+    /// Tasks currently assigned or in progress.
+    pub running_items: Vec<TaskItem>,
+    /// Tasks waiting to be started.
+    pub queued_items: Vec<TaskItem>,
+    /// Tasks waiting for verification/review.
+    pub review_items: Vec<TaskItem>,
+    /// Completed tasks.
+    pub done_items: Vec<TaskItem>,
+    /// Current auto-assign mode.
+    pub auto_assign_mode: AutoAssignMode,
+    /// Pending assignment confirmation banners.
+    pub pending_assignments: Vec<PendingAssignmentSummary>,
 }
 
 impl TaskBoardPanel {

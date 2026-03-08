@@ -130,9 +130,6 @@ pub struct TaskManager {
 
     /// Event bus.
     event_bus: Arc<dyn EventBus>,
-
-    /// Completed task IDs (for dependency checking).
-    completed_tasks: Vec<TaskId>,
 }
 
 impl TaskManager {
@@ -169,7 +166,6 @@ impl TaskManager {
             context: ContextTracker::new(config.context),
             storage,
             event_bus,
-            completed_tasks: Vec::new(),
         }
     }
 
@@ -187,7 +183,10 @@ impl TaskManager {
             if let Some(task) = self.storage.load_task(&id)? {
                 match task.status {
                     TaskStatus::Done => {
-                        self.completed_tasks.push(task.id.clone());
+                        // Enqueue with Done status so all_tasks() includes them
+                        // for dependency checking. queued_tasks() / next_task()
+                        // filter out Done, so they won't be re-assigned.
+                        self.queue.enqueue(task)?;
                     }
                     TaskStatus::Queued => {
                         self.queue.enqueue(task)?;
@@ -213,7 +212,7 @@ impl TaskManager {
     ///
     /// Returns an error if saving to storage fails.
     pub async fn save(&self) -> Result<()> {
-        for task in self.queue.queued_tasks() {
+        for task in self.queue.all_tasks().values() {
             self.storage.save_task(task)?;
         }
         Ok(())
@@ -321,12 +320,8 @@ impl TaskManager {
         task.plan_file = plan_file;
         task.project_dir = project_dir;
 
-        // Persist
-        let task_ref = self
-            .queue
-            .get_task(id)
-            .ok_or_else(|| anyhow!("Task {} not found after update", id))?;
-        self.storage.save_task(task_ref)?;
+        let snapshot = task.clone();
+        self.storage.save_task(&snapshot)?;
         Ok(())
     }
 
@@ -334,11 +329,7 @@ impl TaskManager {
     ///
     /// Returns tasks with `Queued` status.
     pub fn queued_tasks(&self) -> Vec<&Task> {
-        self.queue
-            .queued_tasks()
-            .into_iter()
-            .filter(|t| t.status == TaskStatus::Queued)
-            .collect()
+        self.queue.queued_tasks()
     }
 
     /// Get in-progress tasks.
@@ -359,9 +350,20 @@ impl TaskManager {
 
     /// Get completed task IDs.
     ///
-    /// Returns the list of task IDs that have been completed.
-    pub fn completed_task_ids(&self) -> &[TaskId] {
-        &self.completed_tasks
+    /// Returns all task IDs that have reached `Done` status,
+    /// derived from the task map (no unbounded separate list).
+    pub fn completed_task_ids(&self) -> Vec<TaskId> {
+        self.done_ids()
+    }
+
+    /// Collect IDs of all Done tasks for dependency checking.
+    fn done_ids(&self) -> Vec<TaskId> {
+        self.queue
+            .all_tasks()
+            .values()
+            .filter(|t| t.status == TaskStatus::Done)
+            .map(|t| t.id.clone())
+            .collect()
     }
 
     // === Assignment Operations ===
@@ -378,8 +380,7 @@ impl TaskManager {
     ///
     /// An assignment action indicating what should be done.
     pub fn on_session_idle(&mut self, session: &Session) -> Option<AssignmentAction> {
-        self.assignment
-            .on_session_idle(session, &mut self.queue, &self.completed_tasks)
+        self.assignment.on_session_idle(session, &mut self.queue)
     }
 
     /// Confirm a pending assignment.
@@ -452,8 +453,37 @@ impl TaskManager {
     ///
     /// Returns an error if the task doesn't exist.
     pub fn start_task(&mut self, task_id: &TaskId) -> Result<()> {
+        let task = self
+            .queue
+            .get_task_mut(task_id)
+            .ok_or_else(|| anyhow!("Task {} not found", task_id))?;
+
+        match task.status {
+            // Queued/Blocked: bypass assignment step (e.g. manual start)
+            TaskStatus::Queued | TaskStatus::Blocked => {
+                task.status = TaskStatus::Working;
+                task.started_at.get_or_insert_with(chrono::Utc::now);
+            }
+            // Assigned: normal flow — session has taken ownership, now working
+            TaskStatus::Assigned => {
+                task.status = TaskStatus::Working;
+                task.started_at.get_or_insert_with(chrono::Utc::now);
+            }
+            // Already working or in review — no-op is fine
+            TaskStatus::Working | TaskStatus::Verifying | TaskStatus::Review => {}
+            other => {
+                return Err(anyhow!(
+                    "Task {} cannot be started from {:?} state",
+                    task_id,
+                    other
+                ));
+            }
+        }
+
+        if let Some(task_ref) = self.queue.get_task(task_id) {
+            self.storage.save_task(task_ref)?;
+        }
         tracing::info!(?task_id, "Task started");
-        // The task status update is handled by the queue on assignment
         Ok(())
     }
 
@@ -519,17 +549,21 @@ impl TaskManager {
                 result,
             })
         } else if task.can_retry() {
-            // Generate retry message
-            let message = self.verification.format_failure(
-                &result,
-                task.retry.retry_count + 1,
-                task.retry.max_retries,
-            );
+            let max_retries = task.retry.max_retries;
 
-            // Requeue task
+            // Requeue first so the actual post-increment count is available.
             self.queue.requeue_task(task_id)?;
 
-            let retry_count = task.retry.retry_count + 1;
+            // Read the authoritative retry count from the queue after increment.
+            let retry_count = self
+                .queue
+                .get_task(task_id)
+                .map(|t| t.retry.retry_count)
+                .unwrap_or(0);
+
+            let message = self
+                .verification
+                .format_failure(&result, retry_count, max_retries);
 
             Ok(TaskCompletionResult::NeedsRetry {
                 task_id: task_id.clone(),
@@ -613,7 +647,6 @@ impl TaskManager {
     /// Returns an error if the task doesn't exist or completion fails.
     pub fn approve_task(&mut self, task_id: &TaskId) -> Result<()> {
         self.queue.complete_task(task_id, true)?;
-        self.completed_tasks.push(task_id.clone());
 
         // Save updated task
         if let Some(task) = self.get_task(task_id) {
@@ -704,15 +737,8 @@ impl TaskManager {
             .map(|(id, task)| (id.clone(), task))
     }
 
-    /// Find a task assigned to a specific session (mutable).
-    ///
-    /// Returns the task ID of the task assigned to the session.
     fn find_task_id_by_session(&self, session_id: SessionId) -> Option<TaskId> {
-        self.queue
-            .all_tasks()
-            .iter()
-            .find(|(_, task)| task.assigned_session == Some(session_id))
-            .map(|(id, _)| id.clone())
+        self.find_task_by_session(session_id).map(|(id, _)| id)
     }
 
     /// Handle session status change and automatically sync task status.
@@ -885,7 +911,7 @@ impl std::fmt::Debug for TaskManager {
         f.debug_struct("TaskManager")
             .field("queue", &self.queue)
             .field("assignment", &self.assignment)
-            .field("completed_tasks_count", &self.completed_tasks.len())
+            .field("done_tasks_count", &self.done_ids().len())
             .finish()
     }
 }
@@ -975,7 +1001,13 @@ mod tests {
         let temp = TempDir::new().unwrap();
         let storage = Arc::new(FileStorageService::new(temp.path()).unwrap());
         let event_bus = Arc::new(DefaultEventBus::new(16));
-        let config = TaskManagerConfig::default();
+        let config = TaskManagerConfig {
+            assignment: AssignmentConfig {
+                idle_threshold_seconds: 0,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
 
         let manager = TaskManager::new(config, storage, event_bus);
         (manager, temp)

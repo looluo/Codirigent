@@ -22,36 +22,35 @@
 use super::core::Workspace;
 use super::editor_detection::detect_monospace_fonts;
 use super::types::{
-    CacheState, CliReaders, ModalState, PollingState, SelectionState, CELL_BORDER_WIDTH,
-    FONT_SIZE_BASE_DEFAULT, HEADER_HEIGHT, REM_BASE, TERMINAL_CONTENT_PADDING,
+    CacheState, CliReaders, ModalState, PollingState, RenderLayoutSignature, SelectionState,
+    TerminalResizeSignature, CELL_BORDER_WIDTH, FONT_SIZE_BASE_DEFAULT, HEADER_HEIGHT, REM_BASE,
+    TERMINAL_CONTENT_PADDING,
 };
 use crate::app::{Copy, Paste};
-// Imports from main branch (terminal integration)
-use crate::input::{key_to_bytes, TerminalKeystroke, TerminalModifiers};
-use crate::terminal_view::TerminalView;
-// Imports from feature branch (UI components)
+use crate::clipboard_preview::ClipboardPreview;
 use crate::empty_session::{EmptySessionEvent, EmptySessionPool};
+use crate::input::{key_to_bytes, TerminalKeystroke, TerminalModifiers};
 use crate::sidebar::{FileTreePanel, WorktreePanel};
 use crate::task_board::TaskBoardPanel;
 use crate::terminal_header::TerminalHeader;
+use crate::terminal_view::TerminalView;
 use crate::theme::CodirigentTheme;
 use crate::toolbar::CustomLayoutPicker;
-// Core imports (combined)
-use crate::clipboard_preview::ClipboardPreview;
 use codirigent_core::compaction::{CompactionConfig, CompactionService};
-use codirigent_core::config_service::ConfigService;
 use codirigent_core::{
-    CodirigentEvent, DefaultEventBus, EventBus, FileStorageService, GridPosition, SessionId,
-    SessionManager, SessionStatus, TaskManager, TaskManagerConfig,
+    CodexExecutionMode, CodirigentEvent, DefaultEventBus, EventBus, FileStorageService,
+    GridPosition, ProcessMonitor, SessionId, SessionManager, SessionStatus, TaskManager,
+    TaskManagerConfig,
 };
-use codirigent_detector::InputDetector;
+use codirigent_detector::{InputDetector, NotificationManager};
 use codirigent_filetree::FileTree;
-use codirigent_session::clipboard_service::DefaultClipboardService;
+use codirigent_session::clipboard_service::{ClipboardService, DefaultClipboardService};
 use codirigent_session::DefaultSessionManager;
 use gpui::{
     div, px, App, AppContext, Bounds, ClickEvent, Context, Entity, EntityInputHandler, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, KeyDownEvent, ParentElement, Pixels, Render,
-    StatefulInteractiveElement, Styled, UTF16Selection, Window,
+    Focusable, InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseMoveEvent,
+    MouseUpEvent, ParentElement, Pixels, Render, StatefulInteractiveElement, Styled,
+    UTF16Selection, Window,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -103,7 +102,7 @@ pub struct WorkspaceView {
     pub(super) empty_cells: EmptySessionPool,
     /// Terminal headers by session ID.
     pub(super) terminal_headers: HashMap<SessionId, TerminalHeader>,
-    /// Project and file tree state (file_tree, file_tree_model, project_root, worktree_panel, worktree_manager, current_branch).
+    /// Project and file tree state (file_tree, file_tree_model, project_root, worktree_panel, worktree_manager).
     pub(super) project: super::project_state::ProjectState,
     /// Clipboard state (smart_clipboard, clipboard_service, clipboard_preview, clipboard_preview_shown_at).
     pub(super) clipboard: super::clipboard_state::ClipboardState,
@@ -123,11 +122,31 @@ pub struct WorkspaceView {
     pub(super) cli_readers: Arc<Mutex<CliReaders>>,
     /// Cached detection results and memoized state.
     pub(super) cache: CacheState,
+    /// Notification manager — enforces master toggle, per-type toggles, and cooldown.
+    /// All desktop notifications must go through this instead of calling send_notification directly.
+    pub(super) notification_manager: NotificationManager,
 }
 
 /// Returns `true` if the editor command refers to a terminal-based editor
 /// (one that needs to run inside an existing terminal session).
 impl WorkspaceView {
+    /// Poll cadence while output is actively streaming.
+    const ACTIVE_OUTPUT_POLL_INTERVAL_MS: u64 = 16;
+    /// Poll cadence once output briefly goes idle.
+    const LIGHT_IDLE_OUTPUT_POLL_INTERVAL_MS: u64 = 50;
+    /// Poll cadence once output has been idle for a few seconds.
+    const DEEP_IDLE_OUTPUT_POLL_INTERVAL_MS: u64 = 200;
+    /// Number of active-rate idle polls before backing off to the light-idle interval.
+    const LIGHT_IDLE_THRESHOLD_POLLS: u32 = 4;
+    /// Number of consecutive idle polls before backing off to the deep-idle interval.
+    const DEEP_IDLE_THRESHOLD_POLLS: u32 = 64;
+    /// Maintenance cadence for non-output UI work (git refresh, clipboard, cleanup).
+    const MAINTENANCE_POLL_INTERVAL_MS: u64 = 250;
+    /// Fallback UI sync interval for any mutation path that misses an explicit dirty mark.
+    const UI_SYNC_FALLBACK_INTERVAL: Duration = Duration::from_secs(1);
+    /// Debounce window for persisted app-state saves.
+    const STATE_SAVE_DEBOUNCE: Duration = Duration::from_millis(200);
+
     /// Returns true when a computed target size is a transient collapse that
     /// should be ignored to avoid 1-column/1-row PTY resizes.
     fn should_skip_collapsed_resize(
@@ -139,6 +158,231 @@ impl WorkspaceView {
         let target_collapsed = target_rows <= 1 || target_cols <= 1;
         let current_usable = current_rows > 1 && current_cols > 1;
         target_collapsed && current_usable
+    }
+
+    fn session_is_shell_idle(&self, session_id: SessionId) -> bool {
+        self.with_detector(|detector| {
+            matches!(
+                detector.get_status(session_id),
+                Some(SessionStatus::Idle) | None
+            )
+        })
+    }
+
+    fn normalize_codex_execution_mode(command: &str) -> Option<CodexExecutionMode> {
+        let tokens: Vec<&str> = command.split_whitespace().collect();
+        let codex_index = tokens.iter().position(|token| *token == "codex")?;
+        let args = &tokens[codex_index + 1..];
+
+        let has_flag = |flag: &str| args.iter().any(|token| token.eq_ignore_ascii_case(flag));
+        let option_value = |short: &str, long: &str| {
+            args.windows(2).find_map(|window| {
+                let [flag, value] = window else {
+                    return None;
+                };
+                if flag.eq_ignore_ascii_case(short) || flag.eq_ignore_ascii_case(long) {
+                    Some(*value)
+                } else {
+                    None
+                }
+            })
+        };
+
+        if has_flag("--dangerously-bypass-approvals-and-sandbox") || has_flag("--yolo") {
+            return Some(CodexExecutionMode::Bypass);
+        }
+
+        if has_flag("--full-auto") {
+            return Some(CodexExecutionMode::FullAuto);
+        }
+
+        let ask_policy = option_value("-a", "--ask-for-approval");
+        let sandbox_mode = option_value("-s", "--sandbox");
+        if ask_policy.is_some_and(|value| value.eq_ignore_ascii_case("never"))
+            && sandbox_mode.is_some_and(|value| value.eq_ignore_ascii_case("danger-full-access"))
+        {
+            return Some(CodexExecutionMode::Bypass);
+        }
+
+        None
+    }
+
+    fn keystroke_is_text_input(event: &KeyDownEvent) -> bool {
+        if event.keystroke.modifiers.control
+            || event.keystroke.modifiers.alt
+            || event.keystroke.modifiers.platform
+            || event.keystroke.modifiers.function
+        {
+            return false;
+        }
+
+        let key: &str = event.keystroke.key.as_ref();
+        let is_plain_space = key == " " || key.eq_ignore_ascii_case("space");
+        if is_plain_space {
+            return true;
+        }
+
+        if event
+            .keystroke
+            .key_char
+            .as_deref()
+            .is_some_and(|text| !text.is_empty())
+        {
+            return true;
+        }
+
+        // On Windows IME layouts, pre-composition keystrokes can arrive with an
+        // empty `key_char` before GPUI dispatches the eventual composition or
+        // committed text via the input handler. Treat any plain printable key as
+        // text input so it does not leak directly into the PTY and suppress the
+        // IME preedit overlay.
+        key.chars().count() == 1
+    }
+
+    pub(super) fn set_session_codex_execution_mode(
+        &mut self,
+        session_id: SessionId,
+        mode: Option<CodexExecutionMode>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut changed = false;
+
+        if let Ok(mgr) = self.session_manager.lock() {
+            changed |= mgr
+                .with_session_state_mut(session_id, |state| {
+                    if state.session.codex_execution_mode != mode {
+                        state.session.codex_execution_mode = mode;
+                        true
+                    } else {
+                        false
+                    }
+                })
+                .unwrap_or(false);
+        }
+
+        if let Some(session) = self.workspace.session_mut(session_id) {
+            if session.codex_execution_mode != mode {
+                session.codex_execution_mode = mode;
+                changed = true;
+            }
+        }
+
+        if changed {
+            self.save_state_to_disk(cx);
+        }
+    }
+
+    fn note_codex_command_submission(
+        &mut self,
+        session_id: SessionId,
+        mode: Option<CodexExecutionMode>,
+        cx: &mut Context<Self>,
+    ) {
+        let mut changed = false;
+        let started_at = chrono::Utc::now();
+
+        // Mark the pane as Codex immediately when the shell command is
+        // submitted so background JSONL polling can report Working on the
+        // same turn, even before the first hook signal arrives.
+        self.clipboard
+            .clipboard_service
+            .set_session_cli_type(session_id, codirigent_core::CliType::CodexCli);
+
+        if let Ok(mgr) = self.session_manager.lock() {
+            changed |= mgr
+                .with_session_state_mut(session_id, |state| {
+                    let mut session_changed = false;
+                    if state.session.codex_execution_mode != mode {
+                        state.session.codex_execution_mode = mode;
+                        session_changed = true;
+                    }
+                    if state.session.codex_started_at != Some(started_at) {
+                        state.session.codex_started_at = Some(started_at);
+                        session_changed = true;
+                    }
+                    if state.session.codex_session_id.take().is_some() {
+                        session_changed = true;
+                    }
+                    session_changed
+                })
+                .unwrap_or(false);
+        }
+
+        if let Some(session) = self.workspace.session_mut(session_id) {
+            if session.codex_execution_mode != mode {
+                session.codex_execution_mode = mode;
+                changed = true;
+            }
+            if session.codex_started_at != Some(started_at) {
+                session.codex_started_at = Some(started_at);
+                changed = true;
+            }
+            if session.codex_session_id.take().is_some() {
+                changed = true;
+            }
+        }
+
+        if changed {
+            self.save_state_to_disk(cx);
+        }
+    }
+
+    pub(super) fn capture_shell_text_input(&mut self, session_id: SessionId, text: &str) {
+        if !self.session_is_shell_idle(session_id) {
+            self.polling.shell_input_buffers.remove(&session_id);
+            return;
+        }
+
+        if text.is_empty() {
+            return;
+        }
+
+        let buffer = self
+            .polling
+            .shell_input_buffers
+            .entry(session_id)
+            .or_default();
+        if buffer.len() >= 1024 {
+            self.polling.shell_input_buffers.remove(&session_id);
+            return;
+        }
+        buffer.push_str(text);
+    }
+
+    fn capture_shell_key_input(
+        &mut self,
+        session_id: SessionId,
+        key: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if !self.session_is_shell_idle(session_id) {
+            self.polling.shell_input_buffers.remove(&session_id);
+            return;
+        }
+
+        match key {
+            "backspace" => {
+                if let Some(buffer) = self.polling.shell_input_buffers.get_mut(&session_id) {
+                    buffer.pop();
+                    if buffer.is_empty() {
+                        self.polling.shell_input_buffers.remove(&session_id);
+                    }
+                }
+            }
+            "enter" => {
+                let command = self.polling.shell_input_buffers.remove(&session_id);
+                if let Some(command) = command {
+                    let mode = Self::normalize_codex_execution_mode(command.trim());
+                    if command.split_whitespace().any(|token| token == "codex") {
+                        self.note_codex_command_submission(session_id, mode, cx);
+                    }
+                }
+            }
+            "escape" => {
+                self.polling.shell_input_buffers.remove(&session_id);
+            }
+            _ => {}
+        }
     }
 
     /// Create a new workspace view.
@@ -161,6 +405,7 @@ impl WorkspaceView {
         workspace.set_theme(theme);
 
         Self::start_output_polling(cx);
+        Self::start_maintenance_polling(cx);
         Self::start_modal_cursor_blink(cx);
 
         let (storage, task_manager) = Self::init_task_manager(event_bus.clone());
@@ -194,8 +439,8 @@ impl WorkspaceView {
                 file_tree_model,
                 project_root: project_root.clone(),
                 worktree_panel: WorktreePanel::new(),
-                worktree_manager: Self::init_worktree_manager(),
-                current_branch: Self::detect_git_branch(),
+                worktree_manager: None,
+                root_cache: HashMap::new(),
             },
             clipboard: super::clipboard_state::ClipboardState {
                 smart_clipboard: crate::platform::create_clipboard(),
@@ -209,6 +454,7 @@ impl WorkspaceView {
                 ),
                 clipboard_preview: ClipboardPreview::new(theme_for_clipboard),
                 clipboard_preview_shown_at: None,
+                last_preview_image_signature: None,
             },
             settings: super::settings_state::SettingsState::new(),
             persistence: super::persistence_state::PersistenceServices {
@@ -222,23 +468,15 @@ impl WorkspaceView {
             polling: PollingState::new(),
             cli_readers: Arc::new(Mutex::new(CliReaders::new())),
             cache: CacheState::new(),
+            notification_manager: NotificationManager::new(Default::default()),
         };
 
         // Pre-detect editors and shells in the background so settings open instantly
         Self::start_detection_background(cx);
+        view.start_settings_background_load(true, cx);
 
-        // Restore sessions from previous run
-        view.restore_sessions_from_disk(cx);
-
-        view.refresh_file_tree_panel();
-        view.refresh_worktree_panel();
-
-        // Load saved layout profiles from user settings
-        if let Some(ref config_service) = view.settings.config_service {
-            if let Ok(user_settings) = config_service.load_user_settings() {
-                view.top_bar
-                    .load_saved_profiles(user_settings.saved_layouts);
-            }
+        if let Some(root) = project_root {
+            view.set_project_root(root, cx);
         }
 
         view
@@ -246,12 +484,11 @@ impl WorkspaceView {
 
     /// Start adaptive output polling background task.
     ///
-    /// Uses 4ms interval when output is being received (low latency for typing),
-    /// 50ms after 12 idle polls (~50ms of no output), and 200ms after 100 idle
-    /// polls (~5s of no output).
+    /// Uses a frame-rate-friendly interval while output is active, then backs
+    /// off once output has been quiet for a short period.
     fn start_output_polling(cx: &mut Context<Self>) {
         cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
-            let mut poll_interval_ms: u64 = 4;
+            let mut poll_interval_ms: u64 = Self::ACTIVE_OUTPUT_POLL_INTERVAL_MS;
             loop {
                 cx.background_executor()
                     .timer(Duration::from_millis(poll_interval_ms))
@@ -260,22 +497,36 @@ impl WorkspaceView {
                     this.poll_output(cx);
                     if this.polling.last_poll_had_output {
                         this.polling.idle_poll_count = 0;
-                        poll_interval_ms = 4;
+                        poll_interval_ms = Self::ACTIVE_OUTPUT_POLL_INTERVAL_MS;
                     } else {
                         this.polling.idle_poll_count =
                             this.polling.idle_poll_count.saturating_add(1);
-                        if this.polling.idle_poll_count > 100 {
-                            // Deep idle (~5s of no output): 200ms polling
-                            poll_interval_ms = 200;
-                        } else if this.polling.idle_poll_count > 12 {
-                            // Light idle (~50ms of no output): 50ms polling
-                            poll_interval_ms = 50;
+                        if this.polling.idle_poll_count > Self::DEEP_IDLE_THRESHOLD_POLLS {
+                            poll_interval_ms = Self::DEEP_IDLE_OUTPUT_POLL_INTERVAL_MS;
+                        } else if this.polling.idle_poll_count > Self::LIGHT_IDLE_THRESHOLD_POLLS {
+                            poll_interval_ms = Self::LIGHT_IDLE_OUTPUT_POLL_INTERVAL_MS;
                         }
                     }
                 });
                 if result.is_err() {
                     break;
                 }
+            }
+        })
+        .detach();
+    }
+
+    /// Start slower maintenance polling for non-output UI work.
+    fn start_maintenance_polling(cx: &mut Context<Self>) {
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(Self::MAINTENANCE_POLL_INTERVAL_MS))
+                .await;
+            let result = this.update(cx, |this, cx| {
+                this.poll_maintenance(cx);
+            });
+            if result.is_err() {
+                break;
             }
         })
         .detach();
@@ -356,56 +607,13 @@ impl WorkspaceView {
     /// Initialize file tree panel from the current working directory.
     fn init_file_tree() -> (FileTreePanel, Option<FileTree>, Option<PathBuf>) {
         let mut file_tree = FileTreePanel::new();
-        let mut file_tree_model = None;
         let mut project_root = None;
         if let Ok(cwd) = std::env::current_dir() {
             file_tree.set_root(cwd.clone());
             project_root = Some(cwd.clone());
-            match FileTree::new(cwd) {
-                Ok(tree) => {
-                    file_tree_model = Some(tree);
-                }
-                Err(e) => {
-                    warn!("Failed to initialize file tree: {}", e);
-                }
-            }
         }
-        (file_tree, file_tree_model, project_root)
+        (file_tree, None, project_root)
     }
-
-    /// Initialize worktree manager if in a git repository.
-    fn init_worktree_manager() -> Option<Arc<Mutex<codirigent_session::WorktreeManager>>> {
-        if let Ok(cwd) = std::env::current_dir() {
-            if let Ok(manager) = codirigent_session::WorktreeManager::new(&cwd) {
-                return Some(Arc::new(Mutex::new(manager)));
-            }
-        }
-        None
-    }
-
-    /// Detect the current git branch.
-    fn detect_git_branch() -> Option<String> {
-        use git2::Repository;
-
-        let cwd = std::env::current_dir().ok()?;
-        let repo = Repository::discover(cwd).ok()?;
-        let head = repo.head().ok()?;
-
-        if head.is_branch() {
-            head.shorthand().map(String::from)
-        } else {
-            // Detached HEAD - show short commit hash
-            let commit = head.peel_to_commit().ok()?;
-            Some(format!("{:.7}", commit.id()))
-        }
-    }
-
-    /// Refresh the file tree panel from the current model.
-
-    /// Poll PTY output and feed to terminal emulators.
-
-    /// Try to compact a session before verification.
-    /// Returns true if compaction was started, false if skipped.
 
     /// Check if a session should be created at the given position.
     /// Returns true if this is not a duplicate click (same position within 100ms).
@@ -425,29 +633,104 @@ impl WorkspaceView {
         true
     }
 
-    /// Create a new session.
-
-    /// Save current session state to disk.
-    pub(super) fn save_state_to_disk(&self) {
-        let sessions = self.with_session_manager(|m| m.list_sessions());
-        let state = codirigent_core::AppState {
-            sessions,
-            layout: codirigent_core::LayoutMode::Grid {
-                rows: self.workspace.layout_profile().dimensions().0,
-                cols: self.workspace.layout_profile().dimensions().1,
-            },
-            updated_at: Some(chrono::Utc::now()),
-        };
-        if let Err(e) = self.persistence.storage.save_state(&state) {
-            warn!("Failed to save state: {}", e);
+    fn persisted_layout_mode(&self) -> codirigent_core::LayoutMode {
+        match self.workspace.layout_state() {
+            crate::layout::WorkspaceLayoutState::Grid(state) => state.profile().to_mode(),
+            crate::layout::WorkspaceLayoutState::SplitTree(state) => {
+                codirigent_core::LayoutMode::SplitTree {
+                    root: state.tree().clone(),
+                }
+            }
         }
     }
 
-    /// Save layout profiles to user settings.
+    /// Mark derived UI state as dirty so it is recomputed on the next render.
+    pub(super) fn mark_ui_sync_dirty(&mut self) {
+        self.polling.ui_sync_dirty = true;
+    }
+
+    /// Mark layout-derived render caches as dirty after structural changes.
+    pub(super) fn mark_layout_cache_dirty(&mut self) {
+        self.cache.render_cell_info_dirty = true;
+        self.cache.layout_generation = self.cache.layout_generation.saturating_add(1);
+        self.cache.last_resize_signature = None;
+        self.cache.pending_resize_signature = None;
+    }
+
+    fn current_resize_signature(
+        &self,
+        cell_width: f32,
+        cell_height: f32,
+    ) -> Option<TerminalResizeSignature> {
+        Some(TerminalResizeSignature {
+            layout_generation: self.cache.layout_generation,
+            layout: self.cache.render_layout_signature?,
+            cell_width,
+            cell_height,
+        })
+    }
+
+    /// Debounce persisted session/layout state writes off the UI thread.
+    pub(super) fn save_state_to_disk(&mut self, cx: &mut Context<Self>) {
+        self.polling.state_save_generation = self.polling.state_save_generation.saturating_add(1);
+        let save_generation = self.polling.state_save_generation;
+        self.polling.state_save_task = None;
+        self.polling.state_save_task =
+            Some(cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+                cx.background_executor()
+                    .timer(Self::STATE_SAVE_DEBOUNCE)
+                    .await;
+
+                let save_inputs = match this.update(cx, |this, _cx| {
+                    if this.polling.state_save_generation != save_generation {
+                        return None;
+                    }
+
+                    Some((
+                        this.persistence.storage.clone(),
+                        this.session_manager.clone(),
+                        this.persisted_layout_mode(),
+                        this.cache.last_window_state.clone(),
+                    ))
+                }) {
+                    Ok(Some(inputs)) => inputs,
+                    Ok(None) | Err(_) => return,
+                };
+
+                let (storage, session_manager, layout, window_state) = save_inputs;
+                let result = cx
+                    .background_executor()
+                    .spawn(async move {
+                        let sessions = session_manager
+                            .lock()
+                            .map(|manager| manager.list_sessions())
+                            .unwrap_or_default();
+                        let state = codirigent_core::AppState {
+                            sessions,
+                            layout,
+                            updated_at: Some(chrono::Utc::now()),
+                            window_bounds: window_state,
+                        };
+                        storage.save_state(&state)
+                    })
+                    .await;
+
+                let _ = this.update(cx, |this, _cx| {
+                    if this.polling.state_save_generation == save_generation {
+                        this.polling.state_save_task = None;
+                    }
+                    if let Err(e) = result {
+                        warn!("Failed to save state: {}", e);
+                    }
+                });
+            }));
+    }
 
     /// Cycle to next layout.
     pub fn next_layout(&mut self, cx: &mut Context<Self>) {
         self.workspace.next_layout();
+        self.mark_layout_cache_dirty();
+        self.mark_ui_sync_dirty();
         self.event_bus.publish(CodirigentEvent::LayoutChanged {
             mode: self.workspace.layout_profile().to_mode(),
         });
@@ -457,6 +740,8 @@ impl WorkspaceView {
     /// Toggle sidebar visibility.
     pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.workspace.toggle_sidebar();
+        self.mark_layout_cache_dirty();
+        self.mark_ui_sync_dirty();
         cx.notify();
     }
 
@@ -467,6 +752,7 @@ impl WorkspaceView {
                 self.event_bus
                     .publish(CodirigentEvent::SessionFocused { id });
             }
+            self.mark_ui_sync_dirty();
             self.sync_file_tree_to_focused_session(cx);
             cx.notify();
         }
@@ -477,36 +763,141 @@ impl WorkspaceView {
     /// This should be called before rendering to ensure all UI components
     /// reflect the current workspace state.
     fn sync_ui_state(&mut self) {
+        let (task_titles, task_counts, task_snapshot) = if let Ok(manager) =
+            self.task_manager.lock()
+        {
+            let mut titles = HashMap::new();
+            let all_tasks = manager.list_tasks();
+            let counts =
+                all_tasks
+                    .iter()
+                    .fold((0usize, 0usize, 0usize, 0usize), |(q, ip, r, d), task| {
+                        titles.insert(task.id.clone(), task.title.clone());
+                        match task.status {
+                            codirigent_core::TaskStatus::Queued
+                            | codirigent_core::TaskStatus::Blocked => (q + 1, ip, r, d),
+                            codirigent_core::TaskStatus::Assigned
+                            | codirigent_core::TaskStatus::Working => (q, ip + 1, r, d),
+                            codirigent_core::TaskStatus::Verifying
+                            | codirigent_core::TaskStatus::Review => (q, ip, r + 1, d),
+                            codirigent_core::TaskStatus::Done => (q, ip, r, d + 1),
+                        }
+                    });
+            let running_items = all_tasks
+                .iter()
+                .filter(|t| {
+                    matches!(
+                        t.status,
+                        codirigent_core::TaskStatus::Assigned
+                            | codirigent_core::TaskStatus::Working
+                    )
+                })
+                .map(|t| self.core_task_to_ui_item(t))
+                .collect();
+            let queued_items = all_tasks
+                .iter()
+                .filter(|t| {
+                    matches!(
+                        t.status,
+                        codirigent_core::TaskStatus::Queued | codirigent_core::TaskStatus::Blocked
+                    )
+                })
+                .map(|t| self.core_task_to_ui_item(t))
+                .collect();
+            let review_items = all_tasks
+                .iter()
+                .filter(|t| {
+                    matches!(
+                        t.status,
+                        codirigent_core::TaskStatus::Verifying
+                            | codirigent_core::TaskStatus::Review
+                    )
+                })
+                .map(|t| self.core_task_to_ui_item(t))
+                .collect();
+            let done_items = all_tasks
+                .iter()
+                .filter(|t| t.status == codirigent_core::TaskStatus::Done)
+                .map(|t| self.core_task_to_ui_item(t))
+                .collect();
+            let config = manager.assignment().config();
+            let auto_assign_mode = crate::task_board::AutoAssignMode::from_config(
+                config.auto_assign,
+                config.confirm_before_assign,
+            );
+            let pending_assignments = manager
+                .assignment()
+                .pending_assignments()
+                .iter()
+                .map(|p| crate::task_board::PendingAssignmentSummary {
+                    task_id: p.task_id.to_string(),
+                    session_number: p.session_id.0,
+                    task_title: all_tasks
+                        .iter()
+                        .find(|t| t.id == p.task_id)
+                        .map(|t| t.title.clone())
+                        .unwrap_or_else(|| p.task_id.to_string()),
+                })
+                .collect();
+            (
+                titles,
+                Some(counts),
+                Some(crate::task_board::TaskBoardSnapshot {
+                    running_items,
+                    queued_items,
+                    review_items,
+                    done_items,
+                    auto_assign_mode,
+                    pending_assignments,
+                }),
+            )
+        } else {
+            (HashMap::new(), None, None)
+        };
+
         // Update terminal headers from sessions
         let sessions = self.workspace.sessions();
         let focused_id = self.workspace.focused_session_id();
         for session in sessions {
             if let Some(header) = self.terminal_headers.get_mut(&session.id) {
-                header.session_name = session.name.clone();
+                // Dirty-check string fields to avoid heap allocations every sync tick
+                if header.session_name != session.name {
+                    header.session_name = session.name.clone();
+                }
+                if header.group_name != session.group {
+                    header.group_name = session.group.clone();
+                }
                 header.status = session.status;
                 header.context_usage = session.context_usage;
                 header.is_focused = focused_id == Some(session.id);
-                header.group_name = session.group.clone();
-                header.project_name = session
+                let project_name = session
                     .git_info
                     .as_ref()
                     .and_then(|gi| gi.repo_root.file_name())
                     .or_else(|| session.working_directory.file_name())
                     .and_then(|n| n.to_str())
                     .map(|s| s.to_string());
-                if let Some(color_hex) = &session.color {
-                    header.session_color = crate::sidebar::Color::from_hex(color_hex);
+                if header.project_name != project_name {
+                    header.project_name = project_name;
                 }
-                if let Some(task_id) = &session.current_task {
-                    // Show task title instead of raw ID
-                    let title = self
-                        .task_manager
-                        .lock()
-                        .ok()
-                        .and_then(|mgr| mgr.get_task(task_id).map(|t| t.title.clone()));
-                    header.task = Some(title.unwrap_or_else(|| task_id.0.to_string()));
-                } else {
-                    header.task = None;
+
+                let session_color = session
+                    .color
+                    .as_deref()
+                    .map(crate::sidebar::Color::from_hex)
+                    .unwrap_or_else(|| crate::sidebar::Color::from_hex("#6366f1"));
+                if header.session_color != session_color {
+                    header.session_color = session_color;
+                }
+
+                let task = session.current_task.as_ref().map(|task_id| {
+                    task_titles
+                        .get(task_id)
+                        .cloned()
+                        .unwrap_or_else(|| task_id.0.to_string())
+                });
+                if header.task != task {
+                    header.task = task;
                 }
             }
         }
@@ -526,47 +917,8 @@ impl WorkspaceView {
             .collect();
         self.empty_cells.setup_for_grid(rows, cols, &occupied);
 
-        // Sync task board counts from TaskManager
-        if let Ok(manager) = self.task_manager.lock() {
-            let all_tasks = manager.list_tasks();
-
-            let queue_count = all_tasks
-                .iter()
-                .filter(|t| {
-                    matches!(
-                        t.status,
-                        codirigent_core::TaskStatus::Queued | codirigent_core::TaskStatus::Blocked
-                    )
-                })
-                .count();
-
-            let in_progress_count = all_tasks
-                .iter()
-                .filter(|t| {
-                    matches!(
-                        t.status,
-                        codirigent_core::TaskStatus::Assigned
-                            | codirigent_core::TaskStatus::Working
-                    )
-                })
-                .count();
-
-            let review_count = all_tasks
-                .iter()
-                .filter(|t| {
-                    matches!(
-                        t.status,
-                        codirigent_core::TaskStatus::Verifying
-                            | codirigent_core::TaskStatus::Review
-                    )
-                })
-                .count();
-
-            let done_count = all_tasks
-                .iter()
-                .filter(|t| t.status == codirigent_core::TaskStatus::Done)
-                .count();
-
+        // Sync task board counts from TaskManager — single pass over all tasks
+        if let Some((queue_count, in_progress_count, review_count, done_count)) = task_counts {
             self.task_board.set_task_counts(
                 queue_count,
                 in_progress_count,
@@ -574,29 +926,14 @@ impl WorkspaceView {
                 done_count,
             );
         }
+        if let Some(snapshot) = task_snapshot {
+            self.task_board.set_snapshot(snapshot);
+        }
     }
 
     /// Get a terminal header for a session.
     pub fn get_terminal_header(&self, id: SessionId) -> Option<&TerminalHeader> {
         self.terminal_headers.get(&id)
-    }
-
-    /// Get a mutable terminal header for a session.
-    pub fn get_terminal_header_mut(&mut self, id: SessionId) -> Option<&mut TerminalHeader> {
-        self.terminal_headers.get_mut(&id)
-    }
-
-    /// Update a session's terminal header.
-    pub fn update_session_header(
-        &mut self,
-        id: SessionId,
-        status: SessionStatus,
-        context_usage: Option<f32>,
-    ) {
-        if let Some(header) = self.terminal_headers.get_mut(&id) {
-            header.status = status;
-            header.context_usage = context_usage;
-        }
     }
 
     /// Process pending events from all UI components.
@@ -643,6 +980,8 @@ impl WorkspaceView {
                             // Custom positional layouts not used from tabs
                         }
                     }
+                    self.mark_layout_cache_dirty();
+                    self.mark_ui_sync_dirty();
                 }
                 crate::top_bar::TopBarEvent::RightPanelToggled => {
                     // Will be wired in plan 05 (right task board)
@@ -678,14 +1017,18 @@ impl WorkspaceView {
         self.selection.selected_session_id = Some(session_id);
         self.drawer.set_selected_session(Some(session_id));
         self.workspace.focus_session(session_id);
+        self.mark_ui_sync_dirty();
         self.sync_file_tree_to_focused_session(cx);
-    }
-
-    /// Select a session without GPUI context (skips background file tree rebuild).
-    pub(super) fn select_session(&mut self, session_id: SessionId) {
-        self.selection.selected_session_id = Some(session_id);
-        self.drawer.set_selected_session(Some(session_id));
-        self.workspace.focus_session(session_id);
+        // If the session showed ResponseReady, downgrade the cache to Idle
+        // immediately so the badge clears without waiting for the next poll.
+        if let Ok(mut readers) = self.cli_readers.lock() {
+            if let Some(cached) = readers.cached_status.get_mut(&session_id) {
+                if cached.status == codirigent_core::SessionStatus::ResponseReady {
+                    cached.status = codirigent_core::SessionStatus::Idle;
+                    cached.status_since = std::time::Instant::now();
+                }
+            }
+        }
     }
 
     /// Process icon rail events (drawer toggling, settings).
@@ -703,10 +1046,6 @@ impl WorkspaceView {
         }
     }
 
-    /// Open the settings page overlay.
-
-    /// Handle task board events.
-
     /// Handle empty session cell events.
     fn handle_empty_session_event(&mut self, event: EmptySessionEvent, cx: &mut Context<Self>) {
         match event {
@@ -720,61 +1059,11 @@ impl WorkspaceView {
         cx.notify();
     }
 
-    /// Open a file in the user's configured editor.
-    ///
-    /// GUI editors (code, zed, cursor, etc.) are spawned as separate processes.
-    /// Terminal editors (vim, nvim, nano, etc.) are injected into the focused terminal.
-    // --- Action Handlers ---
-    // These are called by GPUI when keyboard shortcuts or menu items trigger actions.
-
-    /// Handle Paste action (Cmd+V / Ctrl+V / right-click).
-
-    /// Find the best session to assign a task to.
-    ///
-    /// Only returns idle sessions with a known CLI running (not GenericShell).
-    /// Never assigns to bare shell sessions ??the CLI must be detected first.
-    /// Find the best assignable session for a given task.
-    ///
-    /// Filters sessions by:
-    /// 1. Idle status, no current task, known CLI type
-    /// 2. Directory matching (session working_directory under task's project_dir)
-    ///
-    /// Among matching sessions, prefers:
-    /// 1. The currently focused session (if it matches)
-    /// 2. Otherwise, the session with the lowest context_usage (freshest context)
-
-    /// Detect CLI type from PTY output by scanning for known banners.
-    ///
-    /// Uses simple byte string matching for speed. Returns `None` if no
-    /// known CLI banner is found.
-
     /// Get a reference to the underlying workspace.
     ///
     /// Used by the render module to access workspace state.
     pub(super) fn workspace(&self) -> &Workspace {
         &self.workspace
-    }
-
-    /// Execute a closure with a locked task manager reference.
-    ///
-    /// This helper method reduces boilerplate for the common pattern of locking
-    /// the task manager, executing a closure, and handling lock failure.
-    ///
-    /// # Returns
-    /// - `Some(R)` if the lock was acquired and the closure executed successfully
-    /// - `None` if the lock could not be acquired
-    ///
-    /// # Example
-    /// ```ignore
-    /// self.with_task_manager(|manager| {
-    ///     manager.create_task(task)
-    /// })
-    /// ```
-    pub(super) fn with_task_manager<R>(&self, f: impl FnOnce(&mut TaskManager) -> R) -> Option<R> {
-        self.task_manager
-            .lock()
-            .ok()
-            .map(|mut manager| f(&mut manager))
     }
 
     /// Execute a closure with a locked session manager reference.
@@ -806,6 +1095,9 @@ impl WorkspaceView {
     }
 
     /// Helper to acquire detector lock.
+    ///
+    /// # Panics
+    /// Panics if the detector lock is poisoned (should never happen in normal operation).
     pub(super) fn with_detector<R>(&self, f: impl FnOnce(&mut InputDetector) -> R) -> R {
         let mut detector = self.detector.lock().expect("detector mutex poisoned");
         f(&mut detector)
@@ -837,10 +1129,31 @@ impl WorkspaceView {
     pub(super) fn apply_terminal_font_size(&mut self, window: &mut Window, size: f32) {
         self.workspace.theme_mut().terminal_font_size = size;
         let family = self.workspace.theme().terminal_font_family.clone();
-        let (w, h) =
-            crate::terminal_view::compute_cell_dimensions(window.text_system(), &family, size);
+        let line_height = self.workspace.theme().terminal_line_height;
+        let (w, h) = crate::terminal_view::compute_cell_dimensions(
+            window.text_system(),
+            &family,
+            size,
+            line_height,
+        );
         for tv in self.terminals_mut().values_mut() {
             tv.set_font_size(size);
+            tv.set_cell_dimensions(w, h);
+        }
+    }
+
+    /// Apply a new terminal line height and propagate to all terminal views.
+    pub(super) fn apply_terminal_line_height(&mut self, window: &mut Window, line_height: f32) {
+        self.workspace.theme_mut().terminal_line_height = line_height;
+        let family = self.workspace.theme().terminal_font_family.clone();
+        let size = self.workspace.theme().terminal_font_size;
+        let (w, h) = crate::terminal_view::compute_cell_dimensions(
+            window.text_system(),
+            &family,
+            size,
+            line_height,
+        );
+        for tv in self.terminals_mut().values_mut() {
             tv.set_cell_dimensions(w, h);
         }
     }
@@ -852,8 +1165,13 @@ impl WorkspaceView {
     pub(super) fn apply_terminal_font_family(&mut self, window: &mut Window, family: String) {
         self.workspace.theme_mut().terminal_font_family = family.clone();
         let size = self.workspace.theme().terminal_font_size;
-        let (w, h) =
-            crate::terminal_view::compute_cell_dimensions(window.text_system(), &family, size);
+        let line_height = self.workspace.theme().terminal_line_height;
+        let (w, h) = crate::terminal_view::compute_cell_dimensions(
+            window.text_system(),
+            &family,
+            size,
+            line_height,
+        );
         for tv in self.terminals_mut().values_mut() {
             tv.set_font_family(family.clone());
             tv.set_cell_dimensions(w, h);
@@ -863,13 +1181,6 @@ impl WorkspaceView {
     /// Get grid layout accounting for task board height.
     pub(super) fn grid_layout_with_task_board(&self) -> crate::layout::GridLayout {
         self.workspace.grid_layout()
-    }
-
-    /// Get a reference to the terminals HashMap.
-    ///
-    /// Used by the render module to access terminal views.
-    pub(super) fn terminals(&self) -> &HashMap<SessionId, TerminalView> {
-        &self.terminals
     }
 
     /// Get a mutable reference to the terminals HashMap.
@@ -886,10 +1197,9 @@ impl WorkspaceView {
     /// Returns `true` if any terminal was actually resized.
     fn resize_terminals_to_grid(&mut self) -> bool {
         // Layout constants from types.rs: HEADER_HEIGHT, TERMINAL_CONTENT_PADDING, CELL_BORDER_WIDTH
-        let cell_info = self.workspace.cell_info();
         let mut resized_any = false;
 
-        for info in cell_info {
+        for &info in &self.cache.render_cell_info {
             if let Some(terminal_view) = self.terminals.get_mut(&info.session_id) {
                 // Subtract all chrome between the grid cell bounds and the
                 // actual terminal canvas drawing area:
@@ -963,7 +1273,7 @@ impl WorkspaceView {
 
         // Escape closes settings page if open
         if self.settings.open && event.keystroke.key == "escape" {
-            self.close_settings();
+            self.close_settings(cx);
             cx.notify();
             return;
         }
@@ -1010,7 +1320,20 @@ impl WorkspaceView {
                     return;
                 }
                 "b" => {
+                    self.toggle_task_board(cx);
+                    return;
+                }
+                "e" => {
                     self.toggle_sidebar(cx);
+                    return;
+                }
+                "k" => {
+                    self.toggle_sidebar(cx);
+                    return;
+                }
+                "p" if event.keystroke.modifiers.shift => {
+                    self.open_task_creation_modal();
+                    cx.notify();
                     return;
                 }
                 "\\" => {
@@ -1039,24 +1362,18 @@ impl WorkspaceView {
         // send printable keys from keydown, characters are duplicated.
         // GPUI can report plain Space with an empty key_char, so treat it
         // as text input as well to avoid inserting two spaces.
-        let key: &str = event.keystroke.key.as_ref();
-        let is_plain_space = key == " " || key.eq_ignore_ascii_case("space");
-        if !event.keystroke.modifiers.control
-            && !event.keystroke.modifiers.alt
-            && (event
-                .keystroke
-                .key_char
-                .as_deref()
-                .is_some_and(|s| !s.is_empty())
-                || is_plain_space)
-        {
+        if Self::keystroke_is_text_input(event) {
             return;
         }
+
+        let key: &str = event.keystroke.key.as_ref();
 
         // Get focused session
         let Some(session_id) = self.workspace.focused_session_id() else {
             return;
         };
+
+        self.capture_shell_key_input(session_id, key, cx);
 
         // Get terminal mode for proper escape sequence generation (immutable borrow)
         let term_mode = {
@@ -1078,18 +1395,19 @@ impl WorkspaceView {
 
         // Use key_char for IME-composed characters (non-ASCII input like CJK, accented chars)
         if let Some(ref key_char) = event.keystroke.key_char {
-            if key_char.chars().any(|c| !c.is_ascii()) {
+            if !key_char.is_ascii() {
                 keystroke.ime_key = Some(key_char.clone());
             }
         }
 
         // Convert to bytes
         if let Some(bytes) = key_to_bytes(&keystroke, term_mode) {
+            let mut scrolled_to_bottom = false;
             // Auto-scroll to bottom when user types while scrolled up in scrollback.
             // This is standard terminal behavior: typing should return the view
             // to the cursor position.
             if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
-                terminal_view.scroll_to_bottom();
+                scrolled_to_bottom = terminal_view.scroll_to_bottom_if_needed();
             }
 
             // Send to PTY
@@ -1098,6 +1416,10 @@ impl WorkspaceView {
                     warn!("Failed to send input to session {}: {}", session_id, e);
                 }
             });
+
+            if scrolled_to_bottom {
+                cx.notify();
+            }
         }
     }
 
@@ -1119,29 +1441,7 @@ impl WorkspaceView {
             // blocking the render thread with synchronous file I/O.
             // Only one task at a time — if a task is already in flight it will
             // flush whatever is dirty when it fires (including later edits).
-            let should_flush = self
-                .settings
-                .page
-                .as_ref()
-                .map(|p| p.user_save_pending || p.project_save_pending)
-                .unwrap_or(false);
-            if should_flush && self.settings.save_task.is_none() {
-                self.settings.save_task =
-                    Some(cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
-                        cx.background_executor()
-                            .timer(std::time::Duration::from_millis(500))
-                            .await;
-                        if this
-                            .update(cx, |this, _| {
-                                this.flush_settings();
-                                this.settings.save_task = None;
-                            })
-                            .is_err()
-                        {
-                            tracing::warn!("Settings save: entity dropped before flush");
-                        }
-                    }));
-            }
+            self.schedule_settings_save(std::time::Duration::from_millis(500), cx);
             container = container.child(self.render_settings_overlay(cx));
             return container;
         }
@@ -1179,7 +1479,7 @@ impl WorkspaceView {
                     .p(px(grid_gap))
                     .overflow_hidden()
                     .min_h(px(0.0))
-                    .child(self.render_grid_with_headers(cx)),
+                    .child(self.render_grid_with_headers(window, cx)),
             );
 
         main_content = main_content.child(grid_area);
@@ -1283,7 +1583,7 @@ impl WorkspaceView {
                 div()
                     .absolute()
                     .inset_0()
-                    .bg(gpui::Hsla { h: 0.0, s: 0.0, l: 0.0, a: 0.5 })
+                    .bg(super::types::MODAL_BACKDROP)
                     .flex()
                     .items_center()
                     .justify_center()
@@ -1329,7 +1629,7 @@ impl WorkspaceView {
                                             .text_color(fg)
                                             .cursor_pointer()
                                             .hover(|style| {
-                                                style.bg(gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: 0.1 })
+                                                style.bg(super::types::CANCEL_BUTTON_HOVER)
                                             })
                                             .on_click(cx.listener(
                                                 move |this, _: &ClickEvent, _window, cx| {
@@ -1345,18 +1645,18 @@ impl WorkspaceView {
                                             .px_4()
                                             .py_2()
                                             .rounded_md()
-                                            .bg(gpui::Hsla { h: 0.0, s: 0.8, l: 0.5, a: 1.0 })
+                                            .bg(super::types::DESTRUCTIVE_BUTTON_BG)
                                             .text_sm()
-                                            .text_color(gpui::Hsla { h: 0.0, s: 0.0, l: 1.0, a: 1.0 })
+                                            .text_color(gpui::Hsla::white())
                                             .cursor_pointer()
                                             .hover(|style| {
-                                                style.bg(gpui::Hsla { h: 0.0, s: 0.8, l: 0.4, a: 1.0 })
+                                                style.bg(super::types::DESTRUCTIVE_BUTTON_HOVER)
                                             })
                                             .on_click(cx.listener(
                                                 move |this, _: &ClickEvent, _window, cx| {
                                                     this.modals.pending_profile_deletion = None;
                                                     this.top_bar.remove_tab(idx_for_confirm);
-                                                    this.save_layout_profiles_to_settings();
+                                                    this.save_layout_profiles_to_settings(cx);
                                                     cx.notify();
                                                 },
                                             ))
@@ -1442,9 +1742,13 @@ impl EntityInputHandler for WorkspaceView {
         self.ime_marked_range.clone()
     }
 
-    fn unmark_text(&mut self, _window: &mut Window, _cx: &mut Context<Self>) {
+    fn unmark_text(&mut self, _window: &mut Window, cx: &mut Context<Self>) {
+        let had_ime_overlay = self.ime_marked_range.is_some() || self.ime_preedit_text.is_some();
         self.ime_marked_range = None;
         self.ime_preedit_text = None;
+        if had_ime_overlay {
+            cx.notify();
+        }
     }
 
     fn replace_text_in_range(
@@ -1459,22 +1763,27 @@ impl EntityInputHandler for WorkspaceView {
             return;
         }
 
+        let had_ime_overlay = self.ime_marked_range.is_some() || self.ime_preedit_text.is_some();
         self.ime_marked_range = None;
         self.ime_preedit_text = None;
+        let mut scrolled_to_bottom = false;
         if let Some(session_id) = self.workspace.focused_session_id() {
             // Typing while scrolled up should jump back to the cursor line,
             // matching native terminal behavior.
             if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
-                terminal_view.scroll_to_bottom();
+                scrolled_to_bottom = terminal_view.scroll_to_bottom_if_needed();
             }
 
+            self.capture_shell_text_input(session_id, text);
             let text_bytes = text.as_bytes().to_vec();
 
             self.with_session_manager(move |sm| {
                 let _ = sm.send_input(session_id, &text_bytes);
             });
         }
-        cx.notify();
+        if had_ime_overlay || scrolled_to_bottom {
+            cx.notify();
+        }
     }
 
     fn replace_and_mark_text_in_range(
@@ -1483,14 +1792,21 @@ impl EntityInputHandler for WorkspaceView {
         text: &str,
         _mark_range: Option<std::ops::Range<usize>>,
         _window: &mut Window,
-        _cx: &mut Context<Self>,
+        cx: &mut Context<Self>,
     ) {
         if self.has_blocking_modal() {
+            let had_ime_overlay =
+                self.ime_marked_range.is_some() || self.ime_preedit_text.is_some();
             self.ime_marked_range = None;
             self.ime_preedit_text = None;
+            if had_ime_overlay {
+                cx.notify();
+            }
             return;
         }
 
+        let previous_text = self.ime_preedit_text.clone();
+        let previous_range = self.ime_marked_range.clone();
         let len = text.encode_utf16().count();
         if len == 0 {
             self.ime_marked_range = None;
@@ -1499,16 +1815,20 @@ impl EntityInputHandler for WorkspaceView {
             self.ime_marked_range = Some(0..len);
             self.ime_preedit_text = Some(text.to_string());
         }
+
+        if self.ime_preedit_text != previous_text || self.ime_marked_range != previous_range {
+            cx.notify();
+        }
     }
 
     fn bounds_for_range(
         &mut self,
         _range: std::ops::Range<usize>,
-        _element_bounds: Bounds<Pixels>,
+        element_bounds: Bounds<Pixels>,
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<Bounds<Pixels>> {
-        Some(_element_bounds)
+        Some(element_bounds)
     }
 
     fn character_index_for_point(
@@ -1517,6 +1837,7 @@ impl EntityInputHandler for WorkspaceView {
         _window: &mut Window,
         _cx: &mut Context<Self>,
     ) -> Option<usize> {
+        // TODO: implement proper character index for correct IME candidate window positioning
         Some(0)
     }
 }
@@ -1539,11 +1860,14 @@ impl Render for WorkspaceView {
         self.process_top_bar_events();
         self.process_icon_rail_events();
 
-        // Sync UI state (throttled to ~10/sec to avoid locking task_manager
-        // and iterating all tasks on every frame during high-frequency output).
+        // Sync UI state only when metadata changed, with a slow fallback pass
+        // to recover from any missed invalidation.
         let now = Instant::now();
-        if now.duration_since(self.polling.last_ui_sync) >= Duration::from_millis(100) {
+        if self.polling.ui_sync_dirty
+            || now.duration_since(self.polling.last_ui_sync) >= Self::UI_SYNC_FALLBACK_INTERVAL
+        {
             self.sync_ui_state();
+            self.polling.ui_sync_dirty = false;
             self.polling.last_ui_sync = now;
         }
 
@@ -1553,6 +1877,39 @@ impl Render for WorkspaceView {
         let window_bounds =
             crate::layout::Bounds::from_size(window_size.width.into(), window_size.height.into());
         self.workspace.set_bounds(window_bounds);
+
+        // Detect window move/resize and persist bounds (debounced)
+        {
+            let wb = window.bounds();
+            let x = f32::from(wb.origin.x);
+            let y = f32::from(wb.origin.y);
+            let w = f32::from(wb.size.width);
+            let h = f32::from(wb.size.height);
+            let maximized = window.is_maximized();
+
+            if w.is_finite() && h.is_finite() && w > 0.0 && h > 0.0 {
+                let current = (x, y, w, h, maximized);
+                let prev = self
+                    .cache
+                    .last_window_state
+                    .as_ref()
+                    .map(|s| (s.x, s.y, s.width, s.height, s.is_maximized));
+                let is_initial = prev.is_none();
+
+                if prev != Some(current) {
+                    self.cache.last_window_state = Some(codirigent_core::WindowState {
+                        x,
+                        y,
+                        width: w,
+                        height: h,
+                        is_maximized: maximized,
+                    });
+                    if !is_initial {
+                        self.save_state_to_disk(cx);
+                    }
+                }
+            }
+        }
 
         // Update sidebar width to match actual icon rail + drawer state
         // so grid_bounds() calculates correct cell dimensions
@@ -1571,66 +1928,21 @@ impl Render for WorkspaceView {
             0.0
         };
         self.workspace.set_right_panel_width(right_panel_w);
-
-        // Sync terminal cell dimensions with actual font metrics so the
-        // emulator calculates the correct row/col counts.
-        // Uses a cache to skip font system calls when settings haven't changed.
+        let layout_signature = RenderLayoutSignature {
+            bounds: window_bounds,
+            sidebar_width: actual_sidebar_width,
+            right_panel_width: right_panel_w,
+            grid_gap: self.workspace.theme().grid_gap,
+        };
+        if self.cache.render_cell_info_dirty
+            || self.cache.render_layout_signature != Some(layout_signature)
         {
-            let font_family = &self.workspace.theme().terminal_font_family;
-            let font_size = self.workspace.theme().terminal_font_size;
-            let (real_w, real_h) = match &self.cache.cached_cell_dims {
-                Some(cached)
-                    if cached.font_family == *font_family
-                        && (cached.font_size - font_size).abs() < 0.01 =>
-                {
-                    (cached.cell_width, cached.cell_height)
-                }
-                _ => {
-                    let (w, h) = crate::terminal_view::compute_cell_dimensions(
-                        window.text_system(),
-                        font_family,
-                        font_size,
-                    );
-                    self.cache.cached_cell_dims = Some(super::types::CachedCellDims {
-                        font_family: font_family.clone(),
-                        font_size,
-                        cell_width: w,
-                        cell_height: h,
-                    });
-                    (w, h)
-                }
-            };
-            for tv in self.terminals.values_mut() {
-                if !tv.dimensions_initialized() {
-                    tv.set_cell_dimensions(real_w, real_h);
-                }
-            }
+            self.cache.render_cell_info = self.workspace.cell_info();
+            self.cache.render_cell_info_dirty = false;
+            self.cache.render_layout_signature = Some(layout_signature);
         }
 
-        // Resize terminals to fit the new grid cell bounds (throttled to ~10/sec
-        // to avoid resize feedback loop during window drag/resize)
-        let now = Instant::now();
-        if now.duration_since(self.polling.last_resize_time) > Duration::from_millis(100) {
-            self.resize_terminals_to_grid();
-            self.polling.last_resize_time = now;
-            self.polling.pending_resize = false;
-        } else if !self.polling.pending_resize {
-            self.polling.pending_resize = true;
-            cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
-                cx.background_executor()
-                    .timer(Duration::from_millis(100))
-                    .await;
-                let _ = this.update(cx, |this, cx| {
-                    let resized = this.resize_terminals_to_grid();
-                    this.polling.last_resize_time = Instant::now();
-                    this.polling.pending_resize = false;
-                    if resized {
-                        cx.notify();
-                    }
-                });
-            })
-            .detach();
-        }
+        self.sync_terminal_dimensions_and_resize(window, cx);
 
         // Clone theme values before any mutable borrows
         let theme = self.workspace.theme();
@@ -1668,6 +1980,33 @@ impl Render for WorkspaceView {
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {
                 this.handle_key_down(event, window, cx);
             }))
+            .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                let Some(drag) = &mut this.selection.drag else {
+                    return;
+                };
+
+                let pos =
+                    crate::layout::Point::new(event.position.x.into(), event.position.y.into());
+                drag.update_pointer(pos, &this.cache.render_cell_info);
+                cx.notify();
+            }))
+            // Global mouse-up: catch drag releases anywhere in workspace
+            .on_mouse_up(
+                MouseButton::Left,
+                cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
+                    if let Some(drag) = this.selection.drag.take() {
+                        if drag.active {
+                            if let Some(target) = drag.target_index {
+                                this.workspace.swap_sessions(drag.source_index, target);
+                                this.mark_layout_cache_dirty();
+                                this.mark_ui_sync_dirty();
+                                this.save_state_to_disk(cx);
+                            }
+                        }
+                        cx.notify();
+                    }
+                }),
+            )
             .bg(bg)
             .flex()
             .flex_col();
@@ -1677,6 +2016,92 @@ impl Render for WorkspaceView {
         container = self.render_active_modals(container, cx);
         container = self.render_overlays(container, cx);
         container
+    }
+}
+
+impl WorkspaceView {
+    /// Sync terminal cell dimensions with font metrics, then throttle-trigger PTY resize.
+    ///
+    /// Uses a cache keyed on font family + size so font queries only run when
+    /// terminal appearance settings change, not on every frame.
+    ///
+    /// Resize is debounced to ≤10/sec to prevent PTY feedback loops during
+    /// continuous window drag/resize.
+    fn sync_terminal_dimensions_and_resize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
+        let font_family = &self.workspace.theme().terminal_font_family;
+        let font_size = self.workspace.theme().terminal_font_size;
+        let line_height = self.workspace.theme().terminal_line_height;
+        let (real_w, real_h) = match &self.cache.cached_cell_dims {
+            Some(cached)
+                if cached.font_family == *font_family
+                    && (cached.font_size - font_size).abs() < 0.01
+                    && (cached.line_height - line_height).abs() < 0.001 =>
+            {
+                (cached.cell_width, cached.cell_height)
+            }
+            _ => {
+                let (w, h) = crate::terminal_view::compute_cell_dimensions(
+                    window.text_system(),
+                    font_family,
+                    font_size,
+                    line_height,
+                );
+                self.cache.cached_cell_dims = Some(super::types::CachedCellDims {
+                    font_family: font_family.clone(),
+                    font_size,
+                    line_height,
+                    cell_width: w,
+                    cell_height: h,
+                });
+                (w, h)
+            }
+        };
+        for tv in self.terminals.values_mut() {
+            if !tv.dimensions_initialized() {
+                tv.set_cell_dimensions(real_w, real_h);
+            }
+        }
+
+        let Some(resize_signature) = self.current_resize_signature(real_w, real_h) else {
+            return;
+        };
+        if self.cache.last_resize_signature == Some(resize_signature) {
+            return;
+        }
+
+        let now = Instant::now();
+        if now.duration_since(self.polling.last_resize_time) > Duration::from_millis(100) {
+            self.resize_terminals_to_grid();
+            self.cache.last_resize_signature = Some(resize_signature);
+            self.cache.pending_resize_signature = None;
+            self.polling.last_resize_time = now;
+            self.polling.pending_resize = false;
+        } else {
+            self.cache.pending_resize_signature = Some(resize_signature);
+            if self.polling.pending_resize {
+                return;
+            }
+            self.polling.pending_resize = true;
+            cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(100))
+                    .await;
+                let _ = this.update(cx, |this, cx| {
+                    let Some(signature) = this.cache.pending_resize_signature.take() else {
+                        this.polling.pending_resize = false;
+                        return;
+                    };
+                    let resized = this.resize_terminals_to_grid();
+                    this.cache.last_resize_signature = Some(signature);
+                    this.polling.last_resize_time = Instant::now();
+                    this.polling.pending_resize = false;
+                    if resized {
+                        cx.notify();
+                    }
+                });
+            })
+            .detach();
+        }
     }
 }
 
@@ -1735,14 +2160,6 @@ mod tests {
     //! - [ ] Layout changes trigger re-render
 
     #[test]
-    fn test_workspace_view_module_compiles() {
-        // Validates that the module compiles with all GPUI dependencies.
-        // The actual rendering and interaction tests require GPUI test infrastructure.
-        // See workspace/tests.rs for core logic tests (29 tests, 100% coverage).
-        assert!(true, "WorkspaceView module compiles successfully");
-    }
-
-    #[test]
     fn test_core_workspace_is_tested_separately() {
         // Reminder: Core workspace logic has dedicated tests in workspace/tests.rs
         // Run `cargo test workspace::tests` to see all 29 tests pass
@@ -1751,18 +2168,6 @@ mod tests {
         // Quick sanity check that we can create a workspace
         let ws = Workspace::new();
         assert!(ws.sessions().is_empty());
-    }
-
-    #[cfg(unix)]
-    #[test]
-    fn test_is_executable() {
-        use std::path::Path;
-        // /bin/sh should always exist and be executable on Unix
-        assert!(super::is_executable(Path::new("/bin/sh")));
-        // A non-existent path should not be executable
-        assert!(!super::is_executable(Path::new(
-            "/nonexistent_binary_abc123"
-        )));
     }
 
     #[test]
@@ -1793,5 +2198,59 @@ mod tests {
         assert!(!super::WorkspaceView::should_skip_collapsed_resize(
             40, 120, 30, 100
         ));
+    }
+
+    #[test]
+    fn test_normalize_codex_execution_mode_detects_bypass_alias() {
+        assert_eq!(
+            super::WorkspaceView::normalize_codex_execution_mode("codex --yolo"),
+            Some(codirigent_core::CodexExecutionMode::Bypass)
+        );
+    }
+
+    #[test]
+    fn test_normalize_codex_execution_mode_detects_full_auto() {
+        assert_eq!(
+            super::WorkspaceView::normalize_codex_execution_mode("codex resume abc --full-auto"),
+            Some(codirigent_core::CodexExecutionMode::FullAuto)
+        );
+    }
+
+    #[test]
+    fn test_normalize_codex_execution_mode_detects_explicit_never_and_danger() {
+        assert_eq!(
+            super::WorkspaceView::normalize_codex_execution_mode(
+                "codex -a never -s danger-full-access"
+            ),
+            Some(codirigent_core::CodexExecutionMode::Bypass)
+        );
+    }
+
+    #[test]
+    fn test_keystroke_is_text_input_for_plain_printable_without_key_char() {
+        let event = gpui::KeyDownEvent {
+            keystroke: gpui::Keystroke {
+                modifiers: gpui::Modifiers::default(),
+                key: "a".to_string(),
+                key_char: None,
+            },
+            is_held: false,
+        };
+
+        assert!(super::WorkspaceView::keystroke_is_text_input(&event));
+    }
+
+    #[test]
+    fn test_keystroke_is_not_text_input_for_named_terminal_key() {
+        let event = gpui::KeyDownEvent {
+            keystroke: gpui::Keystroke {
+                modifiers: gpui::Modifiers::default(),
+                key: "enter".to_string(),
+                key_char: None,
+            },
+            is_held: false,
+        };
+
+        assert!(!super::WorkspaceView::keystroke_is_text_input(&event));
     }
 }

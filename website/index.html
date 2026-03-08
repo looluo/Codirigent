@@ -3,384 +3,262 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>Codirigent — Orchestrate your AI coding CLIs</title>
-  <meta name="description" content="Run Claude Code, Codex, and Gemini in parallel. Session persistence, status detection, and grid layouts — all from one terminal workspace.">
-  <meta property="og:title" content="Codirigent — Orchestrate your AI coding CLIs">
+  <title>Codirigent — The Native Workspace for AI Coding CLIs</title>
+  <meta name="description" content="Run Claude Code, Codex, and Gemini in parallel. Session persistence, status detection, and grid layouts — all from one Rust-native workspace.">
+  <meta property="og:title" content="Codirigent — The Native Workspace for AI Coding CLIs">
   <meta property="og:description" content="Run Claude Code, Codex, and Gemini in parallel. Session persistence, status detection, and grid layouts.">
   <meta property="og:type" content="website">
   <meta property="og:url" content="https://codirigent.dev">
   <link rel="icon" href="favicon.svg" type="image/svg+xml">
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
-  <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@400;500;600;700;800&family=DM+Sans:opsz,wght@9..40,400;9..40,500&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;700&family=Plus+Jakarta+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&display=swap" rel="stylesheet">
   <style>
-    :root {
-      --bg: #09090b;
-      --bg-card: #111113;
-      --bg-elevated: #19191d;
-      --border: rgba(255,255,255,0.06);
-      --border-hover: rgba(255,255,255,0.1);
-      --green: #39d353;
-      --green-bright: #4ae668;
-      --red: #ff6b6b;
-      --yellow: #fbbf24;
-      --text: #fafafa;
-      --text-secondary: #a1a1aa;
-      --text-muted: #52525b;
-      --font-display: 'Outfit', system-ui, sans-serif;
-      --font-body: 'DM Sans', system-ui, sans-serif;
-      --font-mono: 'JetBrains Mono', monospace;
-      --ease: cubic-bezier(0.16, 1, 0.3, 1);
-      --max-w: 1100px;
-      --gutter: 24px;
+    :root{
+      --bg:#040404;--bg-card:#0a0a0c;--bg-elevated:#111114;
+      --border:rgba(255,255,255,.06);--border-hover:rgba(255,255,255,.1);
+      --soft:rgba(245,245,246,.74);--muted:rgba(245,245,246,.36);--dim:rgba(245,245,246,.5);
+      --text:#f5f5f6;--text-secondary:#a1a1aa;--text-muted:#52525b;
+      --mint:#8df7c1;--green:#39d353;--red:#ff6b6b;--yellow:#fbbf24;
+      --display:"Space Grotesk",sans-serif;--body:"Plus Jakarta Sans",sans-serif;--mono:"IBM Plex Mono",monospace;
+      --ease:cubic-bezier(.22,1,.36,1);--max-w:1100px;--gutter:24px
     }
-    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
-    html { scroll-behavior: smooth; -webkit-font-smoothing: antialiased; }
-    @media (prefers-reduced-motion: reduce) {
-      *, *::before, *::after { animation-duration: 0.01ms !important; transition-duration: 0.01ms !important; }
-    }
-    body {
-      font-family: var(--font-body); background: var(--bg);
-      color: var(--text); line-height: 1.6; overflow-x: hidden;
-    }
-    .container { max-width: var(--max-w); margin: 0 auto; padding: 0 var(--gutter); }
-    section { position: relative; }
-    h1, h2, h3 { font-family: var(--font-display); font-weight: 700; line-height: 1.1; letter-spacing: -0.025em; }
-    h1 { font-size: clamp(2.8rem, 5.5vw, 4.2rem); font-weight: 800; }
-    h2 { font-size: clamp(1.8rem, 3.5vw, 2.6rem); }
-    h3 { font-size: 1.1rem; font-weight: 600; letter-spacing: -0.01em; }
-    p { color: var(--text-secondary); }
-    a { color: inherit; text-decoration: none; }
+    *{box-sizing:border-box;margin:0;padding:0}
+    html{scroll-behavior:smooth;-webkit-font-smoothing:antialiased}
+    body{font-family:var(--body);color:var(--text);background:var(--bg);line-height:1.6;overflow-x:hidden}
+    a{color:inherit;text-decoration:none}
+    h1,h2,h3{font-family:var(--display);font-weight:700;line-height:1.1;letter-spacing:-.025em}
+    .container{max-width:var(--max-w);margin:0 auto;padding:0 var(--gutter)}
+    p{color:var(--text-secondary)}
 
-    /* Header */
-    .header {
-      position: fixed; top: 0; left: 0; right: 0; z-index: 100;
-      height: 64px; display: flex; align-items: center;
-      transition: all 0.3s;
-    }
-    .header.scrolled {
-      background: rgba(9,9,11,0.85);
-      backdrop-filter: blur(16px); -webkit-backdrop-filter: blur(16px);
-      border-bottom: 1px solid var(--border);
-    }
-    .header-inner {
-      max-width: var(--max-w); margin: 0 auto; width: 100%;
-      padding: 0 var(--gutter);
-      display: flex; align-items: center; justify-content: space-between;
-    }
-    .logo-group { display: flex; align-items: center; gap: 10px; }
-    .logo-text { font-family: var(--font-display); font-weight: 700; font-size: 1.1rem; }
-    .header-right { display: flex; align-items: center; gap: 6px; }
-    .nav-link {
-      font-family: var(--font-display); font-size: 0.84rem; font-weight: 500;
-      color: var(--text-muted); padding: 6px 12px; border-radius: 6px;
-      transition: color 0.15s;
-    }
-    .nav-link:hover { color: var(--text-secondary); }
-    .header-cta {
-      font-family: var(--font-display); font-size: 0.84rem; font-weight: 600;
-      color: var(--bg); background: var(--text);
-      padding: 7px 16px; border-radius: 6px; border: none; cursor: pointer;
-      margin-left: 6px; transition: opacity 0.15s;
-    }
-    .header-cta:hover { opacity: 0.85; }
+    /* ─── CANVAS ─── */
+    #field{position:fixed;inset:0;z-index:0;width:100%;height:100%;pointer-events:none}
 
-    /* Hero */
-    .hero {
-      text-align: center;
-      padding: 140px var(--gutter) 0;
-    }
-    .hero-badge {
-      display: inline-flex; align-items: center; gap: 6px;
-      font-family: var(--font-mono); font-size: 0.75rem;
-      color: var(--green);
-      border: 1px solid rgba(57,211,83,0.2);
-      padding: 5px 14px; border-radius: 100px;
-      margin-bottom: 24px;
-    }
-    .hero-badge .dot {
-      width: 5px; height: 5px; border-radius: 50%;
-      background: var(--green);
-    }
-    .hero h1 { margin-bottom: 16px; }
-    .hero h1 .green { color: var(--green); }
-    .hero-sub {
-      font-size: 1.1rem; line-height: 1.7;
-      color: var(--text-secondary);
-      max-width: 480px; margin: 0 auto 32px;
-    }
-    .hero-actions {
-      display: flex; gap: 10px; justify-content: center; flex-wrap: wrap;
-      margin-bottom: 64px;
-    }
-    .btn {
-      display: inline-flex; align-items: center; gap: 8px;
-      padding: 12px 24px; border-radius: 8px;
-      font-family: var(--font-display); font-weight: 600; font-size: 0.9rem;
-      transition: all 0.2s; border: none; cursor: pointer; text-decoration: none;
-    }
-    .btn svg { width: 16px; height: 16px; }
-    .btn-primary {
-      background: var(--text); color: var(--bg);
-    }
-    .btn-primary:hover { opacity: 0.85; }
-    .btn-secondary {
-      background: transparent; color: var(--text-secondary);
-      border: 1px solid var(--border);
-    }
-    .btn-secondary:hover { border-color: var(--border-hover); color: var(--text); }
+    /* ─── NAV ─── */
+    .nav{position:fixed;top:0;left:0;right:0;z-index:100;display:grid;grid-template-columns:1fr auto 1fr;align-items:center;padding:20px 42px;transition:background .3s,backdrop-filter .3s,border-color .3s;border-bottom:1px solid transparent}
+    .nav.scrolled{background:rgba(4,4,4,.88);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border-bottom-color:var(--border)}
+    .brand{display:inline-flex;align-items:center;gap:10px;font:700 .98rem/1 var(--display);letter-spacing:-.03em;text-shadow:0 2px 8px rgba(0,0,0,.6)}
+    .brand svg{width:26px;height:26px;flex-shrink:0}
+    .links{display:flex;align-items:center;justify-content:center;gap:4px}
+    .links a{padding:8px 16px;border-radius:10px;font:500 .84rem/1 var(--body);color:var(--soft);text-shadow:0 2px 8px rgba(0,0,0,.5);transition:color 180ms ease,background 180ms ease}
+    .links a:hover{color:var(--text);background:rgba(255,255,255,.06)}
+    .nav-right{display:flex;align-items:center;justify-content:flex-end;gap:12px}
+    .nav-gh{display:inline-flex;align-items:center;justify-content:center;width:36px;height:36px;border-radius:8px;color:var(--soft);transition:color 180ms ease,background 180ms ease}
+    .nav-gh:hover{color:var(--text);background:rgba(255,255,255,.06)}
+    .nav-cta{display:inline-flex;align-items:center;gap:6px;padding:8px 18px;border-radius:8px;background:var(--text);color:var(--bg);font:600 .82rem/1 var(--display);transition:opacity 180ms ease;text-shadow:none}
+    .nav-cta:hover{opacity:.85}
 
-    /* Demo video */
-    .terminal-wrap {
-      max-width: 960px; margin: 48px auto 0;
-      padding-bottom: 80px;
-    }
-    .demo-video-frame {
-      border-radius: 12px; overflow: hidden;
-      border: 1px solid var(--border);
-      box-shadow: 0 24px 64px rgba(0,0,0,0.5);
-    }
-    .demo-video-frame video {
-      width: 100%; height: auto; display: block;
-    }
+    /* ─── HERO ─── */
+    .hero{position:relative;z-index:2;display:flex;flex-direction:column;align-items:center;text-align:center;min-height:100vh;padding:110px 32px 80px}
+    .eyebrow{display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:999px;border:1px solid rgba(255,255,255,.1);background:rgba(0,0,0,.4);backdrop-filter:blur(16px);font:400 .74rem/1 var(--mono);color:var(--soft);letter-spacing:.03em;text-transform:uppercase;text-shadow:0 1px 4px rgba(0,0,0,.5)}
+    .eyebrow:before{content:"";width:8px;height:8px;border-radius:999px;background:var(--mint);box-shadow:0 0 18px rgba(141,247,193,.48)}
+    .hero h1{margin-top:24px;font:700 clamp(3.6rem,7vw,7rem)/.88 var(--display);letter-spacing:-.09em;text-shadow:0 4px 30px rgba(0,0,0,.7),0 1px 3px rgba(0,0,0,.5)}
+    .hero .h-dim{display:block;color:var(--dim);font-weight:500}
+    .hero .h-bright{display:block;color:var(--text)}
+    .sub{max-width:520px;margin-top:22px;color:var(--soft);font-size:1rem;line-height:1.72;text-shadow:0 2px 12px rgba(0,0,0,.7),0 1px 2px rgba(0,0,0,.5)}
+    .hero-actions{display:flex;flex-direction:column;align-items:center;gap:14px;margin-top:28px}
+    .downloads{display:flex;align-items:center;gap:10px}
+    .btn{display:inline-flex;align-items:center;justify-content:center;gap:8px;padding:13px 22px;border-radius:14px;font-size:.9rem;font-weight:600;font-family:var(--display);border:1px solid rgba(255,255,255,.08);backdrop-filter:blur(12px);text-shadow:0 1px 3px rgba(0,0,0,.3);transition:transform 180ms var(--ease),background 180ms ease,border-color 180ms ease,opacity 180ms ease;cursor:pointer;text-decoration:none}
+    .btn:hover{transform:translateY(-1px)}
+    .btn svg{width:16px;height:16px}
+    .btn-primary{background:var(--text);color:#050505;border-color:rgba(255,255,255,.2);box-shadow:0 12px 30px rgba(255,255,255,.08);text-shadow:none}
+    .btn-primary:hover{opacity:.9}
+    .btn-secondary{background:transparent;color:var(--text-secondary);border:1px solid var(--border)}
+    .btn-secondary:hover{border-color:var(--border-hover);color:var(--text)}
 
-    /* Sections */
-    .section {
-      padding: 100px 0;
-      border-top: 1px solid var(--border);
-    }
-    .section-label {
-      font-family: var(--font-mono); font-size: 0.72rem;
-      text-transform: uppercase; letter-spacing: 0.08em;
-      color: var(--text-muted); margin-bottom: 12px;
-    }
-    .section-title { margin-bottom: 48px; }
+    /* ─── BADGES ─── */
+    .badges-left,.badges-right{position:fixed;z-index:3;display:flex;flex-direction:column;gap:12px;top:50%;transform:translateY(-50%)}
+    .badges-left{left:clamp(18px,3vw,42px)}.badges-right{right:clamp(18px,3vw,42px)}
+    .badge{display:inline-flex;align-items:center;gap:8px;padding:8px 14px;border-radius:999px;border:1px solid rgba(255,255,255,.08);background:rgba(255,255,255,.03);backdrop-filter:blur(14px);font:400 .66rem/1 var(--mono);color:var(--soft);text-transform:uppercase;letter-spacing:.04em;text-shadow:0 1px 4px rgba(0,0,0,.5);white-space:nowrap;cursor:default;transition:transform 300ms var(--ease),border-color 300ms ease,background 300ms ease,box-shadow 300ms ease,opacity 300ms ease;animation:badgeFadeIn .6s var(--ease) both;animation-delay:var(--d,0s)}
+    .badge:hover{transform:translateX(var(--hx,6px));border-color:rgba(141,247,193,.22);background:rgba(141,247,193,.04);box-shadow:0 0 20px rgba(141,247,193,.08)}
+    .badge:before{content:"";width:6px;height:6px;flex-shrink:0;border-radius:999px;background:rgba(245,245,246,.32);transition:background 300ms ease,box-shadow 300ms ease}
+    .badge:hover:before{background:var(--mint);box-shadow:0 0 10px rgba(141,247,193,.4)}
+    .badges-left .badge{--hx:6px}.badges-right .badge{--hx:-6px}
+    .badges-left .badge:nth-child(1){--d:.1s}.badges-left .badge:nth-child(2){--d:.2s}.badges-left .badge:nth-child(3){--d:.3s}
+    .badges-right .badge:nth-child(1){--d:.15s}.badges-right .badge:nth-child(2){--d:.25s}.badges-right .badge:nth-child(3){--d:.35s}
+    @keyframes badgeFadeIn{from{opacity:0;transform:translateY(8px)}to{opacity:1;transform:translateY(0)}}
 
-    /* Features */
-    .features-grid {
-      display: grid; grid-template-columns: repeat(3, 1fr); gap: 1px;
-      background: var(--border);
-      border: 1px solid var(--border); border-radius: 12px;
-      overflow: hidden;
-    }
-    .feat {
-      background: var(--bg);
-      padding: 36px 28px;
-      transition: background 0.2s;
-    }
-    .feat:hover { background: var(--bg-card); }
-    .feat-icon {
-      width: 36px; height: 36px;
-      display: flex; align-items: center; justify-content: center;
-      margin-bottom: 16px; color: var(--green);
-    }
-    .feat h3 { margin-bottom: 8px; }
-    .feat p { font-size: 0.88rem; line-height: 1.6; }
-    .features-grid .feat:last-child {
-      grid-column: 1 / -1;
-      display: grid; grid-template-columns: auto 1fr;
-      gap: 0 20px; align-items: start;
-    }
-    .features-grid .feat:last-child .feat-icon { grid-row: 1 / 3; }
+    /* ─── MAIN SECTIONS (semi-transparent, canvas bleeds through) ─── */
+    .main-sections{position:relative;z-index:5;background:rgba(4,4,4,.86)}
+    .main-sections::before{content:"";position:absolute;top:-200px;left:0;right:0;height:200px;background:linear-gradient(to bottom,transparent,rgba(4,4,4,.86));pointer-events:none;z-index:5}
+    .main-sections::after{content:"";position:absolute;top:0;left:8%;right:8%;height:1px;background:linear-gradient(90deg,transparent,rgba(141,247,193,.15),transparent);z-index:6}
+    .section{padding:100px 0;border-top:1px solid rgba(141,247,193,.04)}
+    .section-label{font-family:var(--mono);font-size:.72rem;text-transform:uppercase;letter-spacing:.08em;color:var(--mint);margin-bottom:12px;opacity:.7}
+    .section-title{margin-bottom:48px;font-size:clamp(1.8rem,3.5vw,2.6rem)}
 
-    /* Screenshots — tabbed gallery */
-    .gallery-tabs {
-      display: flex; gap: 0; margin-bottom: 20px;
-      border-bottom: 1px solid var(--border);
-    }
-    .gallery-tab {
-      font-family: var(--font-display); font-size: 0.84rem; font-weight: 500;
-      padding: 8px 16px; border: none; cursor: pointer;
-      background: none; color: var(--text-muted);
-      border-bottom: 2px solid transparent; margin-bottom: -1px;
-      transition: color 0.15s, border-color 0.15s;
-    }
-    .gallery-tab.active { color: var(--text); border-bottom-color: var(--text); }
-    .gallery-tab:hover:not(.active) { color: var(--text-secondary); }
-    .gallery-frame {
-      position: relative;
-      background: var(--bg-card);
-      border: 1px solid var(--border);
-      border-radius: 12px; overflow: hidden;
-    }
-    .gallery-slide {
-      display: none;
-    }
-    .gallery-slide.active { display: block; }
-    .gallery-slide img {
-      width: 100%; height: auto; display: block;
-    }
-    .gallery-caption {
-      padding: 14px 20px;
-      border-top: 1px solid var(--border);
-      font-size: 0.8rem; color: var(--green);
-      background: var(--bg-card);
-    }
+    /* ─── FEATURES (bento grid) ─── */
+    #features{background:radial-gradient(ellipse 900px 700px at 10% 40%,rgba(141,247,193,.045),transparent)}
+    .bento{display:grid;grid-template-columns:1.2fr 1fr;gap:12px}
+    .bento-card{padding:32px 28px;border-radius:16px;border:1px solid rgba(141,247,193,.06);background:rgba(255,255,255,.02);backdrop-filter:blur(12px);transition:background .3s,border-color .3s,box-shadow .3s,transform .3s var(--ease)}
+    .bento-card:hover{background:rgba(141,247,193,.025);border-color:rgba(141,247,193,.14);box-shadow:0 8px 40px rgba(141,247,193,.05);transform:translateY(-3px)}
+    .bento-hero{grid-row:1/3;display:flex;flex-direction:column;justify-content:center;padding:44px 36px}
+    .bento-wide{grid-column:1/-1;display:grid;grid-template-columns:auto 1fr;gap:0 20px;align-items:start}
+    .bento-wide .bento-icon{grid-row:1/3}
+    .bento-icon{width:40px;height:40px;display:flex;align-items:center;justify-content:center;margin-bottom:18px;color:var(--mint);filter:drop-shadow(0 0 6px rgba(141,247,193,.25))}
+    .bento-card h3{font-size:1.1rem;font-weight:600;letter-spacing:-.01em;margin-bottom:8px}
+    .bento-hero h3{font-size:1.4rem;margin-bottom:12px}
+    .bento-card p{font-size:.88rem;line-height:1.6}
 
-    /* Performance */
-    .perf-layout {
-      display: grid; grid-template-columns: 1fr 1fr; gap: 80px; align-items: start;
-    }
-    .perf-text p { margin-top: 12px; font-size: 1rem; }
-    .perf-rust-badge {
-      display: inline-flex; align-items: center; gap: 8px;
-      margin-bottom: 16px;
-      font-family: var(--font-mono); font-size: 0.8rem;
-      color: #CE422B; font-weight: 500;
-    }
-    .perf-bars { display: flex; flex-direction: column; gap: 24px; }
-    .perf-row {}
-    .perf-row-top {
-      display: flex; justify-content: space-between; margin-bottom: 8px;
-    }
-    .perf-row-label { font-family: var(--font-display); font-weight: 500; font-size: 0.9rem; }
-    .perf-row-vals { font-family: var(--font-mono); font-size: 0.72rem; color: var(--text-muted); }
-    .perf-row-vals .hi { color: var(--green); }
-    .perf-row-tracks { display: flex; flex-direction: column; gap: 4px; }
-    .perf-track { height: 6px; border-radius: 3px; background: var(--bg-elevated); }
-    .perf-bar { height: 100%; border-radius: 3px; width: 0; transition: width 1s var(--ease); }
-    .perf-bar.a { background: var(--green); }
-    .perf-bar.b { background: #3f3f46; }
-    .perf-legend {
-      display: flex; gap: 16px; margin-top: 4px;
-      font-family: var(--font-mono); font-size: 0.65rem; color: var(--text-muted);
-    }
-    .perf-legend span { display: flex; align-items: center; gap: 6px; }
-    .perf-legend .ld { width: 8px; height: 8px; border-radius: 2px; }
-    .perf-legend .ld-a { background: var(--green); }
-    .perf-legend .ld-b { background: #3f3f46; }
+    /* ─── GALLERY (3D showcase) ─── */
+    #screenshots{background:radial-gradient(ellipse 900px 700px at 85% 60%,rgba(141,247,193,.04),transparent)}
+    .showcase{margin-top:40px}
+    .showcase-frame{border-radius:16px;overflow:hidden;border:1px solid rgba(141,247,193,.08);box-shadow:24px 20px 80px rgba(0,0,0,.5),0 0 40px rgba(141,247,193,.03);transform:perspective(1400px) rotateY(-2deg) rotateX(1.5deg);transition:transform .6s var(--ease),box-shadow .6s var(--ease)}
+    .showcase-frame:hover{transform:perspective(1400px) rotateY(0) rotateX(0);box-shadow:0 24px 80px rgba(0,0,0,.5),0 0 50px rgba(141,247,193,.06)}
+    .showcase-slide{display:none}.showcase-slide.active{display:block}
+    .showcase-slide img,.showcase-slide video{width:100%;height:auto;display:block}
+    .showcase-nav{display:flex;justify-content:center;gap:8px;margin-top:28px}
+    .showcase-dot{padding:7px 16px;border-radius:999px;border:1px solid rgba(255,255,255,.06);background:none;color:var(--text-muted);font:500 .72rem/1 var(--mono);letter-spacing:.02em;cursor:pointer;transition:all .2s}
+    .showcase-dot.active{color:var(--mint);border-color:rgba(141,247,193,.22);background:rgba(141,247,193,.06)}
+    .showcase-dot:hover:not(.active){color:var(--text-secondary);border-color:rgba(255,255,255,.12)}
+    .showcase-caption{text-align:center;font-size:.8rem;color:var(--mint);margin-top:18px;opacity:.6}
 
-    /* Install */
-    .install-layout {
-      display: grid; grid-template-columns: 1fr 1.2fr; gap: 64px; align-items: start;
-    }
-    .install-text p { margin-top: 12px; font-size: 1rem; }
-    .code-block {
-      background: var(--bg-card); border: 1px solid var(--border);
-      border-radius: 10px; overflow: hidden;
-    }
-    .code-block-top {
-      display: flex; justify-content: space-between; align-items: center;
-      padding: 10px 16px; border-bottom: 1px solid var(--border);
-    }
-    .code-block-top span { font-family: var(--font-mono); font-size: 0.68rem; color: var(--text-muted); }
-    .copy-btn {
-      font-family: var(--font-mono); font-size: 0.62rem;
-      color: var(--text-muted); background: none; border: 1px solid var(--border);
-      border-radius: 4px; padding: 2px 8px; cursor: pointer; transition: color 0.15s;
-    }
-    .copy-btn:hover { color: var(--text-secondary); }
-    .code-block-code {
-      padding: 16px 20px; font-family: var(--font-mono); font-size: 0.8rem;
-      line-height: 1.8; color: var(--text-secondary);
-    }
-    .code-block-code .dim { color: var(--text-muted); }
-    .code-block-code .hl { color: var(--green); }
-    .install-req {
-      margin-top: 12px; font-size: 0.8rem; color: var(--text-muted);
-    }
-    .install-dl-cards { display: flex; flex-direction: column; gap: 8px; }
-    .dl-card {
-      display: flex; align-items: center; gap: 14px;
-      padding: 16px 18px; border-radius: 10px;
-      background: var(--bg-card); border: 1px solid var(--border);
-      color: var(--text); transition: border-color 0.15s, background 0.15s;
-    }
-    .dl-card:hover { border-color: var(--border-hover); background: var(--bg-elevated); }
-    .dl-card-name { font-family: var(--font-display); font-weight: 600; font-size: 0.9rem; }
-    .dl-card-sub { font-family: var(--font-mono); font-size: 0.7rem; color: var(--text-muted); margin-top: 2px; }
-    .dl-card-arrow { margin-left: auto; color: var(--text-muted); flex-shrink: 0; }
+    /* ─── PERFORMANCE (editorial stats) ─── */
+    #performance{background:radial-gradient(ellipse 900px 700px at 75% 30%,rgba(141,247,193,.045),transparent)}
+    .section-sub{max-width:520px;font-size:1rem;line-height:1.7;color:var(--text-secondary);margin-top:12px}
+    .stats{display:grid;grid-template-columns:repeat(4,1fr);gap:16px;margin-top:56px}
+    .stat{text-align:center;padding:36px 16px;border-radius:16px;border:1px solid rgba(141,247,193,.06);background:rgba(255,255,255,.02);backdrop-filter:blur(12px);transition:transform .3s var(--ease),border-color .3s,box-shadow .3s}
+    .stat:hover{transform:translateY(-4px);border-color:rgba(141,247,193,.14);box-shadow:0 16px 40px rgba(0,0,0,.3),0 0 30px rgba(141,247,193,.04)}
+    .stat-val{display:flex;align-items:baseline;justify-content:center;gap:4px}
+    .stat-num{font:700 clamp(2.4rem,5vw,3.8rem)/1 var(--display);letter-spacing:-.06em;color:var(--mint);text-shadow:0 0 30px rgba(141,247,193,.25)}
+    .stat-unit{font:500 clamp(1rem,2vw,1.4rem)/1 var(--display);color:var(--mint);opacity:.55}
+    .stat-label{font:400 .72rem/1 var(--mono);text-transform:uppercase;letter-spacing:.06em;color:var(--text-secondary);margin-top:12px}
+    .stat-vs{font:400 .62rem/1 var(--mono);color:var(--text-muted);margin-top:6px}
+    .perf-note{text-align:center;font:400 .7rem/1 var(--mono);color:var(--text-muted);margin-top:28px;letter-spacing:.03em}
 
-    /* Footer */
-    .footer {
-      padding: 40px 0;
-      border-top: 1px solid var(--border);
-    }
-    .footer-inner { display: flex; justify-content: space-between; align-items: center; }
-    .footer-left { display: flex; align-items: center; gap: 12px; }
-    .footer-text { font-size: 0.78rem; color: var(--text-muted); }
-    .footer-links { display: flex; gap: 20px; }
-    .footer-links a { font-size: 0.78rem; color: var(--text-muted); transition: color 0.15s; }
-    .footer-links a:hover { color: var(--text-secondary); }
+    /* ─── INSTALL (terminal centerpiece) ─── */
+    #install{background:radial-gradient(ellipse 900px 700px at 15% 50%,rgba(141,247,193,.04),transparent)}
+    #install .section-title,#install .section-label{text-align:center}
+    .install-sub{max-width:480px;margin:12px auto 0;text-align:center;font-size:1rem;line-height:1.7;color:var(--text-secondary)}
+    .terminal-block{max-width:680px;margin:48px auto 0;border-radius:16px;border:1px solid rgba(141,247,193,.1);background:rgba(10,10,12,.65);backdrop-filter:blur(20px);box-shadow:0 32px 80px rgba(0,0,0,.5),0 0 60px rgba(141,247,193,.04);overflow:hidden}
+    .terminal-chrome{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--border)}
+    .terminal-title{flex:1;font:400 .68rem/1 var(--mono);color:var(--text-muted)}
+    .term-dots{display:flex;gap:6px;align-items:center}
+    .term-dots span{width:10px;height:10px;border-radius:50%}
+    .term-dots span:nth-child(1){background:#ff5f57}
+    .term-dots span:nth-child(2){background:#febc2e}
+    .term-dots span:nth-child(3){background:#28c840}
+    .copy-btn{font:400 .62rem/1 var(--mono);color:var(--text-muted);background:none;border:1px solid var(--border);border-radius:4px;padding:3px 10px;cursor:pointer;transition:color .15s,border-color .15s}
+    .copy-btn:hover{color:var(--mint);border-color:rgba(141,247,193,.2)}
+    .terminal-body{padding:24px 28px;font:400 .85rem/1.9 var(--mono);color:var(--text-secondary)}
+    .terminal-body .cdim{color:var(--text-muted)}
+    .terminal-body .chl{color:var(--mint)}
+    .install-req{text-align:center;margin-top:16px;font-size:.8rem;color:var(--text-muted)}
 
-    /* Animations */
-    .reveal {
-      opacity: 0; transform: translateY(20px);
-      transition: opacity 0.6s var(--ease), transform 0.6s var(--ease);
-    }
-    .reveal.visible { opacity: 1; transform: translateY(0); }
-    .r-d1 { transition-delay: 0.06s; }
-    .r-d2 { transition-delay: 0.12s; }
-    .r-d3 { transition-delay: 0.18s; }
-    .hero-in { animation: fade-up 0.7s var(--ease) both; }
-    .hero-in-1 { animation-delay: 0s; }
-    .hero-in-2 { animation-delay: 0.08s; }
-    .hero-in-3 { animation-delay: 0.16s; }
-    .hero-in-4 { animation-delay: 0.24s; }
-    .hero-in-5 { animation-delay: 0.35s; }
-    @keyframes fade-up {
-      from { opacity: 0; transform: translateY(20px); }
-      to { opacity: 1; transform: translateY(0); }
-    }
+    /* ─── FOOTER ─── */
+    .footer{position:relative;padding:40px 0;border-top:1px solid rgba(141,247,193,.04)}
+    .footer::before{content:"";position:absolute;top:0;left:15%;right:15%;height:1px;background:linear-gradient(90deg,transparent,rgba(141,247,193,.1),transparent)}
+    .footer-inner{display:flex;justify-content:space-between;align-items:center}
+    .footer-left{display:flex;align-items:center;gap:12px}
+    .footer-text{font-size:.78rem;color:var(--text-muted)}
+    .footer-links{display:flex;gap:20px}
+    .footer-links a{font-size:.78rem;color:var(--text-muted);transition:color .15s}
+    .footer-links a:hover{color:var(--mint)}
 
-    /* Responsive */
-    @media (max-width: 900px) {
-      .features-grid { grid-template-columns: 1fr; }
-      .features-grid .feat:last-child { grid-column: auto; display: block; }
-      .gallery-tabs { overflow-x: auto; }
-      .perf-layout { grid-template-columns: 1fr; gap: 40px; }
-      .install-layout { grid-template-columns: 1fr; gap: 32px; }
-    }
-    @media (max-width: 640px) {
-      .hero { padding-top: 110px; }
-      .hero-actions { flex-direction: column; align-items: center; }
-      .btn { width: 100%; max-width: 260px; justify-content: center; }
-      .terminal-wrap { padding-bottom: 48px; }
-      .section { padding: 72px 0; }
-      .footer-inner { flex-direction: column; gap: 12px; text-align: center; }
-      .header-right .nav-link { display: none; }
-    }
+    /* ─── ANIMATIONS ─── */
+    .reveal{opacity:0;transform:translateY(20px);transition:opacity .6s var(--ease),transform .6s var(--ease)}
+    .reveal.visible{opacity:1;transform:translateY(0)}
+    .r-d1{transition-delay:.06s}.r-d2{transition-delay:.12s}
+    .hero-in{animation:fade-up .7s var(--ease) both}
+    .hero-in-1{animation-delay:0s}.hero-in-2{animation-delay:.08s}.hero-in-3{animation-delay:.16s}.hero-in-4{animation-delay:.24s}
+    @keyframes fade-up{from{opacity:0;transform:translateY(20px)}to{opacity:1;transform:translateY(0)}}
+
+    /* ─── RESPONSIVE ─── */
+    @media(prefers-reduced-motion:reduce){*,*:before,*:after{animation:none!important;transition:none!important}}
+    @media(max-width:1100px){.badges-left,.badges-right{display:none}}
+    @media(max-width:900px){.bento{grid-template-columns:1fr}.bento-hero{grid-row:auto}.bento-wide{grid-template-columns:1fr}.showcase-frame{transform:none}.stats{grid-template-columns:repeat(2,1fr)}.showcase-nav{overflow-x:auto;justify-content:flex-start;padding-bottom:4px}}
+    @media(max-width:860px){.links{display:none}.nav{padding:18px 24px;grid-template-columns:1fr 1fr}}
+    @media(max-width:720px){.nav{padding:16px 18px}.hero h1{font-size:clamp(2.6rem,12vw,3.8rem)}.sub{font-size:.9rem}.downloads{flex-direction:column}.hero{padding-top:90px}}
+    @media(max-width:640px){.section{padding:72px 0}.stats{grid-template-columns:repeat(2,1fr);gap:10px}.stat{padding:24px 12px}.stat-num{font-size:clamp(1.8rem,8vw,2.6rem)}.footer-inner{flex-direction:column;gap:12px;text-align:center}.nav-cta{display:none}}
   </style>
 </head>
 <body>
 
-  <header class="header" id="header">
-    <div class="header-inner">
-      <a href="/" class="logo-group">
-        <svg width="26" height="26" viewBox="0 0 120 120" fill="none"><rect x="15" y="15" width="25" height="25" rx="5" fill="#39d353"/><rect x="47" y="15" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="79" y="15" width="25" height="25" rx="5" fill="#39d353" opacity=".4"/><rect x="15" y="47" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="47" y="47" width="25" height="25" rx="5" fill="#FF6B6B"/><rect x="79" y="47" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="15" y="79" width="25" height="25" rx="5" fill="#39d353" opacity=".4"/><rect x="47" y="79" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="79" y="79" width="25" height="25" rx="5" fill="#39d353"/><path d="M55 55L62 60L55 65" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><line x1="62" y1="60" x2="72" y2="60" stroke="#fff" stroke-width="3" stroke-linecap="round"/></svg>
-        <span class="logo-text">Codirigent</span>
+  <canvas id="field"></canvas>
+
+  <nav class="nav" id="nav">
+    <a class="brand" href="/">
+      <svg width="26" height="26" viewBox="0 0 120 120" fill="none"><rect x="15" y="15" width="25" height="25" rx="5" fill="#39d353"/><rect x="47" y="15" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="79" y="15" width="25" height="25" rx="5" fill="#39d353" opacity=".4"/><rect x="15" y="47" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="47" y="47" width="25" height="25" rx="5" fill="#FF6B6B"/><rect x="79" y="47" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="15" y="79" width="25" height="25" rx="5" fill="#39d353" opacity=".4"/><rect x="47" y="79" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="79" y="79" width="25" height="25" rx="5" fill="#39d353"/><path d="M55 55L62 60L55 65" stroke="#fff" stroke-width="3" stroke-linecap="round" stroke-linejoin="round"/><line x1="62" y1="60" x2="72" y2="60" stroke="#fff" stroke-width="3" stroke-linecap="round"/></svg>
+      <span>Codirigent</span>
+    </a>
+    <div class="links">
+      <a href="#screenshots">Preview</a>
+      <a href="#features">Features</a>
+      <a href="#performance">Performance</a>
+    </div>
+    <div class="nav-right">
+      <a class="nav-gh" href="https://github.com/oso95/Codirigent" target="_blank" rel="noopener" aria-label="GitHub">
+        <svg width="20" height="20" viewBox="0 0 24 24" fill="currentColor"><path d="M12 .297c-6.63 0-12 5.373-12 12 0 5.303 3.438 9.8 8.205 11.385.6.113.82-.258.82-.577 0-.285-.01-1.04-.015-2.04-3.338.724-4.042-1.61-4.042-1.61C4.422 18.07 3.633 17.7 3.633 17.7c-1.087-.744.084-.729.084-.729 1.205.084 1.838 1.236 1.838 1.236 1.07 1.835 2.809 1.305 3.495.998.108-.776.417-1.305.76-1.605-2.665-.3-5.466-1.332-5.466-5.93 0-1.31.465-2.38 1.235-3.22-.135-.303-.54-1.523.105-3.176 0 0 1.005-.322 3.3 1.23.96-.267 1.98-.399 3-.405 1.02.006 2.04.138 3 .405 2.28-1.552 3.285-1.23 3.285-1.23.645 1.653.24 2.873.12 3.176.765.84 1.23 1.91 1.23 3.22 0 4.61-2.805 5.625-5.475 5.92.42.36.81 1.096.81 2.22 0 1.606-.015 2.896-.015 3.286 0 .315.21.69.825.57C20.565 22.092 24 17.592 24 12.297c0-6.627-5.373-12-12-12"/></svg>
       </a>
-      <div class="header-right">
-        <a href="#features" class="nav-link">Features</a>
-        <a href="#performance" class="nav-link">Performance</a>
-        <a href="https://github.com/oso95/Codirigent" class="nav-link" target="_blank" rel="noopener">GitHub</a>
-        <a href="https://github.com/oso95/Codirigent/releases/latest" class="header-cta" id="header-dl">Download</a>
+      <a class="nav-cta" href="https://github.com/oso95/Codirigent/releases/latest" id="nav-dl">Download</a>
+    </div>
+  </nav>
+
+  <div class="badges-left">
+    <span class="badge">Built on Rust</span>
+    <span class="badge">Session persistence</span>
+    <span class="badge">Status detection</span>
+  </div>
+  <div class="badges-right">
+    <span class="badge">PTY-native sessions</span>
+    <span class="badge">Custom pane layouts</span>
+    <span class="badge">Clipboard handoff</span>
+  </div>
+
+  <section class="hero">
+    <div class="eyebrow hero-in hero-in-1">Open source &middot; Rust-native multi-agent workspace</div>
+    <h1 class="hero-in hero-in-2"><span class="h-dim">The native workspace</span><span class="h-bright">for AI coding CLIs</span></h1>
+    <p class="sub hero-in hero-in-3">Run Claude Code, Codex, and Gemini in parallel from one persistent workspace. Shape the grid, track status at a glance, and stay inside the flow.</p>
+    <div class="hero-actions hero-in hero-in-4">
+      <div class="downloads">
+        <a class="btn btn-primary" href="https://github.com/oso95/Codirigent/releases/latest" id="dl-win" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
+          Download for Windows
+        </a>
+        <a class="btn btn-secondary" href="https://github.com/oso95/Codirigent/releases/latest" id="dl-mac" target="_blank" rel="noopener">
+          <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
+          Download for macOS
+        </a>
       </div>
     </div>
-  </header>
+  </section>
 
-  <main>
-    <section class="hero">
+  <main class="main-sections">
+
+    <!-- Screenshots -->
+    <section class="section" id="screenshots">
       <div class="container">
-        <div class="hero-badge hero-in hero-in-1">Built in Rust &middot; Powered by GPUI &middot; No Electron</div>
-        <h1 class="hero-in hero-in-2">Orchestrate your <span class="green">AI coding CLIs</span></h1>
-        <p class="hero-sub hero-in hero-in-3">Run Claude Code, Codex, and Gemini in parallel.<br>Sessions persist. Statuses auto-detect. One workspace.</p>
-        <div class="hero-actions hero-in hero-in-4">
-          <a href="https://github.com/oso95/Codirigent/releases/latest" class="btn btn-primary" id="dl-win">
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M0 3.449L9.75 2.1v9.451H0m10.949-9.602L24 0v11.4H10.949M0 12.6h9.75v9.451L0 20.699M10.949 12.6H24V24l-12.9-1.801"/></svg>
-            Download for Windows
-          </a>
-          <a href="https://github.com/oso95/Codirigent/releases/latest" class="btn btn-secondary" id="dl-mac">
-            <svg viewBox="0 0 24 24" fill="currentColor"><path d="M18.71 19.5c-.83 1.24-1.71 2.45-3.05 2.47-1.34.03-1.77-.79-3.29-.79-1.53 0-2 .77-3.27.82-1.31.05-2.3-1.32-3.14-2.53C4.25 17 2.94 12.45 4.7 9.39c.87-1.52 2.43-2.48 4.12-2.51 1.28-.02 2.5.87 3.29.87.78 0 2.26-1.07 3.8-.91.65.03 2.47.26 3.64 1.98-.09.06-2.17 1.28-2.15 3.81.03 3.02 2.65 4.03 2.68 4.04-.03.07-.42 1.44-1.38 2.83M13 3.5c.73-.83 1.94-1.46 2.94-1.5.13 1.17-.34 2.35-1.04 3.19-.69.85-1.83 1.51-2.95 1.42-.15-1.15.41-2.35 1.05-3.11z"/></svg>
-            Download for macOS
-          </a>
+        <div class="reveal">
+          <div class="section-label">Preview</div>
+          <h2 class="section-title">See it in action</h2>
         </div>
-      </div>
-      <div class="terminal-wrap hero-in hero-in-5">
-        <div class="demo-video-frame">
-          <video autoplay loop muted playsinline>
-            <source src="video/demo.mp4" type="video/mp4">
-          </video>
+        <div class="showcase reveal r-d1">
+          <div class="showcase-frame">
+            <div class="showcase-slide active" data-caption="Multi-session grid &mdash; run Claude Code, Codex, and Gemini side by side">
+              <img src="images/main.png" alt="Codirigent workspace — multi-session grid of AI coding CLIs" loading="lazy">
+            </div>
+            <div class="showcase-slide" data-caption="Split panes horizontally or vertically and preview your layout before applying">
+              <video autoplay loop muted playsinline>
+                <source src="video/customLayout.mp4" type="video/mp4">
+              </video>
+            </div>
+            <div class="showcase-slide" data-caption="Configure your default shell, editor, working directory, and startup behaviour">
+              <img src="images/settings.png" alt="Codirigent general settings" loading="lazy">
+            </div>
+            <div class="showcase-slide" data-caption="Project-aware file tree that syncs to the focused session">
+              <img src="images/fileTree.png" alt="Codirigent file explorer panel" loading="lazy">
+            </div>
+            <div class="showcase-slide" data-caption="Manage branches and worktrees without leaving the workspace">
+              <img src="images/gitWorktree.png" alt="Codirigent git worktrees panel" loading="lazy">
+            </div>
+          </div>
+          <nav class="showcase-nav">
+            <button class="showcase-dot active" data-slide="0">Workspace</button>
+            <button class="showcase-dot" data-slide="1">Custom Layout</button>
+            <button class="showcase-dot" data-slide="2">Settings</button>
+            <button class="showcase-dot" data-slide="3">File Explorer</button>
+            <button class="showcase-dot" data-slide="4">Git Worktrees</button>
+          </nav>
+          <div class="showcase-caption" id="showcase-caption">Multi-session grid &mdash; run Claude Code, Codex, and Gemini side by side</div>
         </div>
       </div>
     </section>
@@ -392,84 +270,41 @@
           <div class="section-label">Features</div>
           <h2 class="section-title">Built for multi-CLI workflows</h2>
         </div>
-        <div class="features-grid reveal r-d1">
-          <div class="feat">
-            <div class="feat-icon">
-              <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+        <div class="bento reveal r-d1">
+          <div class="bento-card bento-hero">
+            <div class="bento-icon">
+              <svg width="28" height="28" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
             </div>
             <h3>Multi-Session Grid</h3>
-            <p>Run Claude Code, Codex, and Gemini simultaneously in a tiled terminal. Each session gets its own PTY.</p>
+            <p>Run Claude Code, Codex, and Gemini simultaneously in a tiled terminal. Each session gets its own PTY &mdash; fully isolated, fully parallel.</p>
           </div>
-          <div class="feat">
-            <div class="feat-icon">
+          <div class="bento-card">
+            <div class="bento-icon">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><polyline points="17 21 17 13 7 13 7 21"/><polyline points="7 3 7 8 15 8"/></svg>
             </div>
             <h3>Session Persistence</h3>
-            <p>Sessions survive restarts with working directories, scroll history, and state. Pick up where you left off.</p>
+            <p>Sessions survive restarts with working directories, scroll history, and state.</p>
           </div>
-          <div class="feat">
-            <div class="feat-icon">
+          <div class="bento-card">
+            <div class="bento-icon">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><circle cx="12" cy="12" r="3"/><path d="M12 1v2M12 21v2M4.22 4.22l1.42 1.42M18.36 18.36l1.42 1.42M1 12h2M21 12h2M4.22 19.78l1.42-1.42M18.36 5.64l1.42-1.42"/></svg>
             </div>
             <h3>Status Detection</h3>
-            <p>Working, Idle, or Needs Attention &mdash; always know which CLI needs you without checking each session.</p>
+            <p>Working, Idle, or Needs Attention &mdash; know which CLI needs you at a glance.</p>
           </div>
-          <div class="feat">
-            <div class="feat-icon">
+          <div class="bento-card bento-wide">
+            <div class="bento-icon">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/><path d="M9 14l2 2 4-4"/></svg>
             </div>
             <h3>Clipboard Integration</h3>
             <p>Paste screenshots and text across sessions. Share context between CLIs without leaving the workspace.</p>
           </div>
-          <div class="feat">
-            <div class="feat-icon">
+          <div class="bento-card bento-wide">
+            <div class="bento-icon">
               <svg width="22" height="22" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round"><rect x="3" y="3" width="8" height="11" rx="1"/><rect x="13" y="3" width="8" height="5" rx="1"/><rect x="13" y="11" width="8" height="10" rx="1"/><rect x="3" y="17" width="8" height="4" rx="1"/></svg>
             </div>
             <h3>Custom Layout</h3>
-            <p>Split any pane horizontally or vertically, remove panes, and preview the result — build exactly the layout you need without being locked into a fixed grid.</p>
-          </div>
-        </div>
-      </div>
-    </section>
-
-    <!-- Screenshots -->
-    <section class="section" id="screenshots">
-      <div class="container">
-        <div class="reveal">
-          <div class="section-label">Preview</div>
-          <h2 class="section-title">See it in action</h2>
-        </div>
-        <div class="reveal r-d1">
-          <div class="gallery-tabs">
-            <button class="gallery-tab active" data-slide="0">Workspace</button>
-            <button class="gallery-tab" data-slide="1">Custom Layout</button>
-            <button class="gallery-tab" data-slide="2">Settings</button>
-            <button class="gallery-tab" data-slide="3">File Explorer</button>
-            <button class="gallery-tab" data-slide="4">Git Worktrees</button>
-          </div>
-          <div class="gallery-frame">
-            <div class="gallery-slide active">
-              <img src="images/main.png" alt="Codirigent workspace — multi-session grid of AI coding CLIs">
-              <div class="gallery-caption">Multi-session grid — run Claude Code, Codex, and Gemini side by side in a single workspace</div>
-            </div>
-            <div class="gallery-slide">
-              <video autoplay loop muted playsinline style="width:100%;display:block;">
-                <source src="video/customLayout.mp4" type="video/mp4">
-              </video>
-              <div class="gallery-caption">Custom Layout — split panes horizontally or vertically, remove panes, and preview your layout before applying</div>
-            </div>
-            <div class="gallery-slide">
-              <img src="images/settings.png" alt="Codirigent general settings">
-              <div class="gallery-caption">Settings — configure your default shell, editor, working directory, and startup behaviour</div>
-            </div>
-            <div class="gallery-slide">
-              <img src="images/fileTree.png" alt="Codirigent file explorer panel">
-              <div class="gallery-caption">File Explorer — project-aware file tree that syncs to the focused session</div>
-            </div>
-            <div class="gallery-slide">
-              <img src="images/gitWorktree.png" alt="Codirigent git worktrees panel">
-              <div class="gallery-caption">Git Worktrees — manage branches and worktrees without leaving the workspace</div>
-            </div>
+            <p>Split any pane horizontally or vertically, remove panes, and preview the result &mdash; build exactly the layout you need.</p>
           </div>
         </div>
       </div>
@@ -478,122 +313,373 @@
     <!-- Performance -->
     <section class="section" id="performance">
       <div class="container">
-        <div class="perf-layout">
-          <div class="perf-text reveal">
-            <div class="section-label">Performance</div>
-            <div class="perf-rust-badge">
-              <svg width="28" height="28" viewBox="0 0 24 24" fill="#CE422B" xmlns="http://www.w3.org/2000/svg" aria-label="Rust"><path d="M23.8346 11.7033l-1.0073-.6236a13.7268 13.7268 0 00-.0283-.2936l.8656-.8069a.3483.3483 0 00-.1154-.578l-1.1066-.414a8.4958 8.4958 0 00-.087-.2856l.6904-.9587a.3462.3462 0 00-.2257-.5446l-1.1663-.1894a9.3574 9.3574 0 00-.1407-.2622l.49-1.0761a.3437.3437 0 00-.0274-.3361.3486.3486 0 00-.3006-.154l-1.1845.0416a6.7444 6.7444 0 00-.1873-.2268l.2723-1.153a.3472.3472 0 00-.417-.4172l-1.1532.2724a14.0183 14.0183 0 00-.2278-.1873l.0415-1.1845a.3442.3442 0 00-.49-.328l-1.076.491c-.0872-.0476-.1742-.0952-.2623-.1407l-.1903-1.1673A.3483.3483 0 0016.256.955l-.9597.6905a8.4867 8.4867 0 00-.2855-.086l-.414-1.1066a.3483.3483 0 00-.5781-.1154l-.8069.8666a9.2936 9.2936 0 00-.2936-.0284L12.2946.1683a.3462.3462 0 00-.5892 0l-.6236 1.0073a13.7383 13.7383 0 00-.2936.0284L9.9803.3374a.3462.3462 0 00-.578.1154l-.4141 1.1065c-.0962.0274-.1903.0567-.2855.086L7.744.955a.3483.3483 0 00-.5447.2258L7.009 2.348a9.3574 9.3574 0 00-.2622.1407l-1.0762-.491a.3462.3462 0 00-.49.328l.0416 1.1845a7.9826 7.9826 0 00-.2278.1873L3.8413 3.425a.3472.3472 0 00-.4171.4171l.2713 1.1531c-.0628.075-.1255.1509-.1863.2268l-1.1845-.0415a.3462.3462 0 00-.328.49l.491 1.0761a9.167 9.167 0 00-.1407.2622l-1.1662.1894a.3483.3483 0 00-.2258.5446l.6904.9587a13.303 13.303 0 00-.087.2855l-1.1065.414a.3483.3483 0 00-.1155.5781l.8656.807a9.2936 9.2936 0 00-.0283.2935l-1.0073.6236a.3442.3442 0 000 .5892l1.0073.6236c.008.0982.0182.1964.0283.2936l-.8656.8079a.3462.3462 0 00.1155.578l1.1065.4141c.0273.0962.0567.1914.087.2855l-.6904.9587a.3452.3452 0 00.2268.5447l1.1662.1893c.0456.088.0922.1751.1408.2622l-.491 1.0762a.3462.3462 0 00.328.49l1.1834-.0415c.0618.0769.1235.1528.1873.2277l-.2713 1.1541a.3462.3462 0 00.4171.4161l1.153-.2713c.075.0638.151.1255.2279.1863l-.0415 1.1845a.3442.3442 0 00.49.327l1.0761-.49c.087.0486.1741.0951.2622.1407l.1903 1.1662a.3483.3483 0 00.5447.2268l.9587-.6904a9.299 9.299 0 00.2855.087l.414 1.1066a.3452.3452 0 00.5781.1154l.8079-.8656c.0972.0111.1954.0203.2936.0294l.6236 1.0073a.3472.3472 0 00.5892 0l.6236-1.0073c.0982-.0091.1964-.0183.2936-.0294l.8069.8656a.3483.3483 0 00.578-.1154l.4141-1.1066a8.4626 8.4626 0 00.2855-.087l.9587.6904a.3452.3452 0 00.5447-.2268l.1903-1.1662c.088-.0456.1751-.0931.2622-.1407l1.0762.49a.3472.3472 0 00.49-.327l-.0415-1.1845a6.7267 6.7267 0 00.2267-.1863l1.1531.2713a.3472.3472 0 00.4171-.416l-.2713-1.1542c.0628-.0749.1255-.1508.1863-.2278l1.1845.0415a.3442.3442 0 00.328-.49l-.49-1.076c.0475-.0872.0951-.1742.1407-.2623l1.1662-.1893a.3483.3483 0 00.2258-.5447l-.6904-.9587.087-.2855 1.1066-.414a.3462.3462 0 00.1154-.5781l-.8656-.8079c.0101-.0972.0202-.1954.0283-.2936l1.0073-.6236a.3442.3442 0 000-.5892zm-6.7413 8.3551a.7138.7138 0 01.2986-1.396.714.714 0 11-.2997 1.396zm-.3422-2.3142a.649.649 0 00-.7715.5l-.3573 1.6685c-1.1035.501-2.3285.7795-3.6193.7795a8.7368 8.7368 0 01-3.6951-.814l-.3574-1.6684a.648.648 0 00-.7714-.499l-1.473.3158a8.7216 8.7216 0 01-.7613-.898h7.1676c.081 0 .1356-.0141.1356-.088v-2.536c0-.074-.0536-.0881-.1356-.0881h-2.0966v-1.6077h2.2677c.2065 0 1.1065.0587 1.394 1.2088.0901.3533.2875 1.5044.4232 1.8729.1346.413.6833 1.2381 1.2685 1.2381h3.5716a.7492.7492 0 00.1296-.0131 8.7874 8.7874 0 01-.8119.9526zM6.8369 20.024a.714.714 0 11-.2997-1.396.714.714 0 01.2997 1.396zM4.1177 8.9972a.7137.7137 0 11-1.304.5791.7137.7137 0 011.304-.579zm-.8352 1.9813l1.5347-.6824a.65.65 0 00.33-.8585l-.3158-.7147h1.2432v5.6025H3.5669a8.7753 8.7753 0 01-.2834-3.348zm6.7343-.5437V8.7836h2.9601c.153 0 1.0792.1772 1.0792.8697 0 .575-.7107.7815-1.2948.7815zm10.7574 1.4862c0 .2187-.008.4363-.0243.651h-.9c-.09 0-.1265.0586-.1265.1477v.413c0 .973-.5487 1.1846-1.0296 1.2382-.4576.0517-.9648-.1913-1.0275-.4717-.2704-1.5186-.7198-1.8436-1.4305-2.4034.8817-.5599 1.799-1.386 1.799-2.4915 0-1.1936-.819-1.9458-1.3769-2.3153-.7825-.5163-1.6491-.6195-1.883-.6195H5.4682a8.7651 8.7651 0 014.907-2.7699l1.0974 1.151a.648.648 0 00.9182.0213l1.227-1.1743a8.7753 8.7753 0 016.0044 4.2762l-.8403 1.8982a.652.652 0 00.33.8585l1.6178.7188c.0283.2875.0425.577.0425.8717zm-9.3006-9.5993a.7128.7128 0 11.984 1.0316.7137.7137 0 01-.984-1.0316zm8.3389 6.71a.7107.7107 0 01.9395-.3625.7137.7137 0 11-.9405.3635z"/></svg>
-              <span>Rust</span>
-            </div>
-            <h2>Native Rust.<br>No Electron.</h2>
-            <p>Built in Rust with GPUI rendering — the same GPU-accelerated framework behind Zed. 22 MB on disk, ~40 MB RAM, and under 1% CPU at idle.</p>
+        <div class="reveal">
+          <div class="section-label">Performance</div>
+          <h2 class="section-title">Native Rust. No Electron.</h2>
+          <p class="section-sub">Built with GPUI rendering &mdash; the same GPU-accelerated framework behind Zed. Every byte counts.</p>
+        </div>
+        <div class="stats reveal r-d1">
+          <div class="stat">
+            <div class="stat-val"><span class="stat-num">~40</span><span class="stat-unit">MB</span></div>
+            <div class="stat-label">Memory</div>
+            <div class="stat-vs">vs ~500 MB (Electron)</div>
           </div>
-          <div class="perf-bars reveal r-d1">
-            <div class="perf-row">
-              <div class="perf-row-top">
-                <span class="perf-row-label">Memory</span>
-                <span class="perf-row-vals"><span class="hi">~40 MB</span> vs ~500 MB</span>
-              </div>
-              <div class="perf-row-tracks">
-                <div class="perf-track"><div class="perf-bar a" style="--tw:8%"></div></div>
-                <div class="perf-track"><div class="perf-bar b" style="--tw:100%"></div></div>
-              </div>
-            </div>
-            <div class="perf-row">
-              <div class="perf-row-top">
-                <span class="perf-row-label">CPU <span style="font-size:0.7rem;font-weight:400;color:var(--text-muted)">(idle)</span></span>
-                <span class="perf-row-vals"><span class="hi">~1%</span> vs ~3%</span>
-              </div>
-              <div class="perf-row-tracks">
-                <div class="perf-track"><div class="perf-bar a" style="--tw:33%"></div></div>
-                <div class="perf-track"><div class="perf-bar b" style="--tw:100%"></div></div>
-              </div>
-            </div>
-            <div class="perf-row">
-              <div class="perf-row-top">
-                <span class="perf-row-label">Startup</span>
-                <span class="perf-row-vals"><span class="hi">&lt;0.5s</span> vs ~3s</span>
-              </div>
-              <div class="perf-row-tracks">
-                <div class="perf-track"><div class="perf-bar a" style="--tw:17%"></div></div>
-                <div class="perf-track"><div class="perf-bar b" style="--tw:100%"></div></div>
-              </div>
-            </div>
-            <div class="perf-row">
-              <div class="perf-row-top">
-                <span class="perf-row-label">Disk</span>
-                <span class="perf-row-vals"><span class="hi">22 MB</span> vs ~500 MB</span>
-              </div>
-              <div class="perf-row-tracks">
-                <div class="perf-track"><div class="perf-bar a" style="--tw:4%"></div></div>
-                <div class="perf-track"><div class="perf-bar b" style="--tw:100%"></div></div>
-              </div>
-            </div>
-            <div class="perf-legend">
-              <span><span class="ld ld-a"></span> Codirigent</span>
-              <span><span class="ld ld-b"></span> VSCode + extensions</span>
-            </div>
+          <div class="stat">
+            <div class="stat-val"><span class="stat-num">&lt;1</span><span class="stat-unit">%</span></div>
+            <div class="stat-label">CPU at idle</div>
+            <div class="stat-vs">vs ~3% (Electron)</div>
+          </div>
+          <div class="stat">
+            <div class="stat-val"><span class="stat-num">&lt;0.5</span><span class="stat-unit">s</span></div>
+            <div class="stat-label">Startup</div>
+            <div class="stat-vs">vs ~3s (Electron)</div>
+          </div>
+          <div class="stat">
+            <div class="stat-val"><span class="stat-num">22</span><span class="stat-unit">MB</span></div>
+            <div class="stat-label">Disk footprint</div>
+            <div class="stat-vs">vs ~500 MB (Electron)</div>
           </div>
         </div>
+        <p class="perf-note reveal r-d2">Measured on Windows 11 &middot; 5 sessions open &middot; Codirigent v0.1.0-alpha</p>
       </div>
     </section>
 
     <!-- Install -->
     <section class="section" id="install">
       <div class="container">
-        <div class="install-layout">
-          <div class="install-text reveal">
-            <div class="section-label">Build from source</div>
-            <h2>Open source &amp; self-hostable</h2>
-            <p>GPL-3.0 licensed. Clone the repo and run with Cargo — no build system beyond Rust required.</p>
-          </div>
-          <div class="reveal r-d1">
-            <div class="code-block">
-              <div class="code-block-top">
-                <span>Terminal</span>
-                <button class="copy-btn" onclick="copyCode(this)">Copy</button>
-              </div>
-              <div class="code-block-code">
-                <span class="dim"># Requires Rust (rustup.rs)</span><br><br>
-                <span class="hl">git clone</span> https://github.com/oso95/Codirigent<br>
-                <span class="hl">cd</span> Codirigent<br>
-                <span class="hl">cargo run</span> --all-features
-              </div>
+        <div class="reveal">
+          <div class="section-label" style="text-align:center">Build from source</div>
+          <h2 class="section-title" style="text-align:center">Open source &amp; self-hostable</h2>
+          <p class="install-sub">GPL-3.0 licensed. Clone the repo and run with Cargo &mdash; no build system beyond Rust required.</p>
+        </div>
+        <div class="reveal r-d1">
+          <div class="terminal-block">
+            <div class="terminal-chrome">
+              <div class="term-dots"><span></span><span></span><span></span></div>
+              <span class="terminal-title">Terminal</span>
+              <button class="copy-btn" id="copy-btn">Copy</button>
             </div>
-            <div class="install-req">Requires Rust 1.75+ &middot; Windows or macOS</div>
+            <div class="terminal-body" id="code-content">
+              <span class="cdim"># Requires Rust 1.75+ (rustup.rs)</span><br><br>
+              <span class="chl">git clone</span> https://github.com/oso95/Codirigent.git<br>
+              <span class="chl">cd</span> Codirigent<br>
+              <span class="chl">cargo install</span> --path . --all-features<br>
+              <span class="chl">cargo install</span> --path crates/codirigent-hook
+            </div>
           </div>
+          <div class="install-req">Requires Rust 1.75+ &middot; Windows or macOS</div>
         </div>
       </div>
     </section>
-  </main>
 
-  <footer class="footer">
-    <div class="container">
-      <div class="footer-inner">
-        <div class="footer-left">
-          <svg width="18" height="18" viewBox="0 0 120 120" fill="none"><rect x="15" y="15" width="25" height="25" rx="5" fill="#39d353"/><rect x="47" y="15" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="79" y="15" width="25" height="25" rx="5" fill="#39d353" opacity=".4"/><rect x="15" y="47" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="47" y="47" width="25" height="25" rx="5" fill="#FF6B6B"/><rect x="79" y="47" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="15" y="79" width="25" height="25" rx="5" fill="#39d353" opacity=".4"/><rect x="47" y="79" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="79" y="79" width="25" height="25" rx="5" fill="#39d353"/></svg>
-          <span class="footer-text">GPL-3.0 &middot; Built with Rust &amp; GPUI</span>
-        </div>
-        <div class="footer-links">
-          <a href="https://github.com/oso95/Codirigent" target="_blank">GitHub</a>
-          <a href="https://github.com/oso95/Codirigent/releases" target="_blank">Releases</a>
-          <a href="https://github.com/oso95/Codirigent/blob/main/LICENSE" target="_blank">License</a>
+    <!-- Footer -->
+    <footer class="footer">
+      <div class="container">
+        <div class="footer-inner">
+          <div class="footer-left">
+            <svg width="18" height="18" viewBox="0 0 120 120" fill="none"><rect x="15" y="15" width="25" height="25" rx="5" fill="#39d353"/><rect x="47" y="15" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="79" y="15" width="25" height="25" rx="5" fill="#39d353" opacity=".4"/><rect x="15" y="47" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="47" y="47" width="25" height="25" rx="5" fill="#FF6B6B"/><rect x="79" y="47" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="15" y="79" width="25" height="25" rx="5" fill="#39d353" opacity=".4"/><rect x="47" y="79" width="25" height="25" rx="5" fill="#39d353" opacity=".7"/><rect x="79" y="79" width="25" height="25" rx="5" fill="#39d353"/></svg>
+            <span class="footer-text">GPL-3.0 &middot; Built with Rust &amp; GPUI</span>
+          </div>
+          <div class="footer-links">
+            <a href="https://github.com/oso95/Codirigent" target="_blank" rel="noopener">GitHub</a>
+            <a href="https://github.com/oso95/Codirigent/releases" target="_blank" rel="noopener">Releases</a>
+            <a href="https://github.com/oso95/Codirigent/blob/main/LICENSE" target="_blank" rel="noopener">License</a>
+          </div>
         </div>
       </div>
-    </div>
-  </footer>
+    </footer>
+  </main>
 
   <script>
-    const h=document.getElementById('header');let t=false;
-    window.addEventListener('scroll',()=>{if(!t){requestAnimationFrame(()=>{h.classList.toggle('scrolled',window.scrollY>32);t=false});t=true}});
-    const ro=new IntersectionObserver(e=>{e.forEach(x=>{if(x.isIntersecting){x.target.classList.add('visible');ro.unobserve(x.target)}})},{threshold:0.1,rootMargin:'0px 0px -40px 0px'});
-    document.querySelectorAll('.reveal').forEach(el=>ro.observe(el));
-    const po=new IntersectionObserver(e=>{e.forEach(x=>{if(x.isIntersecting){x.target.querySelectorAll('.perf-bar').forEach(b=>{b.style.width=b.style.getPropertyValue('--tw')});po.unobserve(x.target)}})},{threshold:0.2});
-    document.querySelectorAll('.perf-bars').forEach(el=>po.observe(el));
-    document.querySelectorAll('.gallery-tab').forEach(tab=>{tab.addEventListener('click',()=>{const i=tab.dataset.slide;document.querySelectorAll('.gallery-tab').forEach(t=>t.classList.remove('active'));document.querySelectorAll('.gallery-slide').forEach(s=>s.classList.remove('active'));tab.classList.add('active');document.querySelectorAll('.gallery-slide')[i].classList.add('active')})});
-    function copyCode(b){const c=b.closest('.code-block').querySelector('.code-block-code').textContent;navigator.clipboard.writeText(c.trim()).then(()=>{b.textContent='Copied!';setTimeout(()=>{b.textContent='Copy'},2000)})}
-    (async()=>{try{const r=await fetch('https://api.github.com/repos/oso95/Codirigent/releases/latest');if(!r.ok)return;const d=await r.json();const m=d.assets.find(a=>a.name.endsWith('.msi'));const dm=d.assets.find(a=>a.name.endsWith('.dmg'));if(m)document.getElementById('dl-win').href=m.browser_download_url;if(dm)document.getElementById('dl-mac').href=dm.browser_download_url}catch(e){}})();
-    (()=>{if(/Mac|iPhone|iPad/.test(navigator.userAgent)){const w=document.getElementById('dl-win'),m=document.getElementById('dl-mac');if(w&&m){w.className='btn btn-secondary';m.className='btn btn-primary';m.parentNode.insertBefore(m,w)}}})();
+  /* ─── Interference Field ─── */
+  (function () {
+    var canvas = document.getElementById('field');
+    var ctx = canvas.getContext('2d');
+    var W, H, frame = 0;
+    var dotX, dotY, dotA, dotR, dotG, dotB, dotRad, dotCount;
+
+    var MINT = [141, 247, 193];
+    var STATUS_COLORS = {
+      working:   [245, 158, 11],
+      ready:     [34, 197, 94],
+      idle:      [82, 82, 91],
+      attention: [244, 63, 94]
+    };
+
+    var AGENTS = [
+      { status: 'working',   label: 'claude-code' },
+      { status: 'ready',     label: 'codex' },
+      { status: 'working',   label: 'gemini-cli' },
+      { status: 'attention', label: 'claude-code' },
+      { status: 'idle',      label: 'codex' },
+      { status: 'working',   label: 'gemini-cli' }
+    ];
+
+    var SP = 6;
+    var BASE_R = 1.5;
+    var sources = [];
+    var dotDists;
+
+    function computeSources() {
+      var cols = 3, rows = 2;
+      var gridW = Math.min(W * 0.42, 620);
+      var gridH = Math.min(H * 0.18, 180);
+      var ox = (W - gridW) / 2;
+      var oy = H * 0.62;
+
+      sources = [];
+      for (var r = 0; r < rows; r++) {
+        for (var c = 0; c < cols; c++) {
+          var i = r * cols + c;
+          var sc = STATUS_COLORS[AGENTS[i].status];
+          var active = AGENTS[i].status === 'working' || AGENTS[i].status === 'attention';
+          sources.push({
+            x: ox + (c + 0.5) * (gridW / cols),
+            y: oy + (r + 0.5) * (gridH / rows),
+            color: sc, active: active,
+            freq: 0.045 + i * 0.006,
+            phase: i * 1.8,
+            strength: active ? 1.0 : 0.5
+          });
+        }
+      }
+    }
+
+    function buildGrid() {
+      var cols = Math.ceil(W / SP) + 1;
+      var rows = Math.ceil(H / SP) + 1;
+      dotCount = cols * rows;
+      dotX   = new Float32Array(dotCount);
+      dotY   = new Float32Array(dotCount);
+      dotA   = new Float32Array(dotCount);
+      dotR   = new Uint8Array(dotCount);
+      dotG   = new Uint8Array(dotCount);
+      dotB   = new Uint8Array(dotCount);
+      dotRad = new Float32Array(dotCount);
+      var idx = 0;
+      for (var r = 0; r < rows; r++) {
+        for (var c = 0; c < cols; c++) {
+          dotX[idx] = c * SP;
+          dotY[idx] = r * SP;
+          idx++;
+        }
+      }
+    }
+
+    function precomputeDistances() {
+      dotDists = new Float32Array(dotCount * 6);
+      for (var i = 0; i < dotCount; i++) {
+        var px = dotX[i], py = dotY[i];
+        for (var s = 0; s < 6; s++) {
+          var dx = px - sources[s].x, dy = py - sources[s].y;
+          dotDists[i * 6 + s] = Math.sqrt(dx * dx + dy * dy);
+        }
+      }
+    }
+
+    function composeDots(t) {
+      var breath = 0.93 + 0.07 * Math.sin(t * 0.25);
+      var cx = W / 2, cy = H * 0.54;
+      var maxR = Math.hypot(W * 0.55, H * 0.55);
+
+      for (var i = 0; i < dotCount; i++) {
+        var px = dotX[i], py = dotY[i];
+        dotRad[i] = BASE_R;
+
+        var vignDist = Math.hypot(px - cx, py - cy);
+        var vign = Math.max(0, 1 - (vignDist / maxR) * 0.7);
+
+        var vertFade = py < H * 0.38 ? (py / (H * 0.38)) * 0.3 : py < H * 0.50 ? 0.3 + ((py - H * 0.38) / (H * 0.12)) * 0.7 : 1.0;
+
+        var waveSum = 0;
+        var nearestDist = 9999, nearestSrc = 0;
+        var base = i * 6;
+
+        for (var s = 0; s < 6; s++) {
+          var dist = dotDists[base + s];
+          var src = sources[s];
+          waveSum += Math.cos(dist * src.freq + src.phase + t * 0.4) * src.strength;
+          if (dist < nearestDist) { nearestDist = dist; nearestSrc = s; }
+        }
+
+        var absWave = Math.abs(waveSum) / 3.0;
+        var pattern = Math.min(1, absWave);
+        var sharp = pattern * pattern;
+
+        var alpha = sharp * vign * vertFade * 0.80 * breath;
+        dotRad[i] = BASE_R + alpha * 0.5;
+
+        var nearSrc = sources[nearestSrc];
+        var proxBlend = Math.max(0, 1 - nearestDist / 300);
+        var colorMix = proxBlend * proxBlend * 0.6;
+
+        var r = MINT[0] * (1 - colorMix) + nearSrc.color[0] * colorMix;
+        var g = MINT[1] * (1 - colorMix) + nearSrc.color[1] * colorMix;
+        var b = MINT[2] * (1 - colorMix) + nearSrc.color[2] * colorMix;
+
+        for (var s2 = 0; s2 < 6; s2++) {
+          var src2 = sources[s2];
+          var dist2 = dotDists[base + s2];
+          if (dist2 < 40) {
+            var nearness = 1 - dist2 / 40;
+            var pulse = src2.active ? 0.65 + 0.35 * Math.sin(t * 2.2 + src2.phase) : 1;
+            var boost = nearness * nearness * nearness;
+            if (dist2 < 7) {
+              alpha = 0.92 * pulse;
+              r = src2.color[0]; g = src2.color[1]; b = src2.color[2];
+              dotRad[i] = BASE_R * 1.6;
+            } else {
+              var haloA = boost * 0.6 * pulse;
+              if (haloA > alpha) {
+                alpha = haloA;
+                r = src2.color[0]; g = src2.color[1]; b = src2.color[2];
+              }
+            }
+          }
+        }
+
+        dotA[i]   = Math.min(alpha, 1);
+        dotR[i]   = r | 0;
+        dotG[i]   = g | 0;
+        dotB[i]   = b | 0;
+      }
+    }
+
+    function render() {
+      ctx.clearRect(0, 0, W, H);
+      for (var i = 0; i < dotCount; i++) {
+        if (dotA[i] < 0.008) continue;
+        var rd = dotRad[i];
+        var d = rd * 2;
+        ctx.fillStyle = 'rgba(' + dotR[i] + ',' + dotG[i] + ',' + dotB[i] + ',' + dotA[i].toFixed(3) + ')';
+        ctx.fillRect(dotX[i] - rd, dotY[i] - rd, d, d);
+      }
+    }
+
+    function resize() {
+      var dpr = window.devicePixelRatio || 1;
+      W = canvas.clientWidth;
+      H = canvas.clientHeight;
+      canvas.width = W * dpr;
+      canvas.height = H * dpr;
+      ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+      computeSources();
+      buildGrid();
+      precomputeDistances();
+    }
+
+    function loop() {
+      frame++;
+      composeDots(frame * 0.008);
+      render();
+      requestAnimationFrame(loop);
+    }
+
+    window.addEventListener('resize', resize);
+    resize();
+    loop();
+  })();
+
+  /* ─── Nav scroll effect ─── */
+  (function () {
+    var nav = document.getElementById('nav');
+    var ticking = false;
+    window.addEventListener('scroll', function () {
+      if (!ticking) {
+        requestAnimationFrame(function () {
+          nav.classList.toggle('scrolled', window.scrollY > 32);
+          ticking = false;
+        });
+        ticking = true;
+      }
+    });
+  })();
+
+  /* ─── Badge fade on scroll ─── */
+  (function () {
+    var bl = document.querySelector('.badges-left');
+    var br = document.querySelector('.badges-right');
+    if (!bl || !br) return;
+    var ticking = false;
+    window.addEventListener('scroll', function () {
+      if (!ticking) {
+        requestAnimationFrame(function () {
+          var fade = Math.max(0, 1 - window.scrollY / (window.innerHeight * 0.6));
+          bl.style.opacity = fade;
+          br.style.opacity = fade;
+          ticking = false;
+        });
+        ticking = true;
+      }
+    });
+  })();
+
+  /* ─── Scroll reveal ─── */
+  (function () {
+    var ro = new IntersectionObserver(function (entries) {
+      entries.forEach(function (entry) {
+        if (entry.isIntersecting) {
+          entry.target.classList.add('visible');
+          ro.unobserve(entry.target);
+        }
+      });
+    }, { threshold: 0.1, rootMargin: '0px 0px -40px 0px' });
+    document.querySelectorAll('.reveal').forEach(function (el) { ro.observe(el); });
+  })();
+
+  /* ─── Showcase gallery ─── */
+  (function () {
+    var dots = document.querySelectorAll('.showcase-dot');
+    var slides = document.querySelectorAll('.showcase-slide');
+    var caption = document.getElementById('showcase-caption');
+    dots.forEach(function (dot) {
+      dot.addEventListener('click', function () {
+        var idx = dot.dataset.slide;
+        dots.forEach(function (d) { d.classList.remove('active'); });
+        slides.forEach(function (s) { s.classList.remove('active'); });
+        dot.classList.add('active');
+        slides[idx].classList.add('active');
+        if (caption) caption.textContent = slides[idx].dataset.caption || '';
+      });
+    });
+  })();
+
+  /* ─── Copy code ─── */
+  document.getElementById('copy-btn').addEventListener('click', function () {
+    var btn = this;
+    var code = document.getElementById('code-content').textContent;
+    navigator.clipboard.writeText(code.trim()).then(function () {
+      btn.textContent = 'Copied!';
+      setTimeout(function () { btn.textContent = 'Copy'; }, 2000);
+    });
+  });
+
+  /* ─── Auto-resolve download URLs from GitHub API ─── */
+  (function () {
+    fetch('https://api.github.com/repos/oso95/Codirigent/releases/latest')
+      .then(function (r) { return r.ok ? r.json() : null; })
+      .then(function (d) {
+        if (!d) return;
+        var msi = d.assets.find(function (a) { return a.name.endsWith('.msi'); });
+        var dmg = d.assets.find(function (a) { return a.name.endsWith('.dmg'); });
+        if (msi) document.getElementById('dl-win').href = msi.browser_download_url;
+        if (dmg) document.getElementById('dl-mac').href = dmg.browser_download_url;
+      })
+      .catch(function () {});
+  })();
+
+  /* ─── OS detection: swap primary/secondary buttons ─── */
+  (function () {
+    if (/Mac|iPhone|iPad/.test(navigator.userAgent)) {
+      var w = document.getElementById('dl-win');
+      var m = document.getElementById('dl-mac');
+      if (w && m) {
+        w.className = 'btn btn-secondary';
+        m.className = 'btn btn-primary';
+        m.parentNode.insertBefore(m, w);
+      }
+    }
+  })();
   </script>
 </body>
 </html>

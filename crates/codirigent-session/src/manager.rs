@@ -22,6 +22,15 @@ const DEFAULT_PTY_ROWS: u16 = 24;
 /// Default terminal width in columns.
 const DEFAULT_PTY_COLS: u16 = 80;
 
+/// Output drained from a session without exhausting its full backlog.
+#[derive(Debug, Default)]
+pub struct DrainedOutput {
+    /// Bytes drained from the PTY output queue.
+    pub data: Vec<u8>,
+    /// Whether more output is still queued for this session.
+    pub has_more: bool,
+}
+
 /// Canonicalize a path and strip the `\\?\` extended-length prefix on Windows.
 ///
 /// `std::fs::canonicalize` on Windows returns UNC paths like `\\?\C:\Users\...`
@@ -94,10 +103,8 @@ impl DefaultSessionManager {
 
     /// Acquire the sessions lock.
     ///
-    /// # Panics
-    /// Panics if the mutex is poisoned (another thread panicked while holding the lock).
     fn lock_sessions(&self) -> MutexGuard<'_, HashMap<SessionId, SessionState>> {
-        self.sessions.lock().expect("sessions mutex poisoned")
+        self.sessions.lock().unwrap_or_else(|p| p.into_inner())
     }
 
     /// Generate a unique session ID.
@@ -157,18 +164,44 @@ impl DefaultSessionManager {
     ///
     /// * `id` - The session ID to drain output from
     pub fn try_drain_output(&self, id: SessionId) -> Option<Vec<u8>> {
+        self.try_drain_output_bounded(id, usize::MAX, usize::MAX)
+            .map(|drained| drained.data)
+    }
+
+    /// Drain output from a session with soft chunk/byte budgets.
+    ///
+    /// This keeps a single noisy session from monopolizing the UI thread while
+    /// still preserving the unread backlog in the channel for the next poll.
+    pub fn try_drain_output_bounded(
+        &self,
+        id: SessionId,
+        max_chunks: usize,
+        max_bytes: usize,
+    ) -> Option<DrainedOutput> {
         let mut sessions = self.lock_sessions();
         let state = sessions.get_mut(&id)?;
-        let mut output = Vec::new();
+        let chunk_budget = max_chunks.max(1);
+        let byte_budget = max_bytes.max(1);
+        let mut output = Vec::with_capacity(byte_budget.min(64 * 1024));
+        let mut chunks_drained = 0usize;
+        let mut hit_budget = false;
 
         while let Ok(data) = state.output_rx.try_recv() {
             output.extend(data);
+            chunks_drained += 1;
+            if chunks_drained >= chunk_budget || output.len() >= byte_budget {
+                hit_budget = true;
+                break;
+            }
         }
 
         if output.is_empty() {
             None
         } else {
-            Some(output)
+            Some(DrainedOutput {
+                data: output,
+                has_more: hit_budget || !state.output_rx.is_empty(),
+            })
         }
     }
 
@@ -190,6 +223,14 @@ impl DefaultSessionManager {
     /// Get all session IDs.
     pub fn session_ids(&self) -> Vec<SessionId> {
         self.lock_sessions().keys().copied().collect()
+    }
+
+    /// Get all sessions that currently have unread PTY output queued.
+    pub fn sessions_with_pending_output(&self) -> Vec<SessionId> {
+        self.lock_sessions()
+            .iter()
+            .filter_map(|(id, state)| (!state.output_rx.is_empty()).then_some(*id))
+            .collect()
     }
 
     /// Get the child PID for a session.
@@ -343,6 +384,11 @@ impl SessionManager for DefaultSessionManager {
             ));
         }
 
+        // Inject CODIRIGENT_SESSION_ID so codirigent-hook can match hook signals
+        // back to this exact session without relying on CWD heuristics.
+        let id_str = id.0.to_string();
+        let env_vars: &[(&str, &str)] = &[("CODIRIGENT_SESSION_ID", &id_str)];
+
         // Spawn PTY: use specific shell if provided, otherwise auto-detect
         let mut pty = if let Some(ref shell_name) = shell {
             if !shell_name.is_empty() {
@@ -354,15 +400,15 @@ impl SessionManager for DefaultSessionManager {
                     &args,
                     DEFAULT_PTY_ROWS,
                     DEFAULT_PTY_COLS,
-                    &[],
+                    env_vars,
                 )
                 .context("Failed to spawn PTY with selected shell")?
             } else {
-                PtyHandle::spawn(&working_dir, DEFAULT_PTY_ROWS, DEFAULT_PTY_COLS, &[])
+                PtyHandle::spawn(&working_dir, DEFAULT_PTY_ROWS, DEFAULT_PTY_COLS, env_vars)
                     .context("Failed to spawn PTY")?
             }
         } else {
-            PtyHandle::spawn(&working_dir, DEFAULT_PTY_ROWS, DEFAULT_PTY_COLS, &[])
+            PtyHandle::spawn(&working_dir, DEFAULT_PTY_ROWS, DEFAULT_PTY_COLS, env_vars)
                 .context("Failed to spawn PTY")?
         };
 
@@ -1047,7 +1093,7 @@ mod tests {
 
         // Create a temporary file (not a directory)
         let temp_dir = std::env::temp_dir();
-        let temp_file = temp_dir.join(format!("dirigent_test_file_{}", std::process::id()));
+        let temp_file = temp_dir.join(format!("codirigent_test_file_{}", std::process::id()));
         {
             let mut file = std::fs::File::create(&temp_file).unwrap();
             file.write_all(b"test").unwrap();

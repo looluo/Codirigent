@@ -53,6 +53,14 @@
                             KeyPath='yes'/>
                     </Component>
 
+                    <Component Id='hook_binary' Guid='*' Win64='yes'>
+                        <File
+                            Id='hook_exe'
+                            Name='codirigent-hook.exe'
+                            Source='$(var.BinaryPath)\codirigent-hook.exe'
+                            KeyPath='yes'/>
+                    </Component>
+
                     <Component Id='path_env' Guid='B2C3D4E5-6F7A-489C-AD1E-2F3A4B5C6D7E' Win64='yes' KeyPath='yes'>
                         <Environment
                             Id='PATH'
@@ -104,6 +112,7 @@
             Absent='disallow'>
 
             <ComponentRef Id='binary'/>
+            <ComponentRef Id='hook_binary'/>
             <ComponentRef Id='StartMenuShortcut'/>
 
             <Feature

@@ -15,13 +15,13 @@ use alacritty_terminal::term::Term;
 /// # Arguments
 ///
 /// * `term` - The terminal instance to copy from
-/// * `start` - Start position as (row, col)
-/// * `end` - End position as (row, col)
+/// * `start` - Start position as (grid_line, col)
+/// * `end` - End position as (grid_line, col)
 ///
 /// # Returns
 ///
 /// The selected text as a string, with trailing whitespace trimmed from lines.
-pub fn copy_selection<T>(term: &Term<T>, start: (usize, usize), end: (usize, usize)) -> String {
+pub fn copy_selection<T>(term: &Term<T>, start: (i32, usize), end: (i32, usize)) -> String {
     let mut text = String::new();
 
     // Normalize selection (ensure start <= end)
@@ -30,21 +30,22 @@ pub fn copy_selection<T>(term: &Term<T>, start: (usize, usize), end: (usize, usi
     } else {
         (end, start)
     };
-    let (start_row, start_col) = start;
-    let (end_row, end_col) = end;
+    let (start_line, start_col) = start;
+    let (end_line, end_col) = end;
 
     let grid = term.grid();
-    let total_lines = grid.screen_lines();
     let total_cols = grid.columns();
+    let start_line = start_line.max(term.topmost_line().0);
+    let end_line = end_line.min(term.bottommost_line().0);
 
-    for row in start_row..=end_row {
-        if row >= total_lines {
-            break;
-        }
+    if start_line > end_line {
+        return String::new();
+    }
 
-        let line = &grid[Line(row as i32)];
-        let col_start = if row == start_row { start_col } else { 0 };
-        let col_end = if row == end_row {
+    for line_idx in start_line..=end_line {
+        let line = &grid[Line(line_idx)];
+        let col_start = if line_idx == start_line { start_col } else { 0 };
+        let col_end = if line_idx == end_line {
             end_col.min(total_cols.saturating_sub(1))
         } else {
             total_cols.saturating_sub(1)
@@ -65,74 +66,15 @@ pub fn copy_selection<T>(term: &Term<T>, start: (usize, usize), end: (usize, usi
         text.push_str(trimmed);
 
         // Add newline between lines (but not after the last line)
-        if row < end_row && !trimmed.is_empty() {
+        if line_idx < end_line && !trimmed.is_empty() {
             text.push('\n');
-        } else if row < end_row && trimmed.is_empty() {
+        } else if line_idx < end_line && trimmed.is_empty() {
             // Preserve empty lines in multi-line selections
             text.push('\n');
         }
     }
 
     text.trim_end().to_string()
-}
-
-/// Trait for clipboard operations.
-///
-/// This trait abstracts clipboard access to allow for testing and
-/// platform-specific implementations.
-pub trait ClipboardProvider: Send + Sync {
-    /// Write text to the clipboard.
-    fn write(&self, text: String) -> anyhow::Result<()>;
-
-    /// Read text from the clipboard.
-    fn read(&self) -> anyhow::Result<Option<String>>;
-}
-
-/// A no-op clipboard provider for testing.
-#[derive(Debug, Default)]
-pub struct NoopClipboard;
-
-impl ClipboardProvider for NoopClipboard {
-    fn write(&self, _text: String) -> anyhow::Result<()> {
-        Ok(())
-    }
-
-    fn read(&self) -> anyhow::Result<Option<String>> {
-        Ok(None)
-    }
-}
-
-/// An in-memory clipboard provider for testing.
-#[derive(Debug, Default)]
-pub struct TestClipboard {
-    content: std::sync::Mutex<Option<String>>,
-}
-
-impl TestClipboard {
-    /// Create a new test clipboard.
-    pub fn new() -> Self {
-        Self::default()
-    }
-
-    /// Create a test clipboard with initial content.
-    pub fn with_content(content: impl Into<String>) -> Self {
-        Self {
-            content: std::sync::Mutex::new(Some(content.into())),
-        }
-    }
-}
-
-impl ClipboardProvider for TestClipboard {
-    fn write(&self, text: String) -> anyhow::Result<()> {
-        let mut content = self.content.lock().expect("TestClipboard mutex poisoned");
-        *content = Some(text);
-        Ok(())
-    }
-
-    fn read(&self) -> anyhow::Result<Option<String>> {
-        let content = self.content.lock().expect("TestClipboard mutex poisoned");
-        Ok(content.clone())
-    }
 }
 
 /// Prepare text for pasting into terminal.
@@ -221,34 +163,5 @@ mod tests {
         let text = "hello \u{4E2D}\u{6587}"; // Chinese characters
         let result = sanitize_paste(text);
         assert_eq!(result, "hello \u{4E2D}\u{6587}");
-    }
-
-    #[test]
-    fn test_test_clipboard() {
-        let clipboard = TestClipboard::new();
-
-        // Initially empty
-        assert_eq!(clipboard.read().unwrap(), None);
-
-        // Write and read back
-        clipboard.write("test".to_string()).unwrap();
-        assert_eq!(clipboard.read().unwrap(), Some("test".to_string()));
-
-        // Overwrite
-        clipboard.write("new".to_string()).unwrap();
-        assert_eq!(clipboard.read().unwrap(), Some("new".to_string()));
-    }
-
-    #[test]
-    fn test_test_clipboard_with_content() {
-        let clipboard = TestClipboard::with_content("initial");
-        assert_eq!(clipboard.read().unwrap(), Some("initial".to_string()));
-    }
-
-    #[test]
-    fn test_noop_clipboard() {
-        let clipboard = NoopClipboard;
-        clipboard.write("test".to_string()).unwrap();
-        assert_eq!(clipboard.read().unwrap(), None);
     }
 }

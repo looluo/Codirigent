@@ -73,7 +73,6 @@ impl CliSessionStatus {
     }
 }
 
-pub mod claude_session_reader;
 pub mod cli_detector;
 pub mod cli_output_detection;
 pub mod clipboard_service;
@@ -91,14 +90,13 @@ pub mod shell_detection;
 pub mod skill_manager;
 pub mod worktree;
 
-pub use claude_session_reader::{ClaudeSessionReader, ClaudeSessionStatus};
 pub use cli_detector::{CliDetector, DefaultCliDetector};
 pub use cli_output_detection::detect_cli_from_output;
 pub use clipboard_service::{ClipboardService, DefaultClipboardService};
 pub use codex_session_reader::{CodexSessionReader, CodexSessionStatus};
 pub use gemini_session_reader::{GeminiSessionReader, GeminiSessionStatus};
 pub use git_status::GitStatusService;
-pub use manager::DefaultSessionManager;
+pub use manager::{DefaultSessionManager, DrainedOutput};
 pub use osc133::{extract_osc133_events, ShellState};
 pub use osc7::extract_osc7_path;
 pub use pty::{spawn_output_reader, OutputReader, PtyHandle, PtySize, ShellCommand};

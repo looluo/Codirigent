@@ -122,37 +122,6 @@ impl TerminalEventHandler {
         }
     }
 
-    /// Create a new event handler with clipboard integration.
-    pub fn with_clipboard(
-        session_id: SessionId,
-        clipboard: Arc<dyn crate::smart_clipboard::SmartClipboardProvider>,
-    ) -> Self {
-        Self {
-            session_id,
-            clipboard: Some(clipboard),
-            pty_writer: None,
-        }
-    }
-
-    /// Create a new event handler with full integration.
-    ///
-    /// # Arguments
-    ///
-    /// * `session_id` - The session this handler is associated with
-    /// * `clipboard` - Clipboard provider for copy/paste operations
-    /// * `pty_writer` - Channel sender for forwarding PTY write requests
-    pub fn with_full_integration(
-        session_id: SessionId,
-        clipboard: Arc<dyn crate::smart_clipboard::SmartClipboardProvider>,
-        pty_writer: mpsc::UnboundedSender<Vec<u8>>,
-    ) -> Self {
-        Self {
-            session_id,
-            clipboard: Some(clipboard),
-            pty_writer: Some(pty_writer),
-        }
-    }
-
     /// Get the session ID this handler is associated with.
     pub fn session_id(&self) -> SessionId {
         self.session_id
@@ -461,7 +430,8 @@ impl Terminal {
     /// Get the cursor position as (row, column).
     ///
     /// Row and column are 0-indexed.
-    pub fn cursor_position(&self) -> (usize, usize) {
+    #[cfg(test)]
+    pub(crate) fn cursor_position(&self) -> (usize, usize) {
         let cursor = &self.term.grid().cursor;
         (cursor.point.line.0 as usize, cursor.point.column.0)
     }

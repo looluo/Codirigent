@@ -11,7 +11,7 @@ use gpui::{
 };
 
 impl WorkspaceView {
-    /// token counter, right-panel toggle, and window controls.
+    /// Render the top bar with session tabs, token counter, right-panel toggle, and window controls.
     pub(super) fn render_top_bar(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
         let theme = self.workspace().theme();
         let bg: gpui::Hsla = theme.header_background.into();
@@ -19,7 +19,6 @@ impl WorkspaceView {
         let fg: gpui::Hsla = theme.foreground.into();
         let muted: gpui::Hsla = theme.muted.into();
         let active: gpui::Hsla = theme.active.into();
-        let _primary: gpui::Hsla = theme.primary.into();
 
         // Clone tab data and state before building the element tree
         let tabs: Vec<(usize, String, bool, bool)> = self
@@ -93,14 +92,7 @@ impl WorkspaceView {
                         .text_xs()
                         .text_color(muted)
                         .cursor_pointer()
-                        .hover(|style| {
-                            style.text_color(gpui::Hsla {
-                                h: 0.0,
-                                s: 0.8,
-                                l: 0.6,
-                                a: 1.0,
-                            })
-                        })
+                        .hover(|style| style.text_color(super::types::DESTRUCTIVE_HOVER_TEXT))
                         .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
                             // Set pending deletion to show confirmation dialog
                             this.modals.pending_profile_deletion =

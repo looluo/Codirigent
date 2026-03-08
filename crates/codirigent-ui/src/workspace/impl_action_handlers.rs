@@ -44,6 +44,7 @@ impl WorkspaceView {
         info!("SplitHorizontal action triggered");
         if let Some(slot) = self.workspace.split_pane(SplitDirection::Horizontal, 0.5) {
             info!(?slot, "Split pane horizontally, new slot created");
+            self.mark_layout_cache_dirty();
             cx.notify();
         }
     }
@@ -58,6 +59,7 @@ impl WorkspaceView {
         info!("SplitVertical action triggered");
         if let Some(slot) = self.workspace.split_pane(SplitDirection::Vertical, 0.5) {
             info!(?slot, "Split pane vertically, new slot created");
+            self.mark_layout_cache_dirty();
             cx.notify();
         }
     }
@@ -79,6 +81,7 @@ impl WorkspaceView {
             if let Some(id) = session_to_close {
                 self.close_session(id, cx);
             } else {
+                self.mark_layout_cache_dirty();
                 cx.notify();
             }
         }
@@ -105,94 +108,37 @@ impl WorkspaceView {
         info!("ToggleSidebar action triggered");
         self.toggle_sidebar(cx);
     }
+}
 
-    /// Handle FocusSession1 action (Cmd+1).
-    pub(super) fn handle_focus_session1(
-        &mut self,
-        _action: &FocusSession1,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.focus_session_number(1, cx);
-    }
+/// Generate FocusSession handler methods for WorkspaceView.
+///
+/// Each GPUI action type requires a distinct handler method signature.
+/// This macro eliminates the repetition of nine identical handler bodies.
+macro_rules! impl_focus_session_handlers {
+    ($($num:literal => $action:ident => $handler:ident),+ $(,)?) => {
+        impl WorkspaceView {
+            $(
+                pub(super) fn $handler(
+                    &mut self,
+                    _action: &$action,
+                    _window: &mut Window,
+                    cx: &mut Context<Self>,
+                ) {
+                    self.focus_session_number($num, cx);
+                }
+            )+
+        }
+    };
+}
 
-    /// Handle FocusSession2 action (Cmd+2).
-    pub(super) fn handle_focus_session2(
-        &mut self,
-        _action: &FocusSession2,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.focus_session_number(2, cx);
-    }
-
-    /// Handle FocusSession3 action (Cmd+3).
-    pub(super) fn handle_focus_session3(
-        &mut self,
-        _action: &FocusSession3,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.focus_session_number(3, cx);
-    }
-
-    /// Handle FocusSession4 action (Cmd+4).
-    pub(super) fn handle_focus_session4(
-        &mut self,
-        _action: &FocusSession4,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.focus_session_number(4, cx);
-    }
-
-    /// Handle FocusSession5 action (Cmd+5).
-    pub(super) fn handle_focus_session5(
-        &mut self,
-        _action: &FocusSession5,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.focus_session_number(5, cx);
-    }
-
-    /// Handle FocusSession6 action (Cmd+6).
-    pub(super) fn handle_focus_session6(
-        &mut self,
-        _action: &FocusSession6,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.focus_session_number(6, cx);
-    }
-
-    /// Handle FocusSession7 action (Cmd+7).
-    pub(super) fn handle_focus_session7(
-        &mut self,
-        _action: &FocusSession7,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.focus_session_number(7, cx);
-    }
-
-    /// Handle FocusSession8 action (Cmd+8).
-    pub(super) fn handle_focus_session8(
-        &mut self,
-        _action: &FocusSession8,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.focus_session_number(8, cx);
-    }
-
-    /// Handle FocusSession9 action (Cmd+9).
-    pub(super) fn handle_focus_session9(
-        &mut self,
-        _action: &FocusSession9,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        self.focus_session_number(9, cx);
-    }
+impl_focus_session_handlers! {
+    1 => FocusSession1 => handle_focus_session1,
+    2 => FocusSession2 => handle_focus_session2,
+    3 => FocusSession3 => handle_focus_session3,
+    4 => FocusSession4 => handle_focus_session4,
+    5 => FocusSession5 => handle_focus_session5,
+    6 => FocusSession6 => handle_focus_session6,
+    7 => FocusSession7 => handle_focus_session7,
+    8 => FocusSession8 => handle_focus_session8,
+    9 => FocusSession9 => handle_focus_session9,
 }

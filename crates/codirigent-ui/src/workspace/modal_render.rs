@@ -4,6 +4,7 @@
 //! custom layout modal and session action modal.
 
 use super::gpui::WorkspaceView;
+use super::types::MODAL_FIELD_HEIGHT;
 use crate::components::text_input::{text_input, TextInputStyle};
 use crate::icons;
 use crate::toolbar::CustomLayoutMode;
@@ -37,33 +38,19 @@ impl WorkspaceView {
         let current_mode = picker.mode;
         let picker_error = picker.error.clone();
 
-        // Mode tab bar
-        let grid_tab_color = if current_mode == CustomLayoutMode::Grid {
-            primary
-        } else {
-            muted
+        // Mode tab bar — helpers to keep the active/inactive state consistent.
+        let tab_color = |mode| if current_mode == mode { primary } else { muted };
+        let tab_border = |mode| {
+            if current_mode == mode {
+                primary
+            } else {
+                gpui::Hsla::transparent_black()
+            }
         };
-        let split_tab_color = if current_mode == CustomLayoutMode::Split {
-            primary
-        } else {
-            muted
-        };
-        let transparent = gpui::Hsla {
-            h: 0.0,
-            s: 0.0,
-            l: 0.0,
-            a: 0.0,
-        };
-        let grid_tab_border = if current_mode == CustomLayoutMode::Grid {
-            primary
-        } else {
-            transparent
-        };
-        let split_tab_border = if current_mode == CustomLayoutMode::Split {
-            primary
-        } else {
-            transparent
-        };
+        let grid_tab_color = tab_color(CustomLayoutMode::Grid);
+        let grid_tab_border = tab_border(CustomLayoutMode::Grid);
+        let split_tab_color = tab_color(CustomLayoutMode::Split);
+        let split_tab_border = tab_border(CustomLayoutMode::Split);
 
         let mode_tabs = div()
             .flex()
@@ -74,7 +61,7 @@ impl WorkspaceView {
                 div()
                     .id("mode-tab-grid")
                     .flex_1()
-                    .h(px(36.0))
+                    .h(px(MODAL_FIELD_HEIGHT))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -95,7 +82,7 @@ impl WorkspaceView {
                 div()
                     .id("mode-tab-split")
                     .flex_1()
-                    .h(px(36.0))
+                    .h(px(MODAL_FIELD_HEIGHT))
                     .flex()
                     .items_center()
                     .justify_center()
@@ -137,12 +124,14 @@ impl WorkspaceView {
                             this.custom_picker.close();
                             let profile = crate::layout::LayoutProfile::Custom { rows, cols };
                             this.workspace.set_layout(profile);
+                            this.mark_layout_cache_dirty();
                         }
                     }
                     CustomLayoutMode::Split => {
                         if let Some(tree) = this.custom_picker.validate_split() {
                             this.custom_picker.close();
                             this.workspace.set_split_tree(tree);
+                            this.mark_layout_cache_dirty();
                         }
                     }
                 }
@@ -326,21 +315,15 @@ impl WorkspaceView {
                             rows_value.clone()
                         };
 
-                        text_input(
-                            "rows-input",
-                            display_value,
-                            is_focused,
-                            has_error,
-                            &input_style,
-                        )
-                        .cursor_pointer()
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _event, _window, cx| {
-                                this.custom_picker.set_focus(0);
-                                cx.notify();
-                            }),
-                        )
+                        text_input(display_value, is_focused, has_error, &input_style)
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _event, _window, cx| {
+                                    this.custom_picker.set_focus(0);
+                                    cx.notify();
+                                }),
+                            )
                     }),
             )
             // Columns input
@@ -358,21 +341,15 @@ impl WorkspaceView {
                             cols_value.clone()
                         };
 
-                        text_input(
-                            "cols-input",
-                            display_value,
-                            is_focused,
-                            has_error,
-                            &input_style,
-                        )
-                        .cursor_pointer()
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(|this, _event, _window, cx| {
-                                this.custom_picker.set_focus(1);
-                                cx.notify();
-                            }),
-                        )
+                        text_input(display_value, is_focused, has_error, &input_style)
+                            .cursor_pointer()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|this, _event, _window, cx| {
+                                    this.custom_picker.set_focus(1);
+                                    cx.notify();
+                                }),
+                            )
                     }),
             )
             // Preview grid
@@ -718,62 +695,6 @@ impl WorkspaceView {
             .object_fit(ObjectFit::Contain)
     }
 
-    /// Parse a group color string into Hsla.
-    fn parse_group_color(&self, color: &str) -> Option<gpui::Hsla> {
-        match color.to_lowercase().as_str() {
-            "teal" | "blue-green" => Some(gpui::Hsla {
-                h: 0.52,
-                s: 0.70,
-                l: 0.60,
-                a: 1.0,
-            }),
-            "coral" | "orange-red" => Some(gpui::Hsla {
-                h: 0.03,
-                s: 0.80,
-                l: 0.62,
-                a: 1.0,
-            }),
-            "orange" => Some(gpui::Hsla {
-                h: 0.08,
-                s: 0.90,
-                l: 0.60,
-                a: 1.0,
-            }),
-            "blue" => Some(gpui::Hsla {
-                h: 0.60,
-                s: 0.70,
-                l: 0.60,
-                a: 1.0,
-            }),
-            "purple" => Some(gpui::Hsla {
-                h: 0.75,
-                s: 0.60,
-                l: 0.65,
-                a: 1.0,
-            }),
-            "green" => Some(gpui::Hsla {
-                h: 0.33,
-                s: 0.60,
-                l: 0.55,
-                a: 1.0,
-            }),
-            "yellow" => Some(gpui::Hsla {
-                h: 0.15,
-                s: 0.80,
-                l: 0.65,
-                a: 1.0,
-            }),
-            "red" => Some(gpui::Hsla {
-                h: 0.0,
-                s: 0.80,
-                l: 0.60,
-                a: 1.0,
-            }),
-            _ => None,
-        }
-    }
-
-    /// Render session context menu (dropdown near the trigger button).
     /// Render the session action modal for rename/group.
     pub(super) fn render_session_action_modal(
         &mut self,
@@ -881,7 +802,6 @@ impl WorkspaceView {
                                 .child(div().text_sm().text_color(muted).child(label))
                                 .child(
                                     text_input(
-                                        "session-action-input",
                                         input_value,
                                         true, // Always focused in modal
                                         modal.error.is_some(),

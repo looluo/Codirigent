@@ -72,50 +72,20 @@ pub use clipboard_stub::StubSmartClipboard;
 /// let content = clipboard.read_content().unwrap();
 /// ```
 #[cfg(target_os = "macos")]
-pub fn create_clipboard() -> Box<dyn crate::smart_clipboard::SmartClipboardProvider> {
-    Box::new(MacOSSmartClipboard::new())
+pub fn create_clipboard() -> std::sync::Arc<dyn crate::smart_clipboard::SmartClipboardProvider> {
+    std::sync::Arc::new(MacOSSmartClipboard::new())
 }
 
-/// Create a platform-appropriate smart clipboard provider.
-///
-/// Returns the correct implementation for the current platform:
-/// - macOS: `MacOSSmartClipboard`
-/// - Windows: `WindowsSmartClipboard`
-/// - Other: `StubSmartClipboard`
-///
-/// # Example
-///
-/// ```ignore
-/// use codirigent_ui::platform::create_clipboard;
-/// use codirigent_ui::smart_clipboard::SmartClipboardProvider;
-///
-/// let clipboard = create_clipboard();
-/// let content = clipboard.read_content().unwrap();
-/// ```
+/// See macOS variant for full documentation.
 #[cfg(target_os = "windows")]
-pub fn create_clipboard() -> Box<dyn crate::smart_clipboard::SmartClipboardProvider> {
-    Box::new(WindowsSmartClipboard::new())
+pub fn create_clipboard() -> std::sync::Arc<dyn crate::smart_clipboard::SmartClipboardProvider> {
+    std::sync::Arc::new(WindowsSmartClipboard::new())
 }
 
-/// Create a platform-appropriate smart clipboard provider.
-///
-/// Returns the correct implementation for the current platform:
-/// - macOS: `MacOSSmartClipboard`
-/// - Windows: `WindowsSmartClipboard`
-/// - Other: `StubSmartClipboard`
-///
-/// # Example
-///
-/// ```
-/// use codirigent_ui::platform::create_clipboard;
-/// use codirigent_ui::smart_clipboard::SmartClipboardProvider;
-///
-/// let clipboard = create_clipboard();
-/// let content = clipboard.read_content().unwrap();
-/// ```
+/// See macOS variant for full documentation.
 #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-pub fn create_clipboard() -> Box<dyn crate::smart_clipboard::SmartClipboardProvider> {
-    Box::new(StubSmartClipboard::new())
+pub fn create_clipboard() -> std::sync::Arc<dyn crate::smart_clipboard::SmartClipboardProvider> {
+    std::sync::Arc::new(StubSmartClipboard::new())
 }
 
 #[cfg(test)]

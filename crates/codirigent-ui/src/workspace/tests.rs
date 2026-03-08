@@ -337,11 +337,11 @@ fn test_workspace_cell_info() {
     assert_eq!(cells.len(), 2);
 
     assert_eq!(cells[0].session_id, SessionId(1));
-    assert!(cells[0].is_focused);
-    assert_eq!(cells[0].name, "Session 1");
+    assert_eq!(ws.focused_session_id(), Some(SessionId(1)));
+    assert_eq!(ws.session(cells[0].session_id).unwrap().name, "Session 1");
 
     assert_eq!(cells[1].session_id, SessionId(2));
-    assert!(!cells[1].is_focused);
+    assert_ne!(ws.focused_session_id(), Some(SessionId(2)));
 }
 
 #[test]
@@ -350,16 +350,12 @@ fn test_cell_info_fields() {
         session_id: SessionId(1),
         index: 0,
         bounds: Bounds::from_size(100.0, 100.0),
-        name: "Test".to_string(),
-        status: SessionStatus::Working,
-        is_focused: true,
     };
 
     assert_eq!(info.session_id, SessionId(1));
     assert_eq!(info.index, 0);
-    assert_eq!(info.name, "Test");
-    assert_eq!(info.status, SessionStatus::Working);
-    assert!(info.is_focused);
+    assert_eq!(info.bounds.size.width, 100.0);
+    assert_eq!(info.bounds.size.height, 100.0);
 }
 
 #[test]
@@ -396,8 +392,8 @@ fn test_workspace_single_layout_shows_focused_session() {
     let cells = ws.cell_info();
     assert_eq!(cells.len(), 1);
     assert_eq!(cells[0].session_id, SessionId(2));
-    assert!(cells[0].is_focused);
-    assert_eq!(cells[0].name, "Session 2");
+    assert_eq!(ws.focused_session_id(), Some(SessionId(2)));
+    assert_eq!(ws.session(cells[0].session_id).unwrap().name, "Session 2");
 }
 
 #[test]
@@ -420,7 +416,7 @@ fn test_workspace_single_layout_focused_session_already_first() {
     let cells = ws.cell_info();
     assert_eq!(cells.len(), 1);
     assert_eq!(cells[0].session_id, SessionId(1));
-    assert!(cells[0].is_focused);
+    assert_eq!(ws.focused_session_id(), Some(SessionId(1)));
 }
 
 #[test]
@@ -457,10 +453,6 @@ fn test_workspace_single_layout_preserves_order_on_exit() {
 
     // Session 3 should still be focused
     assert_eq!(ws.focused_session_id(), Some(SessionId(3)));
-    assert!(!cells[0].is_focused);
-    assert!(!cells[1].is_focused);
-    assert!(cells[2].is_focused);
-    assert!(!cells[3].is_focused);
 }
 
 // --- set_split_tree tests ---
@@ -647,4 +639,178 @@ fn test_string_truncation_allocates_when_long() {
     };
 
     assert!(matches!(result, Cow::Owned(_)));
+}
+
+#[test]
+fn test_workspace_swap_sessions_grid() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    ws.set_bounds(Bounds::from_size(1000.0, 800.0));
+    ws.add_session(make_session(1, "S1"));
+    ws.add_session(make_session(2, "S2"));
+    ws.add_session(make_session(3, "S3"));
+
+    // Swap index 0 (S1) with index 2 (S3)
+    assert!(ws.swap_sessions(0, 2));
+
+    let cells = ws.cell_info();
+    assert_eq!(cells[0].session_id, SessionId(3));
+    assert_eq!(cells[1].session_id, SessionId(2));
+    assert_eq!(cells[2].session_id, SessionId(1));
+}
+
+#[test]
+fn test_workspace_swap_sessions_same_index() {
+    let mut ws = Workspace::new();
+    ws.add_session(make_session(1, "S1"));
+
+    // Swap with self is a no-op, returns false
+    assert!(!ws.swap_sessions(0, 0));
+}
+
+#[test]
+fn test_workspace_swap_sessions_out_of_bounds() {
+    let mut ws = Workspace::new();
+    ws.add_session(make_session(1, "S1"));
+
+    assert!(!ws.swap_sessions(0, 5));
+    assert!(!ws.swap_sessions(5, 0));
+}
+
+#[test]
+fn test_workspace_swap_sessions_split_tree() {
+    let mut ws = Workspace::new();
+    let tree = LayoutNode::from_grid(1, 3);
+    ws.set_split_tree(tree);
+    ws.add_session(make_session(1, "S1"));
+    ws.add_session(make_session(2, "S2"));
+    ws.add_session(make_session(3, "S3"));
+
+    // Swap index 0 with index 2
+    assert!(ws.swap_sessions(0, 2));
+
+    let cells = ws.cell_info();
+    assert_eq!(cells[0].session_id, SessionId(3));
+    assert_eq!(cells[2].session_id, SessionId(1));
+}
+
+#[test]
+fn test_workspace_swap_sessions_split_tree_with_empty_slot() {
+    let mut ws = Workspace::new();
+    let tree = LayoutNode::from_grid(1, 3);
+    ws.set_split_tree(tree);
+    ws.add_session(make_session(1, "S1"));
+    // Slot 0 has S1, slots 1 and 2 are empty
+
+    // Swap S1 from slot 0 to empty slot 2
+    assert!(ws.swap_sessions(0, 2));
+
+    let split = ws.layout_state().as_split_tree().unwrap();
+    assert_eq!(split.assignments()[0].1, None);
+    assert_eq!(split.assignments()[2].1, Some(SessionId(1)));
+}
+
+#[test]
+fn test_workspace_swap_sessions_focus_follows_session() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    ws.set_bounds(Bounds::from_size(1000.0, 800.0));
+    ws.add_session(make_session(1, "S1"));
+    ws.add_session(make_session(2, "S2"));
+    ws.add_session(make_session(3, "S3"));
+
+    // Focus S1 at index 0
+    ws.focus_session(SessionId(1));
+    assert_eq!(ws.focused_session_id(), Some(SessionId(1)));
+
+    // Swap indices 0 and 2 — S1 moves to index 2
+    ws.swap_sessions(0, 2);
+
+    // Focus should follow S1 to its new position
+    assert_eq!(ws.focused_session_id(), Some(SessionId(1)));
+}
+
+#[test]
+fn test_workspace_swap_sessions_split_tree_after_split_respects_visual_order() {
+    let mut ws = Workspace::new();
+    ws.set_split_tree(LayoutNode::from_grid(1, 2));
+    ws.add_session(make_session(1, "S1"));
+    ws.add_session(make_session(2, "S2"));
+    ws.focus_session(SessionId(1));
+
+    assert!(ws.split_pane(SplitDirection::Horizontal, 0.5).is_some());
+    assert!(ws.add_session(make_session(3, "S3")));
+
+    let before = ws.cell_info();
+    assert_eq!(
+        before
+            .iter()
+            .map(|cell| cell.session_id)
+            .collect::<Vec<_>>(),
+        vec![SessionId(1), SessionId(3), SessionId(2)]
+    );
+
+    assert!(ws.swap_sessions(0, 1));
+
+    let after = ws.cell_info();
+    assert_eq!(
+        after.iter().map(|cell| cell.session_id).collect::<Vec<_>>(),
+        vec![SessionId(3), SessionId(1), SessionId(2)]
+    );
+}
+
+#[cfg(feature = "gpui-full")]
+#[test]
+fn test_drag_state_updates_target_after_leaving_source_header() {
+    let cells = vec![
+        CellInfo {
+            session_id: SessionId(1),
+            index: 0,
+            bounds: Bounds::new(0.0, 0.0, 100.0, 100.0),
+        },
+        CellInfo {
+            session_id: SessionId(2),
+            index: 1,
+            bounds: Bounds::new(120.0, 0.0, 100.0, 100.0),
+        },
+    ];
+    let mut drag = super::types::DragState {
+        source_session_id: SessionId(1),
+        source_index: 0,
+        start_position: Point::new(10.0, 10.0),
+        current_position: Point::new(10.0, 10.0),
+        active: false,
+        target_index: None,
+    };
+
+    drag.update_pointer(Point::new(20.0, 20.0), &cells);
+    assert!(drag.active);
+    assert_eq!(drag.target_index, None);
+
+    drag.update_pointer(Point::new(140.0, 20.0), &cells);
+    assert_eq!(drag.target_index, Some(1));
+}
+
+#[cfg(feature = "gpui-full")]
+#[test]
+fn test_drag_state_does_not_target_source_or_activate_too_early() {
+    let cells = vec![CellInfo {
+        session_id: SessionId(1),
+        index: 0,
+        bounds: Bounds::new(0.0, 0.0, 100.0, 100.0),
+    }];
+    let mut drag = super::types::DragState {
+        source_session_id: SessionId(1),
+        source_index: 0,
+        start_position: Point::new(10.0, 10.0),
+        current_position: Point::new(10.0, 10.0),
+        active: false,
+        target_index: Some(0),
+    };
+
+    drag.update_pointer(Point::new(12.0, 12.0), &cells);
+    assert!(!drag.active);
+    assert_eq!(drag.target_index, None);
+
+    drag.update_pointer(Point::new(20.0, 20.0), &cells);
+    assert!(drag.active);
+    assert_eq!(drag.target_index, None);
 }

@@ -31,4 +31,4 @@ mod tree;
 
 pub use entry::{FileEntry, FileIcon};
 pub use error::{FileTreeError, Result};
-pub use tree::FileTree;
+pub use tree::{quote_path_for_terminal, FileTree, TerminalPathStyle};

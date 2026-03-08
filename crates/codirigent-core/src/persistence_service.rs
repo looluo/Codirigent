@@ -11,7 +11,7 @@
 
 use crate::persistence::{Checkpoint, PersistentState, RecoveryResult};
 use crate::types::SessionId;
-use anyhow::Result;
+use anyhow::{bail, Result};
 use serde::{Deserialize, Serialize};
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -292,10 +292,21 @@ impl DefaultPersistenceService {
         self.checkpoints_path().join(format!("{}.json", id))
     }
 
+    fn reject_symlink(path: &Path, description: &str) -> Result<()> {
+        if let Ok(metadata) = fs::symlink_metadata(path) {
+            if metadata.file_type().is_symlink() {
+                bail!("Refusing to use symlinked {} at {:?}", description, path);
+            }
+        }
+        Ok(())
+    }
+
     /// Ensure the necessary directories exist.
     fn ensure_dirs(&self) -> Result<()> {
         fs::create_dir_all(&self.codirigent_dir)?;
+        Self::reject_symlink(&self.codirigent_dir, ".codirigent directory")?;
         fs::create_dir_all(self.checkpoints_path())?;
+        Self::reject_symlink(&self.checkpoints_path(), "checkpoints directory")?;
         Ok(())
     }
 
@@ -313,6 +324,8 @@ impl PersistenceService for DefaultPersistenceService {
         let temp_path = self.state_path().with_extension("tmp");
 
         // Write to temp file first, then rename for atomicity
+        Self::reject_symlink(&self.state_path(), "state file")?;
+        Self::reject_symlink(&temp_path, "temporary state file")?;
         fs::write(&temp_path, &json)?;
         fs::rename(&temp_path, self.state_path())?;
 
@@ -325,6 +338,7 @@ impl PersistenceService for DefaultPersistenceService {
             return Ok(None);
         }
 
+        Self::reject_symlink(&path, "state file")?;
         let content = fs::read_to_string(&path)?;
         let state: PersistentState = serde_json::from_str(&content)?;
         Ok(Some(state))
@@ -335,7 +349,9 @@ impl PersistenceService for DefaultPersistenceService {
 
         let checkpoint = Checkpoint::new(name.to_string(), state.clone());
         let json = serde_json::to_string_pretty(&checkpoint)?;
-        fs::write(self.checkpoint_path(&checkpoint.id), json)?;
+        let checkpoint_path = self.checkpoint_path(&checkpoint.id);
+        Self::reject_symlink(&checkpoint_path, "checkpoint file")?;
+        fs::write(checkpoint_path, json)?;
 
         Ok(checkpoint)
     }

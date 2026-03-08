@@ -13,10 +13,7 @@ impl TaskQueue {
     ///
     /// Returns the highest-priority unblocked task that is still in
     /// the `Queued` status and has all dependencies satisfied.
-    ///
-    /// # Arguments
-    ///
-    /// * `completed_tasks` - List of task IDs that have been completed
+    /// Done tasks are determined from the queue's own task map.
     ///
     /// # Returns
     ///
@@ -34,27 +31,42 @@ impl TaskQueue {
     /// let task = Task::new(TaskId::from("test"), "Test".to_string(), "".to_string());
     /// queue.enqueue(task).unwrap();
     ///
-    /// let next = queue.next_task(&[]);
+    /// let next = queue.next_task();
     /// assert!(next.is_some());
     /// assert_eq!(next.unwrap().id, TaskId::from("test"));
     /// ```
-    pub fn next_task(&self, completed_tasks: &[TaskId]) -> Option<&Task> {
-        self.state()
+    pub fn next_task(&self) -> Option<&Task> {
+        // Build done set from the queue's own task map to avoid external allocation.
+        let done_set: std::collections::HashSet<&TaskId> = self
+            .tasks()
+            .values()
+            .filter(|t| t.status == TaskStatus::Done)
+            .map(|t| &t.id)
+            .collect();
+
+        let mut eligible = self
+            .state()
             .order
             .iter()
             .filter_map(|id| self.tasks().get(id))
             .filter(|task| {
                 task.status == TaskStatus::Queued
                     && !self.is_blocked(&task.id)
-                    && task.dependencies_satisfied(completed_tasks)
-            })
-            .max_by(|a, b| {
-                let score_a = self.calculate_score(a, completed_tasks);
-                let score_b = self.calculate_score(b, completed_tasks);
-                score_a
-                    .partial_cmp(&score_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+                    && task.dependencies_satisfied_fast(&done_set)
+            });
+
+        if self.config().mode == SchedulerMode::Fifo {
+            // FIFO: the order Vec already encodes priority — take the first match in O(n).
+            eligible.next()
+        } else {
+            // Other modes: score all eligible tasks and return the highest-scoring one.
+            // Pre-compute scores to avoid calling calculate_score twice per comparison
+            // (which in Smart mode would invoke chrono::Utc::now() O(n) extra times).
+            eligible
+                .map(|task| (task, self.calculate_score(task)))
+                .max_by(|(_, sa), (_, sb)| sa.partial_cmp(sb).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(task, _)| task)
+        }
     }
 
     /// Get the next task for a specific session (considers tag matching).
@@ -65,7 +77,6 @@ impl TaskQueue {
     /// # Arguments
     ///
     /// * `session` - The session to find a task for
-    /// * `completed_tasks` - List of task IDs that have been completed
     ///
     /// # Returns
     ///
@@ -91,37 +102,43 @@ impl TaskQueue {
     /// let mut session = Session::new(SessionId(1), "Backend Session".to_string(), PathBuf::from("/tmp"));
     /// session.group = Some("backend".to_string());
     ///
-    /// let next = queue.next_task_for_session(&session, &[]);
+    /// let next = queue.next_task_for_session(&session);
     /// assert!(next.is_some());
     /// ```
-    pub fn next_task_for_session(
-        &self,
-        session: &Session,
-        completed_tasks: &[TaskId],
-    ) -> Option<&Task> {
-        self.state()
+    pub fn next_task_for_session(&self, session: &Session) -> Option<&Task> {
+        let done_set: std::collections::HashSet<&TaskId> = self
+            .tasks()
+            .values()
+            .filter(|t| t.status == TaskStatus::Done)
+            .map(|t| &t.id)
+            .collect();
+
+        let mut eligible = self
+            .state()
             .order
             .iter()
             .filter_map(|id| self.tasks().get(id))
             .filter(|task| {
                 task.status == TaskStatus::Queued
                     && !self.is_blocked(&task.id)
-                    && task.dependencies_satisfied(completed_tasks)
+                    && task.dependencies_satisfied_fast(&done_set)
                     && task.project_dir.as_ref().map_or(true, |pd| {
                         super::session_matches_project(&session.working_directory, pd)
                     })
-            })
-            .max_by(|a, b| {
-                let score_a = self.calculate_score_for_session(a, session, completed_tasks);
-                let score_b = self.calculate_score_for_session(b, session, completed_tasks);
-                score_a
-                    .partial_cmp(&score_b)
-                    .unwrap_or(std::cmp::Ordering::Equal)
-            })
+            });
+
+        if self.config().mode == SchedulerMode::Fifo {
+            eligible.next()
+        } else {
+            eligible
+                .map(|task| (task, self.calculate_score_for_session(task, session)))
+                .max_by(|(_, sa), (_, sb)| sa.partial_cmp(sb).unwrap_or(std::cmp::Ordering::Equal))
+                .map(|(task, _)| task)
+        }
     }
 
     /// Calculate priority score for a task.
-    pub(crate) fn calculate_score(&self, task: &Task, _completed_tasks: &[TaskId]) -> f32 {
+    pub(crate) fn calculate_score(&self, task: &Task) -> f32 {
         match self.config().mode {
             SchedulerMode::Fifo => {
                 // Earlier position = higher score
@@ -143,13 +160,8 @@ impl TaskQueue {
     }
 
     /// Calculate score for a task considering session tag matching.
-    pub(crate) fn calculate_score_for_session(
-        &self,
-        task: &Task,
-        session: &Session,
-        completed_tasks: &[TaskId],
-    ) -> f32 {
-        let base_score = self.calculate_score(task, completed_tasks);
+    pub(crate) fn calculate_score_for_session(&self, task: &Task, session: &Session) -> f32 {
+        let base_score = self.calculate_score(task);
 
         // Add tag matching bonus
         let tag_score = if let Some(ref group) = session.group {
@@ -166,12 +178,18 @@ impl TaskQueue {
     }
 
     /// Calculate age score based on how long the task has been waiting.
+    ///
+    /// Uses a logarithmic curve so older tasks asymptotically approach 1.0
+    /// without a hard cap. A task waiting 60 minutes scores ≈ 0.5; tasks
+    /// waiting longer continue to differentiate rather than collapsing to the
+    /// same score.
     pub(crate) fn calculate_age_score(&self, task: &Task) -> f32 {
-        let age = chrono::Utc::now()
+        let age_minutes = chrono::Utc::now()
             .signed_duration_since(task.created_at)
-            .num_minutes();
-        // Normalize: 1 hour waiting = 1.0 score
-        (age as f32 / 60.0).min(1.0)
+            .num_minutes()
+            .max(0) as f32;
+        // Asymptotic: score → 1.0 as age → ∞, equals 0.5 at 60 minutes.
+        age_minutes / (age_minutes + 60.0)
     }
 }
 
@@ -212,7 +230,7 @@ mod tests {
     #[test]
     fn test_next_task_empty_queue() {
         let queue = create_queue();
-        assert!(queue.next_task(&[]).is_none());
+        assert!(queue.next_task().is_none());
     }
 
     #[test]
@@ -221,7 +239,7 @@ mod tests {
         let task = Task::new(TaskId::from("task-001"), "Test".to_string(), "".to_string());
         queue.enqueue(task).unwrap();
 
-        let next = queue.next_task(&[]);
+        let next = queue.next_task();
         assert!(next.is_some());
         assert_eq!(next.unwrap().id, TaskId::from("task-001"));
     }
@@ -239,7 +257,7 @@ mod tests {
         queue.enqueue(low_task).unwrap();
         queue.enqueue(high_task).unwrap();
 
-        let next = queue.next_task(&[]);
+        let next = queue.next_task();
         assert_eq!(next.unwrap().id, TaskId::from("high"));
     }
 
@@ -260,7 +278,7 @@ mod tests {
         queue.enqueue(high_task).unwrap();
         queue.enqueue(critical_task).unwrap();
 
-        let next = queue.next_task(&[]);
+        let next = queue.next_task();
         assert_eq!(next.unwrap().id, TaskId::from("critical"));
     }
 
@@ -277,7 +295,7 @@ mod tests {
         queue.enqueue(task2).unwrap();
 
         // task-2 should be blocked, so next should return task-1
-        let next = queue.next_task(&[]);
+        let next = queue.next_task();
         assert_eq!(next.unwrap().id, TaskId::from("task-1"));
 
         // Assign and complete task-1
@@ -287,7 +305,7 @@ mod tests {
         queue.complete_task(&TaskId::from("task-1"), true).unwrap();
 
         // After task-1 completes, task-2 is unblocked
-        let next = queue.next_task(&[TaskId::from("task-1")]);
+        let next = queue.next_task();
         assert_eq!(next.unwrap().id, TaskId::from("task-2"));
     }
 
@@ -307,7 +325,7 @@ mod tests {
             .unwrap();
 
         // Next should return second task
-        let next = queue.next_task(&[]);
+        let next = queue.next_task();
         assert_eq!(next.unwrap().id, TaskId::from("task-2"));
     }
 
@@ -338,7 +356,7 @@ mod tests {
         let mut session = Session::new(SessionId(1), "Backend".to_string(), PathBuf::from("/tmp"));
         session.group = Some("backend".to_string());
 
-        let next = queue.next_task_for_session(&session, &[]);
+        let next = queue.next_task_for_session(&session);
         assert_eq!(next.unwrap().id, TaskId::from("backend"));
     }
 
@@ -352,7 +370,7 @@ mod tests {
         // Session without group
         let session = Session::new(SessionId(1), "Session".to_string(), PathBuf::from("/tmp"));
 
-        let next = queue.next_task_for_session(&session, &[]);
+        let next = queue.next_task_for_session(&session);
         assert!(next.is_some());
     }
 
@@ -372,7 +390,7 @@ mod tests {
         queue.enqueue(high_task).unwrap();
 
         // In FIFO mode, low should come first (despite lower priority)
-        let next = queue.next_task(&[]);
+        let next = queue.next_task();
         assert_eq!(next.unwrap().id, TaskId::from("low"));
     }
 
@@ -400,7 +418,7 @@ mod tests {
 
         // Task with no deps should score higher in dependency mode
         // (because the dependencies are external and don't block)
-        let next = queue.next_task(&[]);
+        let next = queue.next_task();
         assert!(next.is_some());
     }
 
@@ -435,7 +453,7 @@ mod tests {
             "Session A".to_string(),
             PathBuf::from("/project-a"),
         );
-        let next = queue.next_task_for_session(&session_a, &[]);
+        let next = queue.next_task_for_session(&session_a);
         assert_eq!(next.unwrap().id, TaskId::from("task-a"));
 
         // Session in /project-b should only get task-b
@@ -444,7 +462,7 @@ mod tests {
             "Session B".to_string(),
             PathBuf::from("/project-b"),
         );
-        let next = queue.next_task_for_session(&session_b, &[]);
+        let next = queue.next_task_for_session(&session_b);
         assert_eq!(next.unwrap().id, TaskId::from("task-b"));
     }
 
@@ -463,7 +481,7 @@ mod tests {
             "Session".to_string(),
             PathBuf::from("/project/src"),
         );
-        let next = queue.next_task_for_session(&session, &[]);
+        let next = queue.next_task_for_session(&session);
         assert!(next.is_some());
     }
 
@@ -481,7 +499,7 @@ mod tests {
             "Session".to_string(),
             PathBuf::from("/any/directory"),
         );
-        let next = queue.next_task_for_session(&session, &[]);
+        let next = queue.next_task_for_session(&session);
         assert!(next.is_some());
     }
 
@@ -500,7 +518,7 @@ mod tests {
             "Session".to_string(),
             PathBuf::from("/project-b"),
         );
-        let next = queue.next_task_for_session(&session, &[]);
+        let next = queue.next_task_for_session(&session);
         assert!(next.is_none());
     }
 
@@ -509,20 +527,31 @@ mod tests {
         let mut queue = create_queue();
 
         let mut task = Task::new(TaskId::from("task-1"), "Task".to_string(), "".to_string());
-        // External dependency (not in queue)
-        task.dependencies = vec![TaskId::from("external")];
+        // Dependency on another task
+        task.dependencies = vec![TaskId::from("dep-task")];
 
         queue.enqueue(task).unwrap();
 
-        // Should not be blocked since dependency doesn't exist in queue
+        // dep-task not in queue, so is_blocked returns false (no blocking entry)
         assert!(!queue.is_blocked(&TaskId::from("task-1")));
 
-        // But should not be selectable without completed_tasks
-        let next = queue.next_task(&[]);
+        // task-1 not selectable because dep-task not done
+        let next = queue.next_task();
         assert!(next.is_none());
 
-        // With external dependency marked complete
-        let next = queue.next_task(&[TaskId::from("external")]);
+        // Enqueue dep-task, assign and complete it so it's Done in the queue
+        let dep = Task::new(TaskId::from("dep-task"), "Dep".to_string(), "".to_string());
+        queue.enqueue(dep).unwrap();
+        queue
+            .assign_task(&TaskId::from("dep-task"), SessionId(9))
+            .unwrap();
+        queue
+            .complete_task(&TaskId::from("dep-task"), true)
+            .unwrap();
+
+        // Now dep-task is Done in queue — task-1 becomes eligible
+        let next = queue.next_task();
         assert!(next.is_some());
+        assert_eq!(next.unwrap().id, TaskId::from("task-1"));
     }
 }

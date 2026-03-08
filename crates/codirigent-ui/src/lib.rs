@@ -74,7 +74,6 @@
 
 #![warn(missing_docs)]
 #![warn(clippy::all)]
-#![cfg_attr(debug_assertions, allow(dead_code))]
 
 // Core modules (ready)
 pub mod actions;
@@ -102,7 +101,6 @@ pub mod theme_manager;
 pub mod title_bar;
 pub mod toolbar;
 pub mod top_bar;
-pub mod ui_composition;
 pub mod workspace;
 
 // Modules that require GPUI feature only
@@ -160,9 +158,6 @@ pub use clipboard_preview::ClipboardPreview;
 pub use empty_session::{
     EmptySessionCell, EmptySessionEvent, EmptySessionPool, EmptySessionRenderHints,
 };
-
-// Re-export UI composition types
-pub use ui_composition::{AppUiEvents, AppUiState};
 
 // Re-export GPUI app when feature is enabled
 #[cfg(feature = "gpui-full")]

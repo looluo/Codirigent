@@ -3,10 +3,11 @@
 //! This module contains struct and enum definitions used throughout the workspace
 //! implementation, including modal states and UI component data.
 
+use super::CellInfo;
 use codirigent_core::{SessionId, SessionStatus, TaskId};
-use codirigent_session::claude_session_reader::ClaudeSessionReader;
 use codirigent_session::codex_session_reader::CodexSessionReader;
 use codirigent_session::gemini_session_reader::GeminiSessionReader;
+use gpui::Hsla;
 use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::time::Instant;
@@ -27,12 +28,131 @@ pub(super) const CELL_BORDER_WIDTH: f32 = 2.0;
 /// Height of dropdown trigger buttons in pixels.
 pub(super) const DROPDOWN_TRIGGER_HEIGHT: f32 = 28.0;
 
+/// Height of the drawer (Sessions panel) header bar in pixels.
+pub(super) const DRAWER_HEADER_HEIGHT: f32 = 40.0;
+
+/// Default prefix used when generating session names (e.g. "Session 1").
+///
+/// Used both for name generation (`format!("{}{}", SESSION_NAME_PREFIX, n)`)
+/// and for reverse-parsing the session number (`strip_prefix(SESSION_NAME_PREFIX)`).
+pub(super) const SESSION_NAME_PREFIX: &str = "Session ";
+
+/// Height of session and group rows in the Sessions drawer panel.
+pub(super) const SESSION_ROW_HEIGHT: f32 = 28.0;
+
+/// Height of input fields and modal rows (larger than session rows).
+pub(super) const MODAL_FIELD_HEIGHT: f32 = 36.0;
+
+/// Git change status colors used in the Worktrees panel.
+///
+/// These are git-convention colors (green=staged, orange=modified, red=deleted,
+/// blue=renamed/moved) and intentionally live outside the general app theme.
+pub(super) mod git_colors {
+    use gpui::Hsla;
+    pub const STAGED: Hsla = Hsla {
+        h: 0.35,
+        s: 0.6,
+        l: 0.5,
+        a: 1.0,
+    };
+    pub const MODIFIED: Hsla = Hsla {
+        h: 0.1,
+        s: 0.8,
+        l: 0.6,
+        a: 1.0,
+    };
+    pub const DELETED: Hsla = Hsla {
+        h: 0.0,
+        s: 0.7,
+        l: 0.55,
+        a: 1.0,
+    };
+    pub const RENAMED: Hsla = Hsla {
+        h: 0.58,
+        s: 0.5,
+        l: 0.6,
+        a: 1.0,
+    };
+}
+
 /// Default rem size in pixels (base for font scaling).
 /// Scaled proportionally: `REM_BASE * (font_size_base / 13.0)`.
 pub(super) const REM_BASE: f32 = 16.0;
 
 /// Default font size base in pixels (used to compute rem scaling).
 pub(super) const FONT_SIZE_BASE_DEFAULT: f32 = 13.0;
+
+/// Label shown in empty grid cells (no session assigned).
+pub(super) const EMPTY_CELL_MESSAGE: &str = "Idle - Ready for next task";
+
+/// Semi-transparent black overlay used behind modal dialogs.
+pub(super) const MODAL_BACKDROP: Hsla = Hsla {
+    h: 0.0,
+    s: 0.0,
+    l: 0.0,
+    a: 0.5,
+};
+
+/// Background color for destructive action buttons (delete, end session).
+pub(super) const DESTRUCTIVE_BUTTON_BG: Hsla = Hsla {
+    h: 0.0,
+    s: 0.8,
+    l: 0.5,
+    a: 1.0,
+};
+
+/// Hover background color for destructive action buttons (slightly darker).
+pub(super) const DESTRUCTIVE_BUTTON_HOVER: Hsla = Hsla {
+    h: 0.0,
+    s: 0.8,
+    l: 0.4,
+    a: 1.0,
+};
+
+/// Hover background color for secondary/cancel buttons (subtle white tint).
+pub(super) const CANCEL_BUTTON_HOVER: Hsla = Hsla {
+    h: 0.0,
+    s: 0.0,
+    l: 1.0,
+    a: 0.1,
+};
+
+/// Muted grey used for git branch name labels in the worktrees panel.
+pub(super) const BRANCH_NAME_COLOR: Hsla = Hsla {
+    h: 0.0,
+    s: 0.0,
+    l: 0.75,
+    a: 1.0,
+};
+
+/// Amber color used for the dirty-file count indicator in session rows.
+pub(super) const DIRTY_INDICATOR_COLOR: Hsla = Hsla {
+    h: 0.1,
+    s: 0.8,
+    l: 0.6,
+    a: 1.0,
+};
+
+/// Light red used for destructive hover text (close-tab button, etc.).
+///
+/// Lighter than `DESTRUCTIVE_BUTTON_BG` to work as foreground text color.
+pub(super) const DESTRUCTIVE_HOVER_TEXT: Hsla = Hsla {
+    h: 0.0,
+    s: 0.8,
+    l: 0.6,
+    a: 1.0,
+};
+
+/// Destructive action color for menu item text (softer red; used for "End Session" etc.).
+///
+/// Distinct from `DESTRUCTIVE_BUTTON_BG` which is used as a button fill.
+/// The lighter lightness makes it readable as colored text against panel backgrounds.
+pub(super) const DESTRUCTIVE_ITEM_COLOR: Hsla = Hsla {
+    h: 0.0,
+    s: 0.7,
+    l: 0.55,
+    a: 1.0,
+};
 
 /// Predefined group color palette for visual distinction.
 ///
@@ -159,6 +279,57 @@ pub(super) struct SelectionState {
     pub file_tree_context_menu: Option<FileTreeContextMenu>,
     /// Click deduplication: track last click position and time to prevent double-creation.
     pub last_click_position: Option<(codirigent_core::GridPosition, Instant)>,
+    /// Active drag-and-drop state for session reordering (None when not dragging).
+    pub drag: Option<DragState>,
+}
+
+/// State for drag-and-drop session reordering.
+///
+/// Tracks an in-progress drag operation where the user is moving a session
+/// from one pane to another by dragging its header bar.
+#[derive(Debug, Clone, Copy)]
+pub(super) struct DragState {
+    /// Session being dragged.
+    pub source_session_id: SessionId,
+    /// Grid index (or slot index) of the source cell.
+    pub source_index: usize,
+    /// Mouse position when drag started (screen pixels).
+    pub start_position: crate::layout::Point,
+    /// Current mouse position (screen pixels).
+    pub current_position: crate::layout::Point,
+    /// Whether the drag threshold (5px) has been exceeded.
+    pub active: bool,
+    /// Index of the cell currently under the cursor (drop target), if any.
+    pub target_index: Option<usize>,
+}
+
+const DRAG_ACTIVATION_DISTANCE_SQUARED: f32 = 25.0;
+
+impl DragState {
+    /// Update drag activation and drop target from a pointer position.
+    ///
+    /// This is shared between header-local and workspace-global mouse move
+    /// handlers so reordering keeps working after the cursor leaves the
+    /// source header.
+    pub(super) fn update_pointer(&mut self, position: crate::layout::Point, cells: &[CellInfo]) {
+        self.current_position = position;
+
+        if !self.active {
+            let dx = position.x - self.start_position.x;
+            let dy = position.y - self.start_position.y;
+            if (dx * dx + dy * dy) <= DRAG_ACTIVATION_DISTANCE_SQUARED {
+                self.target_index = None;
+                return;
+            }
+            self.active = true;
+        }
+
+        self.target_index = cells
+            .iter()
+            .find(|cell| cell.bounds.contains(position))
+            .map(|cell| cell.index)
+            .filter(|&target| target != self.source_index);
+    }
 }
 
 impl SelectionState {
@@ -170,6 +341,7 @@ impl SelectionState {
             selecting_session_id: None,
             file_tree_context_menu: None,
             last_click_position: None,
+            drag: None,
         }
     }
 }
@@ -189,22 +361,48 @@ pub(super) struct PollingState {
     pub pending_resize: bool,
     /// Last time git status was refreshed for sessions.
     pub last_git_refresh: Instant,
-    /// Last time JSONL status was checked (throttled to ~1/second).
-    pub last_jsonl_check: Instant,
     /// Sessions that need a deferred Enter keypress sent to their PTY.
     pub pending_enters: HashMap<SessionId, (Instant, bool)>,
-    /// Last time sync_ui_state ran (throttled to avoid per-frame overhead).
+    /// Last time sync_ui_state ran (fallback safety sync for missed invalidations).
     pub last_ui_sync: Instant,
+    /// Whether derived UI state (headers, empty cells, task counts) needs recomputing.
+    pub ui_sync_dirty: bool,
     /// Last time clipboard was checked for changes (time-based, ~1/second).
     pub last_clipboard_check: Instant,
     /// Whether a background git refresh is currently in-flight.
     pub git_refresh_in_flight: bool,
-    /// Whether a background JSONL status check is currently in-flight.
+    /// Whether a background JSONL status check (Codex/Gemini) is in-flight.
     pub jsonl_check_in_flight: bool,
+    /// Whether a background hook-signal scan is in-flight.
+    pub hook_signal_check_in_flight: bool,
     /// Whether a background file tree rebuild is currently in-flight.
     pub file_tree_rebuild_in_flight: bool,
     /// Whether a background clipboard image save is currently in-flight.
     pub clipboard_load_in_flight: bool,
+    /// Sessions currently preparing PTY output on a background thread.
+    pub output_prepare_in_flight: HashSet<SessionId>,
+    /// Debounced app-state persistence task.
+    pub state_save_task: Option<gpui::Task<()>>,
+    /// Monotonic generation for debounced app-state persistence.
+    pub state_save_generation: u64,
+    /// Last time the Codex/Gemini JSONL check ran.
+    pub last_jsonl_check: Instant,
+    /// Last time hook signal files were scanned (~1/second throttle).
+    pub last_hook_signal_check: Instant,
+    /// Latest hook payload marker processed per signal file stem.
+    pub last_processed_hook_signal_ts: HashMap<String, ProcessedHookSignal>,
+    /// Generation counter for async project-root refreshes (file tree/worktree).
+    pub project_refresh_generation: u64,
+    /// Whether session restoration from disk is currently in-flight.
+    pub restore_in_flight: bool,
+    /// Best-effort shell command line capture per session while the shell is idle.
+    pub shell_input_buffers: HashMap<SessionId, String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct ProcessedHookSignal {
+    pub ts: u64,
+    pub fingerprint: u64,
 }
 
 impl PollingState {
@@ -215,16 +413,32 @@ impl PollingState {
             last_resize_time: Instant::now() - std::time::Duration::from_millis(200),
             pending_resize: false,
             last_git_refresh: Instant::now(),
-            last_jsonl_check: Instant::now(),
             pending_enters: HashMap::new(),
             last_ui_sync: Instant::now() - std::time::Duration::from_millis(200),
+            ui_sync_dirty: true,
             last_clipboard_check: Instant::now(),
             git_refresh_in_flight: false,
             jsonl_check_in_flight: false,
+            hook_signal_check_in_flight: false,
             file_tree_rebuild_in_flight: false,
             clipboard_load_in_flight: false,
+            output_prepare_in_flight: HashSet::new(),
+            state_save_task: None,
+            state_save_generation: 0,
+            last_jsonl_check: Instant::now(),
+            last_hook_signal_check: Instant::now() - std::time::Duration::from_secs(1),
+            last_processed_hook_signal_ts: HashMap::new(),
+            project_refresh_generation: 0,
+            restore_in_flight: false,
+            shell_input_buffers: HashMap::new(),
         }
     }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum CliStatusSource {
+    Hook,
+    Jsonl,
 }
 
 #[derive(Debug, Clone)]
@@ -232,24 +446,28 @@ pub(super) struct CachedCliStatus {
     pub(super) status: SessionStatus,
     pub(super) tool_name: Option<String>,
     pub(super) seen_at: Instant,
+    pub(super) source: CliStatusSource,
     /// When the status last changed (for stale NeedsAttention detection).
     pub(super) status_since: Instant,
+    /// How long this entry is valid after `seen_at`.
+    /// Hook-based entries (Claude Code) use a longer TTL than JSONL-based ones
+    /// so a long-running task does not lose its "working" state between polls.
+    pub(super) ttl: std::time::Duration,
 }
 
 /// Grouped CLI session reader state for WorkspaceView.
 ///
-/// Contains JSONL session readers for different CLI types and the
-/// process-tree CLI detector.
+/// Contains JSONL/session readers for Codex and Gemini plus the process-tree
+/// CLI detector. Claude Code and Gemini can receive hook-based status updates
+/// via `check_hook_signals`; the readers remain as a higher-fidelity fallback.
 pub(super) struct CliReaders {
-    /// Claude Code JSONL session reader for high-fidelity status detection.
-    pub claude: Option<ClaudeSessionReader>,
     /// Codex CLI JSONL session reader for high-fidelity status detection.
     pub codex: Option<CodexSessionReader>,
     /// Gemini CLI JSON session reader for high-fidelity status detection.
     pub gemini: Option<GeminiSessionReader>,
     /// Process-tree CLI detector for gating JSONL auto-probe on GenericShell sessions.
     pub detector: codirigent_session::DefaultCliDetector,
-    /// Cached JSONL-derived session status, persisted between poll cycles so
+    /// Cached CLI-derived session status, persisted between poll cycles so
     /// the high-frequency InputDetector does not overwrite it.
     pub cached_status: HashMap<SessionId, CachedCliStatus>,
 }
@@ -257,7 +475,6 @@ pub(super) struct CliReaders {
 impl CliReaders {
     pub fn new() -> Self {
         Self {
-            claude: ClaudeSessionReader::new(),
             codex: CodexSessionReader::new(),
             gemini: GeminiSessionReader::new(),
             detector: codirigent_session::DefaultCliDetector::new(),
@@ -287,6 +504,20 @@ pub(super) struct CacheState {
     /// Cached result of font metric computation, keyed by font settings.
     /// Avoids repeated font system calls when settings haven't changed.
     pub cached_cell_dims: Option<CachedCellDims>,
+    /// Cached cell layout info reused by resize and paint passes.
+    pub render_cell_info: Vec<super::core::CellInfo>,
+    /// Whether `render_cell_info` must be recomputed before use.
+    pub render_cell_info_dirty: bool,
+    /// Last geometry signature used to build `render_cell_info`.
+    pub render_layout_signature: Option<RenderLayoutSignature>,
+    /// Monotonic generation for layout/session arrangement changes.
+    pub layout_generation: u64,
+    /// Last signature applied to terminal resize sync.
+    pub last_resize_signature: Option<TerminalResizeSignature>,
+    /// Latest pending resize signature queued for the deferred resize path.
+    pub pending_resize_signature: Option<TerminalResizeSignature>,
+    /// Last captured window bounds for persistence and change detection.
+    pub last_window_state: Option<codirigent_core::WindowState>,
 }
 
 impl CacheState {
@@ -300,6 +531,13 @@ impl CacheState {
             compaction_start_times: HashMap::new(),
             drawer_group_expanded: HashMap::new(),
             cached_cell_dims: None,
+            render_cell_info: Vec::new(),
+            render_cell_info_dirty: true,
+            render_layout_signature: None,
+            layout_generation: 0,
+            last_resize_signature: None,
+            pending_resize_signature: None,
+            last_window_state: None,
         }
     }
 }
@@ -309,6 +547,23 @@ impl CacheState {
 pub(super) struct CachedCellDims {
     pub font_family: String,
     pub font_size: f32,
+    pub line_height: f32,
+    pub cell_width: f32,
+    pub cell_height: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct RenderLayoutSignature {
+    pub bounds: crate::layout::Bounds,
+    pub sidebar_width: f32,
+    pub right_panel_width: f32,
+    pub grid_gap: f32,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct TerminalResizeSignature {
+    pub layout_generation: u64,
+    pub layout: RenderLayoutSignature,
     pub cell_width: f32,
     pub cell_height: f32,
 }

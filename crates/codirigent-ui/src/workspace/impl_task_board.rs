@@ -7,7 +7,7 @@
 
 use super::cli_helpers::format_task_input;
 use super::gpui::WorkspaceView;
-use codirigent_core::{Session, SessionManager, TaskId};
+use codirigent_core::{SessionId, SessionManager, TaskId};
 use codirigent_session::clipboard_service::ClipboardService;
 use gpui::Context;
 use std::time::Instant;
@@ -53,166 +53,95 @@ impl WorkspaceView {
                     return;
                 }
 
-                if let Ok(mut manager) = self.task_manager.lock() {
-                    let result = match action {
-                        TaskAction::Start => {
-                            info!("Starting task {}", task_id);
-                            manager.start_task(&task_id)
-                        }
-                        TaskAction::Review => {
-                            // Move to Review status and release from session
-                            info!("Moving task {} to review", task_id);
-                            let r = manager.move_to_review(&task_id);
-                            if r.is_ok() {
-                                let assigned_session_id = self
-                                    .workspace
-                                    .sessions()
-                                    .iter()
-                                    .find(|s| s.current_task.as_ref() == Some(&task_id))
-                                    .map(|s| s.id);
-                                if let Some(sid) = assigned_session_id {
-                                    drop(manager);
-                                    if let Ok(mgr) = self.session_manager.lock() {
-                                        mgr.with_session_state_mut(sid, |state| {
-                                            state.session.current_task = None;
-                                        });
-                                    }
-                                    if let Some(session) = self.workspace.session_mut(sid) {
-                                        session.current_task = None;
-                                    }
-                                    cx.notify();
-                                    return;
-                                }
-                            }
-                            r
-                        }
-                        TaskAction::Complete => {
-                            // Actually approve and complete the task
-                            info!("Approving task {}", task_id);
-                            let r = manager.approve_task(&task_id);
-                            if r.is_ok() {
-                                // Find session that had this task and clear current_task
-                                let assigned_session_id = self
-                                    .workspace
-                                    .sessions()
-                                    .iter()
-                                    .find(|s| s.current_task.as_ref() == Some(&task_id))
-                                    .map(|s| s.id);
-
-                                if let Some(sid) = assigned_session_id {
-                                    // Release task_manager before session_manager
-                                    drop(manager);
-                                    if let Ok(mgr) = self.session_manager.lock() {
-                                        mgr.with_session_state_mut(sid, |state| {
-                                            state.session.current_task = None;
-                                        });
-                                    }
-                                    if let Some(session) = self.workspace.session_mut(sid) {
-                                        session.current_task = None;
-                                    }
-                                    cx.notify();
-                                    return;
-                                }
-                            }
-                            r
-                        }
-                        TaskAction::Delete => {
-                            info!("Deleting task {}", task_id);
-                            let r = manager.delete_task(&task_id);
-                            if r.is_ok() {
-                                // Clear current_task from any session that had this task
-                                let assigned_session_id = self
-                                    .workspace
-                                    .sessions()
-                                    .iter()
-                                    .find(|s| s.current_task.as_ref() == Some(&task_id))
-                                    .map(|s| s.id);
-                                if let Some(sid) = assigned_session_id {
-                                    drop(manager);
-                                    if let Ok(mgr) = self.session_manager.lock() {
-                                        mgr.with_session_state_mut(sid, |state| {
-                                            state.session.current_task = None;
-                                        });
-                                    }
-                                    if let Some(session) = self.workspace.session_mut(sid) {
-                                        session.current_task = None;
-                                    }
-                                    cx.notify();
-                                    return;
-                                }
-                            }
-                            r
-                        }
-                        TaskAction::Assign => {
-                            info!("Assign action triggered for task {}", task_id);
-                            // Get task for directory matching
-                            let task = manager.get_task(&task_id).cloned();
-                            let target = task
-                                .as_ref()
-                                .and_then(|t| self.find_assignable_session_for_task(t));
-
-                            if let Some(session) = target {
-                                match manager.direct_assign(&task_id, session.id) {
-                                    Ok(prompt) => {
-                                        // Check CLI type to decide how to send the prompt
-                                        let cli_type = self
-                                            .clipboard
-                                            .clipboard_service
-                                            .get_session_cli_type(session.id);
-
-                                        // Release task_manager before session_manager
-                                        drop(manager);
-
-                                        // Build the command to send to the PTY
-                                        let input = format_task_input(&prompt, cli_type);
-
-                                        if let Ok(mgr) = self.session_manager.lock() {
-                                            mgr.with_session_state_mut(session.id, |state| {
-                                                state.session.current_task = Some(task_id.clone());
-                                            });
-                                            if let Err(e) =
-                                                mgr.send_input(session.id, input.as_bytes())
-                                            {
-                                                warn!("Failed to send task prompt: {}", e);
-                                            }
-                                        }
-                                        self.polling
-                                            .pending_enters
-                                            .insert(session.id, (Instant::now(), false));
-                                        if let Some(ws_session) =
-                                            self.workspace.session_mut(session.id)
-                                        {
-                                            ws_session.current_task = Some(task_id.clone());
-                                        }
-                                        // Mark session as having received a manual assignment,
-                                        // which unlocks auto-assign for future tasks.
-                                        self.cache.manually_assigned_sessions.insert(session.id);
-                                        info!(
-                                            "Manually assigned task {} to session {}",
-                                            task_id, session.id
-                                        );
-                                        cx.notify();
-                                        return;
-                                    }
-                                    Err(e) => {
-                                        warn!("Failed to assign task: {}", e);
-                                        Err(e)
-                                    }
-                                }
-                            } else {
-                                warn!("No matching session available for assignment (check directory matching)");
-                                Ok(())
-                            }
-                        }
-                        TaskAction::Edit => {
-                            // Handled above, before the lock
-                            unreachable!()
-                        }
-                    };
-
-                    if let Err(e) = result {
-                        warn!("Task action failed: {}", e);
+                let Ok(mut manager) = self.task_manager.lock() else {
+                    warn!("Failed to lock task manager");
+                    return;
+                };
+                let result = match action {
+                    TaskAction::Start => {
+                        info!("Starting task {}", task_id);
+                        manager.start_task(&task_id)
                     }
+                    TaskAction::Review => {
+                        // Move to Review status and release from session
+                        info!("Moving task {} to review", task_id);
+                        let r = manager.move_to_review(&task_id);
+                        let sid = r
+                            .is_ok()
+                            .then(|| self.session_with_task(&task_id))
+                            .flatten();
+                        drop(manager);
+                        if let Some(sid) = sid {
+                            self.clear_task_from_session(sid, cx);
+                            return;
+                        }
+                        r
+                    }
+                    TaskAction::Complete => {
+                        // Approve and complete the task, releasing it from its session
+                        info!("Approving task {}", task_id);
+                        let r = manager.approve_task(&task_id);
+                        let sid = r
+                            .is_ok()
+                            .then(|| self.session_with_task(&task_id))
+                            .flatten();
+                        drop(manager);
+                        if let Some(sid) = sid {
+                            self.clear_task_from_session(sid, cx);
+                            return;
+                        }
+                        r
+                    }
+                    TaskAction::Delete => {
+                        info!("Deleting task {}", task_id);
+                        let r = manager.delete_task(&task_id);
+                        let sid = r
+                            .is_ok()
+                            .then(|| self.session_with_task(&task_id))
+                            .flatten();
+                        drop(manager);
+                        if let Some(sid) = sid {
+                            self.clear_task_from_session(sid, cx);
+                            return;
+                        }
+                        r
+                    }
+                    TaskAction::Assign => {
+                        info!("Assign action triggered for task {}", task_id);
+                        let task = manager.get_task(&task_id).cloned();
+                        let target_id = task
+                            .as_ref()
+                            .and_then(|t| self.find_assignable_session_for_task(t));
+
+                        if let Some(sid) = target_id {
+                            match manager.direct_assign(&task_id, sid) {
+                                Ok(prompt) => {
+                                    drop(manager);
+                                    self.send_task_to_session(&task_id, sid, &prompt);
+                                    self.cache.manually_assigned_sessions.insert(sid);
+                                    info!("Manually assigned task {} to session {}", task_id, sid);
+                                    self.mark_ui_sync_dirty();
+                                    cx.notify();
+                                    return;
+                                }
+                                Err(e) => {
+                                    warn!("Failed to assign task: {}", e);
+                                    Err(e)
+                                }
+                            }
+                        } else {
+                            warn!("No matching session available for assignment (check directory matching)");
+                            Ok(())
+                        }
+                    }
+                    TaskAction::Edit => {
+                        // Handled above, before the lock
+                        unreachable!()
+                    }
+                };
+
+                if let Err(e) = result {
+                    warn!("Task action failed: {}", e);
                 }
             }
             crate::task_board::TaskBoardEvent::ConfirmAssignment { task_id } => {
@@ -249,34 +178,7 @@ impl WorkspaceView {
                     }
                 };
 
-                // Update session's current_task
-                if let Ok(mgr) = self.session_manager.lock() {
-                    mgr.with_session_state_mut(session_id, |state| {
-                        state.session.current_task = Some(task_id.clone());
-                    });
-                }
-                if let Some(ws_session) = self.workspace.session_mut(session_id) {
-                    ws_session.current_task = Some(task_id.clone());
-                }
-
-                // Send prompt to PTY
-                let cli_type = self
-                    .clipboard
-                    .clipboard_service
-                    .get_session_cli_type(session_id);
-                let input = format_task_input(&prompt, cli_type);
-                if let Ok(mgr) = self.session_manager.lock() {
-                    if let Err(e) = mgr.send_input(session_id, input.as_bytes()) {
-                        warn!(
-                            "Failed to send confirmed task prompt to session {}: {}",
-                            session_id, e
-                        );
-                    }
-                }
-                self.polling
-                    .pending_enters
-                    .insert(session_id, (Instant::now(), false));
-
+                self.send_task_to_session(&task_id, session_id, &prompt);
                 info!(?task_id, ?session_id, "Confirmed and sent task to session");
             }
             crate::task_board::TaskBoardEvent::RejectAssignment { task_id } => {
@@ -288,44 +190,102 @@ impl WorkspaceView {
                 info!(?task_id, "Rejected assignment — task remains queued");
             }
         }
+        self.mark_ui_sync_dirty();
         cx.notify();
     }
 
-    fn find_assignable_session_for_task(&self, task: &codirigent_core::Task) -> Option<Session> {
-        let candidates: Vec<_> = self
-            .workspace
-            .sessions()
-            .iter()
-            .filter(|s| {
-                s.status == codirigent_core::SessionStatus::Idle
-                    && s.current_task.is_none()
-                    && self.clipboard.clipboard_service.get_session_cli_type(s.id)
-                        != codirigent_core::CliType::GenericShell
-                    && task.project_dir.as_ref().map_or(true, |pd| {
-                        codirigent_core::session_matches_project(&s.working_directory, pd)
-                    })
-            })
-            .cloned()
-            .collect();
-
-        if candidates.is_empty() {
-            return None;
-        }
-
-        // Prefer the focused session if it's among candidates
-        if let Some(focused_id) = self.workspace.focused_session_id() {
-            if let Some(session) = candidates.iter().find(|s| s.id == focused_id) {
-                return Some(session.clone());
+    /// Send a task prompt to a session: updates `current_task` in both the
+    /// session manager and the workspace cache, formats and sends the PTY input,
+    /// and inserts a deferred Enter keypress.
+    ///
+    /// Must be called **after** any task-manager lock has been dropped.
+    pub(super) fn send_task_to_session(
+        &mut self,
+        task_id: &TaskId,
+        session_id: codirigent_core::SessionId,
+        prompt: &str,
+    ) {
+        let cli_type = self
+            .clipboard
+            .clipboard_service
+            .get_session_cli_type(session_id);
+        let input = format_task_input(prompt, cli_type);
+        if let Ok(mgr) = self.session_manager.lock() {
+            mgr.with_session_state_mut(session_id, |state| {
+                state.session.current_task = Some(task_id.clone());
+            });
+            if let Err(e) = mgr.send_input(session_id, input.as_bytes()) {
+                warn!(
+                    "Failed to send task prompt to session {}: {}",
+                    session_id, e
+                );
             }
         }
+        if let Some(ws_session) = self.workspace.session_mut(session_id) {
+            ws_session.current_task = Some(task_id.clone());
+        }
+        self.polling
+            .pending_enters
+            .insert(session_id, (Instant::now(), false));
+        self.mark_ui_sync_dirty();
+    }
 
-        // Among remaining, pick the session with lowest context_usage (freshest context window)
-        candidates.into_iter().min_by(|a, b| {
-            let usage_a = a.context_usage.unwrap_or(0.0);
-            let usage_b = b.context_usage.unwrap_or(0.0);
-            usage_a
-                .partial_cmp(&usage_b)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        })
+    /// Find the best assignable session for a task, returning only its ID (no clone).
+    fn find_assignable_session_for_task(&self, task: &codirigent_core::Task) -> Option<SessionId> {
+        let focused_id = self.workspace.focused_session_id();
+
+        let mut best: Option<(SessionId, f32)> = None;
+        for s in self.workspace.sessions().iter().filter(|s| {
+            s.status == codirigent_core::SessionStatus::Idle
+                && s.current_task.is_none()
+                && self.clipboard.clipboard_service.get_session_cli_type(s.id)
+                    != codirigent_core::CliType::GenericShell
+                && task.project_dir.as_ref().map_or(true, |pd| {
+                    codirigent_core::session_matches_project(&s.working_directory, pd)
+                })
+        }) {
+            // Focused session wins immediately
+            if Some(s.id) == focused_id {
+                return Some(s.id);
+            }
+            let usage = s.context_usage.unwrap_or(0.0);
+            if best
+                .as_ref()
+                .map_or(true, |&(_, best_usage)| usage < best_usage)
+            {
+                best = Some((s.id, usage));
+            }
+        }
+        best.map(|(id, _)| id)
+    }
+
+    /// Clear `current_task` from a session after a task action completes.
+    ///
+    /// Updates both the in-memory workspace view and the persisted session state
+    /// managed by the session manager. Must be called **after** dropping the
+    /// task manager lock to avoid lock-order issues.
+    fn clear_task_from_session(&mut self, sid: codirigent_core::SessionId, cx: &mut Context<Self>) {
+        if let Ok(mgr) = self.session_manager.lock() {
+            mgr.with_session_state_mut(sid, |state| {
+                state.session.current_task = None;
+            });
+        }
+        if let Some(session) = self.workspace.session_mut(sid) {
+            session.current_task = None;
+        }
+        self.mark_ui_sync_dirty();
+        cx.notify();
+    }
+
+    /// Find the ID of the session currently running the given task.
+    ///
+    /// Used by task action handlers to locate which session to release after
+    /// a Review, Complete, or Delete action succeeds.
+    fn session_with_task(&self, task_id: &TaskId) -> Option<codirigent_core::SessionId> {
+        self.workspace
+            .sessions()
+            .iter()
+            .find(|s| s.current_task.as_ref() == Some(task_id))
+            .map(|s| s.id)
     }
 }

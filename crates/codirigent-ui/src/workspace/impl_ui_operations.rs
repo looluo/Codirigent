@@ -1,24 +1,47 @@
 //! UI operation handlers for WorkspaceView.
 
+use super::cli_helpers::terminal_path_style;
 use super::editor_detection::{extra_editor_dirs, is_terminal_editor};
 use super::gpui::WorkspaceView;
 use super::types::SessionActionKind;
-use codirigent_core::config_service::ConfigService;
 use codirigent_core::{SessionId, SessionManager};
 use gpui::Context;
 use std::path::Path;
 use tracing::{info, warn};
 
 impl WorkspaceView {
+    pub(super) fn terminal_path_style(&self) -> codirigent_filetree::TerminalPathStyle {
+        let configured = self
+            .effective_user_settings()
+            .general
+            .default_shell
+            .as_str();
+        let shell_name = (!configured.is_empty()).then_some(configured);
+        terminal_path_style(shell_name)
+    }
+
     /// Open a file in the user's configured editor.
     pub(super) fn open_in_editor(&mut self, path: &Path) {
-        let editor = self
-            .settings
-            .config_service
-            .as_ref()
-            .and_then(|cs| cs.load_user_settings().ok())
-            .map(|s| s.general.editor_command)
-            .unwrap_or_else(|| "code".to_string());
+        if !self.project.is_safe_project_path(path) {
+            warn!(
+                ?path,
+                "Blocked attempt to open a path outside the project root"
+            );
+            return;
+        }
+
+        let editor = {
+            let configured = self
+                .effective_user_settings()
+                .general
+                .editor_command
+                .clone();
+            if configured.is_empty() {
+                "code".to_string()
+            } else {
+                configured
+            }
+        };
 
         let absolute_path = if path.is_absolute() {
             path.to_path_buf()
@@ -30,10 +53,12 @@ impl WorkspaceView {
 
         if is_terminal_editor(&editor) {
             if let Some(session_id) = self.workspace.focused_session_id() {
-                let path_str = if let Some(tree) = &self.project.file_tree_model {
-                    tree.path_for_terminal(path)
-                } else {
-                    path.to_string_lossy().to_string()
+                let Some(path_str) = self
+                    .project
+                    .format_path_for_terminal(path, self.terminal_path_style())
+                else {
+                    warn!(?path, "Failed to quote path safely for terminal editor");
+                    return;
                 };
 
                 let command = format!("{} {}\n", editor, path_str);
@@ -89,7 +114,7 @@ impl WorkspaceView {
     }
 
     /// Handle a session menu action (rename, assign to group, end session, etc.).
-    pub fn handle_session_menu_action(
+    pub(super) fn handle_session_menu_action(
         &mut self,
         session_id: SessionId,
         action: crate::workspace::render::SessionMenuAction,
@@ -139,7 +164,8 @@ impl WorkspaceView {
             self.workspace
                 .sync_sessions_from_manager(&manager.list_sessions());
         }
-        self.save_state_to_disk();
+        self.mark_ui_sync_dirty();
+        self.save_state_to_disk(cx);
         cx.notify();
     }
 }

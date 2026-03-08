@@ -51,7 +51,7 @@ where
     // Use mutex serialization instead.
     #[cfg(test)]
     {
-        let _guard = CLIPBOARD_MUTEX.lock().unwrap();
+        let _guard = CLIPBOARD_MUTEX.lock().unwrap_or_else(|p| p.into_inner());
         f()
     }
 
@@ -433,6 +433,14 @@ impl SmartClipboardProvider for MacOSSmartClipboard {
     /// Returns `true` if the clipboard contains PNG or TIFF image data.
     fn has_image(&self) -> bool {
         Self::has_type(&Self::png_type()) || Self::has_type(&Self::tiff_type())
+    }
+
+    fn has_text(&self) -> bool {
+        Self::has_type(&Self::string_type())
+    }
+
+    fn has_files(&self) -> bool {
+        Self::has_type(&Self::file_url_type())
     }
 
     fn has_changed(&self) -> bool {

@@ -5,7 +5,7 @@
 //! to the main workspace.
 
 use gpui::{
-    div, hsla, px, App, AppContext, Context, Entity, FocusHandle, Focusable, Image, ImageFormat,
+    div, px, App, AppContext, Context, Entity, FocusHandle, Focusable, Image, ImageFormat,
     InteractiveElement, IntoElement, ObjectFit, ParentElement, Render, Styled, StyledImage, Window,
 };
 use std::sync::Arc;
@@ -13,6 +13,9 @@ use std::time::Duration;
 
 /// Embedded logo PNG (240x240 @2x, matches logo-primary-dark.svg).
 pub const LOGO_PNG_BYTES: &[u8] = include_bytes!("../../../assets/icons/logo-primary-dark@2x.png");
+
+/// Callback invoked when the splash screen completes.
+type SplashCallback = Box<dyn FnOnce(&mut gpui::Context<SplashScreen>) + Send + 'static>;
 
 /// Brand colors used in the splash screen.
 pub mod brand {
@@ -58,12 +61,12 @@ pub mod brand {
         a: 1.0,
     };
 
-    /// Glow color (green at 8% opacity)
+    /// Glow color (green at 10% opacity)
     pub const GLOW: Hsla = Hsla {
         h: 130.0 / 360.0,
         s: 0.64,
         l: 0.525,
-        a: 0.08,
+        a: 0.1,
     };
 
     /// Text color (white)
@@ -99,10 +102,8 @@ pub struct SplashScreen {
     focus_handle: FocusHandle,
     /// Loading message to display.
     loading_message: String,
-    /// Whether the splash is complete and ready to transition.
-    is_complete: bool,
     /// Callback to invoke when splash is complete.
-    on_complete: Option<Box<dyn FnOnce(&mut Context<Self>) + Send + 'static>>,
+    on_complete: Option<SplashCallback>,
 }
 
 impl SplashScreen {
@@ -133,33 +134,15 @@ impl SplashScreen {
         Self {
             focus_handle: cx.focus_handle(),
             loading_message: "Loading modules...".to_string(),
-            is_complete: false,
             on_complete: Some(Box::new(on_complete)),
         }
     }
 
-    /// Update the loading message.
-    pub fn set_loading_message(&mut self, message: impl Into<String>, cx: &mut Context<Self>) {
-        self.loading_message = message.into();
-        cx.notify();
-    }
-
-    /// Check if the splash screen is complete.
-    pub fn is_complete(&self) -> bool {
-        self.is_complete
-    }
-
     /// Mark the splash as complete and trigger callback.
     fn complete(&mut self, cx: &mut Context<Self>) {
-        self.is_complete = true;
         if let Some(callback) = self.on_complete.take() {
             callback(cx);
         }
-    }
-
-    /// Manually trigger completion (for external timer management).
-    pub fn trigger_complete(&mut self, cx: &mut Context<Self>) {
-        self.complete(cx);
     }
 
     /// Render the logo from the embedded PNG image.
@@ -198,7 +181,7 @@ impl Render for SplashScreen {
                     .w(px(400.0))
                     .h(px(400.0))
                     .rounded_full()
-                    .bg(hsla(130.0 / 360.0, 0.64, 0.525, 0.1)),
+                    .bg(brand::GLOW),
             )
             .child(
                 // Main content
@@ -270,6 +253,7 @@ where
 }
 
 #[cfg(test)]
+#[allow(clippy::assertions_on_constants)]
 mod tests {
     use super::*;
 

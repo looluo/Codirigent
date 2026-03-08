@@ -10,7 +10,7 @@
 //! - [`Checkpoint`]: Named snapshot for manual save points
 //! - [`RecoveryResult`]: Result of session recovery attempt
 
-use crate::types::{LayoutMode, Session, SessionId, SessionStatus, TaskId};
+use crate::types::{CodexExecutionMode, LayoutMode, Session, SessionId, SessionStatus, TaskId};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -61,6 +61,23 @@ pub struct PersistentSession {
     pub group: Option<String>,
     /// Session color.
     pub color: Option<String>,
+    /// Last known Claude Code session ID (UUID).
+    /// When present, restored sessions run `claude --resume <id>`.
+    pub claude_session_id: Option<String>,
+    /// Last known Codex session ID (UUID).
+    /// When present, restored sessions run `codex resume <id>`.
+    pub codex_session_id: Option<String>,
+    /// Last known effective Codex execution mode.
+    #[serde(default)]
+    pub codex_execution_mode: Option<CodexExecutionMode>,
+    /// Last known start time of the active Codex CLI run in this shell.
+    #[serde(default)]
+    pub codex_started_at: Option<chrono::DateTime<chrono::Utc>>,
+    /// Last known Gemini CLI session ID (UUID).
+    pub gemini_session_id: Option<String>,
+    /// Last known Claude Code permission mode (e.g. `"bypassPermissions"`).
+    /// When `"bypassPermissions"`, resume adds `--dangerously-skip-permissions`.
+    pub claude_permission_mode: Option<String>,
 }
 
 impl PersistentSession {
@@ -99,6 +116,12 @@ impl PersistentSession {
             scrollback_hash: None,
             group: session.group.clone(),
             color: session.color.clone(),
+            claude_session_id: session.claude_session_id.clone(),
+            codex_session_id: session.codex_session_id.clone(),
+            codex_execution_mode: session.codex_execution_mode,
+            codex_started_at: session.codex_started_at,
+            gemini_session_id: session.gemini_session_id.clone(),
+            claude_permission_mode: None, // populated at save time from JSONL
         }
     }
 
@@ -166,6 +189,11 @@ impl PersistentSession {
             group: self.group.clone(),
             color: self.color.clone(),
             git_info: None, // Re-detected on restore
+            claude_session_id: self.claude_session_id.clone(),
+            codex_session_id: self.codex_session_id.clone(),
+            codex_execution_mode: self.codex_execution_mode,
+            codex_started_at: self.codex_started_at,
+            gemini_session_id: self.gemini_session_id.clone(),
         }
     }
 
@@ -377,10 +405,13 @@ impl Checkpoint {
         }
     }
 
-    /// Generate a unique checkpoint ID based on timestamp.
+    /// Generate a unique checkpoint ID based on timestamp with nanosecond resolution.
+    ///
+    /// Uses microsecond precision to reduce the collision window to <1µs,
+    /// making accidental duplicates extremely unlikely in normal use.
     fn generate_id() -> String {
         let now = chrono::Utc::now();
-        format!("checkpoint-{}", now.format("%Y%m%d-%H%M%S-%3f"))
+        format!("checkpoint-{}", now.format("%Y%m%d-%H%M%S-%6f"))
     }
 }
 

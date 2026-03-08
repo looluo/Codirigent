@@ -5,17 +5,18 @@
 //!
 //! Requires the `gpui` feature to be enabled.
 
-use codirigent_core::DefaultEventBus;
+use codirigent_core::hook_installer;
+use codirigent_core::{DefaultEventBus, FileStorageService, StorageService};
 use codirigent_detector::{DetectorConfig, InputDetector};
 use codirigent_session::DefaultSessionManager;
 use gpui::{
-    div, px, size, App, AppContext, Application, Bounds, Context, Entity, FocusHandle, Focusable,
-    InteractiveElement, IntoElement, KeyBinding, ParentElement, Render, Styled, TitlebarOptions,
-    Window, WindowBounds, WindowOptions,
+    div, point, px, size, App, AppContext, Application, Bounds, Context, Entity, FocusHandle,
+    Focusable, InteractiveElement, IntoElement, KeyBinding, ParentElement, Render, Styled,
+    TitlebarOptions, Window, WindowBounds, WindowOptions,
 };
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use tracing::info;
+use tracing::{info, warn};
 
 use crate::layout::LayoutProfile;
 use crate::splash_screen::brand;
@@ -61,6 +62,13 @@ pub use actions_impl::*;
 
 /// Default splash screen duration in milliseconds.
 const DEFAULT_SPLASH_DURATION_MS: u64 = 2000;
+
+/// Maximum window width for bounds validation (8K UHD).
+const MAX_WINDOW_WIDTH: f32 = 7680.0;
+/// Maximum window height for bounds validation (8K UHD).
+const MAX_WINDOW_HEIGHT: f32 = 4320.0;
+/// Reasonable screen coordinate limit (allows multi-monitor with negative offsets).
+const MAX_WINDOW_COORDINATE: f32 = 16000.0;
 
 /// Application view state.
 enum AppViewState {
@@ -231,7 +239,7 @@ impl AppView {
                     .w(px(400.0))
                     .h(px(400.0))
                     .rounded_full()
-                    .bg(gpui::hsla(130.0 / 360.0, 0.64, 0.525, 0.1)),
+                    .bg(brand::GLOW),
             )
             .child(
                 // Main content
@@ -323,7 +331,7 @@ impl CodirigentApp {
     /// Initializes the session manager, input detector, and event bus.
     /// By default, the splash screen is enabled.
     pub fn new() -> Self {
-        let event_bus = Arc::new(DefaultEventBus::new(64));
+        let event_bus = Arc::new(DefaultEventBus::with_default_capacity());
 
         let session_manager = Arc::new(Mutex::new(DefaultSessionManager::new(event_bus.clone())));
 
@@ -370,6 +378,28 @@ impl CodirigentApp {
     pub fn run(self) {
         info!("Starting Codirigent GPUI application...");
 
+        // Install Claude Code hooks so status detection works without manual setup.
+        // Use the full path to the sibling binary so the hook runs correctly
+        // regardless of whether its directory is on PATH.
+        let hook_binary = hook_installer::hook_binary_path();
+        match hook_installer::ensure_hooks_installed(&hook_binary) {
+            Ok(true) => info!("Claude Code hooks installed ({})", hook_binary.display()),
+            Ok(false) => {}
+            Err(e) => warn!("Failed to install Claude Code hooks: {e}"),
+        }
+
+        match hook_installer::ensure_codex_hooks_installed(&hook_binary) {
+            Ok(true) => info!("Codex hooks installed ({})", hook_binary.display()),
+            Ok(false) => {}
+            Err(e) => warn!("Failed to install Codex hooks: {e}"),
+        }
+
+        match hook_installer::ensure_gemini_hooks_installed(&hook_binary) {
+            Ok(true) => info!("Gemini hooks installed ({})", hook_binary.display()),
+            Ok(false) => {}
+            Err(e) => warn!("Failed to install Gemini hooks: {e}"),
+        }
+
         let show_splash = self.show_splash;
         let splash_duration = self.splash_duration;
 
@@ -411,19 +441,57 @@ impl CodirigentApp {
             let default_layout = LayoutProfile::Grid2x2;
             let (min_width, min_height) = default_layout.minimum_window_size();
 
-            let bounds = Bounds::centered(None, size(px(1536.0), px(864.0)), cx);
+            // Try to restore saved window bounds from disk
+            let saved_window = {
+                let data_dir = dirs::data_dir()
+                    .map(|d| d.join("Codirigent"))
+                    .unwrap_or_else(|| std::env::temp_dir().join("codirigent-fallback"));
+                FileStorageService::new(&data_dir)
+                    .and_then(|s| s.load_state())
+                    .ok()
+                    .and_then(|state| state.window_bounds)
+            };
+
+            let default_bounds = Bounds::centered(None, size(px(1536.0), px(864.0)), cx);
+
+            let window_bounds = if let Some(ref ws) = saved_window {
+                // Validate saved size and position are reasonable
+                let size_ok = ws.width >= min_width
+                    && ws.height >= min_height
+                    && ws.width <= MAX_WINDOW_WIDTH
+                    && ws.height <= MAX_WINDOW_HEIGHT;
+                let position_ok = ws.x.is_finite()
+                    && ws.y.is_finite()
+                    && ws.x.abs() < MAX_WINDOW_COORDINATE
+                    && ws.y.abs() < MAX_WINDOW_COORDINATE;
+
+                if size_ok && position_ok {
+                    let bounds = Bounds {
+                        origin: point(px(ws.x), px(ws.y)),
+                        size: size(px(ws.width), px(ws.height)),
+                    };
+                    if ws.is_maximized {
+                        WindowBounds::Maximized(bounds)
+                    } else {
+                        WindowBounds::Windowed(bounds)
+                    }
+                } else {
+                    WindowBounds::Windowed(default_bounds)
+                }
+            } else {
+                WindowBounds::Windowed(default_bounds)
+            };
 
             if show_splash {
                 // Show splash screen with transition to workspace
                 cx.open_window(
                     WindowOptions {
-                        window_bounds: Some(WindowBounds::Windowed(bounds)),
+                        window_bounds: Some(window_bounds),
                         window_min_size: Some(size(px(min_width), px(min_height))),
                         titlebar: Some(TitlebarOptions {
                             title: Some("Codirigent".into()),
                             appears_transparent: true, // Custom titlebar like Zed
                             traffic_light_position: None,
-                            ..Default::default()
                         }),
                         ..Default::default()
                     },
@@ -445,13 +513,12 @@ impl CodirigentApp {
                 // Skip splash, go directly to workspace
                 cx.open_window(
                     WindowOptions {
-                        window_bounds: Some(WindowBounds::Windowed(bounds)),
+                        window_bounds: Some(window_bounds),
                         window_min_size: Some(size(px(min_width), px(min_height))),
                         titlebar: Some(TitlebarOptions {
                             title: Some("Codirigent".into()),
                             appears_transparent: true, // Custom titlebar like Zed
                             traffic_light_position: None,
-                            ..Default::default()
                         }),
                         ..Default::default()
                     },

@@ -13,6 +13,9 @@ use crate::terminal_view::CursorShape;
 
 use super::types::DROPDOWN_TRIGGER_HEIGHT;
 
+/// Displayed in dropdowns when no specific value is configured (auto-selected).
+const AUTO_DETECT_LABEL: &str = "(Auto-detect)";
+
 impl super::gpui::WorkspaceView {
     /// Render the full settings overlay (sidebar + content area).
     pub(super) fn render_settings_overlay(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -23,7 +26,11 @@ impl super::gpui::WorkspaceView {
                 .flex()
                 .items_center()
                 .justify_center()
-                .child("Settings not available")
+                .child(if self.settings.load_task.is_some() {
+                    "Loading settings..."
+                } else {
+                    "Settings not available"
+                })
                 .into_any_element();
         };
         let theme = self.workspace.theme();
@@ -58,7 +65,7 @@ impl super::gpui::WorkspaceView {
                 .py_2()
                 .cursor_pointer()
                 .on_click(cx.listener(|this, _, _, cx| {
-                    this.close_settings();
+                    this.close_settings(cx);
                     cx.notify();
                 }))
                 .child(
@@ -290,10 +297,7 @@ impl super::gpui::WorkspaceView {
                 .id(SharedString::from(format!("{}-backdrop", dd_id)))
                 .occlude()
                 .absolute()
-                .top(px(0.0))
-                .left(px(0.0))
-                .w(px(9999.0))
-                .h(px(9999.0))
+                .inset_0()
                 .on_mouse_down(
                     MouseButton::Left,
                     cx.listener(|this, _, _, cx| {
@@ -334,24 +338,29 @@ impl super::gpui::WorkspaceView {
         let shell = page.user_settings.general.default_shell.clone();
         let working_dir = page.user_settings.general.default_working_dir.clone();
         let show_splash = page.user_settings.general.show_splash;
+        let notif = page.user_settings.notifications.clone();
         let theme = self.workspace.theme();
 
-        // Show actual CWD when no custom path is configured
-        let display_dir = working_dir.clone().unwrap_or_else(|| {
-            std::env::current_dir()
-                .map(|p| p.display().to_string())
-                .unwrap_or_else(|_| String::new())
-        });
+        // Show the current project root when no custom path is configured.
+        let display_dir = working_dir
+            .clone()
+            .or_else(|| {
+                self.project
+                    .project_root
+                    .as_ref()
+                    .map(|path| path.display().to_string())
+            })
+            .unwrap_or_default();
 
         let editor_options: Vec<&str> = page.detected_editors.iter().map(|s| s.as_str()).collect();
 
-        // Build shell options: empty string displays as "(Auto-detect)"
+        // Build shell options: empty string displays as AUTO_DETECT_LABEL
         let shell_display_options: Vec<String> = page
             .detected_shells
             .iter()
             .map(|s| {
                 if s.is_empty() {
-                    "(Auto-detect)".to_string()
+                    AUTO_DETECT_LABEL.to_string()
                 } else {
                     s.clone()
                 }
@@ -360,7 +369,7 @@ impl super::gpui::WorkspaceView {
         let shell_option_refs: Vec<&str> =
             shell_display_options.iter().map(|s| s.as_str()).collect();
         let shell_display = if shell.is_empty() {
-            "(Auto-detect)".to_string()
+            AUTO_DETECT_LABEL.to_string()
         } else {
             shell.clone()
         };
@@ -399,8 +408,8 @@ impl super::gpui::WorkspaceView {
                     cx,
                     |this, val, _, _| {
                         if let Some(page) = this.settings.page.as_mut() {
-                            // Map "(Auto-detect)" back to empty string
-                            let stored = if val == "(Auto-detect)" {
+                            // Map AUTO_DETECT_LABEL back to empty string
+                            let stored = if val == AUTO_DETECT_LABEL {
                                 String::new()
                             } else {
                                 val
@@ -422,20 +431,180 @@ impl super::gpui::WorkspaceView {
                 "Show splash screen",
                 "Display splash screen on application start",
                 theme,
-                div()
-                    .id("toggle-splash")
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(|this, _, _, cx| {
-                            if let Some(page) = this.settings.page.as_mut() {
-                                page.user_settings.general.show_splash =
-                                    !page.user_settings.general.show_splash;
-                                page.user_save_pending = true;
-                            }
-                            cx.notify();
-                        }),
-                    )
-                    .child(setting_toggle(show_splash, theme)),
+                self.render_toggle_control("toggle-splash", show_splash, cx, |this, _, cx| {
+                    if let Some(page) = this.settings.page.as_mut() {
+                        page.user_settings.general.show_splash =
+                            !page.user_settings.general.show_splash;
+                        page.user_save_pending = true;
+                    }
+                    cx.notify();
+                }),
+            ))
+            .child(settings_section_header("Notifications", theme, false))
+            .child(setting_row(
+                "Desktop notifications",
+                "Send OS notifications when an agent responds or needs your input",
+                theme,
+                self.render_toggle_control(
+                    "toggle-notif-desktop",
+                    notif.desktop,
+                    cx,
+                    |this, _, cx| {
+                        if let Some(page) = this.settings.page.as_mut() {
+                            page.user_settings.notifications.desktop =
+                                !page.user_settings.notifications.desktop;
+                            page.user_save_pending = true;
+                        }
+                        cx.notify();
+                    },
+                ),
+            ))
+            .child(setting_row(
+                "Sound",
+                "Play a sound with each notification",
+                theme,
+                self.render_toggle_control("toggle-notif-sound", notif.sound, cx, |this, _, cx| {
+                    if let Some(page) = this.settings.page.as_mut() {
+                        page.user_settings.notifications.sound =
+                            !page.user_settings.notifications.sound;
+                        page.user_save_pending = true;
+                    }
+                    cx.notify();
+                }),
+            ))
+            .child(settings_section_header("Notification types", theme, false))
+            .child(setting_row(
+                "Input required",
+                "Notify when an agent is waiting for your response",
+                theme,
+                self.render_toggle_control(
+                    "toggle-notif-input-required",
+                    notif.input_required,
+                    cx,
+                    |this, _, cx| {
+                        if let Some(page) = this.settings.page.as_mut() {
+                            page.user_settings.notifications.input_required =
+                                !page.user_settings.notifications.input_required;
+                            page.user_save_pending = true;
+                        }
+                        cx.notify();
+                    },
+                ),
+            ))
+            .child(setting_row(
+                "Task completed",
+                "Notify when a task finishes successfully",
+                theme,
+                self.render_toggle_control(
+                    "toggle-notif-task-completed",
+                    notif.task_completed,
+                    cx,
+                    |this, _, cx| {
+                        if let Some(page) = this.settings.page.as_mut() {
+                            page.user_settings.notifications.task_completed =
+                                !page.user_settings.notifications.task_completed;
+                            page.user_save_pending = true;
+                        }
+                        cx.notify();
+                    },
+                ),
+            ))
+            .child(setting_row(
+                "Task failed",
+                "Notify when a task fails or errors out",
+                theme,
+                self.render_toggle_control(
+                    "toggle-notif-task-failed",
+                    notif.task_failed,
+                    cx,
+                    |this, _, cx| {
+                        if let Some(page) = this.settings.page.as_mut() {
+                            page.user_settings.notifications.task_failed =
+                                !page.user_settings.notifications.task_failed;
+                            page.user_save_pending = true;
+                        }
+                        cx.notify();
+                    },
+                ),
+            ))
+            .child(setting_row(
+                "Permission prompt",
+                "Notify when an agent needs permission to use a tool",
+                theme,
+                self.render_toggle_control(
+                    "toggle-notif-permission",
+                    notif.permission_prompt,
+                    cx,
+                    |this, _, cx| {
+                        if let Some(page) = this.settings.page.as_mut() {
+                            page.user_settings.notifications.permission_prompt =
+                                !page.user_settings.notifications.permission_prompt;
+                            page.user_save_pending = true;
+                        }
+                        cx.notify();
+                    },
+                ),
+            ))
+            .child(setting_row(
+                "Response ready",
+                "Notify when an agent finishes responding in a background session",
+                theme,
+                self.render_toggle_control(
+                    "toggle-notif-response-ready",
+                    notif.response_ready,
+                    cx,
+                    |this, _, cx| {
+                        if let Some(page) = this.settings.page.as_mut() {
+                            page.user_settings.notifications.response_ready =
+                                !page.user_settings.notifications.response_ready;
+                            page.user_save_pending = true;
+                        }
+                        cx.notify();
+                    },
+                ),
+            ))
+            .child(setting_row(
+                "Error",
+                "Notify on unexpected errors",
+                theme,
+                self.render_toggle_control("toggle-notif-error", notif.error, cx, |this, _, cx| {
+                    if let Some(page) = this.settings.page.as_mut() {
+                        page.user_settings.notifications.error =
+                            !page.user_settings.notifications.error;
+                        page.user_save_pending = true;
+                    }
+                    cx.notify();
+                }),
+            ))
+            .child(settings_section_header("Cooldown", theme, false))
+            .child(setting_row(
+                "Cooldown per session",
+                "Suppress repeated notifications for the same session (0 = no cooldown, max 300s)",
+                theme,
+                self.number_stepper(
+                    "num-notif-cooldown",
+                    &format!("{}s", notif.cooldown_seconds),
+                    cx,
+                    |this, _, cx| {
+                        if let Some(page) = this.settings.page.as_mut() {
+                            page.user_settings.notifications.cooldown_seconds = page
+                                .user_settings
+                                .notifications
+                                .cooldown_seconds
+                                .saturating_sub(5);
+                            page.user_save_pending = true;
+                        }
+                        cx.notify();
+                    },
+                    |this, _, cx| {
+                        if let Some(page) = this.settings.page.as_mut() {
+                            page.user_settings.notifications.cooldown_seconds =
+                                (page.user_settings.notifications.cooldown_seconds + 5).min(300);
+                            page.user_save_pending = true;
+                        }
+                        cx.notify();
+                    },
+                ),
             ))
             .into_any_element()
     }
@@ -489,14 +658,14 @@ impl super::gpui::WorkspaceView {
                                     p.user_settings.terminal.font_size,
                                 )
                             })
-                            .unwrap_or((4, 13, 13));
+                            .unwrap_or((4, 13.0, 13.0));
                         this.workspace.set_theme(new_theme);
                         let t = this.workspace.theme_mut();
                         t.grid_gap = gap as f32;
-                        t.font_size_base = ui_size as f32;
-                        t.font_size_small = (ui_size as f32 - 2.0).max(8.0);
-                        t.font_size_large = ui_size as f32 + 2.0;
-                        t.terminal_font_size = term_size as f32;
+                        t.font_size_base = ui_size;
+                        t.font_size_small = (ui_size - 2.0).max(8.0);
+                        t.font_size_large = ui_size + 2.0;
+                        t.terminal_font_size = term_size;
                     },
                 ),
             ))
@@ -511,26 +680,32 @@ impl super::gpui::WorkspaceView {
                     cx,
                     |this, _, cx| {
                         if let Some(page) = this.settings.page.as_mut() {
-                            page.user_settings.appearance.font_size = page
-                                .user_settings
-                                .appearance
-                                .font_size
-                                .saturating_sub(1)
-                                .max(10);
+                            page.user_settings.appearance.font_size =
+                                (page.user_settings.appearance.font_size - 1.0).max(10.0);
                             page.user_save_pending = true;
-                            let size = page.user_settings.appearance.font_size as f32;
-                            this.apply_ui_font_size(size);
                         }
+                        let size = this
+                            .settings
+                            .page
+                            .as_ref()
+                            .map(|p| p.user_settings.appearance.font_size)
+                            .unwrap_or(13.0);
+                        this.apply_ui_font_size(size);
                         cx.notify();
                     },
                     |this, _, cx| {
                         if let Some(page) = this.settings.page.as_mut() {
                             page.user_settings.appearance.font_size =
-                                (page.user_settings.appearance.font_size + 1).min(24);
+                                (page.user_settings.appearance.font_size + 1.0).min(24.0);
                             page.user_save_pending = true;
-                            let size = page.user_settings.appearance.font_size as f32;
-                            this.apply_ui_font_size(size);
                         }
+                        let size = this
+                            .settings
+                            .page
+                            .as_ref()
+                            .map(|p| p.user_settings.appearance.font_size)
+                            .unwrap_or(13.0);
+                        this.apply_ui_font_size(size);
                         cx.notify();
                     },
                 ),
@@ -616,26 +791,32 @@ impl super::gpui::WorkspaceView {
                     cx,
                     |this, window, cx| {
                         if let Some(page) = this.settings.page.as_mut() {
-                            page.user_settings.terminal.font_size = page
-                                .user_settings
-                                .terminal
-                                .font_size
-                                .saturating_sub(1)
-                                .max(8);
+                            page.user_settings.terminal.font_size =
+                                (page.user_settings.terminal.font_size - 1.0).max(8.0);
                             page.user_save_pending = true;
-                            let size = page.user_settings.terminal.font_size as f32;
-                            this.apply_terminal_font_size(window, size);
                         }
+                        let size = this
+                            .settings
+                            .page
+                            .as_ref()
+                            .map(|p| p.user_settings.terminal.font_size)
+                            .unwrap_or(13.0);
+                        this.apply_terminal_font_size(window, size);
                         cx.notify();
                     },
                     |this, window, cx| {
                         if let Some(page) = this.settings.page.as_mut() {
                             page.user_settings.terminal.font_size =
-                                (page.user_settings.terminal.font_size + 1).min(24);
+                                (page.user_settings.terminal.font_size + 1.0).min(24.0);
                             page.user_save_pending = true;
-                            let size = page.user_settings.terminal.font_size as f32;
-                            this.apply_terminal_font_size(window, size);
                         }
+                        let size = this
+                            .settings
+                            .page
+                            .as_ref()
+                            .map(|p| p.user_settings.terminal.font_size)
+                            .unwrap_or(13.0);
+                        this.apply_terminal_font_size(window, size);
                         cx.notify();
                     },
                 ),
@@ -676,23 +857,27 @@ impl super::gpui::WorkspaceView {
                     "num-line-height",
                     &format!("{:.1}", line_height),
                     cx,
-                    |this, _, cx| {
+                    |this, window, cx| {
                         if let Some(page) = this.settings.page.as_mut() {
                             page.user_settings.terminal.line_height =
                                 (page.user_settings.terminal.line_height - 0.1).max(1.0);
                             page.user_settings.terminal.line_height =
                                 (page.user_settings.terminal.line_height * 10.0).round() / 10.0;
                             page.user_save_pending = true;
+                            let lh = page.user_settings.terminal.line_height;
+                            this.apply_terminal_line_height(window, lh);
                         }
                         cx.notify();
                     },
-                    |this, _, cx| {
+                    |this, window, cx| {
                         if let Some(page) = this.settings.page.as_mut() {
                             page.user_settings.terminal.line_height =
                                 (page.user_settings.terminal.line_height + 0.1).min(2.5);
                             page.user_settings.terminal.line_height =
                                 (page.user_settings.terminal.line_height * 10.0).round() / 10.0;
                             page.user_save_pending = true;
+                            let lh = page.user_settings.terminal.line_height;
+                            this.apply_terminal_line_height(window, lh);
                         }
                         cx.notify();
                     },
@@ -1221,6 +1406,26 @@ impl super::gpui::WorkspaceView {
                     )
                     .child("+"),
             )
+    }
+
+    /// Build an interactive toggle control — a `setting_toggle` wired to a click handler.
+    fn render_toggle_control(
+        &self,
+        id: &str,
+        current: bool,
+        cx: &mut Context<Self>,
+        on_toggle: impl Fn(&mut Self, &mut Window, &mut Context<Self>) + 'static,
+    ) -> impl IntoElement {
+        let theme = self.workspace.theme();
+        div()
+            .id(SharedString::from(id.to_string()))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _, window, cx| {
+                    on_toggle(this, window, cx);
+                }),
+            )
+            .child(setting_toggle(current, theme))
     }
 }
 

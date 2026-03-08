@@ -6,7 +6,7 @@
 //! ## File Locations
 //!
 //! - Project config: `.codirigent/config.json` (in project directory)
-//! - User settings: `~/.config/dirigent/settings.json` (platform-specific)
+//! - User settings: `~/.config/codirigent/settings.json` (platform-specific)
 //!
 //! ## Example
 //!
@@ -178,6 +178,7 @@ pub enum ConfigChange {
 /// let config = service.load_project_config(project).unwrap();
 /// println!("Scheduler mode: {:?}", config.scheduler.mode);
 /// ```
+#[derive(Clone)]
 pub struct DefaultConfigService {
     user_config_dir: PathBuf,
 }
@@ -186,9 +187,9 @@ impl DefaultConfigService {
     /// Create a new config service with the default user config directory.
     ///
     /// The user config directory is determined by the platform:
-    /// - Linux: `~/.config/dirigent`
-    /// - macOS: `~/Library/Application Support/dirigent`
-    /// - Windows: `%APPDATA%\dirigent`
+    /// - Linux: `~/.config/codirigent`
+    /// - macOS: `~/Library/Application Support/codirigent`
+    /// - Windows: `%APPDATA%\codirigent`
     ///
     /// # Errors
     ///
@@ -267,7 +268,8 @@ impl ConfigService for DefaultConfigService {
         let path = self.user_settings_path();
         if path.exists() {
             let content = fs::read_to_string(&path)?;
-            let settings: UserSettings = serde_json::from_str(&content)?;
+            let mut settings: UserSettings = serde_json::from_str(&content)?;
+            settings.modules.context_tracker.sanitize();
             Ok(settings)
         } else {
             Ok(UserSettings::default())
@@ -292,8 +294,9 @@ impl ConfigService for DefaultConfigService {
     }
 
     fn watch_config(&self, _project_dir: &Path) -> Result<mpsc::Receiver<ConfigChange>> {
-        // Hot-reload placeholder using tokio mpsc channel
-        // In the future, this will use the notify crate to watch for file changes
+        // TODO: implement file-watching with the `notify` crate.
+        // The sender is intentionally dropped so the receiver immediately
+        // returns `None` on recv, making callers treat this as "no changes".
         let (_tx, rx) = mpsc::channel(16);
         Ok(rx)
     }
@@ -390,11 +393,11 @@ mod tests {
     #[test]
     fn test_user_settings_path() {
         let service =
-            DefaultConfigService::with_config_dir(PathBuf::from("/home/user/.config/dirigent"));
+            DefaultConfigService::with_config_dir(PathBuf::from("/home/user/.config/codirigent"));
         let path = service.user_settings_path();
         assert_eq!(
             path,
-            PathBuf::from("/home/user/.config/dirigent/settings.json")
+            PathBuf::from("/home/user/.config/codirigent/settings.json")
         );
     }
 
@@ -443,7 +446,7 @@ mod tests {
 
         let mut settings = UserSettings::default();
         settings.appearance.theme = "light".to_string();
-        settings.appearance.font_size = 16;
+        settings.appearance.grid_gap = 8;
 
         service.save_user_settings(&settings).unwrap();
 
@@ -453,7 +456,7 @@ mod tests {
 
         let loaded = service.load_user_settings().unwrap();
         assert_eq!(loaded.appearance.theme, "light");
-        assert_eq!(loaded.appearance.font_size, 16);
+        assert_eq!(loaded.appearance.grid_gap, 8);
     }
 
     #[test]

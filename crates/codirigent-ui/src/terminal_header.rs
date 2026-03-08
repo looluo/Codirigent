@@ -175,6 +175,11 @@ impl StatusIndicator {
                 color: Color::from_hex("#f43f5e"),
                 animated: true,
             },
+            SessionStatus::ResponseReady => Self {
+                text: "Ready",
+                color: Color::from_hex("#22c55e"),
+                animated: false,
+            },
             SessionStatus::Error => Self {
                 text: "Error",
                 color: Color::from_hex("#ef4444"),

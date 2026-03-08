@@ -33,6 +33,7 @@
 use anyhow::{bail, Context, Result};
 use codirigent_core::{SessionId, Worktree, WorktreeCreateOptions};
 use git2::{BranchType, Repository};
+use std::path::Component;
 use std::path::{Path, PathBuf};
 use tracing::{debug, info};
 
@@ -50,6 +51,58 @@ fn normalize_path(path: &Path) -> PathBuf {
         }
     }
     canonical
+}
+
+fn normalize_nonexistent_path(path: &Path) -> PathBuf {
+    // Find the deepest existing ancestor and canonicalize it, then append
+    // the non-existent suffix. This resolves symlinks (e.g. /var → /private/var
+    // on macOS) for the existing portion of the path.
+    let mut ancestor: &Path = path;
+    loop {
+        if ancestor.exists() {
+            let canonical = ancestor
+                .canonicalize()
+                .unwrap_or_else(|_| ancestor.to_path_buf());
+            let suffix = path.strip_prefix(ancestor).unwrap_or(Path::new(""));
+            let result = canonical.join(suffix);
+            #[cfg(windows)]
+            {
+                let s = result.to_string_lossy();
+                if let Some(stripped) = s.strip_prefix(r"\\?\") {
+                    return PathBuf::from(stripped);
+                }
+            }
+            return result;
+        }
+        match ancestor.parent() {
+            Some(parent) => ancestor = parent,
+            None => break,
+        }
+    }
+
+    // Fallback: resolve . and .. without canonicalization
+    let mut normalized = PathBuf::new();
+    for component in path.components() {
+        match component {
+            Component::Prefix(prefix) => normalized.push(prefix.as_os_str()),
+            Component::RootDir => normalized.push(component.as_os_str()),
+            Component::CurDir => {}
+            Component::ParentDir => {
+                normalized.pop();
+            }
+            Component::Normal(part) => normalized.push(part),
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let s = normalized.to_string_lossy();
+        if let Some(stripped) = s.strip_prefix(r"\\?\") {
+            return PathBuf::from(stripped);
+        }
+    }
+
+    normalized
 }
 
 /// Git worktree manager.
@@ -76,6 +129,26 @@ pub struct WorktreeManager {
 }
 
 impl WorktreeManager {
+    fn ensure_managed_worktree_path(&self, path: &Path) -> Result<PathBuf> {
+        if !path.is_absolute() {
+            bail!("Custom worktree paths must be absolute");
+        }
+
+        let normalized = if path.exists() {
+            normalize_path(path)
+        } else {
+            normalize_nonexistent_path(path)
+        };
+        if !normalized.starts_with(&self.repo_path) {
+            bail!(
+                "Worktree path must stay within the repository root: {}",
+                self.repo_path.display()
+            );
+        }
+
+        Ok(normalized)
+    }
+
     /// Create a new worktree manager for the given repository.
     ///
     /// Uses `Repository::discover()` to find the git repository root,
@@ -285,6 +358,7 @@ impl WorktreeManager {
         let worktree_path = options
             .path
             .unwrap_or_else(|| self.repo_path.join("worktrees").join(&options.branch));
+        let worktree_path = self.ensure_managed_worktree_path(&worktree_path)?;
 
         // Create parent directory if needed
         if let Some(parent) = worktree_path.parent() {
@@ -364,7 +438,7 @@ impl WorktreeManager {
     /// ```
     pub fn remove(&mut self, path: &Path, force: bool) -> Result<()> {
         let repo = Repository::open(&self.repo_path)?;
-        let normalized = normalize_path(path);
+        let normalized = self.ensure_managed_worktree_path(path)?;
 
         // Find worktree in our list
         let wt = self
@@ -387,7 +461,7 @@ impl WorktreeManager {
                     if git_wt_path == normalized {
                         if force {
                             // Remove directory first
-                            std::fs::remove_dir_all(path).ok();
+                            std::fs::remove_dir_all(&normalized).ok();
                         }
                         git_wt
                             .prune(Some(
@@ -799,6 +873,20 @@ mod tests {
         // Path might be canonicalized — use normalize_path for consistent comparison
         let expected = normalize_path(&custom_path);
         assert_eq!(wt.path, expected);
+    }
+
+    #[test]
+    fn test_create_worktree_rejects_path_outside_repo() {
+        let (_temp, path) = setup_test_repo();
+        let mut manager = WorktreeManager::new(&path).expect("manager should open test repo");
+
+        let external = std::env::temp_dir().join("codirigent-external-worktree");
+        let options =
+            WorktreeCreateOptions::new("feature-external".to_string()).with_path(external);
+
+        let result = manager.create(options);
+        assert!(result.is_err());
+        assert!(result.unwrap_err().to_string().contains("repository root"));
     }
 
     #[test]

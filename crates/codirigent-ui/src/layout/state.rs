@@ -252,6 +252,28 @@ impl LayoutState {
             self.focused_index = Some(new_index);
         }
     }
+
+    /// Swap two session assignments by index.
+    ///
+    /// Focus follows the session: if the focused session was at index `a`,
+    /// focus moves to index `b` (and vice versa).
+    ///
+    /// Returns `true` if both indices are valid and different.
+    pub fn swap_assignments(&mut self, a: usize, b: usize) -> bool {
+        if a == b || a >= self.assignments.len() || b >= self.assignments.len() {
+            return false;
+        }
+        self.assignments.swap(a, b);
+        // Keep focus on the same session (it moved to the other index)
+        if let Some(fi) = self.focused_index {
+            if fi == a {
+                self.focused_index = Some(b);
+            } else if fi == b {
+                self.focused_index = Some(a);
+            }
+        }
+        true
+    }
 }
 
 /// Split layout state manager.
@@ -270,6 +292,23 @@ pub struct SplitLayoutState {
 }
 
 impl SplitLayoutState {
+    fn sync_assignment_order(&mut self) {
+        let slot_order = self.tree.slots_in_order();
+        let mut ordered = Vec::with_capacity(slot_order.len());
+
+        for slot in slot_order {
+            if let Some((_, session)) = self
+                .assignments
+                .iter()
+                .find(|(current, _)| *current == slot)
+            {
+                ordered.push((slot, *session));
+            }
+        }
+
+        self.assignments = ordered;
+    }
+
     /// Create from a layout node tree.
     pub fn new(tree: LayoutNode) -> Self {
         let slots = tree.slots_in_order();
@@ -516,6 +555,7 @@ impl SplitLayoutState {
             self.next_slot_id += 1;
             // Add the new slot to assignments (empty)
             self.assignments.push((new_slot, None));
+            self.sync_assignment_order();
             Some(new_slot)
         } else {
             None
@@ -528,6 +568,7 @@ impl SplitLayoutState {
             self.tree = new_tree;
             // Remove the closed slot from assignments
             self.assignments.retain(|(s, _)| *s != target);
+            self.sync_assignment_order();
             // Fix focus if needed
             if self.focused_slot == Some(target) {
                 self.focused_slot = self
@@ -568,6 +609,21 @@ impl SplitLayoutState {
             .iter()
             .find(|(s, _)| *s == slot)
             .and_then(|(_, sess)| *sess)
+    }
+
+    /// Swap session assignments between two slots by index into the assignments vec.
+    ///
+    /// Swaps the `Option<SessionId>` values (not the SlotIds).
+    /// Returns `true` if both indices are valid and different.
+    pub fn swap_assignments(&mut self, a: usize, b: usize) -> bool {
+        if a == b || a >= self.assignments.len() || b >= self.assignments.len() {
+            return false;
+        }
+        let session_a = self.assignments[a].1;
+        let session_b = self.assignments[b].1;
+        self.assignments[a].1 = session_b;
+        self.assignments[b].1 = session_a;
+        true
     }
 }
 

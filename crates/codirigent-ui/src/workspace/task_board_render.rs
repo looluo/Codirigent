@@ -15,9 +15,77 @@ use gpui::{
     StatefulInteractiveElement, Styled,
 };
 
+/// Priority indicator colors in Hsla (consistent with amber/green constants below).
+const PRIORITY_HIGH_COLOR: gpui::Hsla = gpui::Hsla {
+    h: 0.0,
+    s: 1.0,
+    l: 0.71,
+    a: 1.0,
+};
+const PRIORITY_MEDIUM_COLOR: gpui::Hsla = gpui::Hsla {
+    h: 0.105,
+    s: 0.92,
+    l: 0.50,
+    a: 1.0,
+};
+const PRIORITY_LOW_COLOR: gpui::Hsla = gpui::Hsla {
+    h: 0.611,
+    s: 0.83,
+    l: 0.65,
+    a: 1.0,
+};
+
+/// Amber color for "confirm assignment" button and pending-assignment banners.
+const AMBER_CONFIRM: gpui::Hsla = gpui::Hsla {
+    h: 0.11,
+    s: 0.95,
+    l: 0.55,
+    a: 1.0,
+};
+const AMBER_BG: gpui::Hsla = gpui::Hsla {
+    h: 0.11,
+    s: 0.95,
+    l: 0.55,
+    a: 0.08,
+};
+const AMBER_BORDER: gpui::Hsla = gpui::Hsla {
+    h: 0.11,
+    s: 0.95,
+    l: 0.55,
+    a: 0.25,
+};
+const AMBER_TEXT: gpui::Hsla = gpui::Hsla {
+    h: 0.11,
+    s: 0.95,
+    l: 0.55,
+    a: 0.9,
+};
+/// Green color for "accept/approve" assignment banners.
+const GREEN_BG: gpui::Hsla = gpui::Hsla {
+    h: 0.40,
+    s: 0.7,
+    l: 0.45,
+    a: 0.20,
+};
+const GREEN_FG: gpui::Hsla = gpui::Hsla {
+    h: 0.40,
+    s: 0.8,
+    l: 0.60,
+    a: 1.0,
+};
+const GREEN_BG_HOVER: gpui::Hsla = gpui::Hsla {
+    h: 0.40,
+    s: 0.7,
+    l: 0.45,
+    a: 0.35,
+};
+
 impl WorkspaceView {
     /// Convert core Task to UI TaskItem with status mapping.
-    fn core_task_to_ui_item(&self, task: &codirigent_core::Task) -> crate::task_board::TaskItem {
+    pub(super) fn core_task_to_ui_item(
+        &self,
+        task: &codirigent_core::Task,
+    ) -> crate::task_board::TaskItem {
         use crate::task_board::{TaskItem, TaskPriority as UIPriority, TaskStatus as UIStatus};
         use codirigent_core::{TaskPriority as CorePriority, TaskStatus as CoreStatus};
 
@@ -81,6 +149,7 @@ impl WorkspaceView {
     /// - `border_color`: Default border color
     /// - `input_bg`: Default background color
     /// - `cx`: GPUI context
+    #[allow(clippy::too_many_arguments)]
     fn build_priority_button(
         &self,
         id: impl Into<SharedString>,
@@ -298,7 +367,6 @@ impl WorkspaceView {
                                         )))
                                         .child(
                                             text_input(
-                                                "task-title-input",
                                                 title_value,
                                                 title_focused,
                                                 modal.error.is_some(),
@@ -387,12 +455,7 @@ impl WorkspaceView {
                                                     "priority-high",
                                                     codirigent_core::TaskPriority::High,
                                                     "High",
-                                                    gpui::Hsla::from(gpui::Rgba {
-                                                        r: 1.0,
-                                                        g: 0.42,
-                                                        b: 0.42,
-                                                        a: 1.0,
-                                                    }),
+                                                    PRIORITY_HIGH_COLOR,
                                                     modal.priority,
                                                     fg,
                                                     muted,
@@ -404,12 +467,7 @@ impl WorkspaceView {
                                                     "priority-medium",
                                                     codirigent_core::TaskPriority::Medium,
                                                     "Medium",
-                                                    gpui::Hsla::from(gpui::Rgba {
-                                                        r: 0.96,
-                                                        g: 0.62,
-                                                        b: 0.04,
-                                                        a: 1.0,
-                                                    }),
+                                                    PRIORITY_MEDIUM_COLOR,
                                                     modal.priority,
                                                     fg,
                                                     muted,
@@ -421,12 +479,7 @@ impl WorkspaceView {
                                                     "priority-low",
                                                     codirigent_core::TaskPriority::Low,
                                                     "Low",
-                                                    gpui::Hsla::from(gpui::Rgba {
-                                                        r: 0.36,
-                                                        g: 0.55,
-                                                        b: 0.94,
-                                                        a: 1.0,
-                                                    }),
+                                                    PRIORITY_LOW_COLOR,
                                                     modal.priority,
                                                     fg,
                                                     muted,
@@ -454,7 +507,6 @@ impl WorkspaceView {
                                         )))
                                         .child(
                                             text_input(
-                                                "task-plan-file-input",
                                                 plan_file_value,
                                                 plan_focused,
                                                 false,
@@ -566,7 +618,6 @@ impl WorkspaceView {
         label: &str,
         session_id: SessionId,
         action: SessionMenuAction,
-        _theme: &CodirigentTheme,
         hover_bg: gpui::Hsla,
         fg: gpui::Hsla,
         cx: &mut Context<Self>,
@@ -616,6 +667,23 @@ impl WorkspaceView {
 
     /// Render the narrow icon rail (56px).
     /// Render a single task card for the right task board.
+    /// Build a vertically-stacked section div containing one task card per item.
+    ///
+    /// Eliminates the repeated 4-line section-builder pattern for each task
+    /// status group (Running, Queued, Review, Done).
+    fn build_task_items_section(
+        &self,
+        items: &[crate::task_board::TaskItem],
+        theme: &CodirigentTheme,
+        cx: &mut Context<Self>,
+    ) -> impl IntoElement {
+        let mut section = div().flex().flex_col().gap(px(4.0));
+        for item in items {
+            section = section.child(self.render_task_card(item, theme, cx));
+        }
+        section
+    }
+
     fn render_task_card(
         &self,
         item: &crate::task_board::TaskItem,
@@ -781,98 +849,13 @@ impl WorkspaceView {
         let panel_label_row_height = 14.0;
         let panel_icon_y_offset = 1.0;
 
-        // Fetch real task data from TaskManager
-        let (
-            running_items,
-            queued_items,
-            review_items,
-            done_items,
-            auto_assign_mode,
-            pending_assignments,
-        ) = if let Ok(manager) = self.task_manager.lock() {
-            let all_tasks = manager.list_tasks();
-
-            let running: Vec<_> = all_tasks
-                .iter()
-                .filter(|t| {
-                    matches!(
-                        t.status,
-                        codirigent_core::TaskStatus::Assigned
-                            | codirigent_core::TaskStatus::Working
-                    )
-                })
-                .map(|t| self.core_task_to_ui_item(t))
-                .collect();
-            let queued: Vec<_> = all_tasks
-                .iter()
-                .filter(|t| {
-                    matches!(
-                        t.status,
-                        codirigent_core::TaskStatus::Queued | codirigent_core::TaskStatus::Blocked
-                    )
-                })
-                .map(|t| self.core_task_to_ui_item(t))
-                .collect();
-            let review: Vec<_> = all_tasks
-                .iter()
-                .filter(|t| {
-                    matches!(
-                        t.status,
-                        codirigent_core::TaskStatus::Verifying
-                            | codirigent_core::TaskStatus::Review
-                    )
-                })
-                .map(|t| self.core_task_to_ui_item(t))
-                .collect();
-            let done: Vec<_> = all_tasks
-                .iter()
-                .filter(|t| t.status == codirigent_core::TaskStatus::Done)
-                .map(|t| self.core_task_to_ui_item(t))
-                .collect();
-            let config = manager.assignment().config();
-            let mode = crate::task_board::AutoAssignMode::from_config(
-                config.auto_assign,
-                config.confirm_before_assign,
-            );
-
-            // Collect pending assignments for the confirmation banner
-            let pending: Vec<_> = manager
-                .assignment()
-                .pending_assignments()
-                .iter()
-                .map(|p| {
-                    let task_title = all_tasks
-                        .iter()
-                        .find(|t| t.id == p.task_id)
-                        .map(|t| t.title.clone())
-                        .unwrap_or_else(|| p.task_id.to_string());
-                    (p.task_id.to_string(), p.session_id.0, task_title)
-                })
-                .collect();
-
-            let queue_count = queued.len();
-            let in_progress_count = running.len();
-            let review_count = review.len();
-            let done_count = done.len();
-            drop(manager);
-            self.task_board.set_task_counts(
-                queue_count,
-                in_progress_count,
-                review_count,
-                done_count,
-            );
-
-            (running, queued, review, done, mode, pending)
-        } else {
-            (
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                Vec::new(),
-                crate::task_board::AutoAssignMode::Off,
-                Vec::new(),
-            )
-        };
+        let snapshot = self.task_board.snapshot().clone();
+        let running_items = snapshot.running_items;
+        let queued_items = snapshot.queued_items;
+        let review_items = snapshot.review_items;
+        let done_items = snapshot.done_items;
+        let auto_assign_mode = snapshot.auto_assign_mode;
+        let pending_assignments = snapshot.pending_assignments;
 
         let running_count = running_items.len();
         let queued_count = queued_items.len();
@@ -880,7 +863,7 @@ impl WorkspaceView {
         let done_count = done_items.len();
 
         // Auto-assign badge colors based on three-state mode
-        let amber: gpui::Hsla = gpui::hsla(0.11, 0.95, 0.55, 1.0); // Amber for Confirm
+        let amber: gpui::Hsla = AMBER_CONFIRM;
         let (auto_dot_color, auto_text_opacity, auto_bg_opacity, auto_border_opacity, auto_label) =
             match auto_assign_mode {
                 crate::task_board::AutoAssignMode::Off => {
@@ -897,25 +880,10 @@ impl WorkspaceView {
 
         // Render task cards for each section
         let theme_ref = self.workspace().theme().clone();
-        let mut running_section = div().flex().flex_col().gap(px(4.0));
-        for item in &running_items {
-            running_section = running_section.child(self.render_task_card(item, &theme_ref, cx));
-        }
-
-        let mut queued_section = div().flex().flex_col().gap(px(4.0));
-        for item in &queued_items {
-            queued_section = queued_section.child(self.render_task_card(item, &theme_ref, cx));
-        }
-
-        let mut review_section = div().flex().flex_col().gap(px(4.0));
-        for item in &review_items {
-            review_section = review_section.child(self.render_task_card(item, &theme_ref, cx));
-        }
-
-        let mut done_section = div().flex().flex_col().gap(px(4.0));
-        for item in &done_items {
-            done_section = done_section.child(self.render_task_card(item, &theme_ref, cx));
-        }
+        let running_section = self.build_task_items_section(&running_items, &theme_ref, cx);
+        let queued_section = self.build_task_items_section(&queued_items, &theme_ref, cx);
+        let review_section = self.build_task_items_section(&review_items, &theme_ref, cx);
+        let done_section = self.build_task_items_section(&done_items, &theme_ref, cx);
 
         div()
             .id("right-task-board")
@@ -1014,121 +982,113 @@ impl WorkspaceView {
                     ),
             )
             // Pending assignment confirmation banners
-            .children(
-                pending_assignments
-                    .into_iter()
-                    .map(|(task_id, session_num, task_title)| {
-                        let confirm_task_id = task_id.clone();
-                        let reject_task_id = task_id.clone();
-                        let amber_bg: gpui::Hsla = gpui::hsla(0.11, 0.95, 0.55, 0.08);
-                        let amber_border: gpui::Hsla = gpui::hsla(0.11, 0.95, 0.55, 0.25);
-                        let amber_text: gpui::Hsla = gpui::hsla(0.11, 0.95, 0.55, 0.9);
-                        let green_bg: gpui::Hsla = gpui::hsla(0.40, 0.7, 0.45, 0.20);
-                        let green_fg: gpui::Hsla = gpui::hsla(0.40, 0.8, 0.60, 1.0);
+            .children(pending_assignments.into_iter().map(|pending| {
+                let confirm_task_id = pending.task_id.clone();
+                let reject_task_id = pending.task_id.clone();
+                let amber_bg: gpui::Hsla = AMBER_BG;
+                let amber_border: gpui::Hsla = AMBER_BORDER;
+                let amber_text: gpui::Hsla = AMBER_TEXT;
+                let green_bg: gpui::Hsla = GREEN_BG;
+                let green_fg: gpui::Hsla = GREEN_FG;
 
+                div()
+                    .id(SharedString::from(format!(
+                        "pending-confirm-{}",
+                        pending.task_id
+                    )))
+                    .mx_2()
+                    .mt_2()
+                    .p_2()
+                    .rounded_md()
+                    .bg(amber_bg)
+                    .border_1()
+                    .border_color(amber_border)
+                    .flex()
+                    .flex_col()
+                    .gap(px(6.0))
+                    // Row 1: pause icon + task title + "Proposed for Session N"
+                    .child(
                         div()
-                            .id(SharedString::from(format!("pending-confirm-{}", task_id)))
-                            .mx_2()
-                            .mt_2()
-                            .p_2()
-                            .rounded_md()
-                            .bg(amber_bg)
-                            .border_1()
-                            .border_color(amber_border)
                             .flex()
-                            .flex_col()
+                            .items_center()
                             .gap(px(6.0))
-                            // Row 1: pause icon + task title + "Proposed for Session N"
+                            .child(div().text_size(px(11.0)).text_color(amber_text).child("⏸"))
+                            .child(
+                                div().flex_1().overflow_hidden().child(
+                                    div()
+                                        .text_size(px(12.0))
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(amber_text)
+                                        .child(pending.task_title),
+                                ),
+                            )
                             .child(
                                 div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.0))
-                                    .child(
-                                        div().text_size(px(11.0)).text_color(amber_text).child("⏸"),
-                                    )
-                                    .child(
-                                        div().flex_1().overflow_hidden().child(
-                                            div()
-                                                .text_size(px(12.0))
-                                                .font_weight(FontWeight::MEDIUM)
-                                                .text_color(amber_text)
-                                                .child(task_title),
-                                        ),
-                                    )
+                                    .text_size(px(10.0))
+                                    .text_color(muted.opacity(0.7))
+                                    .child(format!("→ Session {}", pending.session_number)),
+                            ),
+                    )
+                    // Row 2: Send + Skip buttons
+                    .child(
+                        div()
+                            .flex()
+                            .items_center()
+                            .gap(px(6.0))
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "confirm-send-{}",
+                                        confirm_task_id
+                                    )))
+                                    .px(px(10.0))
+                                    .py(px(3.0))
+                                    .rounded(px(4.0))
+                                    .bg(green_bg)
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(GREEN_BG_HOVER))
+                                    .on_click(cx.listener(
+                                        move |this, _: &ClickEvent, _window, _cx| {
+                                            this.task_board.confirm_pending_assignment(
+                                                confirm_task_id.clone(),
+                                            );
+                                        },
+                                    ))
                                     .child(
                                         div()
-                                            .text_size(px(10.0))
+                                            .text_size(px(11.0))
+                                            .font_weight(FontWeight::MEDIUM)
+                                            .text_color(green_fg)
+                                            .child("Send"),
+                                    ),
+                            )
+                            .child(
+                                div()
+                                    .id(SharedString::from(format!(
+                                        "confirm-skip-{}",
+                                        reject_task_id
+                                    )))
+                                    .px(px(10.0))
+                                    .py(px(3.0))
+                                    .rounded(px(4.0))
+                                    .bg(active_bg.opacity(0.4))
+                                    .cursor_pointer()
+                                    .hover(|style| style.bg(gpui::hsla(0.0, 0.0, 0.5, 0.15)))
+                                    .on_click(cx.listener(
+                                        move |this, _: &ClickEvent, _window, _cx| {
+                                            this.task_board
+                                                .reject_pending_assignment(reject_task_id.clone());
+                                        },
+                                    ))
+                                    .child(
+                                        div()
+                                            .text_size(px(11.0))
                                             .text_color(muted.opacity(0.7))
-                                            .child(format!("→ Session {}", session_num)),
+                                            .child("Skip"),
                                     ),
-                            )
-                            // Row 2: Send + Skip buttons
-                            .child(
-                                div()
-                                    .flex()
-                                    .items_center()
-                                    .gap(px(6.0))
-                                    .child(
-                                        div()
-                                            .id(SharedString::from(format!(
-                                                "confirm-send-{}",
-                                                confirm_task_id
-                                            )))
-                                            .px(px(10.0))
-                                            .py(px(3.0))
-                                            .rounded(px(4.0))
-                                            .bg(green_bg)
-                                            .cursor_pointer()
-                                            .hover(|style| {
-                                                style.bg(gpui::hsla(0.40, 0.7, 0.45, 0.35))
-                                            })
-                                            .on_click(cx.listener(
-                                                move |this, _: &ClickEvent, _window, _cx| {
-                                                    this.task_board.confirm_pending_assignment(
-                                                        confirm_task_id.clone(),
-                                                    );
-                                                },
-                                            ))
-                                            .child(
-                                                div()
-                                                    .text_size(px(11.0))
-                                                    .font_weight(FontWeight::MEDIUM)
-                                                    .text_color(green_fg)
-                                                    .child("Send"),
-                                            ),
-                                    )
-                                    .child(
-                                        div()
-                                            .id(SharedString::from(format!(
-                                                "confirm-skip-{}",
-                                                reject_task_id
-                                            )))
-                                            .px(px(10.0))
-                                            .py(px(3.0))
-                                            .rounded(px(4.0))
-                                            .bg(active_bg.opacity(0.4))
-                                            .cursor_pointer()
-                                            .hover(|style| {
-                                                style.bg(gpui::hsla(0.0, 0.0, 0.5, 0.15))
-                                            })
-                                            .on_click(cx.listener(
-                                                move |this, _: &ClickEvent, _window, _cx| {
-                                                    this.task_board.reject_pending_assignment(
-                                                        reject_task_id.clone(),
-                                                    );
-                                                },
-                                            ))
-                                            .child(
-                                                div()
-                                                    .text_size(px(11.0))
-                                                    .text_color(muted.opacity(0.7))
-                                                    .child("Skip"),
-                                            ),
-                                    ),
-                            )
-                    }),
-            )
+                            ),
+                    )
+            }))
             // Scrollable content - Running + Queue sections
             .child(
                 div()

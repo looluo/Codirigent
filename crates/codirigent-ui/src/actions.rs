@@ -102,12 +102,12 @@ pub struct FocusPreviousSession;
 
 /// Focus session in a direction.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub struct FocusDirection_ {
+pub struct FocusDirectionAction {
     /// Direction to focus.
     pub direction: FocusDirection,
 }
 
-impl FocusDirection_ {
+impl FocusDirectionAction {
     /// Focus up.
     pub const fn up() -> Self {
         Self {
@@ -263,29 +263,6 @@ pub struct OpenCommandPalette;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReloadConfig;
 
-/// Action handler trait for processing actions.
-///
-/// This trait allows workspace or other components to handle
-/// actions in a type-safe way.
-pub trait ActionHandler {
-    /// Handle a quit action.
-    fn handle_quit(&mut self) -> bool;
-    /// Handle layout cycling.
-    fn handle_next_layout(&mut self);
-    /// Handle layout cycling backwards.
-    fn handle_previous_layout(&mut self);
-    /// Handle sidebar toggle.
-    fn handle_toggle_sidebar(&mut self);
-    /// Handle focusing a session.
-    fn handle_focus_session(&mut self, number: usize) -> bool;
-    /// Handle focusing next session.
-    fn handle_focus_next(&mut self);
-    /// Handle focusing previous session.
-    fn handle_focus_previous(&mut self);
-    /// Handle directional focus.
-    fn handle_focus_direction(&mut self, direction: FocusDirection);
-}
-
 /// Keybinding configuration.
 #[derive(Debug, Clone)]
 pub struct KeyBinding {
@@ -389,16 +366,16 @@ mod tests {
 
     #[test]
     fn test_focus_direction() {
-        let up = FocusDirection_::up();
+        let up = FocusDirectionAction::up();
         assert_eq!(up.direction, FocusDirection::Up);
 
-        let down = FocusDirection_::down();
+        let down = FocusDirectionAction::down();
         assert_eq!(down.direction, FocusDirection::Down);
 
-        let left = FocusDirection_::left();
+        let left = FocusDirectionAction::left();
         assert_eq!(left.direction, FocusDirection::Left);
 
-        let right = FocusDirection_::right();
+        let right = FocusDirectionAction::right();
         assert_eq!(right.direction, FocusDirection::Right);
     }
 
@@ -515,35 +492,5 @@ mod tests {
         let cloned = kb.clone();
         assert_eq!(kb.key, cloned.key);
         assert_eq!(kb.action, cloned.action);
-    }
-
-    // Test for ActionHandler trait existence
-    struct MockHandler;
-
-    impl ActionHandler for MockHandler {
-        fn handle_quit(&mut self) -> bool {
-            true
-        }
-        fn handle_next_layout(&mut self) {}
-        fn handle_previous_layout(&mut self) {}
-        fn handle_toggle_sidebar(&mut self) {}
-        fn handle_focus_session(&mut self, _: usize) -> bool {
-            true
-        }
-        fn handle_focus_next(&mut self) {}
-        fn handle_focus_previous(&mut self) {}
-        fn handle_focus_direction(&mut self, _: FocusDirection) {}
-    }
-
-    #[test]
-    fn test_action_handler_trait() {
-        let mut handler = MockHandler;
-        assert!(handler.handle_quit());
-        handler.handle_next_layout();
-        handler.handle_toggle_sidebar();
-        assert!(handler.handle_focus_session(1));
-        handler.handle_focus_next();
-        handler.handle_focus_previous();
-        handler.handle_focus_direction(FocusDirection::Up);
     }
 }

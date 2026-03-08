@@ -26,6 +26,11 @@ fn test_save_and_load_state() {
         group: None,
         color: None,
         git_info: None,
+        claude_session_id: None,
+        codex_session_id: None,
+        codex_execution_mode: None,
+        codex_started_at: None,
+        gemini_session_id: None,
     };
 
     let mut state = PersistentState::default();
@@ -91,6 +96,11 @@ fn test_overwrite_state() {
         group: None,
         color: None,
         git_info: None,
+        claude_session_id: None,
+        codex_session_id: None,
+        codex_execution_mode: None,
+        codex_started_at: None,
+        gemini_session_id: None,
     };
 
     let mut state = PersistentState::default();
@@ -111,6 +121,11 @@ fn test_overwrite_state() {
         group: None,
         color: None,
         git_info: None,
+        claude_session_id: None,
+        codex_session_id: None,
+        codex_execution_mode: None,
+        codex_started_at: None,
+        gemini_session_id: None,
     };
 
     state
@@ -247,6 +262,11 @@ fn test_multiple_checkpoints_independent() {
         group: None,
         color: None,
         git_info: None,
+        claude_session_id: None,
+        codex_session_id: None,
+        codex_execution_mode: None,
+        codex_started_at: None,
+        gemini_session_id: None,
     };
     state1
         .sessions
@@ -264,6 +284,11 @@ fn test_multiple_checkpoints_independent() {
         group: None,
         color: None,
         git_info: None,
+        claude_session_id: None,
+        codex_session_id: None,
+        codex_execution_mode: None,
+        codex_started_at: None,
+        gemini_session_id: None,
     };
     state2
         .sessions
@@ -351,6 +376,11 @@ fn test_session_to_persistent_conversion() {
         group: Some("backend".to_string()),
         color: Some("#ff0000".to_string()),
         git_info: None,
+        claude_session_id: None,
+        codex_session_id: None,
+        codex_execution_mode: None,
+        codex_started_at: None,
+        gemini_session_id: None,
     };
 
     let persistent = PersistentSession::from_session(&session);

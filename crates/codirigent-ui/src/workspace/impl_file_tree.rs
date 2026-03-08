@@ -8,15 +8,70 @@
 //! - Path insertion and clipboard operations
 
 use super::gpui::WorkspaceView;
+use super::project_state::CachedProjectRootState;
 use super::types::FileTreeContextMenu;
-use crate::sidebar::{FileTreeEntryData, FileTreeEvent, WorktreeEvent};
+use crate::sidebar::{FileTreeEntryData, FileTreeEvent};
 use codirigent_core::{SessionId, SessionManager};
 use codirigent_filetree::FileTree;
-use std::path::PathBuf;
+use codirigent_session::WorktreeManager;
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex};
 use tracing::{info, warn};
 
 impl WorkspaceView {
+    fn cache_current_project_root_state(&mut self) {
+        let Some(root) = self.project.project_root.clone() else {
+            return;
+        };
+
+        self.project.root_cache.insert(
+            root,
+            CachedProjectRootState {
+                file_tree_model: self.project.file_tree_model.take(),
+                worktree_manager: self.project.worktree_manager.take(),
+                worktrees: self.project.worktree_panel.worktrees().to_vec(),
+                available_branches: self.project.worktree_panel.available_branches().to_vec(),
+            },
+        );
+    }
+
+    fn restore_cached_project_root_state(&mut self, path: &PathBuf) -> bool {
+        let Some(cached) = self.project.root_cache.remove(path) else {
+            return false;
+        };
+
+        self.project.file_tree_model = cached.file_tree_model;
+        self.project.worktree_manager = cached.worktree_manager;
+        self.project.worktree_panel.set_worktrees(cached.worktrees);
+        self.project
+            .worktree_panel
+            .set_available_branches(cached.available_branches);
+        self.refresh_file_tree_panel();
+        true
+    }
+
+    fn clear_project_root_state(&mut self) {
+        self.project.file_tree_model = None;
+        self.project.worktree_manager = None;
+        self.project.worktree_panel.set_worktrees(Vec::new());
+        self.project
+            .worktree_panel
+            .set_available_branches(Vec::new());
+        self.refresh_file_tree_panel();
+    }
+
+    fn cached_project_root_state_mut(&mut self, path: &Path) -> &mut CachedProjectRootState {
+        self.project
+            .root_cache
+            .entry(path.to_path_buf())
+            .or_insert_with(|| CachedProjectRootState {
+                file_tree_model: None,
+                worktree_manager: None,
+                worktrees: Vec::new(),
+                available_branches: Vec::new(),
+            })
+    }
+
     pub(super) fn refresh_file_tree_panel(&mut self) {
         let entries = if let Some(tree) = &self.project.file_tree_model {
             let tree: &FileTree = tree;
@@ -41,25 +96,109 @@ impl WorkspaceView {
         self.project.file_tree.update_from_entries(entries);
     }
 
-    /// Refresh worktree panel from the worktree manager.
-    pub(super) fn refresh_worktree_panel(&mut self) {
-        if let Some(ref manager) = self.project.worktree_manager {
-            if let Ok(mut mgr) = manager.lock() {
-                let _: Result<(), anyhow::Error> = mgr.refresh();
-                self.project
-                    .worktree_panel
-                    .set_worktrees(mgr.list().to_vec());
-                if let Ok(branches) = mgr.list_local_branches() {
-                    self.project.worktree_panel.set_available_branches(branches);
-                }
-                return;
-            }
-        }
+    fn spawn_file_tree_refresh(
+        &mut self,
+        path: PathBuf,
+        generation: u64,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        self.polling.file_tree_rebuild_in_flight = true;
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+            let path_for_build = path.clone();
+            let tree_result = cx
+                .background_executor()
+                .spawn(async move { FileTree::new(path_for_build) })
+                .await;
 
-        self.project.worktree_panel.set_worktrees(Vec::new());
-        self.project
-            .worktree_panel
-            .set_available_branches(Vec::new());
+            let _ = this.update(cx, |this, cx| {
+                let is_current = this.polling.project_refresh_generation == generation
+                    && this.project.project_root.as_ref() == Some(&path);
+                if is_current {
+                    this.polling.file_tree_rebuild_in_flight = false;
+                }
+
+                match tree_result {
+                    Ok(tree) => {
+                        if is_current {
+                            this.project.file_tree_model = Some(tree);
+                            this.refresh_file_tree_panel();
+                            cx.notify();
+                        } else {
+                            this.cached_project_root_state_mut(&path).file_tree_model = Some(tree);
+                        }
+                    }
+                    Err(e) => {
+                        warn!("Failed to initialize file tree: {}", e);
+                        if is_current {
+                            this.project.file_tree_model = None;
+                            this.refresh_file_tree_panel();
+                            cx.notify();
+                        } else {
+                            this.cached_project_root_state_mut(&path).file_tree_model = None;
+                        }
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
+    fn spawn_worktree_refresh(
+        &mut self,
+        path: PathBuf,
+        generation: u64,
+        cx: &mut gpui::Context<Self>,
+    ) {
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+            let path_for_build = path.clone();
+            let worktree_result = cx.background_executor().spawn(async move {
+                let manager = WorktreeManager::new(&path_for_build)?;
+                let worktrees = manager.list().to_vec();
+                let branches = manager.list_local_branches().unwrap_or_default();
+                Ok::<_, anyhow::Error>((manager, worktrees, branches))
+            });
+
+            let result = worktree_result.await;
+            let _ = this.update(cx, |this, cx| {
+                let is_current = this.polling.project_refresh_generation == generation
+                    && this.project.project_root.as_ref() == Some(&path);
+
+                match result {
+                    Ok((manager, worktrees, branches)) => {
+                        let manager = Arc::new(Mutex::new(manager));
+                        if is_current {
+                            this.project.worktree_manager = Some(manager.clone());
+                            this.project.worktree_panel.set_worktrees(worktrees.clone());
+                            this.project
+                                .worktree_panel
+                                .set_available_branches(branches.clone());
+                            cx.notify();
+                        } else {
+                            let cached = this.cached_project_root_state_mut(&path);
+                            cached.worktree_manager = Some(manager);
+                            cached.worktrees = worktrees;
+                            cached.available_branches = branches;
+                        }
+                    }
+                    Err(_) => {
+                        if is_current {
+                            this.project.worktree_manager = None;
+                            this.project.worktree_panel.set_worktrees(Vec::new());
+                            this.project
+                                .worktree_panel
+                                .set_available_branches(Vec::new());
+                            cx.notify();
+                        } else {
+                            let cached = this.cached_project_root_state_mut(&path);
+                            cached.worktree_manager = None;
+                            cached.worktrees.clear();
+                            cached.available_branches.clear();
+                        }
+                    }
+                }
+            });
+        })
+        .detach();
     }
 
     /// Set the current project root and update dependent UI.
@@ -67,41 +206,31 @@ impl WorkspaceView {
     /// Sets the root immediately (cheap) and spawns the expensive directory
     /// walk on a background thread to avoid blocking the UI.
     pub(super) fn set_project_root(&mut self, path: PathBuf, cx: &mut gpui::Context<Self>) {
+        let same_root = self.project.project_root.as_ref() == Some(&path);
+        if same_root && self.project.file_tree_model.is_some() {
+            return;
+        }
+
+        if !same_root {
+            self.cache_current_project_root_state();
+        }
+
         self.project.project_root = Some(path.clone());
         self.project.file_tree.set_root(path.clone());
+        let restored_cached_state = self.restore_cached_project_root_state(&path);
+        if !restored_cached_state {
+            self.clear_project_root_state();
+        }
+        self.mark_ui_sync_dirty();
 
-        // Worktree manager init is cheap (just reads .git), do it synchronously
-        self.project.worktree_manager = codirigent_session::WorktreeManager::new(&path)
-            .ok()
-            .map(|manager| Arc::new(Mutex::new(manager)));
-        self.refresh_worktree_panel();
-
-        // Spawn the expensive FileTree::new (recursive dir walk) on background
-        if !self.polling.file_tree_rebuild_in_flight {
-            self.polling.file_tree_rebuild_in_flight = true;
-            let bg_path = path;
-            cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
-                let tree_result = cx
-                    .background_executor()
-                    .spawn(async move { FileTree::new(bg_path.clone()) })
-                    .await;
-
-                let _ = this.update(cx, |this, cx| {
-                    this.polling.file_tree_rebuild_in_flight = false;
-                    match tree_result {
-                        Ok(tree) => {
-                            this.project.file_tree_model = Some(tree);
-                        }
-                        Err(e) => {
-                            warn!("Failed to initialize file tree: {}", e);
-                            this.project.file_tree_model = None;
-                        }
-                    }
-                    this.refresh_file_tree_panel();
-                    cx.notify();
-                });
-            })
-            .detach();
+        self.polling.project_refresh_generation =
+            self.polling.project_refresh_generation.saturating_add(1);
+        let generation = self.polling.project_refresh_generation;
+        self.spawn_file_tree_refresh(path.clone(), generation, cx);
+        self.spawn_worktree_refresh(path, generation, cx);
+        self.start_settings_background_load(false, cx);
+        if restored_cached_state {
+            cx.notify();
         }
     }
 
@@ -155,103 +284,28 @@ impl WorkspaceView {
             }
             FileTreeEvent::PathDraggedToTerminal { path, session_id } => {
                 info!(?path, ?session_id, "Path dragged to terminal");
+                if !self.project.is_safe_project_path(&path) {
+                    warn!(
+                        ?path,
+                        "Blocked attempt to send a path outside the project root"
+                    );
+                    cx.notify();
+                    return;
+                }
                 // C3 implementation: insert path into terminal
-                let path_str = if let Some(tree) = &self.project.file_tree_model {
-                    let tree: &FileTree = tree;
-                    tree.path_for_terminal(&path)
-                } else {
-                    path.to_string_lossy().to_string()
+                let Some(path_str) = self
+                    .project
+                    .format_path_for_terminal(&path, self.terminal_path_style())
+                else {
+                    warn!(?path, "Failed to quote dragged path safely for terminal");
+                    cx.notify();
+                    return;
                 };
                 let input = format!("{} ", path_str); // Add space after path
                 let session_id = SessionId(session_id);
                 if let Ok(manager) = self.session_manager.lock() {
                     if let Err(e) = manager.send_input(session_id, input.as_bytes()) {
                         warn!("Failed to send path to terminal: {}", e);
-                    }
-                }
-            }
-        }
-        cx.notify();
-    }
-
-    /// Handle worktree panel events.
-    pub(super) fn handle_worktree_event(
-        &mut self,
-        event: WorktreeEvent,
-        cx: &mut gpui::Context<Self>,
-    ) {
-        match event {
-            WorktreeEvent::RemoveRequested(path) => {
-                info!(?path, "Remove worktree requested");
-                if let Some(ref manager) = self.project.worktree_manager {
-                    if let Ok(mut mgr) = manager.lock() {
-                        if let Err(e) = mgr.remove(&path, false) {
-                            warn!("Failed to remove worktree: {}", e);
-                        } else {
-                            // Refresh the list
-                            if let Ok(()) = mgr.refresh() {
-                                self.project
-                                    .worktree_panel
-                                    .set_worktrees(mgr.list().to_vec());
-                            }
-                        }
-                    }
-                }
-            }
-            WorktreeEvent::BindSession {
-                worktree_path,
-                session_id,
-            } => {
-                info!(?worktree_path, ?session_id, "Bind session to worktree");
-                if let Some(ref manager) = self.project.worktree_manager {
-                    if let Ok(mut mgr) = manager.lock() {
-                        if mgr.bind_session(&worktree_path, session_id).is_ok() {
-                            // Refresh the list
-                            mgr.refresh().ok();
-                            self.project
-                                .worktree_panel
-                                .set_worktrees(mgr.list().to_vec());
-                        }
-                    }
-                }
-            }
-            WorktreeEvent::UnbindSession(session_id) => {
-                info!(?session_id, "Unbind session from worktree");
-                if let Some(ref manager) = self.project.worktree_manager {
-                    if let Ok(mut mgr) = manager.lock() {
-                        if mgr.unbind_session(session_id).is_ok() {
-                            // Refresh the list
-                            mgr.refresh().ok();
-                            self.project
-                                .worktree_panel
-                                .set_worktrees(mgr.list().to_vec());
-                        }
-                    }
-                }
-            }
-            WorktreeEvent::CleanupMerged => {
-                info!("Cleanup merged worktrees");
-                if let Some(ref manager) = self.project.worktree_manager {
-                    if let Ok(mut mgr) = manager.lock() {
-                        if let Ok(removed) = mgr.cleanup_merged("main") {
-                            info!("Removed {} merged worktrees", removed.len());
-                            // Refresh the list
-                            let _: Result<(), anyhow::Error> = mgr.refresh();
-                            self.project
-                                .worktree_panel
-                                .set_worktrees(mgr.list().to_vec());
-                        }
-                    }
-                }
-            }
-            WorktreeEvent::Refresh => {
-                info!("Refresh worktree list");
-                if let Some(ref manager) = self.project.worktree_manager {
-                    if let Ok(mut mgr) = manager.lock() {
-                        let _: Result<(), anyhow::Error> = mgr.refresh();
-                        self.project
-                            .worktree_panel
-                            .set_worktrees(mgr.list().to_vec());
                     }
                 }
             }
@@ -277,11 +331,20 @@ impl WorkspaceView {
 
     /// Insert a file path into the focused terminal session.
     pub(super) fn insert_path_to_terminal(&mut self, path: &std::path::Path) {
+        if !self.project.is_safe_project_path(path) {
+            warn!(
+                ?path,
+                "Blocked attempt to insert a path outside the project root"
+            );
+            return;
+        }
         if let Some(session_id) = self.workspace.focused_session_id() {
-            let path_str = if let Some(tree) = &self.project.file_tree_model {
-                tree.path_for_terminal(path)
-            } else {
-                path.to_string_lossy().to_string()
+            let Some(path_str) = self
+                .project
+                .format_path_for_terminal(path, self.terminal_path_style())
+            else {
+                warn!(?path, "Failed to quote file-tree path safely for terminal");
+                return;
             };
             let input = format!("{} ", path_str);
             if let Ok(manager) = self.session_manager.lock() {
@@ -294,10 +357,19 @@ impl WorkspaceView {
 
     /// Copy a file path to the system clipboard.
     pub(super) fn copy_path_to_clipboard(&self, path: &std::path::Path) {
-        let path_str = if let Some(tree) = &self.project.file_tree_model {
-            tree.path_for_terminal(path)
-        } else {
-            path.to_string_lossy().to_string()
+        if !self.project.is_safe_project_path(path) {
+            warn!(
+                ?path,
+                "Blocked attempt to copy a path outside the project root"
+            );
+            return;
+        }
+        let Some(path_str) = self
+            .project
+            .format_path_for_terminal(path, self.terminal_path_style())
+        else {
+            warn!(?path, "Failed to quote file-tree path safely for clipboard");
+            return;
         };
         if let Err(e) = self.clipboard.smart_clipboard.write_text(path_str) {
             warn!("Failed to copy path to clipboard: {}", e);
