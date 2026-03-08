@@ -46,7 +46,6 @@ pub enum SessionUpdate {
     },
 
     /// Shell state changed (via OSC 133 markers).
-    #[allow(dead_code)] // Wired when OSC 133 parser emits events directly
     ShellStateChanged {
         /// The session whose shell state changed.
         session_id: SessionId,
@@ -55,7 +54,6 @@ pub enum SessionUpdate {
     },
 
     /// Working directory changed (via OSC 7).
-    #[allow(dead_code)] // Wired when OSC 7 parser emits events directly
     WorkingDirectoryChanged {
         /// The session whose CWD changed.
         session_id: SessionId,

@@ -596,6 +596,7 @@ impl WorkspaceView {
 
         let session_manager = self.session_manager.clone();
         let detector = self.detector.clone();
+        let update_tx = self.update_tx.clone();
 
         cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
             let prepared = cx
@@ -617,12 +618,30 @@ impl WorkspaceView {
                         let mut detector = detector.lock().ok()?;
                         detector.process_output(session_id, &data);
                         for event in codirigent_session::extract_osc133_events(&data) {
+                            // Emit ShellStateChanged for the event-driven pipeline
+                            if let Some(tx) = &update_tx {
+                                let _ = tx.try_send(
+                                    codirigent_core::SessionUpdate::ShellStateChanged {
+                                        session_id,
+                                        state: event.clone(),
+                                    },
+                                );
+                            }
                             detector.set_shell_state(session_id, event);
                         }
                     }
 
                     let cwd_session =
                         codirigent_session::extract_osc7_path(&data).and_then(|new_cwd| {
+                            // Emit WorkingDirectoryChanged for the event-driven pipeline
+                            if let Some(tx) = &update_tx {
+                                let _ = tx.try_send(
+                                    codirigent_core::SessionUpdate::WorkingDirectoryChanged {
+                                        session_id,
+                                        cwd: new_cwd.clone(),
+                                    },
+                                );
+                            }
                             let manager = session_manager.lock().ok()?;
                             let changed = manager.update_working_directory(session_id, new_cwd);
                             if changed {

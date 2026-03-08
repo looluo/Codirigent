@@ -139,8 +139,7 @@ impl DefaultSessionManager {
     ///
     /// Used by external components that need to emit `SessionUpdate` events
     /// (e.g., hook signal readers, JSONL parsers).
-    #[allow(dead_code)] // Wired when hook/JSONL readers emit via channel
-    pub(crate) fn update_sender(&self) -> tokio::sync::mpsc::Sender<SessionUpdate> {
+    pub fn update_sender(&self) -> tokio::sync::mpsc::Sender<SessionUpdate> {
         self.update_tx.clone()
     }
 

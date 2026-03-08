@@ -122,6 +122,9 @@ pub struct WorkspaceView {
     pub(super) output_dispatcher: super::output_dispatcher::OutputDispatcher,
     /// Receiver for the `SessionUpdate` mpsc channel from session manager.
     pub(super) update_rx: Option<tokio::sync::mpsc::Receiver<codirigent_core::SessionUpdate>>,
+    /// Sender for the `SessionUpdate` mpsc channel (cloned to background tasks
+    /// for OSC 133 / OSC 7 event emission).
+    pub(super) update_tx: Option<tokio::sync::mpsc::Sender<codirigent_core::SessionUpdate>>,
     /// CLI session readers and process-tree detector (shared with background tasks).
     pub(super) cli_readers: Arc<Mutex<CliReaders>>,
     /// Cached detection results and memoized state.
@@ -412,13 +415,18 @@ impl WorkspaceView {
         Self::start_maintenance_polling(cx);
         Self::start_modal_cursor_blink(cx);
 
-        // Take the SessionUpdate receiver from the session manager for the
-        // event-driven output dispatcher.
-        let update_rx = match session_manager.lock() {
-            Ok(mgr) => mgr.take_update_receiver(),
+        // Take the SessionUpdate receiver and clone the sender from the session
+        // manager for the event-driven output dispatcher. The sender is cloned
+        // to background tasks for OSC 133 / OSC 7 event emission.
+        let (update_rx, update_tx) = match session_manager.lock() {
+            Ok(mgr) => {
+                let rx = mgr.take_update_receiver();
+                let tx = Some(mgr.update_sender());
+                (rx, tx)
+            }
             Err(e) => {
-                tracing::warn!("Failed to take SessionUpdate receiver (mutex poisoned): {e}");
-                None
+                tracing::warn!("Failed to init SessionUpdate channel (mutex poisoned): {e}");
+                (None, None)
             }
         };
         if update_rx.is_none() {
@@ -485,6 +493,7 @@ impl WorkspaceView {
             polling: PollingState::new(),
             output_dispatcher: super::output_dispatcher::OutputDispatcher::new(),
             update_rx,
+            update_tx,
             cli_readers: Arc::new(Mutex::new(CliReaders::new())),
             cache: CacheState::new(),
             notification_manager: NotificationManager::new(Default::default()),
