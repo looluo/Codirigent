@@ -49,6 +49,33 @@ fn app_start_ts() -> u64 {
     })
 }
 
+fn prioritize_and_partition_output_sessions<F>(
+    mut session_ids: Vec<SessionId>,
+    focused_id: Option<SessionId>,
+    mut can_schedule: F,
+) -> (Vec<SessionId>, Vec<SessionId>)
+where
+    F: FnMut(SessionId) -> bool,
+{
+    if let Some(focused_id) = focused_id {
+        if let Some(index) = session_ids.iter().position(|id| *id == focused_id) {
+            session_ids.swap(0, index);
+        }
+    }
+
+    let mut ready = Vec::with_capacity(session_ids.len());
+    let mut deferred = Vec::new();
+    for session_id in session_ids {
+        if can_schedule(session_id) {
+            ready.push(session_id);
+        } else {
+            deferred.push(session_id);
+        }
+    }
+
+    (ready, deferred)
+}
+
 /// Session status result from a background JSONL read: (status, optional detail string).
 type JsonlStatusResult = Option<(SessionStatus, Option<String>)>;
 
@@ -445,14 +472,24 @@ impl WorkspaceView {
     }
 
     fn schedule_output_preparation(&mut self, cx: &mut Context<Self>) -> bool {
-        let mut session_ids =
+        let session_ids =
             self.with_session_manager(|manager| manager.sessions_with_pending_output());
-        if let Some(focused_id) = self.workspace.focused_session_id() {
-            if let Some(index) = session_ids.iter().position(|id| *id == focused_id) {
-                session_ids.swap(0, index);
-            }
+        let (session_ids, deferred_ids) = prioritize_and_partition_output_sessions(
+            session_ids,
+            self.workspace.focused_session_id(),
+            |id| {
+                self.terminals.contains_key(&id)
+                    && !self.polling.output_prepare_in_flight.contains(&id)
+            },
+        );
+
+        if !deferred_ids.is_empty() {
+            self.with_session_manager(|manager| {
+                for session_id in deferred_ids {
+                    manager.mark_output_pending(session_id);
+                }
+            });
         }
-        session_ids.retain(|id| self.terminals.contains_key(id));
 
         let had_output_activity =
             !session_ids.is_empty() || !self.polling.output_prepare_in_flight.is_empty();
@@ -470,6 +507,7 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) {
         if !self.polling.output_prepare_in_flight.insert(session_id) {
+            self.with_session_manager(|manager| manager.mark_output_pending(session_id));
             return;
         }
 
@@ -2384,5 +2422,33 @@ mod tests {
         };
 
         assert!(should_show_clipboard_preview(&image));
+    }
+
+    #[test]
+    fn focused_schedulable_output_is_prioritized() {
+        let session_ids = vec![SessionId(1), SessionId(2), SessionId(3)];
+        let schedulable = HashSet::from([SessionId(2), SessionId(3)]);
+
+        let (ready, deferred) =
+            prioritize_and_partition_output_sessions(session_ids, Some(SessionId(2)), |id| {
+                schedulable.contains(&id)
+            });
+
+        assert_eq!(ready, vec![SessionId(2), SessionId(3)]);
+        assert_eq!(deferred, vec![SessionId(1)]);
+    }
+
+    #[test]
+    fn unschedulable_output_sessions_are_deferred_instead_of_dropped() {
+        let session_ids = vec![SessionId(1), SessionId(2), SessionId(3)];
+        let schedulable = HashSet::from([SessionId(3)]);
+
+        let (ready, deferred) =
+            prioritize_and_partition_output_sessions(session_ids, Some(SessionId(2)), |id| {
+                schedulable.contains(&id)
+            });
+
+        assert_eq!(ready, vec![SessionId(3)]);
+        assert_eq!(deferred, vec![SessionId(2), SessionId(1)]);
     }
 }

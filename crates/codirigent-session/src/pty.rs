@@ -346,7 +346,15 @@ impl OutputReader {
     /// output_reader.stop();
     /// # }
     /// ```
-    pub fn new(mut reader: Box<dyn Read + Send>) -> Self {
+    pub fn new(reader: Box<dyn Read + Send>) -> Self {
+        Self::new_with_notify(reader, || {})
+    }
+
+    /// Create a new output reader and invoke `on_chunk` after each successful send.
+    pub fn new_with_notify<F>(mut reader: Box<dyn Read + Send>, on_chunk: F) -> Self
+    where
+        F: Fn() + Send + 'static,
+    {
         let (tx, rx) = mpsc::channel(OUTPUT_CHANNEL_CAPACITY);
 
         let handle = thread::spawn(move || {
@@ -363,6 +371,7 @@ impl OutputReader {
                             debug!("PTY output channel closed");
                             break;
                         }
+                        on_chunk();
                     }
                     Err(e) => {
                         debug!(?e, "PTY read error");
@@ -508,6 +517,17 @@ pub fn spawn_output_reader(reader: Box<dyn Read + Send>) -> mpsc::Receiver<Vec<u
     // The thread will still terminate when the receiver is dropped.
     // Use OutputReader::new() directly for proper lifecycle management.
     output_reader.into_receiver()
+}
+
+/// Spawn an output reader and notify after each successfully queued chunk.
+pub fn spawn_output_reader_with_notify<F>(
+    reader: Box<dyn Read + Send>,
+    on_chunk: F,
+) -> mpsc::Receiver<Vec<u8>>
+where
+    F: Fn() + Send + 'static,
+{
+    OutputReader::new_with_notify(reader, on_chunk).into_receiver()
 }
 
 #[cfg(test)]

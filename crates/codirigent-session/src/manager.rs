@@ -4,13 +4,13 @@
 //! trait, managing session lifecycle, PTY I/O, and event publishing.
 
 use crate::git_status::GitStatusService;
-use crate::pty::{spawn_output_reader, PtyHandle};
+use crate::pty::{spawn_output_reader_with_notify, PtyHandle};
 use crate::session::SessionState;
 use anyhow::{anyhow, Context, Result};
 use codirigent_core::{
     CodirigentEvent, EventBus, GitRepoInfo, Session, SessionId, SessionManager, SessionStatus,
 };
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard};
@@ -84,6 +84,8 @@ pub struct DefaultSessionManager {
     event_bus: Arc<dyn EventBus>,
     /// Git status detection service.
     git_status: Mutex<GitStatusService>,
+    /// Sessions whose PTY readers have queued unread output since the last poll.
+    pending_output_sessions: Arc<Mutex<HashSet<SessionId>>>,
 }
 
 impl DefaultSessionManager {
@@ -98,6 +100,7 @@ impl DefaultSessionManager {
             next_id: AtomicU64::new(1),
             event_bus,
             git_status: Mutex::new(GitStatusService::new()),
+            pending_output_sessions: Arc::new(Mutex::new(HashSet::new())),
         }
     }
 
@@ -105,6 +108,12 @@ impl DefaultSessionManager {
     ///
     fn lock_sessions(&self) -> MutexGuard<'_, HashMap<SessionId, SessionState>> {
         self.sessions.lock().unwrap_or_else(|p| p.into_inner())
+    }
+
+    fn lock_pending_output_sessions(&self) -> MutexGuard<'_, HashSet<SessionId>> {
+        self.pending_output_sessions
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
     }
 
     /// Generate a unique session ID.
@@ -178,21 +187,30 @@ impl DefaultSessionManager {
         max_chunks: usize,
         max_bytes: usize,
     ) -> Option<DrainedOutput> {
-        let mut sessions = self.lock_sessions();
-        let state = sessions.get_mut(&id)?;
-        let chunk_budget = max_chunks.max(1);
-        let byte_budget = max_bytes.max(1);
-        let mut output = Vec::with_capacity(byte_budget.min(64 * 1024));
-        let mut chunks_drained = 0usize;
-        let mut hit_budget = false;
+        let (output, has_more) = {
+            let mut sessions = self.lock_sessions();
+            let state = sessions.get_mut(&id)?;
+            let chunk_budget = max_chunks.max(1);
+            let byte_budget = max_bytes.max(1);
+            let mut output = Vec::with_capacity(byte_budget.min(64 * 1024));
+            let mut chunks_drained = 0usize;
+            let mut hit_budget = false;
 
-        while let Ok(data) = state.output_rx.try_recv() {
-            output.extend(data);
-            chunks_drained += 1;
-            if chunks_drained >= chunk_budget || output.len() >= byte_budget {
-                hit_budget = true;
-                break;
+            while let Ok(data) = state.output_rx.try_recv() {
+                output.extend(data);
+                chunks_drained += 1;
+                if chunks_drained >= chunk_budget || output.len() >= byte_budget {
+                    hit_budget = true;
+                    break;
+                }
             }
+
+            let has_more = !output.is_empty() && (hit_budget || !state.output_rx.is_empty());
+            (output, has_more)
+        };
+
+        if has_more {
+            self.lock_pending_output_sessions().insert(id);
         }
 
         if output.is_empty() {
@@ -200,7 +218,7 @@ impl DefaultSessionManager {
         } else {
             Some(DrainedOutput {
                 data: output,
-                has_more: hit_budget || !state.output_rx.is_empty(),
+                has_more,
             })
         }
     }
@@ -227,10 +245,14 @@ impl DefaultSessionManager {
 
     /// Get all sessions that currently have unread PTY output queued.
     pub fn sessions_with_pending_output(&self) -> Vec<SessionId> {
-        self.lock_sessions()
-            .iter()
-            .filter_map(|(id, state)| (!state.output_rx.is_empty()).then_some(*id))
-            .collect()
+        self.lock_pending_output_sessions().drain().collect()
+    }
+
+    /// Mark a session as having unread PTY output ready for UI polling.
+    pub fn mark_output_pending(&self, id: SessionId) {
+        if self.session_exists(id) {
+            self.lock_pending_output_sessions().insert(id);
+        }
     }
 
     /// Get the child PID for a session.
@@ -411,7 +433,13 @@ impl SessionManager for DefaultSessionManager {
         let reader = pty
             .take_reader()
             .ok_or_else(|| anyhow!("Failed to get PTY reader"))?;
-        let output_rx = spawn_output_reader(reader);
+        let pending_output_sessions = self.pending_output_sessions.clone();
+        let output_rx = spawn_output_reader_with_notify(reader, move || {
+            pending_output_sessions
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .insert(id);
+        });
 
         // Create session metadata
         let mut session = Session::new(id, name, working_dir.clone());
@@ -440,6 +468,8 @@ impl SessionManager for DefaultSessionManager {
             .lock_sessions()
             .remove(&id)
             .ok_or_else(|| anyhow!("Session not found: {}", id))?;
+
+        self.lock_pending_output_sessions().remove(&id);
 
         // PTY and output_rx will be dropped, cleaning up resources
 
@@ -559,12 +589,15 @@ impl SessionManager for DefaultSessionManager {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codirigent_core::DefaultEventBus;
+    use crate::pty::PtyHandle;
+    use crate::session::SessionState;
+    use codirigent_core::{DefaultEventBus, Session};
     use git2::Repository;
     use std::fs;
     use std::io::Write;
     use std::path::Path;
     use tempfile::TempDir;
+    use tokio::sync::mpsc;
 
     fn create_manager() -> DefaultSessionManager {
         let event_bus = Arc::new(DefaultEventBus::new(16));
@@ -575,6 +608,16 @@ mod tests {
         let event_bus = Arc::new(DefaultEventBus::new(16));
         let manager = DefaultSessionManager::new(event_bus.clone());
         (manager, event_bus)
+    }
+
+    fn create_manual_session_state(
+        id: SessionId,
+    ) -> (SessionState, mpsc::Sender<Vec<u8>>, TempDir) {
+        let temp = TempDir::new().unwrap();
+        let pty = PtyHandle::spawn(temp.path(), DEFAULT_PTY_ROWS, DEFAULT_PTY_COLS, &[]).unwrap();
+        let (tx, rx) = mpsc::channel(8);
+        let session = Session::new(id, format!("Session {}", id.0), temp.path().to_path_buf());
+        (SessionState::new(session, pty, rx), tx, temp)
     }
 
     fn create_test_repo() -> TempDir {
@@ -1122,6 +1165,73 @@ mod tests {
         // Drain immediately - might be empty or have shell prompt
         // Just verify it doesn't panic or block
         let _ = manager.try_drain_output(id);
+    }
+
+    #[test]
+    fn test_sessions_with_pending_output_drains_ready_set() {
+        let manager = create_manager();
+        let id = SessionId(42);
+        let (state, tx, _temp) = create_manual_session_state(id);
+        manager.lock_sessions().insert(id, state);
+
+        tx.try_send(b"hello".to_vec()).unwrap();
+        manager.lock_pending_output_sessions().insert(id);
+
+        let pending = manager.sessions_with_pending_output();
+        assert_eq!(pending.len(), 1);
+        assert!(pending.contains(&id));
+        assert!(manager.sessions_with_pending_output().is_empty());
+
+        let drained = manager.try_drain_output_bounded(id, 4, 1024).unwrap();
+        assert_eq!(drained.data, b"hello".to_vec());
+        assert!(!drained.has_more);
+    }
+
+    #[test]
+    fn test_try_drain_output_bounded_requeues_when_more_output_remains() {
+        let manager = create_manager();
+        let id = SessionId(43);
+        let (state, tx, _temp) = create_manual_session_state(id);
+        manager.lock_sessions().insert(id, state);
+
+        tx.try_send(b"hello".to_vec()).unwrap();
+        tx.try_send(b"world".to_vec()).unwrap();
+        manager.lock_pending_output_sessions().insert(id);
+
+        let drained = manager.try_drain_output_bounded(id, 1, 1024).unwrap();
+        assert_eq!(drained.data, b"hello".to_vec());
+        assert!(drained.has_more);
+
+        let pending = manager.sessions_with_pending_output();
+        assert_eq!(pending.len(), 1);
+        assert!(pending.contains(&id));
+
+        let drained = manager.try_drain_output_bounded(id, 2, 1024).unwrap();
+        assert_eq!(drained.data, b"world".to_vec());
+        assert!(!drained.has_more);
+        assert!(manager.sessions_with_pending_output().is_empty());
+    }
+
+    #[test]
+    fn test_close_session_clears_pending_output_ready_flag() {
+        let manager = create_manager();
+        let id = SessionId(44);
+        let (state, _tx, _temp) = create_manual_session_state(id);
+        manager.lock_sessions().insert(id, state);
+        manager.lock_pending_output_sessions().insert(id);
+
+        manager.close_session(id).unwrap();
+
+        assert!(manager.sessions_with_pending_output().is_empty());
+    }
+
+    #[test]
+    fn test_mark_output_pending_ignores_unknown_session() {
+        let manager = create_manager();
+
+        manager.mark_output_pending(SessionId(999));
+
+        assert!(manager.sessions_with_pending_output().is_empty());
     }
 
     #[test]
