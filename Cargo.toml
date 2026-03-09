@@ -51,7 +51,7 @@ humantime-serde = "1.1.1"
 image = { version = "0.25.9", default-features = false, features = ["png", "bmp", "tiff", "jpeg"] }
 
 # Git operations
-git2 = "0.20"
+git2 = { version = "0.20", features = ["vendored-openssl"] }
 
 # Directories
 dirs = "5"
