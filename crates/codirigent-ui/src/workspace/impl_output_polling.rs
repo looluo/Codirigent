@@ -1972,10 +1972,7 @@ impl WorkspaceView {
 
         let focused_id = self.workspace.focused_session_id();
         let is_focused = Some(session_id) == focused_id;
-        let prev_status = self
-            .workspace
-            .session(session_id)
-            .map(|s| s.status);
+        let prev_status = self.workspace.session(session_id).map(|s| s.status);
         let new_status = match status.as_str() {
             "working" => SessionStatus::Working,
             "needs_attention" => SessionStatus::NeedsAttention,
@@ -2039,7 +2036,9 @@ impl WorkspaceView {
             );
         }
 
-        if new_status == SessionStatus::ResponseReady && prev_status_for_notif == SessionStatus::Working {
+        if new_status == SessionStatus::ResponseReady
+            && prev_status_for_notif == SessionStatus::Working
+        {
             let name = self
                 .workspace
                 .session(session_id)

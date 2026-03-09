@@ -232,8 +232,8 @@ impl WorkspaceView {
         // keydown handler from sending the proper escape sequences.
         match key {
             "enter" | "backspace" | "delete" | "tab" | "escape" | "up" | "down" | "left"
-            | "right" | "home" | "end" | "pageup" | "pagedown" | "insert" | "f1" | "f2"
-            | "f3" | "f4" | "f5" | "f6" | "f7" | "f8" | "f9" | "f10" | "f11" | "f12" => {
+            | "right" | "home" | "end" | "pageup" | "pagedown" | "insert" | "f1" | "f2" | "f3"
+            | "f4" | "f5" | "f6" | "f7" | "f8" | "f9" | "f10" | "f11" | "f12" => {
                 return false;
             }
             _ => {}
