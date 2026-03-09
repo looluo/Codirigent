@@ -59,8 +59,16 @@ pub(super) fn reconcile(
         return (Some(detector_wins(previous_status)), StaleAction::None);
     };
 
-    // Rule 1: Live Working from detector beats cached (session is active)
-    if detector == SessionStatus::Working && cached != SessionStatus::Working {
+    // Rule 1: Live Working from detector beats cached — but only for JSONL
+    // sources.  Hook signals come directly from the CLI (e.g. Claude Code's
+    // Stop / Notification hooks) and are more authoritative than the detector,
+    // which only sees process-level state ("the shell command is still running")
+    // and cannot distinguish "Claude is streaming" from "Claude is idle,
+    // waiting for user input".
+    if detector == SessionStatus::Working
+        && cached != SessionStatus::Working
+        && cached_source != HintSource::HookSignal
+    {
         return (Some(detector_wins(previous_status)), StaleAction::None);
     }
 
@@ -125,7 +133,26 @@ mod tests {
     }
 
     #[test]
-    fn live_working_beats_cached_response_ready() {
+    fn live_working_beats_cached_jsonl_response_ready() {
+        // Detector Working overrides JSONL sources (not hook signals).
+        let (result, stale) = reconcile(
+            SessionId(1),
+            Some(SessionStatus::Working),
+            Some(SessionStatus::ResponseReady),
+            HintSource::Jsonl,
+            Some(Duration::from_secs(5)),
+            Some(SessionStatus::ResponseReady),
+        );
+        assert!(matches!(stale, StaleAction::None));
+        let r = result.unwrap();
+        assert_eq!(r.status, SessionStatus::Working);
+        assert_eq!(r.source, HintSource::Detector);
+    }
+
+    #[test]
+    fn hook_signal_beats_detector_working() {
+        // Hook signals come directly from the CLI and are more authoritative
+        // than the detector's process-level heuristic.
         let (result, stale) = reconcile(
             SessionId(1),
             Some(SessionStatus::Working),
@@ -136,8 +163,8 @@ mod tests {
         );
         assert!(matches!(stale, StaleAction::None));
         let r = result.unwrap();
-        assert_eq!(r.status, SessionStatus::Working);
-        assert_eq!(r.source, HintSource::Detector);
+        assert_eq!(r.status, SessionStatus::ResponseReady);
+        assert_eq!(r.source, HintSource::HookSignal);
     }
 
     #[test]

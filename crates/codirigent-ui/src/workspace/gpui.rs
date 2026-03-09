@@ -224,6 +224,21 @@ impl WorkspaceView {
         }
 
         let key: &str = event.keystroke.key.as_ref();
+
+        // Special keys must go through the keydown → key_to_bytes path, not
+        // the IME text-input path.  On macOS, GPUI may populate `key_char`
+        // with control characters (e.g. "\r" for Enter, "\t" for Tab) which
+        // would incorrectly classify them as text input and prevent the
+        // keydown handler from sending the proper escape sequences.
+        match key {
+            "enter" | "backspace" | "delete" | "tab" | "escape" | "up" | "down" | "left"
+            | "right" | "home" | "end" | "pageup" | "pagedown" | "insert" | "f1" | "f2"
+            | "f3" | "f4" | "f5" | "f6" | "f7" | "f8" | "f9" | "f10" | "f11" | "f12" => {
+                return false;
+            }
+            _ => {}
+        }
+
         let is_plain_space = key == " " || key.eq_ignore_ascii_case("space");
         if is_plain_space {
             return true;

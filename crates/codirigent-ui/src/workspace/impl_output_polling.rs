@@ -1971,17 +1971,31 @@ impl WorkspaceView {
         }
 
         let focused_id = self.workspace.focused_session_id();
+        let is_focused = Some(session_id) == focused_id;
+        let prev_status = self
+            .workspace
+            .session(session_id)
+            .map(|s| s.status);
         let new_status = match status.as_str() {
             "working" => SessionStatus::Working,
             "needs_attention" => SessionStatus::NeedsAttention,
             "response_ready" => {
-                if Some(session_id) == focused_id {
+                if is_focused {
                     SessionStatus::Idle
                 } else {
                     SessionStatus::ResponseReady
                 }
             }
-            _ => SessionStatus::Idle,
+            // "idle" signal from the CLI (e.g. idle_prompt notification).
+            // If the session was previously ResponseReady and is unfocused,
+            // keep ResponseReady — the user hasn't read the response yet.
+            _ => {
+                if !is_focused && prev_status == Some(SessionStatus::ResponseReady) {
+                    SessionStatus::ResponseReady
+                } else {
+                    SessionStatus::Idle
+                }
+            }
         };
 
         if let Ok(mut readers) = self.cli_readers.lock() {
@@ -2003,14 +2017,10 @@ impl WorkspaceView {
             );
         }
 
-        let prev_status = self
-            .workspace
-            .session(session_id)
-            .map(|s| s.status)
-            .unwrap_or(SessionStatus::Idle);
+        let prev_status_for_notif = prev_status.unwrap_or(SessionStatus::Idle);
 
         if new_status == SessionStatus::NeedsAttention
-            && prev_status != SessionStatus::NeedsAttention
+            && prev_status_for_notif != SessionStatus::NeedsAttention
         {
             self.event_bus.publish(CodirigentEvent::AttentionRequired {
                 session_id,
@@ -2029,7 +2039,7 @@ impl WorkspaceView {
             );
         }
 
-        if new_status == SessionStatus::ResponseReady && prev_status == SessionStatus::Working {
+        if new_status == SessionStatus::ResponseReady && prev_status_for_notif == SessionStatus::Working {
             let name = self
                 .workspace
                 .session(session_id)
