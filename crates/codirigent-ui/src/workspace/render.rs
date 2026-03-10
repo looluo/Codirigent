@@ -19,8 +19,8 @@ use super::gpui::WorkspaceView;
 use crate::icons;
 use crate::title_bar::TitleBar;
 use gpui::{
-    div, px, ClickEvent, Context, FontWeight, InteractiveElement, IntoElement, MouseButton,
-    ParentElement, SharedString, StatefulInteractiveElement, Styled, Window, WindowControlArea,
+    div, px, ClickEvent, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
+    SharedString, StatefulInteractiveElement, Styled, Window, WindowControlArea,
 };
 use tracing::info;
 

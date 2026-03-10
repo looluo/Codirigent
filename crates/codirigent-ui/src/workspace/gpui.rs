@@ -26,7 +26,6 @@ use super::types::{
     TerminalResizeSignature, CELL_BORDER_WIDTH, FONT_SIZE_BASE_DEFAULT, HEADER_HEIGHT, REM_BASE,
     TERMINAL_CONTENT_PADDING,
 };
-use crate::app::{Copy, Paste};
 use crate::clipboard_preview::ClipboardPreview;
 use crate::empty_session::{EmptySessionEvent, EmptySessionPool};
 use crate::input::{key_to_bytes, TerminalKeystroke, TerminalModifiers};
