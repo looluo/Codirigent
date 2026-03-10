@@ -377,6 +377,12 @@ impl WorkspaceView {
         let can_remove = has_selection && pane_count > 1;
         let tree = self.custom_picker.split_tree.clone();
         let selected = self.custom_picker.selected_slot;
+        let slot_display_numbers: std::collections::HashMap<SlotId, usize> = tree
+            .slots_in_order()
+            .into_iter()
+            .enumerate()
+            .map(|(index, slot)| (slot, index + 1))
+            .collect();
 
         // Action button styling helper
         let btn_opacity = if has_selection { 1.0 } else { 0.5 };
@@ -507,6 +513,7 @@ impl WorkspaceView {
                     .child(Self::render_split_preview_node(
                         &tree,
                         selected,
+                        &slot_display_numbers,
                         primary,
                         preview_bg,
                         border_color,
@@ -519,6 +526,7 @@ impl WorkspaceView {
     fn render_split_preview_node(
         node: &LayoutNode,
         selected: Option<SlotId>,
+        slot_display_numbers: &std::collections::HashMap<SlotId, usize>,
         primary: gpui::Hsla,
         preview_bg: gpui::Hsla,
         border_color: gpui::Hsla,
@@ -528,7 +536,10 @@ impl WorkspaceView {
             LayoutNode::Leaf { slot } => {
                 let is_selected = selected == Some(*slot);
                 let slot_id = *slot;
-                let slot_num = slot.0 + 1; // 1-indexed display
+                let slot_num = slot_display_numbers
+                    .get(&slot_id)
+                    .copied()
+                    .unwrap_or(slot_id.0 as usize + 1);
 
                 let cell_bg = if is_selected {
                     primary.opacity(0.15)
@@ -572,6 +583,7 @@ impl WorkspaceView {
                 let first_elem = Self::render_split_preview_node(
                     first,
                     selected,
+                    slot_display_numbers,
                     primary,
                     preview_bg,
                     border_color,
@@ -580,6 +592,7 @@ impl WorkspaceView {
                 let second_elem = Self::render_split_preview_node(
                     second,
                     selected,
+                    slot_display_numbers,
                     primary,
                     preview_bg,
                     border_color,
