@@ -1,6 +1,7 @@
 name: Release
 
 permissions:
+  actions: write
   contents: write
 
 on:
@@ -47,8 +48,9 @@ jobs:
 
       - uses: Swatinem/rust-cache@v2
         with:
-          key: ${{ matrix.target }}
+          shared-key: release-${{ matrix.target }}
           cache-targets: "false"
+          save-if: ${{ github.ref == 'refs/heads/main' }}
 
       - name: Build binaries
         run: |
@@ -257,3 +259,27 @@ jobs:
           draft: false
           generateReleaseNotes: true
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
+
+  cleanup-tag-caches:
+    name: Cleanup Tag Caches
+    if: always()
+    needs: [build, release]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Delete tag-scoped caches
+        continue-on-error: true
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG_REF="${{ github.ref }}"
+          ALT_TAG_REF="refs/heads/${TAG_REF}"
+
+          gh cache list \
+            --repo "${{ github.repository }}" \
+            --limit 5000 \
+            --json id,ref \
+            --jq ".[] | select(.ref == \"${TAG_REF}\" or .ref == \"${ALT_TAG_REF}\") | .id" |
+          while read -r cache_id; do
+            [ -n "${cache_id}" ] || continue
+            gh cache delete "${cache_id}" --repo "${{ github.repository }}"
+          done
