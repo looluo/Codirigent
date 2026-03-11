@@ -106,9 +106,36 @@ impl WorkspaceView {
             CustomLayoutMode::Split => self.render_split_builder_content(cx).into_any_element(),
         };
 
-        // Apply button handler dispatches on mode
+        // Apply-only button keeps the layout for the current workspace.
         let apply_button = div()
             .id("custom-layout-apply")
+            .px_4()
+            .py_2()
+            .border_1()
+            .border_color(border_color)
+            .rounded_md()
+            .text_sm()
+            .text_color(fg)
+            .cursor_pointer()
+            .hover(|style| style.bg(border_color.opacity(0.1)))
+            .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                this.apply_custom_layout_from_picker(cx);
+                cx.notify();
+            }))
+            .child(self.aligned_icon_label_row(
+                icons::check(),
+                fg,
+                12.0,
+                "Apply",
+                fg,
+                14.0,
+                FontWeight::MEDIUM,
+                16.0,
+                4.0,
+            ));
+
+        let save_and_apply_button = div()
+            .id("custom-layout-save-and-apply")
             .px_4()
             .py_2()
             .bg(primary)
@@ -118,30 +145,14 @@ impl WorkspaceView {
             .cursor_pointer()
             .hover(|style| style.bg(primary.opacity(0.8)))
             .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
-                match this.custom_picker.mode {
-                    CustomLayoutMode::Grid => {
-                        if let Some((rows, cols)) = this.custom_picker.validate() {
-                            this.custom_picker.close();
-                            let profile = crate::layout::LayoutProfile::Custom { rows, cols };
-                            this.workspace.set_layout(profile);
-                            this.mark_layout_cache_dirty();
-                        }
-                    }
-                    CustomLayoutMode::Split => {
-                        if let Some(tree) = this.custom_picker.validate_split() {
-                            this.custom_picker.close();
-                            this.workspace.set_split_tree(tree);
-                            this.mark_layout_cache_dirty();
-                        }
-                    }
-                }
+                this.save_and_apply_custom_layout_from_picker(cx);
                 cx.notify();
             }))
             .child(self.aligned_icon_label_row(
-                icons::check(),
+                icons::plus(),
                 gpui::Hsla::white(),
                 12.0,
-                "Apply",
+                "Save + Apply",
                 gpui::Hsla::white(),
                 14.0,
                 FontWeight::MEDIUM,
@@ -264,7 +275,8 @@ impl WorkspaceView {
                                         )),
                                 )
                                 // Apply button
-                                .child(apply_button),
+                                .child(apply_button)
+                                .child(save_and_apply_button),
                         ),
                 ),
         )
