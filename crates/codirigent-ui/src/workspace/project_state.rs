@@ -11,6 +11,47 @@ use std::sync::{Arc, Mutex};
 use crate::sidebar::{FileTreePanel, WorktreePanel};
 use codirigent_filetree::FileTree;
 
+fn relative_path_from(base: &Path, target: &Path) -> Option<PathBuf> {
+    if base.is_absolute() != target.is_absolute() {
+        return None;
+    }
+
+    let base_components: Vec<_> = base.components().collect();
+    let target_components: Vec<_> = target.components().collect();
+
+    let mut common_len = 0;
+    while common_len < base_components.len()
+        && common_len < target_components.len()
+        && base_components[common_len] == target_components[common_len]
+    {
+        common_len += 1;
+    }
+
+    if base.is_absolute() && common_len == 0 {
+        return None;
+    }
+
+    let mut relative = PathBuf::new();
+    for component in &base_components[common_len..] {
+        match component {
+            std::path::Component::Normal(_)
+            | std::path::Component::CurDir
+            | std::path::Component::ParentDir => relative.push(".."),
+            std::path::Component::RootDir | std::path::Component::Prefix(_) => {}
+        }
+    }
+
+    for component in &target_components[common_len..] {
+        relative.push(component.as_os_str());
+    }
+
+    if relative.as_os_str().is_empty() {
+        relative.push(".");
+    }
+
+    Some(relative)
+}
+
 /// Cached project-root state used for stale-while-revalidate switching between repos.
 pub(super) struct CachedProjectRootState {
     /// In-memory file tree model for the root.
@@ -54,6 +95,27 @@ impl ProjectState {
         } else {
             quote_path_for_terminal(path, style)
         }
+    }
+
+    /// Format a filesystem path for insertion into a terminal session.
+    ///
+    /// Prefers a path relative to the target session's current working
+    /// directory, falling back to the project root and then the absolute path.
+    pub(super) fn format_path_for_terminal_in_session(
+        &self,
+        path: &Path,
+        session_dir: &Path,
+        style: TerminalPathStyle,
+    ) -> Option<String> {
+        let display_path = relative_path_from(session_dir, path)
+            .or_else(|| {
+                self.project_root
+                    .as_deref()
+                    .and_then(|root| relative_path_from(root, path))
+            })
+            .unwrap_or_else(|| path.to_path_buf());
+
+        quote_path_for_terminal(&display_path, style)
     }
 
     /// Returns true when the path resolves within the current project root.
@@ -124,5 +186,57 @@ mod tests {
 
         let state = create_project_state(project.path().to_path_buf());
         assert!(state.is_safe_project_path(&file));
+    }
+
+    #[test]
+    fn relative_path_from_session_dir_uses_file_name_when_possible() {
+        let project = TempDir::new().unwrap();
+        let session_dir = project.path().join("agent-domain-mcp");
+        fs::create_dir(&session_dir).unwrap();
+        let file = session_dir.join("spec.md");
+        fs::write(&file, "spec").unwrap();
+
+        assert_eq!(
+            relative_path_from(&session_dir, &file),
+            Some(PathBuf::from("spec.md"))
+        );
+    }
+
+    #[test]
+    fn format_path_for_terminal_in_session_prefers_relative_path() {
+        let project = TempDir::new().unwrap();
+        let session_dir = project.path().join("agent-domain-mcp");
+        fs::create_dir(&session_dir).unwrap();
+        let file = session_dir.join("spec.md");
+        fs::write(&file, "spec").unwrap();
+
+        let state = create_project_state(project.path().to_path_buf());
+        assert_eq!(
+            state.format_path_for_terminal_in_session(
+                &file,
+                &session_dir,
+                TerminalPathStyle::Posix,
+            ),
+            Some("spec.md".to_string())
+        );
+    }
+
+    #[test]
+    fn format_path_for_terminal_in_session_uses_parent_segments() {
+        let project = TempDir::new().unwrap();
+        let session_dir = project.path().join("src").join("module");
+        fs::create_dir_all(&session_dir).unwrap();
+        let file = project.path().join("README.md");
+        fs::write(&file, "readme").unwrap();
+
+        let state = create_project_state(project.path().to_path_buf());
+        assert_eq!(
+            state.format_path_for_terminal_in_session(
+                &file,
+                &session_dir,
+                TerminalPathStyle::Posix,
+            ),
+            Some("../../README.md".to_string())
+        );
     }
 }
