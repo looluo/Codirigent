@@ -26,7 +26,6 @@ use super::types::{
     TerminalResizeSignature, CELL_BORDER_WIDTH, FONT_SIZE_BASE_DEFAULT, HEADER_HEIGHT, REM_BASE,
     TERMINAL_CONTENT_PADDING,
 };
-use crate::app::{Copy, Paste};
 use crate::clipboard_preview::ClipboardPreview;
 use crate::empty_session::{EmptySessionEvent, EmptySessionPool};
 use crate::input::{key_to_bytes, TerminalKeystroke, TerminalModifiers};
@@ -720,6 +719,24 @@ impl WorkspaceView {
         })
     }
 
+    fn render_focus_signature(&self) -> Option<SessionId> {
+        Self::render_focus_signature_for_layout(
+            self.workspace.layout_profile(),
+            self.workspace.focused_session_id(),
+        )
+    }
+
+    fn render_focus_signature_for_layout(
+        layout_profile: crate::layout::LayoutProfile,
+        focused_session_id: Option<SessionId>,
+    ) -> Option<SessionId> {
+        if layout_profile == crate::layout::LayoutProfile::Single {
+            focused_session_id
+        } else {
+            None
+        }
+    }
+
     /// Debounce persisted session/layout state writes off the UI thread.
     pub(super) fn save_state_to_disk(&mut self, cx: &mut Context<Self>) {
         self.polling.state_save_generation = self.polling.state_save_generation.saturating_add(1);
@@ -1406,11 +1423,11 @@ impl WorkspaceView {
             let key = event.keystroke.key.as_ref();
             match key {
                 "v" => {
-                    self.handle_paste(&Paste, window, cx);
+                    self.handle_paste(&crate::app::Paste, window, cx);
                     return;
                 }
                 "c" => {
-                    self.handle_copy(&Copy, window, cx);
+                    self.handle_copy(&crate::app::Copy, window, cx);
                     return;
                 }
                 "n" => {
@@ -2039,6 +2056,7 @@ impl Render for WorkspaceView {
             sidebar_width: actual_sidebar_width,
             right_panel_width: right_panel_w,
             grid_gap: self.workspace.theme().grid_gap,
+            focused_session_id: self.render_focus_signature(),
         };
         if self.cache.render_cell_info_dirty
             || self.cache.render_layout_signature != Some(layout_signature)
@@ -2304,6 +2322,28 @@ mod tests {
         assert!(!super::WorkspaceView::should_skip_collapsed_resize(
             40, 120, 30, 100
         ));
+    }
+
+    #[test]
+    fn test_render_focus_signature_tracks_focus_in_single_layout() {
+        assert_eq!(
+            super::WorkspaceView::render_focus_signature_for_layout(
+                crate::layout::LayoutProfile::Single,
+                Some(codirigent_core::SessionId(2)),
+            ),
+            Some(codirigent_core::SessionId(2))
+        );
+    }
+
+    #[test]
+    fn test_render_focus_signature_ignores_focus_outside_single_layout() {
+        assert_eq!(
+            super::WorkspaceView::render_focus_signature_for_layout(
+                crate::layout::LayoutProfile::Grid2x2,
+                Some(codirigent_core::SessionId(2)),
+            ),
+            None
+        );
     }
 
     #[test]

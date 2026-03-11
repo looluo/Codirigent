@@ -171,7 +171,7 @@ pub(crate) fn detect_shell_command() -> ShellCommand {
         let program = std::env::var("SHELL").unwrap_or_else(|_| "/bin/bash".to_string());
         ShellCommand {
             program,
-            args: Vec::new(),
+            args: vec!["-l".to_string()],
         }
     }
 
@@ -307,7 +307,7 @@ fn resolve_unix_shell(shell_name: &str) -> ShellCommand {
                 if basename == shell_name {
                     return ShellCommand {
                         program: line.to_string(),
-                        args: Vec::new(),
+                        args: vec!["-l".to_string()],
                     };
                 }
             }
@@ -321,7 +321,7 @@ fn resolve_unix_shell(shell_name: &str) -> ShellCommand {
             if !path.is_empty() {
                 return ShellCommand {
                     program: path,
-                    args: Vec::new(),
+                    args: vec!["-l".to_string()],
                 };
             }
         }

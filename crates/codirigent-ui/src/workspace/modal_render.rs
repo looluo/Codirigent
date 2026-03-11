@@ -106,9 +106,36 @@ impl WorkspaceView {
             CustomLayoutMode::Split => self.render_split_builder_content(cx).into_any_element(),
         };
 
-        // Apply button handler dispatches on mode
+        // Apply-only button keeps the layout for the current workspace.
         let apply_button = div()
             .id("custom-layout-apply")
+            .px_4()
+            .py_2()
+            .border_1()
+            .border_color(border_color)
+            .rounded_md()
+            .text_sm()
+            .text_color(fg)
+            .cursor_pointer()
+            .hover(|style| style.bg(border_color.opacity(0.1)))
+            .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
+                this.apply_custom_layout_from_picker(cx);
+                cx.notify();
+            }))
+            .child(self.aligned_icon_label_row(
+                icons::check(),
+                fg,
+                12.0,
+                "Apply",
+                fg,
+                14.0,
+                FontWeight::MEDIUM,
+                16.0,
+                4.0,
+            ));
+
+        let save_and_apply_button = div()
+            .id("custom-layout-save-and-apply")
             .px_4()
             .py_2()
             .bg(primary)
@@ -118,30 +145,14 @@ impl WorkspaceView {
             .cursor_pointer()
             .hover(|style| style.bg(primary.opacity(0.8)))
             .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
-                match this.custom_picker.mode {
-                    CustomLayoutMode::Grid => {
-                        if let Some((rows, cols)) = this.custom_picker.validate() {
-                            this.custom_picker.close();
-                            let profile = crate::layout::LayoutProfile::Custom { rows, cols };
-                            this.workspace.set_layout(profile);
-                            this.mark_layout_cache_dirty();
-                        }
-                    }
-                    CustomLayoutMode::Split => {
-                        if let Some(tree) = this.custom_picker.validate_split() {
-                            this.custom_picker.close();
-                            this.workspace.set_split_tree(tree);
-                            this.mark_layout_cache_dirty();
-                        }
-                    }
-                }
+                this.save_and_apply_custom_layout_from_picker(cx);
                 cx.notify();
             }))
             .child(self.aligned_icon_label_row(
-                icons::check(),
+                icons::plus(),
                 gpui::Hsla::white(),
                 12.0,
-                "Apply",
+                "Save + Apply",
                 gpui::Hsla::white(),
                 14.0,
                 FontWeight::MEDIUM,
@@ -264,7 +275,8 @@ impl WorkspaceView {
                                         )),
                                 )
                                 // Apply button
-                                .child(apply_button),
+                                .child(apply_button)
+                                .child(save_and_apply_button),
                         ),
                 ),
         )
@@ -377,6 +389,12 @@ impl WorkspaceView {
         let can_remove = has_selection && pane_count > 1;
         let tree = self.custom_picker.split_tree.clone();
         let selected = self.custom_picker.selected_slot;
+        let slot_display_numbers: std::collections::HashMap<SlotId, usize> = tree
+            .slots_in_order()
+            .into_iter()
+            .enumerate()
+            .map(|(index, slot)| (slot, index + 1))
+            .collect();
 
         // Action button styling helper
         let btn_opacity = if has_selection { 1.0 } else { 0.5 };
@@ -507,6 +525,7 @@ impl WorkspaceView {
                     .child(Self::render_split_preview_node(
                         &tree,
                         selected,
+                        &slot_display_numbers,
                         primary,
                         preview_bg,
                         border_color,
@@ -519,6 +538,7 @@ impl WorkspaceView {
     fn render_split_preview_node(
         node: &LayoutNode,
         selected: Option<SlotId>,
+        slot_display_numbers: &std::collections::HashMap<SlotId, usize>,
         primary: gpui::Hsla,
         preview_bg: gpui::Hsla,
         border_color: gpui::Hsla,
@@ -528,7 +548,10 @@ impl WorkspaceView {
             LayoutNode::Leaf { slot } => {
                 let is_selected = selected == Some(*slot);
                 let slot_id = *slot;
-                let slot_num = slot.0 + 1; // 1-indexed display
+                let slot_num = slot_display_numbers
+                    .get(&slot_id)
+                    .copied()
+                    .unwrap_or(slot_id.0 as usize + 1);
 
                 let cell_bg = if is_selected {
                     primary.opacity(0.15)
@@ -572,6 +595,7 @@ impl WorkspaceView {
                 let first_elem = Self::render_split_preview_node(
                     first,
                     selected,
+                    slot_display_numbers,
                     primary,
                     preview_bg,
                     border_color,
@@ -580,6 +604,7 @@ impl WorkspaceView {
                 let second_elem = Self::render_split_preview_node(
                     second,
                     selected,
+                    slot_display_numbers,
                     primary,
                     preview_bg,
                     border_color,
