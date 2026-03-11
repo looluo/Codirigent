@@ -15,8 +15,7 @@ use super::gpui::WorkspaceView;
 use super::types::{CachedCliStatus, CliStatusSource, ProcessedHookSignal};
 use codirigent_core::{
     hook_signals_dir, AssignmentAction, CliType, CodexExecutionMode, CodirigentEvent, EventBus,
-    GitRepoInfo, ProcessMonitor, Session, SessionId, SessionManager, SessionStatus, SessionUpdate,
-    TaskStatus,
+    ProcessMonitor, Session, SessionId, SessionManager, SessionStatus, SessionUpdate, TaskStatus,
 };
 use codirigent_detector::NotificationType;
 use codirigent_session::cli_detector::CliDetector;
@@ -93,25 +92,6 @@ fn app_start_ts() -> u64 {
 /// incorrectly filtered as belonging to a previous run.
 pub(super) fn init_app_start_ts() {
     let _ = app_start_ts();
-}
-
-fn update_cached_session_git_info(session: &mut Session, git_info: &Option<GitRepoInfo>) -> bool {
-    if session.git_info == *git_info {
-        return false;
-    }
-
-    session.git_info = git_info.clone();
-    true
-}
-
-fn apply_cwd_session_update_from_manager(
-    workspace_session: &mut Session,
-    manager_session: &Session,
-) {
-    workspace_session.working_directory = manager_session.working_directory.clone();
-    workspace_session.group = manager_session.group.clone();
-    workspace_session.color = manager_session.color.clone();
-    workspace_session.git_info = None;
 }
 
 fn prioritize_and_partition_output_sessions<F>(
@@ -859,7 +839,9 @@ impl WorkspaceView {
             }
 
             if let Some(ws_session) = self.workspace.session_mut(session_id) {
-                apply_cwd_session_update_from_manager(ws_session, &mgr_session);
+                ws_session.working_directory = mgr_session.working_directory.clone();
+                ws_session.group = None;
+                ws_session.git_info = None;
             }
 
             if self.workspace.focused_session_id() == Some(session_id) {
@@ -1639,7 +1621,12 @@ impl WorkspaceView {
                         }
                     }
                     if let Some(session) = this.workspace.session_mut(*id) {
-                        git_changed |= update_cached_session_git_info(session, git_info);
+                        let next_group = git_info.as_ref().map(|info| info.branch.clone());
+                        if session.git_info != *git_info || session.group != next_group {
+                            session.git_info = git_info.clone();
+                            session.group = next_group;
+                            git_changed = true;
+                        }
                     }
                 }
                 if git_changed {
@@ -1691,6 +1678,7 @@ impl WorkspaceView {
 
                 let branch = git_info.as_ref().map(|info| info.branch.clone());
                 let dirty_count = git_info.as_ref().map(|info| info.dirty_count);
+                let next_group = git_info.as_ref().map(|info| info.branch.clone());
                 let mut changed = false;
                 if let Some(header) = this.terminal_headers.get_mut(&session_id) {
                     if header.git_branch != branch || header.git_dirty_count != dirty_count {
@@ -1700,7 +1688,11 @@ impl WorkspaceView {
                     }
                 }
                 if let Some(session) = this.workspace.session_mut(session_id) {
-                    changed |= update_cached_session_git_info(session, &git_info);
+                    if session.git_info != git_info || session.group != next_group {
+                        session.git_info = git_info.clone();
+                        session.group = next_group;
+                        changed = true;
+                    }
                 }
                 if changed {
                     this.mark_ui_sync_dirty();
@@ -2196,7 +2188,6 @@ impl WorkspaceView {
 mod tests {
     use super::*;
     use codirigent_core::{ImageData, ImageFormat};
-    use std::path::PathBuf;
 
     fn codex_input(
         session_id: u64,
@@ -2416,65 +2407,6 @@ mod tests {
 
         assert!(!should_defer_ambiguous_codex_probe(&inputs[0], &counts));
         assert!(should_defer_ambiguous_codex_probe(&inputs[1], &counts));
-    }
-
-    #[test]
-    fn git_refresh_updates_git_info_without_overwriting_custom_group() {
-        let mut session = Session::new(
-            SessionId(1),
-            "Session 1".to_string(),
-            PathBuf::from("/tmp/project"),
-        );
-        session.group = Some("custom-group".to_string());
-        session.color = Some("#f43f5e".to_string());
-
-        let git_info = Some(GitRepoInfo {
-            repo_root: PathBuf::from("/tmp/project"),
-            branch: "feature/custom-group".to_string(),
-            dirty_count: 2,
-            has_staged: false,
-            head_sha: Some("deadbeef".to_string()),
-            unstaged_files: Vec::new(),
-            staged_files: Vec::new(),
-        });
-
-        assert!(update_cached_session_git_info(&mut session, &git_info));
-        assert_eq!(session.group.as_deref(), Some("custom-group"));
-        assert_eq!(session.color.as_deref(), Some("#f43f5e"));
-        assert_eq!(session.git_info, git_info);
-    }
-
-    #[test]
-    fn cwd_session_update_preserves_custom_group_from_manager() {
-        let mut workspace_session = Session::new(
-            SessionId(1),
-            "Session 1".to_string(),
-            PathBuf::from("/tmp/project"),
-        );
-        workspace_session.group = Some("custom-group".to_string());
-        workspace_session.color = Some("#f43f5e".to_string());
-        workspace_session.git_info = Some(GitRepoInfo {
-            repo_root: PathBuf::from("/tmp/project"),
-            branch: "main".to_string(),
-            dirty_count: 1,
-            has_staged: false,
-            head_sha: Some("deadbeef".to_string()),
-            unstaged_files: Vec::new(),
-            staged_files: Vec::new(),
-        });
-
-        let mut manager_session = workspace_session.clone();
-        manager_session.working_directory = PathBuf::from("/tmp/other-project");
-
-        apply_cwd_session_update_from_manager(&mut workspace_session, &manager_session);
-
-        assert_eq!(
-            workspace_session.working_directory,
-            PathBuf::from("/tmp/other-project")
-        );
-        assert_eq!(workspace_session.group.as_deref(), Some("custom-group"));
-        assert_eq!(workspace_session.color.as_deref(), Some("#f43f5e"));
-        assert!(workspace_session.git_info.is_none());
     }
 
     #[test]

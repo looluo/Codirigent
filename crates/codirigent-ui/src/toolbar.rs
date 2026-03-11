@@ -230,15 +230,6 @@ impl CustomLayoutPicker {
         }
     }
 
-    /// Get the current 1-based display number for a slot in preview order.
-    pub fn slot_display_number(&self, slot: SlotId) -> Option<usize> {
-        self.split_tree
-            .slots_in_order()
-            .iter()
-            .position(|current| *current == slot)
-            .map(|index| index + 1)
-    }
-
     /// Validate the split tree and return it if valid.
     ///
     /// Ensures the tree has between 1 and 20 panes.
@@ -868,25 +859,6 @@ mod tests {
         assert!(picker
             .split_tree
             .contains_slot(picker.selected_slot.unwrap()));
-    }
-
-    #[test]
-    fn test_slot_display_number_reindexes_after_removal() {
-        let mut picker = CustomLayoutPicker::new();
-        picker.split_selected(SplitDirection::Horizontal);
-        picker.selected_slot = Some(SlotId(1));
-        picker.split_selected(SplitDirection::Horizontal);
-
-        picker.selected_slot = Some(SlotId(1));
-        assert!(picker.remove_selected());
-
-        assert_eq!(
-            picker.split_tree.slots_in_order(),
-            vec![SlotId(0), SlotId(2)]
-        );
-        assert_eq!(picker.slot_display_number(SlotId(0)), Some(1));
-        assert_eq!(picker.slot_display_number(SlotId(2)), Some(2));
-        assert_eq!(picker.slot_display_number(SlotId(1)), None);
     }
 
     #[test]

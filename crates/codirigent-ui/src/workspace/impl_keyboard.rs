@@ -5,100 +5,13 @@
 //! - Layout profile persistence to settings
 
 use super::gpui::WorkspaceView;
-use crate::layout_profile::SavedLayoutProfile;
 use crate::toolbar::CustomLayoutMode;
-use codirigent_core::{LayoutMode, LayoutNode, SplitDirection};
+use codirigent_core::SplitDirection;
 use gpui::{Context, KeyDownEvent};
-
-fn saved_grid_layout_profile(rows: u32, cols: u32) -> SavedLayoutProfile {
-    SavedLayoutProfile::new(
-        format!("custom-{}x{}", rows, cols),
-        format!("{}x{}", rows, cols),
-        LayoutMode::Grid { rows, cols },
-    )
-}
-
-fn saved_split_layout_profile(tree: &LayoutNode) -> SavedLayoutProfile {
-    let pane_count = tree.leaf_count();
-    SavedLayoutProfile::new(
-        format!("custom-split-{}", pane_count),
-        format!("Split ({})", pane_count),
-        LayoutMode::SplitTree { root: tree.clone() },
-    )
-}
 
 impl WorkspaceView {
     pub(super) fn save_layout_profiles_to_settings(&mut self, cx: &mut Context<Self>) {
         self.persist_layout_profiles_to_settings(cx);
-    }
-
-    pub(super) fn apply_custom_layout_from_picker(&mut self, cx: &mut Context<Self>) -> bool {
-        let applied = match self.custom_picker.mode {
-            CustomLayoutMode::Grid => {
-                let Some((rows, cols)) = self.custom_picker.validate() else {
-                    return false;
-                };
-
-                self.custom_picker.close();
-                let profile = crate::layout::LayoutProfile::Custom { rows, cols };
-                self.workspace.set_layout(profile);
-                true
-            }
-            CustomLayoutMode::Split => {
-                let Some(tree) = self.custom_picker.validate_split() else {
-                    return false;
-                };
-
-                self.custom_picker.close();
-                self.workspace.set_split_tree(tree);
-                true
-            }
-        };
-
-        if applied {
-            self.mark_layout_cache_dirty();
-            self.mark_ui_sync_dirty();
-            self.save_state_to_disk(cx);
-        }
-
-        applied
-    }
-
-    pub(super) fn save_and_apply_custom_layout_from_picker(
-        &mut self,
-        cx: &mut Context<Self>,
-    ) -> bool {
-        let saved_profile = match self.custom_picker.mode {
-            CustomLayoutMode::Grid => {
-                let Some((rows, cols)) = self.custom_picker.validate() else {
-                    return false;
-                };
-
-                self.custom_picker.close();
-                let profile = crate::layout::LayoutProfile::Custom { rows, cols };
-                self.workspace.set_layout(profile);
-                saved_grid_layout_profile(rows, cols)
-            }
-            CustomLayoutMode::Split => {
-                let Some(tree) = self.custom_picker.validate_split() else {
-                    return false;
-                };
-
-                self.custom_picker.close();
-                self.workspace.set_split_tree(tree.clone());
-                saved_split_layout_profile(&tree)
-            }
-        };
-
-        let profile_id = saved_profile.id.clone();
-        self.mark_layout_cache_dirty();
-        self.mark_ui_sync_dirty();
-        self.top_bar.profile_manager.add_profile(saved_profile);
-        self.top_bar.set_active_profile_id(&profile_id);
-        self.save_layout_profiles_to_settings(cx);
-        self.save_state_to_disk(cx);
-
-        true
     }
 
     pub(super) fn handle_custom_layout_key_down(
@@ -119,7 +32,44 @@ impl WorkspaceView {
                 return true;
             }
             "enter" => {
-                self.save_and_apply_custom_layout_from_picker(cx);
+                match self.custom_picker.mode {
+                    CustomLayoutMode::Grid => {
+                        if let Some((rows, cols)) = self.custom_picker.validate() {
+                            self.custom_picker.close();
+                            let profile = crate::layout::LayoutProfile::Custom { rows, cols };
+                            self.workspace.set_layout(profile);
+                            self.mark_layout_cache_dirty();
+                            let id = format!("custom-{}x{}", rows, cols);
+                            let name = format!("{}x{}", rows, cols);
+                            let saved = crate::layout_profile::SavedLayoutProfile::new(
+                                id.clone(),
+                                name,
+                                codirigent_core::LayoutMode::Grid { rows, cols },
+                            );
+                            self.top_bar.profile_manager.add_profile(saved);
+                            self.top_bar.set_active_profile_id(&id);
+                            self.save_layout_profiles_to_settings(cx);
+                        }
+                    }
+                    CustomLayoutMode::Split => {
+                        if let Some(tree) = self.custom_picker.validate_split() {
+                            self.custom_picker.close();
+                            let pane_count = tree.leaf_count();
+                            let id = format!("custom-split-{}", pane_count);
+                            let name = format!("Split ({})", pane_count);
+                            let saved = crate::layout_profile::SavedLayoutProfile::new(
+                                id.clone(),
+                                name,
+                                codirigent_core::LayoutMode::SplitTree { root: tree.clone() },
+                            );
+                            self.workspace.set_split_tree(tree);
+                            self.mark_layout_cache_dirty();
+                            self.top_bar.profile_manager.add_profile(saved);
+                            self.top_bar.set_active_profile_id(&id);
+                            self.save_layout_profiles_to_settings(cx);
+                        }
+                    }
+                }
                 cx.notify();
                 return true;
             }
@@ -198,30 +148,5 @@ impl WorkspaceView {
         }
 
         true
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::{saved_grid_layout_profile, saved_split_layout_profile};
-    use codirigent_core::{LayoutMode, LayoutNode};
-
-    #[test]
-    fn saved_grid_layout_profile_uses_dimensions() {
-        let profile = saved_grid_layout_profile(4, 3);
-
-        assert_eq!(profile.id, "custom-4x3");
-        assert_eq!(profile.name, "4x3");
-        assert_eq!(profile.layout, LayoutMode::Grid { rows: 4, cols: 3 });
-    }
-
-    #[test]
-    fn saved_split_layout_profile_uses_leaf_count() {
-        let tree = LayoutNode::from_grid(1, 3);
-        let profile = saved_split_layout_profile(&tree);
-
-        assert_eq!(profile.id, "custom-split-3");
-        assert_eq!(profile.name, "Split (3)");
-        assert_eq!(profile.layout, LayoutMode::SplitTree { root: tree });
     }
 }

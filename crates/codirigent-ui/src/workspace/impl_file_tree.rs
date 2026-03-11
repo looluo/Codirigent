@@ -292,31 +292,17 @@ impl WorkspaceView {
                     cx.notify();
                     return;
                 }
-                let session_id = SessionId(session_id);
-                let session_dir = self
-                    .workspace
-                    .session(session_id)
-                    .map(|session| session.working_directory.clone());
                 // C3 implementation: insert path into terminal
-                let Some(path_str) = session_dir
-                    .as_deref()
-                    .and_then(|dir| {
-                        self.project.format_path_for_terminal_in_session(
-                            &path,
-                            dir,
-                            self.terminal_path_style(),
-                        )
-                    })
-                    .or_else(|| {
-                        self.project
-                            .format_path_for_terminal(&path, self.terminal_path_style())
-                    })
+                let Some(path_str) = self
+                    .project
+                    .format_path_for_terminal(&path, self.terminal_path_style())
                 else {
                     warn!(?path, "Failed to quote dragged path safely for terminal");
                     cx.notify();
                     return;
                 };
                 let input = format!("{} ", path_str); // Add space after path
+                let session_id = SessionId(session_id);
                 if let Ok(manager) = self.session_manager.lock() {
                     if let Err(e) = manager.send_input(session_id, input.as_bytes()) {
                         warn!("Failed to send path to terminal: {}", e);
@@ -353,23 +339,9 @@ impl WorkspaceView {
             return;
         }
         if let Some(session_id) = self.workspace.focused_session_id() {
-            let session_dir = self
-                .workspace
-                .session(session_id)
-                .map(|session| session.working_directory.clone());
-            let Some(path_str) = session_dir
-                .as_deref()
-                .and_then(|dir| {
-                    self.project.format_path_for_terminal_in_session(
-                        path,
-                        dir,
-                        self.terminal_path_style(),
-                    )
-                })
-                .or_else(|| {
-                    self.project
-                        .format_path_for_terminal(path, self.terminal_path_style())
-                })
+            let Some(path_str) = self
+                .project
+                .format_path_for_terminal(path, self.terminal_path_style())
             else {
                 warn!(?path, "Failed to quote file-tree path safely for terminal");
                 return;
