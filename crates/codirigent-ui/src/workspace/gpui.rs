@@ -730,6 +730,9 @@ impl WorkspaceView {
         layout_profile: crate::layout::LayoutProfile,
         focused_session_id: Option<SessionId>,
     ) -> Option<SessionId> {
+        // Only single-pane mode swaps which session is visibly rendered when focus
+        // changes. Multi-pane layouts already render every visible session, so
+        // focus changes alone should not invalidate the cell-layout cache.
         if layout_profile == crate::layout::LayoutProfile::Single {
             focused_session_id
         } else {

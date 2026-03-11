@@ -471,6 +471,34 @@ pub(crate) fn configure_shell_integration(cmd: &mut portable_pty::CommandBuilder
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[cfg(unix)]
+    use std::ffi::OsString;
+
+    #[cfg(unix)]
+    struct EnvVarGuard {
+        key: &'static str,
+        value: Option<OsString>,
+    }
+
+    #[cfg(unix)]
+    impl EnvVarGuard {
+        fn capture(key: &'static str) -> Self {
+            Self {
+                key,
+                value: std::env::var_os(key),
+            }
+        }
+    }
+
+    #[cfg(unix)]
+    impl Drop for EnvVarGuard {
+        fn drop(&mut self) {
+            match &self.value {
+                Some(value) => std::env::set_var(self.key, value),
+                None => std::env::remove_var(self.key),
+            }
+        }
+    }
 
     #[test]
     fn test_detect_shell() {
@@ -509,6 +537,40 @@ mod tests {
         assert!(!is_zsh_shell("/bin/bash"));
         assert!(!is_zsh_shell("bash"));
         assert!(!is_zsh_shell(""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[serial_test::serial]
+    fn test_detect_shell_command_uses_login_shell_args() {
+        let _shell_guard = EnvVarGuard::capture("SHELL");
+        let _codirigent_shell_guard = EnvVarGuard::capture("CODIRIGENT_SHELL");
+        let _codirigent_shell_args_guard = EnvVarGuard::capture("CODIRIGENT_SHELL_ARGS");
+
+        std::env::set_var("SHELL", "/bin/zsh");
+        std::env::remove_var("CODIRIGENT_SHELL");
+        std::env::remove_var("CODIRIGENT_SHELL_ARGS");
+
+        let shell = detect_shell_command();
+        assert_eq!(shell.program, "/bin/zsh");
+        assert_eq!(shell.args, vec!["-l"]);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    #[serial_test::serial]
+    fn test_detect_shell_command_respects_codirigent_shell_args_override() {
+        let _shell_guard = EnvVarGuard::capture("SHELL");
+        let _codirigent_shell_guard = EnvVarGuard::capture("CODIRIGENT_SHELL");
+        let _codirigent_shell_args_guard = EnvVarGuard::capture("CODIRIGENT_SHELL_ARGS");
+
+        std::env::set_var("SHELL", "/bin/zsh");
+        std::env::set_var("CODIRIGENT_SHELL", "/opt/custom-shell");
+        std::env::set_var("CODIRIGENT_SHELL_ARGS", "--norc -i");
+
+        let shell = detect_shell_command();
+        assert_eq!(shell.program, "/opt/custom-shell");
+        assert_eq!(shell.args, vec!["--norc", "-i"]);
     }
 
     #[cfg(unix)]
