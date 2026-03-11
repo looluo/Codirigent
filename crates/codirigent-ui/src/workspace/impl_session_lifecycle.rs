@@ -13,8 +13,8 @@ use crate::terminal::Terminal;
 use crate::terminal_header::TerminalHeader;
 use crate::terminal_view::TerminalView;
 use codirigent_core::{
-    CodexExecutionMode, CodirigentEvent, EventBus, ProcessMonitor, Session, SessionId,
-    SessionManager, SessionStatus, SlotId,
+    CodexExecutionMode, CodirigentEvent, EventBus, GridPosition, LayoutMode, ProcessMonitor,
+    Session, SessionId, SessionManager, SessionStatus, SlotId,
 };
 use gpui::Context;
 use serde::Deserialize;
@@ -39,7 +39,62 @@ struct RestoreSessionPlan {
 
 #[derive(Debug)]
 struct RestorePlan {
+    layout: LayoutMode,
     sessions: Vec<RestoreSessionPlan>,
+}
+
+fn layout_profile_for_restore(layout: &LayoutMode) -> Option<crate::layout::LayoutProfile> {
+    if let Some(profile) = crate::layout::LayoutProfile::from_mode(layout) {
+        return Some(profile);
+    }
+
+    match layout {
+        LayoutMode::Custom { positions } => custom_positions_layout_profile(positions),
+        _ => None,
+    }
+}
+
+fn custom_positions_layout_profile(
+    positions: &[(SessionId, GridPosition)],
+) -> Option<crate::layout::LayoutProfile> {
+    let max_row = positions.iter().map(|(_, position)| position.row).max()?;
+    let max_col = positions.iter().map(|(_, position)| position.col).max()?;
+    crate::layout::LayoutProfile::custom(max_row + 1, max_col + 1)
+}
+
+fn restore_layout_capacity(layout: &LayoutMode) -> usize {
+    match layout {
+        LayoutMode::Grid { rows, cols } => (*rows as usize) * (*cols as usize),
+        LayoutMode::Single => 1,
+        LayoutMode::Custom { positions } => layout_profile_for_restore(layout)
+            .map(|profile| profile.max_sessions())
+            .unwrap_or_else(|| positions.len()),
+        LayoutMode::SplitTree { root } => root.leaf_count(),
+    }
+}
+
+fn expanded_restore_layout(session_count: usize) -> LayoutMode {
+    if session_count <= 1 {
+        LayoutMode::Single
+    } else if session_count <= 4 {
+        LayoutMode::Grid { rows: 2, cols: 2 }
+    } else if session_count <= 6 {
+        LayoutMode::Grid { rows: 2, cols: 3 }
+    } else if session_count <= 9 {
+        LayoutMode::Grid { rows: 3, cols: 3 }
+    } else {
+        let cols = 4u32;
+        let rows = (session_count as u32).div_ceil(cols);
+        LayoutMode::Grid { rows, cols }
+    }
+}
+
+fn staging_layout_for_restore(saved_layout: &LayoutMode, session_count: usize) -> LayoutMode {
+    if restore_layout_capacity(saved_layout) >= session_count {
+        saved_layout.clone()
+    } else {
+        expanded_restore_layout(session_count)
+    }
 }
 
 /// Read the `permissionMode` value from the last complete JSON line of a
@@ -371,6 +426,7 @@ fn build_resume_command(program: &str, session_id: &str, extra_args: &[&str]) ->
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
+    use codirigent_core::{AppState, LayoutNode, Session, SessionId, SplitDirection};
     use tempfile::TempDir;
 
     #[test]
@@ -423,6 +479,80 @@ mod tests {
             Some(CodexExecutionMode::Bypass)
         );
     }
+
+    #[test]
+    fn build_restore_plan_preserves_saved_custom_grid_layout() {
+        let state = AppState {
+            sessions: vec![Session::new(
+                SessionId(1),
+                "Session 1".to_string(),
+                PathBuf::from("/tmp"),
+            )],
+            layout: LayoutMode::Grid { rows: 1, cols: 4 },
+            updated_at: None,
+            window_bounds: None,
+        };
+
+        let plan = WorkspaceView::build_restore_plan(state, PathBuf::from("/tmp")).unwrap();
+        assert_eq!(plan.layout, LayoutMode::Grid { rows: 1, cols: 4 });
+    }
+
+    #[test]
+    fn build_restore_plan_preserves_saved_split_tree_layout() {
+        let split_tree = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf { slot: SlotId(0) }),
+            second: Box::new(LayoutNode::Leaf { slot: SlotId(1) }),
+        };
+        let state = AppState {
+            sessions: vec![Session::new(
+                SessionId(1),
+                "Session 1".to_string(),
+                PathBuf::from("/tmp"),
+            )],
+            layout: LayoutMode::SplitTree {
+                root: split_tree.clone(),
+            },
+            updated_at: None,
+            window_bounds: None,
+        };
+
+        let plan = WorkspaceView::build_restore_plan(state, PathBuf::from("/tmp")).unwrap();
+        assert_eq!(
+            plan.layout,
+            LayoutMode::SplitTree {
+                root: split_tree.clone(),
+            }
+        );
+        assert_eq!(
+            restore_layout_capacity(&plan.layout),
+            split_tree.leaf_count()
+        );
+    }
+
+    #[test]
+    fn staging_layout_for_restore_expands_when_saved_layout_is_too_small() {
+        assert_eq!(
+            staging_layout_for_restore(&LayoutMode::Single, 3),
+            LayoutMode::Grid { rows: 2, cols: 2 }
+        );
+    }
+
+    #[test]
+    fn layout_profile_for_restore_supports_legacy_custom_positions() {
+        let profile = layout_profile_for_restore(&LayoutMode::Custom {
+            positions: vec![
+                (SessionId(1), GridPosition { row: 0, col: 0 }),
+                (SessionId(2), GridPosition { row: 1, col: 2 }),
+            ],
+        });
+
+        assert_eq!(
+            profile,
+            Some(crate::layout::LayoutProfile::Custom { rows: 2, cols: 3 })
+        );
+    }
 }
 
 impl WorkspaceView {
@@ -430,7 +560,13 @@ impl WorkspaceView {
         state: codirigent_core::AppState,
         fallback_dir: PathBuf,
     ) -> Option<RestorePlan> {
-        if state.sessions.is_empty() {
+        let codirigent_core::AppState {
+            sessions: saved_sessions,
+            layout,
+            ..
+        } = state;
+
+        if saved_sessions.is_empty() {
             return None;
         }
 
@@ -441,9 +577,9 @@ impl WorkspaceView {
             std::collections::HashSet::new();
         let mut used_gemini_ids: std::collections::HashSet<String> =
             std::collections::HashSet::new();
-        let mut sessions = Vec::with_capacity(state.sessions.len());
+        let mut sessions = Vec::with_capacity(saved_sessions.len());
 
-        for saved in state.sessions {
+        for saved in saved_sessions {
             let working_dir = if saved.working_directory.exists() {
                 saved.working_directory.clone()
             } else {
@@ -519,7 +655,7 @@ impl WorkspaceView {
             });
         }
 
-        Some(RestorePlan { sessions })
+        Some(RestorePlan { layout, sessions })
     }
 
     fn apply_restore_plan(
@@ -535,32 +671,10 @@ impl WorkspaceView {
         info!(count = plan.sessions.len(), "Restoring sessions from disk");
 
         let session_count = plan.sessions.len();
-        let current_max = self.workspace.layout_profile().max_sessions();
-
-        if session_count > current_max {
-            use crate::layout::LayoutProfile;
-            let new_profile = if session_count <= 4 {
-                LayoutProfile::Grid2x2
-            } else if session_count <= 6 {
-                LayoutProfile::Grid2x3
-            } else if session_count <= 9 {
-                LayoutProfile::Grid3x3
-            } else {
-                let cols = 4;
-                let rows = (session_count as u32).div_ceil(cols);
-                LayoutProfile::Custom { rows, cols }
-            };
-
-            info!(
-                "Auto-expanding layout from {} to {} cells to fit {} sessions",
-                current_max,
-                new_profile.max_sessions(),
-                session_count
-            );
-            self.workspace.set_layout(new_profile);
-            self.mark_layout_cache_dirty();
-        }
-
+        let desired_layout = plan.layout.clone();
+        let staging_layout = staging_layout_for_restore(&desired_layout, session_count);
+        let reapply_saved_layout = staging_layout != desired_layout;
+        self.apply_restored_layout_mode(&staging_layout);
         let restore_sessions = plan.sessions;
         cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
             let mut remaining = restore_sessions.into_iter().peekable();
@@ -568,6 +682,7 @@ impl WorkspaceView {
                 let batch = remaining.by_ref().take(2).collect::<Vec<_>>();
                 let is_last_batch = remaining.peek().is_none();
                 let shell = shell.clone();
+                let desired_layout = desired_layout.clone();
 
                 let _ = this.update(cx, |this, cx| {
                     for plan in batch {
@@ -575,6 +690,9 @@ impl WorkspaceView {
                     }
 
                     if is_last_batch {
+                        if reapply_saved_layout {
+                            this.apply_restored_layout_mode(&desired_layout);
+                        }
                         if let Some(first_id) = this.workspace.sessions().first().map(|s| s.id) {
                             this.select_session_with_cx(first_id, cx);
                         }
@@ -593,6 +711,34 @@ impl WorkspaceView {
             }
         })
         .detach();
+    }
+
+    fn apply_restored_layout_mode(&mut self, layout: &LayoutMode) {
+        match layout {
+            LayoutMode::SplitTree { root } => self.workspace.set_split_tree(root.clone()),
+            _ => {
+                if let Some(profile) = layout_profile_for_restore(layout) {
+                    self.workspace.set_layout(profile);
+                }
+            }
+        }
+
+        if let Some(profile) = layout_profile_for_restore(layout) {
+            self.top_bar.set_active_layout(profile);
+        } else if let Some(profile_id) = self
+            .top_bar
+            .profile_manager
+            .list_profiles()
+            .iter()
+            .find(|profile| profile.layout == *layout)
+            .map(|profile| profile.id.clone())
+        {
+            self.top_bar.set_active_profile_id(&profile_id);
+        } else {
+            self.top_bar.set_active_profile_id("__none__");
+        }
+
+        self.mark_layout_cache_dirty();
     }
 
     fn restore_session_from_plan(&mut self, plan: RestoreSessionPlan, shell: Option<String>) {

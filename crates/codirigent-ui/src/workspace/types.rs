@@ -560,6 +560,8 @@ pub(super) struct RenderLayoutSignature {
     pub sidebar_width: f32,
     pub right_panel_width: f32,
     pub grid_gap: f32,
+    /// Only populated in single-session layout where the visible cell depends on focus.
+    pub focused_session_id: Option<SessionId>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
