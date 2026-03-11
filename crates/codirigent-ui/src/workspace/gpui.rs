@@ -1423,11 +1423,11 @@ impl WorkspaceView {
             let key = event.keystroke.key.as_ref();
             match key {
                 "v" => {
-                    self.handle_paste(&Paste, window, cx);
+                    self.handle_paste(&crate::app::Paste, window, cx);
                     return;
                 }
                 "c" => {
-                    self.handle_copy(&Copy, window, cx);
+                    self.handle_copy(&crate::app::Copy, window, cx);
                     return;
                 }
                 "n" => {

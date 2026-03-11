@@ -88,7 +88,7 @@ impl WorkspaceView {
                 _ => 0,
             });
             if let Some(hwnd) = raw_handle {
-                bar = bar.on_mouse_down(MouseButton::Left, move |_event, _window, _cx| {
+                bar = bar.on_mouse_down(gpui::MouseButton::Left, move |_event, _window, _cx| {
                     crate::platform_drag::begin_title_bar_drag(hwnd);
                 });
             }
