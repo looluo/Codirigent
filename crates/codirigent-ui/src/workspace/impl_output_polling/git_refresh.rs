@@ -1,9 +1,4 @@
-//! Future home for background git refresh scheduling and apply helpers.
-//!
-//! Expected move targets in Phase B:
-//! - bulk git refresh scheduling
-//! - per-session git refresh follow-up
-//! - git-info apply helpers
+//! Background git refresh scheduling and apply helpers.
 
 use super::WorkspaceView;
 use codirigent_core::{GitRepoInfo, Session, SessionId, SessionManager};

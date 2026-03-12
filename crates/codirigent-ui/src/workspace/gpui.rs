@@ -12,7 +12,7 @@
 //! Split note:
 //! - The root keeps `WorkspaceView`, constructor wiring, trait impls, and
 //!   orchestration entry points.
-//! - Lightweight helper clusters are moving under `workspace/gpui/` without
+//! - Lower-coupling helper clusters now live under `workspace/gpui/` without
 //!   changing public module paths.
 //!
 //! # Example
