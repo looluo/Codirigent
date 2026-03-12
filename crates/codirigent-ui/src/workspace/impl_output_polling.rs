@@ -927,7 +927,6 @@ impl WorkspaceView {
             }
 
             self.spawn_session_git_refresh(session_id, mgr_session.working_directory.clone(), cx);
-            self.mark_ui_sync_dirty();
             any_dirty = true;
         }
 
@@ -1053,7 +1052,6 @@ impl WorkspaceView {
             let old_status = self.workspace.session(session_id).map(|s| s.status);
             let mut just_started_compaction = false;
             if self.workspace.update_session_status(session_id, status) {
-                self.mark_ui_sync_dirty();
                 any_dirty = true;
                 // Sync task board with the canonical (JSONL-corrected) status
                 if let Some(old) = old_status {
@@ -1085,7 +1083,6 @@ impl WorkspaceView {
                         if let Some(session) = self.workspace.session_mut(session_id) {
                             session.current_task = None;
                         }
-                        self.mark_ui_sync_dirty();
                         // Start context clear and reuse compaction infrastructure
                         let cli_type = self
                             .clipboard
@@ -1108,6 +1105,7 @@ impl WorkspaceView {
                         }
                     }
                 }
+                self.sync_task_derived_state();
             }
             // NeedsAttention is NOT treated as idle because session is blocked
             // Skip if we just started compaction and wait for /clear to finish
@@ -1703,7 +1701,6 @@ impl WorkspaceView {
                     }
                 }
                 if git_changed {
-                    this.mark_ui_sync_dirty();
                     cx.notify();
                 }
             });
@@ -1763,7 +1760,6 @@ impl WorkspaceView {
                     changed |= update_cached_session_git_info(session, &git_info);
                 }
                 if changed {
-                    this.mark_ui_sync_dirty();
                     cx.notify();
                 }
             });

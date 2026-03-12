@@ -221,7 +221,7 @@ impl WorkspaceView {
         if !restored_cached_state {
             self.clear_project_root_state();
         }
-        self.mark_ui_sync_dirty();
+        self.refresh_derived_ui_state();
 
         self.polling.project_refresh_generation =
             self.polling.project_refresh_generation.saturating_add(1);

@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress. This document defines the planned refactor for the remaining UI-thread-bound session workflow in Codirigent, and now reflects implemented progress through Phase 4.
+Substantially complete. This document defines the planned refactor for the remaining UI-thread-bound session workflow in Codirigent, and now reflects implemented progress through Phase 5. Phase 0 instrumentation remains deferred.
 
 ## Progress Snapshot
 
@@ -13,7 +13,7 @@ In progress. This document defines the planned refactor for the remaining UI-thr
 | Phase 2: Async Session Bootstrap | Complete | Session create/restore bootstrap now runs on the background executor, with UI-side attach/finalization only. |
 | Phase 3: Terminal Runtime Offload | Complete | Terminal parsing/state mutation now runs in a background runtime and the UI consumes snapshots only. |
 | Phase 4: Detector Worker | Complete | Detector tick and stale cached-status collection now run on the background executor; UI only applies targeted status deltas. |
-| Phase 5: Derived UI State Cleanup | Pending | Not started. |
+| Phase 5: Derived UI State Cleanup | Complete | Render-time fallback recomputation is removed; derived UI state is now updated from explicit mutation paths and targeted reducers. |
 
 ### Phase 1 Completion Notes
 
@@ -171,6 +171,57 @@ cargo fmt --all -- --check
 cargo check -p codirigent-ui --features gpui-full
 cargo test -p codirigent-ui --lib --all-features
 ```
+
+### Phase 5 Completion Notes
+
+Implemented:
+
+- Removed the render-time derived-state fallback from `WorkspaceView::render()` in `crates/codirigent-ui/src/workspace/gpui.rs`, including the old `ui_sync_dirty` / `last_ui_sync` polling fields from `crates/codirigent-ui/src/workspace/types.rs`.
+- Split the old `sync_ui_state()` sweep into explicit reducers in `gpui.rs`:
+  - `sync_task_board_state()`
+  - `sync_all_session_headers()`
+  - `sync_empty_cells_state()`
+  - `sync_layout_derived_state()`
+  - `sync_task_derived_state()`
+  - `refresh_derived_ui_state()`
+- Expanded `sync_session_header()` so the hot path now updates `project_name`, `task`, git metadata, focus, and session color without relying on a later full recompute.
+- Replaced former `mark_ui_sync_dirty()` mutation sites across the workspace implementation files with explicit reducer calls matched to the type of mutation:
+  - layout/focus changes use `sync_layout_derived_state()`
+  - task transitions use `sync_task_derived_state()`
+  - broad structural session/project mutations use `refresh_derived_ui_state()`
+- Seeded derived UI state during `WorkspaceView::new()` so initial render starts from committed reducer output rather than waiting for a future render repair pass.
+
+Phase 5 tests added:
+
+- Unit tests for `session_project_name()` covering git-root preference and working-directory fallback.
+- Unit tests for cached task-title resolution fallback behavior in the new reducer helpers.
+
+Branch-hygiene and portability checks performed during Phase 5:
+
+- Confirmed no stale references remain to `mark_ui_sync_dirty`, `ui_sync_dirty`, `last_ui_sync`, or `sync_ui_state()` in the workspace code.
+- Confirmed no new production `unwrap()` calls were introduced under the repo's CI unwrap-count rule (`138 -> 138` versus `origin/main`).
+- Scanned the touched Phase 5 workspace files for new Unix-only path literals and found none.
+
+Verification completed successfully with:
+
+```bash
+cargo clean
+cargo fmt --all -- --check
+cargo check --workspace --all-targets --all-features
+cargo build --workspace --all-features
+cargo test --all --all-targets --all-features
+cargo clippy --all --all-targets --all-features -- -D warnings
+cargo check -p codirigent-ui --features gpui-full
+```
+
+Targeted phase validation run before the full gate:
+
+```bash
+cargo test -p codirigent-ui gpui::tests --features gpui-full
+cargo check -p codirigent-ui --features gpui-full
+```
+
+Manual Phase 5 validation is still pending on a live app run. The render-path fallback is removed and the automated gate is green, but the final interactive review for task-board/header freshness under real session activity still needs hands-on confirmation.
 
 ## Problem Statement
 

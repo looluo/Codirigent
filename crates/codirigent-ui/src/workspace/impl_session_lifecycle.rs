@@ -910,7 +910,7 @@ impl WorkspaceView {
             );
         }
 
-        self.mark_ui_sync_dirty();
+        self.refresh_derived_ui_state();
         self.save_state_to_disk(cx);
         cx.notify();
     }
@@ -1190,7 +1190,7 @@ impl WorkspaceView {
                         info!("Session restoration complete");
                     }
 
-                    this.mark_ui_sync_dirty();
+                    this.refresh_derived_ui_state();
                     cx.notify();
                 });
 
@@ -1381,7 +1381,7 @@ impl WorkspaceView {
         self.event_bus
             .publish(CodirigentEvent::SessionClosed { id });
         info!(?id, "Closed session");
-        self.mark_ui_sync_dirty();
+        self.refresh_derived_ui_state();
         self.save_state_to_disk(cx);
         cx.notify();
     }
