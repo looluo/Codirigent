@@ -6,6 +6,7 @@
 use crate::git_status::GitStatusService;
 use crate::pty::{spawn_output_reader_with_notify, PtyHandle};
 use crate::session::SessionState;
+use crate::session_io::SessionIoHandle;
 use anyhow::{anyhow, Context, Result};
 use codirigent_core::{
     CodirigentEvent, EventBus, GitRepoInfo, Session, SessionId, SessionManager, SessionStatus,
@@ -545,8 +546,17 @@ impl SessionManager for DefaultSessionManager {
             .unwrap_or_else(|p| p.into_inner())
             .detect(&working_dir);
 
+        let child_pid = pty.child_pid();
+        let io_handle = SessionIoHandle::spawn(id, pty)?;
+
         // Create session state
-        let state = SessionState::new(session, pty, output_rx, output_notified_clone);
+        let state = SessionState::new(
+            session,
+            child_pid,
+            io_handle,
+            output_rx,
+            output_notified_clone,
+        );
         self.lock_sessions().insert(id, state);
 
         // Publish event
@@ -558,10 +568,12 @@ impl SessionManager for DefaultSessionManager {
     fn close_session(&self, id: SessionId) -> Result<()> {
         info!(%id, "Closing session");
 
-        let _state = self
+        let state = self
             .lock_sessions()
             .remove(&id)
             .ok_or_else(|| anyhow!("Session not found: {}", id))?;
+
+        state.shutdown_io();
 
         self.lock_pending_output_sessions().remove(&id);
 
@@ -573,29 +585,27 @@ impl SessionManager for DefaultSessionManager {
     }
 
     fn send_input(&self, id: SessionId, input: &[u8]) -> Result<()> {
-        let mut sessions = self.lock_sessions();
+        let sessions = self.lock_sessions();
         let state = sessions
-            .get_mut(&id)
+            .get(&id)
             .ok_or_else(|| anyhow!("Session not found: {}", id))?;
 
         state
-            .pty
             .send_input(input)
-            .context("Failed to send input to PTY")?;
+            .context("Failed to queue input for PTY")?;
 
         Ok(())
     }
 
     fn resize(&self, id: SessionId, rows: u16, cols: u16) -> Result<()> {
-        let mut sessions = self.lock_sessions();
+        let sessions = self.lock_sessions();
         let state = sessions
-            .get_mut(&id)
+            .get(&id)
             .ok_or_else(|| anyhow!("Session not found: {}", id))?;
 
         state
-            .pty
             .resize(rows, cols)
-            .context("Failed to resize PTY")?;
+            .context("Failed to queue PTY resize")?;
 
         Ok(())
     }
@@ -712,8 +722,10 @@ mod tests {
         let (tx, rx) = mpsc::channel(8);
         let session = Session::new(id, format!("Session {}", id.0), temp.path().to_path_buf());
         let output_notified = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let child_pid = pty.child_pid();
+        let io_handle = SessionIoHandle::spawn(id, pty).unwrap();
         (
-            SessionState::new(session, pty, rx, output_notified),
+            SessionState::new(session, child_pid, io_handle, rx, output_notified),
             tx,
             temp,
         )
@@ -1245,6 +1257,48 @@ mod tests {
         // Note: output may or may not contain our echo depending on timing
         // The important thing is that the drain works without blocking
         let _ = output;
+    }
+
+    #[tokio::test]
+    async fn test_send_input_preserves_command_order() {
+        let manager = create_manager();
+
+        let id = manager
+            .create_session("Test".to_string(), std::env::temp_dir(), None)
+            .unwrap();
+
+        manager.send_input(id, b"echo phase1_order_a\n").unwrap();
+        manager.send_input(id, b"echo phase1_order_b\n").unwrap();
+        manager.send_input(id, b"echo phase1_order_c\n").unwrap();
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        let mut combined = String::new();
+
+        while tokio::time::Instant::now() < deadline {
+            if let Some(output) = manager.try_drain_output(id) {
+                combined.push_str(&String::from_utf8_lossy(&output));
+                if combined.contains("phase1_order_a")
+                    && combined.contains("phase1_order_b")
+                    && combined.contains("phase1_order_c")
+                {
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        let first = combined.find("phase1_order_a").unwrap_or(usize::MAX);
+        let second = combined.find("phase1_order_b").unwrap_or(usize::MAX);
+        let third = combined.find("phase1_order_c").unwrap_or(usize::MAX);
+
+        assert!(
+            first < second,
+            "expected phase1_order_a before phase1_order_b in output: {combined}"
+        );
+        assert!(
+            second < third,
+            "expected phase1_order_b before phase1_order_c in output: {combined}"
+        );
     }
 
     #[test]

@@ -266,7 +266,7 @@ impl TerminalView {
         let cached_terminal_bg: gpui::Hsla = theme.terminal_background.into();
         let cached_terminal_fg: gpui::Hsla = theme.terminal_foreground.into();
 
-        Self {
+        let mut view = Self {
             terminal,
             theme,
             cell_width,
@@ -288,7 +288,9 @@ impl TerminalView {
             cached_terminal_bg,
             cached_terminal_fg,
             cached_cursor_viewport_pos: None,
-        }
+        };
+        view.refresh_cursor_cache(view.terminal.rows() as usize);
+        view
     }
 
     /// Get a reference to the terminal.
@@ -342,6 +344,7 @@ impl TerminalView {
             width,
             height,
         ));
+        self.refresh_cursor_cache(self.terminal.rows() as usize);
     }
 
     /// Check if cell dimensions have been initialized from font metrics.

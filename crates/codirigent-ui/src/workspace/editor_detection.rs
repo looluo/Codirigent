@@ -255,10 +255,11 @@ pub(super) fn detect_monospace_fonts(text_system: &gpui::TextSystem) -> Vec<Stri
 /// the list of known terminal editors. Handles both Unix (`/`) and
 /// Windows (`\`) path separators via `std::path::Path`.
 pub(super) fn is_terminal_editor(editor: &str) -> bool {
-    let base = std::path::Path::new(editor)
+    let base = editor.rsplit(['/', '\\']).next().unwrap_or(editor);
+    let base = std::path::Path::new(base)
         .file_stem()
         .and_then(|s| s.to_str())
-        .unwrap_or(editor);
+        .unwrap_or(base);
     KNOWN_TERMINAL_EDITORS.contains(&base)
 }
 

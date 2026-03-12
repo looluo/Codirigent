@@ -3,7 +3,8 @@
 //! This module provides the internal session state representation
 //! that combines session metadata with runtime PTY handles.
 
-use crate::pty::PtyHandle;
+use crate::session_io::SessionIoHandle;
+use anyhow::Result;
 use codirigent_core::{Session, SessionId, SessionStatus};
 use std::sync::atomic::AtomicBool;
 use std::sync::Arc;
@@ -17,8 +18,10 @@ use tokio::sync::mpsc;
 pub struct SessionState {
     /// Session metadata (persisted).
     pub session: Session,
-    /// PTY handle for terminal I/O.
-    pub pty: PtyHandle,
+    /// PTY child process ID.
+    child_pid: u32,
+    /// Background PTY command worker handle.
+    io_handle: SessionIoHandle,
     /// Channel receiving PTY output.
     pub output_rx: mpsc::Receiver<Vec<u8>>,
     /// Producer-side dedup flag for the `OutputReady` channel notification.
@@ -32,18 +35,21 @@ impl SessionState {
     /// # Arguments
     ///
     /// * `session` - The session metadata
-    /// * `pty` - The PTY handle for terminal I/O
+    /// * `child_pid` - The PTY child process ID
+    /// * `io_handle` - Background PTY command worker handle
     /// * `output_rx` - Channel for receiving PTY output
     /// * `output_notified` - Shared dedup flag for output notifications
-    pub fn new(
+    pub(crate) fn new(
         session: Session,
-        pty: PtyHandle,
+        child_pid: u32,
+        io_handle: SessionIoHandle,
         output_rx: mpsc::Receiver<Vec<u8>>,
         output_notified: Arc<AtomicBool>,
     ) -> Self {
         Self {
             session,
-            pty,
+            child_pid,
+            io_handle,
             output_rx,
             output_notified,
         }
@@ -74,9 +80,24 @@ impl SessionState {
         &self.session.working_directory
     }
 
+    /// Queue PTY input for background delivery.
+    pub(crate) fn send_input(&self, input: &[u8]) -> Result<()> {
+        self.io_handle.send_input(input)
+    }
+
+    /// Queue a PTY resize for background delivery.
+    pub(crate) fn resize(&self, rows: u16, cols: u16) -> Result<()> {
+        self.io_handle.resize(rows, cols)
+    }
+
+    /// Request the background PTY worker to shut down.
+    pub(crate) fn shutdown_io(&self) {
+        self.io_handle.shutdown();
+    }
+
     /// Get the PTY child process ID.
     pub fn child_pid(&self) -> u32 {
-        self.pty.child_pid()
+        self.child_pid
     }
 }
 
@@ -84,6 +105,7 @@ impl SessionState {
 mod tests {
     use super::*;
     use crate::pty::{spawn_output_reader, PtyHandle};
+    use crate::session_io::SessionIoHandle;
     use tempfile::TempDir;
 
     fn create_test_session_state() -> (SessionState, TempDir) {
@@ -91,6 +113,8 @@ mod tests {
         let mut pty = PtyHandle::spawn(temp.path(), 24, 80, &[]).unwrap();
         let reader = pty.take_reader().unwrap();
         let output_rx = spawn_output_reader(reader);
+        let child_pid = pty.child_pid();
+        let io_handle = SessionIoHandle::spawn(SessionId(1), pty).unwrap();
 
         let session = Session::new(
             SessionId(1),
@@ -100,7 +124,7 @@ mod tests {
 
         let output_notified = Arc::new(AtomicBool::new(false));
         (
-            SessionState::new(session, pty, output_rx, output_notified),
+            SessionState::new(session, child_pid, io_handle, output_rx, output_notified),
             temp,
         )
     }
