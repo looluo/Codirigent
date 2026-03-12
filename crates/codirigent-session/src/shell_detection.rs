@@ -106,6 +106,8 @@ pub struct ShellCommand {
     pub args: Vec<String>,
 }
 
+const TEST_ECHO_SHELL_SENTINEL: &str = "__codirigent_test_echo_shell__";
+
 /// PowerShell initialization command for UTF-8 encoding and shell integration.
 ///
 /// Sets up UTF-8 encoding and implements OSC 133 shell integration markers:
@@ -269,6 +271,10 @@ pub fn resolve_shell(shell_name: &str) -> ShellCommand {
         return detect_shell_command();
     }
 
+    if cfg!(test) && shell_name == TEST_ECHO_SHELL_SENTINEL {
+        return resolve_test_echo_shell();
+    }
+
     if shell_name.is_empty() {
         return detect_shell_command();
     }
@@ -281,6 +287,42 @@ pub fn resolve_shell(shell_name: &str) -> ShellCommand {
     #[cfg(windows)]
     {
         resolve_windows_shell(shell_name)
+    }
+
+    #[cfg(not(any(unix, windows)))]
+    {
+        detect_shell_command()
+    }
+}
+
+fn resolve_test_echo_shell() -> ShellCommand {
+    #[cfg(unix)]
+    {
+        ShellCommand {
+            program: "/bin/sh".to_string(),
+            args: vec![
+                "-c".to_string(),
+                "while IFS= read -r line; do printf '%s\\n' \"$line\"; done".to_string(),
+            ],
+        }
+    }
+
+    #[cfg(windows)]
+    {
+        let program = resolve_windows_powershell_path()
+            .or_else(resolve_pwsh_path)
+            .unwrap_or_else(|| "powershell.exe".to_string());
+
+        ShellCommand {
+            program,
+            args: vec![
+                "-NoLogo".to_string(),
+                "-NoProfile".to_string(),
+                "-Command".to_string(),
+                "while (($line = [Console]::In.ReadLine()) -ne $null) { [Console]::Out.WriteLine($line) }"
+                    .to_string(),
+            ],
+        }
     }
 
     #[cfg(not(any(unix, windows)))]

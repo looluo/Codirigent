@@ -760,14 +760,7 @@ mod tests {
     }
 
     fn deterministic_test_shell() -> Option<String> {
-        #[cfg(windows)]
-        {
-            Some("cmd".to_string())
-        }
-        #[cfg(not(windows))]
-        {
-            Some("/bin/sh".to_string())
-        }
+        Some("__codirigent_test_echo_shell__".to_string())
     }
 
     fn test_shell_command(command: &str) -> Vec<u8> {
