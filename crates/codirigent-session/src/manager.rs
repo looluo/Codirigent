@@ -759,8 +759,8 @@ mod tests {
         dir
     }
 
-    fn deterministic_test_shell() -> Option<String> {
-        Some("__codirigent_test_echo_shell__".to_string())
+    fn deterministic_test_line_forwarder() -> Option<String> {
+        Some("__codirigent_test_line_forwarder__".to_string())
     }
 
     fn test_shell_command(command: &str) -> Vec<u8> {
@@ -1275,18 +1275,21 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn test_send_input_preserves_command_order() {
+    async fn test_send_input_round_trips_multiple_lines_through_manager() {
         let manager = create_manager();
 
         let id = manager
             .create_session(
                 "Test".to_string(),
                 std::env::temp_dir(),
-                deterministic_test_shell(),
+                deterministic_test_line_forwarder(),
             )
             .unwrap();
 
         let ready_marker = format!("phase1_ready_{}", std::process::id());
+        // Use a non-interactive line-forwarding process so the manager test
+        // covers end-to-end PTY writes without depending on shell startup
+        // prompts or OSC/DSR behavior.
         manager
             .send_input(id, &test_shell_command(&ready_marker))
             .unwrap();
@@ -1304,7 +1307,7 @@ mod tests {
         }
         assert!(
             ready_output.contains(&ready_marker),
-            "expected shell readiness marker before order assertions: {ready_output}"
+            "expected PTY readiness marker before output assertions: {ready_output}"
         );
 
         manager
@@ -1339,11 +1342,11 @@ mod tests {
 
         assert!(
             first < second,
-            "expected phase1_order_a before phase1_order_b in output: {combined}"
+            "expected phase1_order_a before phase1_order_b in PTY output: {combined}"
         );
         assert!(
             second < third,
-            "expected phase1_order_b before phase1_order_c in output: {combined}"
+            "expected phase1_order_b before phase1_order_c in PTY output: {combined}"
         );
     }
 

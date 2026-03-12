@@ -202,6 +202,8 @@ mod tests {
         let (target, ops) = RecordingTarget::new();
         let (sender, handle) = spawn_test_worker(target);
 
+        // Queue ordering is the worker's core contract: later writes must never
+        // overtake earlier ones, regardless of caller timing.
         sender
             .send(SessionIoCommand::Write(b"one".to_vec()))
             .unwrap();

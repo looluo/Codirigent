@@ -106,7 +106,7 @@ pub struct ShellCommand {
     pub args: Vec<String>,
 }
 
-const TEST_ECHO_SHELL_SENTINEL: &str = "__codirigent_test_echo_shell__";
+const TEST_LINE_FORWARDER_SENTINEL: &str = "__codirigent_test_line_forwarder__";
 
 /// PowerShell initialization command for UTF-8 encoding and shell integration.
 ///
@@ -271,8 +271,8 @@ pub fn resolve_shell(shell_name: &str) -> ShellCommand {
         return detect_shell_command();
     }
 
-    if cfg!(test) && shell_name == TEST_ECHO_SHELL_SENTINEL {
-        return resolve_test_echo_shell();
+    if cfg!(test) && shell_name == TEST_LINE_FORWARDER_SENTINEL {
+        return resolve_test_line_forwarder();
     }
 
     if shell_name.is_empty() {
@@ -295,7 +295,7 @@ pub fn resolve_shell(shell_name: &str) -> ShellCommand {
     }
 }
 
-fn resolve_test_echo_shell() -> ShellCommand {
+fn resolve_test_line_forwarder() -> ShellCommand {
     #[cfg(unix)]
     {
         ShellCommand {
@@ -307,6 +307,8 @@ fn resolve_test_echo_shell() -> ShellCommand {
     #[cfg(windows)]
     {
         ShellCommand {
+            // `more.com` forwards stdin to stdout without the interactive shell
+            // startup sequences that make PTY tests flaky on Windows.
             program: system32_executable("more.com")
                 .to_string_lossy()
                 .to_string(),
