@@ -57,6 +57,26 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 use tracing::{info, warn};
 
+fn session_project_name(session: &codirigent_core::Session) -> Option<String> {
+    session
+        .git_info
+        .as_ref()
+        .and_then(|git_info| git_info.repo_root.file_name())
+        .or_else(|| session.working_directory.file_name())
+        .and_then(|name| name.to_str())
+        .map(str::to_owned)
+}
+
+fn resolved_task_title(
+    task_id: &codirigent_core::TaskId,
+    task_titles: Option<&HashMap<codirigent_core::TaskId, String>>,
+) -> String {
+    task_titles
+        .and_then(|titles| titles.get(task_id))
+        .cloned()
+        .unwrap_or_else(|| task_id.0.to_string())
+}
+
 /// GPUI View wrapper for Workspace.
 ///
 /// This is the main workspace view that renders the grid of session panes.
@@ -148,8 +168,6 @@ impl WorkspaceView {
     const DEEP_IDLE_THRESHOLD_POLLS: u32 = 64;
     /// Maintenance cadence for non-output UI work (git refresh, clipboard, cleanup).
     const MAINTENANCE_POLL_INTERVAL_MS: u64 = 250;
-    /// Fallback UI sync interval for any mutation path that misses an explicit dirty mark.
-    const UI_SYNC_FALLBACK_INTERVAL: Duration = Duration::from_secs(1);
     /// Debounce window for persisted app-state saves.
     const STATE_SAVE_DEBOUNCE: Duration = Duration::from_millis(200);
 
@@ -430,6 +448,7 @@ impl WorkspaceView {
         super::impl_output_polling::init_app_start_ts();
 
         Self::start_output_polling(cx);
+        Self::start_detector_maintenance_polling(cx);
         Self::start_maintenance_polling(cx);
         Self::start_modal_cursor_blink(cx);
 
@@ -528,6 +547,7 @@ impl WorkspaceView {
             view.set_project_root(root, cx);
         }
 
+        view.refresh_derived_ui_state();
         view
     }
 
@@ -573,6 +593,22 @@ impl WorkspaceView {
                 .await;
             let result = this.update(cx, |this, cx| {
                 this.poll_maintenance(cx);
+            });
+            if result.is_err() {
+                break;
+            }
+        })
+        .detach();
+    }
+
+    /// Start detector maintenance polling off the UI thread.
+    fn start_detector_maintenance_polling(cx: &mut Context<Self>) {
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(Self::MAINTENANCE_POLL_INTERVAL_MS))
+                .await;
+            let result = this.update(cx, |this, cx| {
+                this.spawn_background_detector_maintenance(cx);
             });
             if result.is_err() {
                 break;
@@ -693,11 +729,6 @@ impl WorkspaceView {
         }
     }
 
-    /// Mark derived UI state as dirty so it is recomputed on the next render.
-    pub(super) fn mark_ui_sync_dirty(&mut self) {
-        self.polling.ui_sync_dirty = true;
-    }
-
     /// Mark layout-derived render caches as dirty after structural changes.
     pub(super) fn mark_layout_cache_dirty(&mut self) {
         self.cache.render_cell_info_dirty = true;
@@ -800,7 +831,7 @@ impl WorkspaceView {
     pub fn next_layout(&mut self, cx: &mut Context<Self>) {
         self.workspace.next_layout();
         self.mark_layout_cache_dirty();
-        self.mark_ui_sync_dirty();
+        self.sync_layout_derived_state();
         self.event_bus.publish(CodirigentEvent::LayoutChanged {
             mode: self.workspace.layout_profile().to_mode(),
         });
@@ -811,7 +842,7 @@ impl WorkspaceView {
     pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
         self.workspace.toggle_sidebar();
         self.mark_layout_cache_dirty();
-        self.mark_ui_sync_dirty();
+        self.sync_layout_derived_state();
         cx.notify();
     }
 
@@ -822,116 +853,143 @@ impl WorkspaceView {
                 self.event_bus
                     .publish(CodirigentEvent::SessionFocused { id });
             }
-            self.mark_ui_sync_dirty();
+            self.sync_layout_derived_state();
             self.sync_file_tree_to_focused_session(cx);
             cx.notify();
         }
     }
 
-    /// Synchronize UI component states with workspace state.
-    ///
-    /// This should be called before rendering to ensure all UI components
-    /// reflect the current workspace state. For hot-path per-session updates,
-    /// see [`Self::sync_session_header`] which does targeted delta updates.
-    fn sync_ui_state(&mut self) {
-        let (task_titles, task_counts, task_snapshot) = if let Ok(manager) =
-            self.task_manager.lock()
-        {
-            let mut titles = HashMap::new();
-            let all_tasks = manager.list_tasks();
-            let counts =
-                all_tasks
-                    .iter()
-                    .fold((0usize, 0usize, 0usize, 0usize), |(q, ip, r, d), task| {
-                        titles.insert(task.id.clone(), task.title.clone());
-                        match task.status {
-                            codirigent_core::TaskStatus::Queued
-                            | codirigent_core::TaskStatus::Blocked => (q + 1, ip, r, d),
-                            codirigent_core::TaskStatus::Assigned
-                            | codirigent_core::TaskStatus::Working => (q, ip + 1, r, d),
-                            codirigent_core::TaskStatus::Verifying
-                            | codirigent_core::TaskStatus::Review => (q, ip, r + 1, d),
-                            codirigent_core::TaskStatus::Done => (q, ip, r, d + 1),
-                        }
-                    });
-            let running_items = all_tasks
-                .iter()
-                .filter(|t| {
-                    matches!(
-                        t.status,
-                        codirigent_core::TaskStatus::Assigned
-                            | codirigent_core::TaskStatus::Working
-                    )
-                })
-                .map(|t| self.core_task_to_ui_item(t))
-                .collect();
-            let queued_items = all_tasks
-                .iter()
-                .filter(|t| {
-                    matches!(
-                        t.status,
-                        codirigent_core::TaskStatus::Queued | codirigent_core::TaskStatus::Blocked
-                    )
-                })
-                .map(|t| self.core_task_to_ui_item(t))
-                .collect();
-            let review_items = all_tasks
-                .iter()
-                .filter(|t| {
-                    matches!(
-                        t.status,
-                        codirigent_core::TaskStatus::Verifying
-                            | codirigent_core::TaskStatus::Review
-                    )
-                })
-                .map(|t| self.core_task_to_ui_item(t))
-                .collect();
-            let done_items = all_tasks
-                .iter()
-                .filter(|t| t.status == codirigent_core::TaskStatus::Done)
-                .map(|t| self.core_task_to_ui_item(t))
-                .collect();
-            let config = manager.assignment().config();
-            let auto_assign_mode = crate::task_board::AutoAssignMode::from_config(
-                config.auto_assign,
-                config.confirm_before_assign,
+    fn task_title_for_session(
+        &self,
+        session: &codirigent_core::Session,
+        task_titles: Option<&HashMap<codirigent_core::TaskId, String>>,
+    ) -> Option<String> {
+        let task_id = session.current_task.as_ref()?;
+        if let Some(task_titles) = task_titles {
+            return Some(resolved_task_title(task_id, Some(task_titles)));
+        }
+
+        if let Ok(manager) = self.task_manager.lock() {
+            return Some(
+                manager
+                    .get_task(task_id)
+                    .map(|task| task.title.clone())
+                    .unwrap_or_else(|| task_id.0.to_string()),
             );
-            let pending_assignments = manager
-                .assignment()
-                .pending_assignments()
-                .iter()
-                .map(|p| crate::task_board::PendingAssignmentSummary {
-                    task_id: p.task_id.to_string(),
-                    session_number: p.session_id.0,
-                    task_title: all_tasks
-                        .iter()
-                        .find(|t| t.id == p.task_id)
-                        .map(|t| t.title.clone())
-                        .unwrap_or_else(|| p.task_id.to_string()),
-                })
-                .collect();
-            (
-                titles,
-                Some(counts),
-                Some(crate::task_board::TaskBoardSnapshot {
-                    running_items,
-                    queued_items,
-                    review_items,
-                    done_items,
-                    auto_assign_mode,
-                    pending_assignments,
-                }),
-            )
-        } else {
-            (HashMap::new(), None, None)
+        }
+
+        Some(task_id.0.to_string())
+    }
+
+    fn sync_task_board_state(&mut self) -> HashMap<codirigent_core::TaskId, String> {
+        let Ok(manager) = self.task_manager.lock() else {
+            return HashMap::new();
         };
 
-        // Update terminal headers from sessions
+        let mut titles = HashMap::new();
+        let all_tasks = manager.list_tasks();
+        let counts =
+            all_tasks
+                .iter()
+                .fold((0usize, 0usize, 0usize, 0usize), |(q, ip, r, d), task| {
+                    titles.insert(task.id.clone(), task.title.clone());
+                    match task.status {
+                        codirigent_core::TaskStatus::Queued
+                        | codirigent_core::TaskStatus::Blocked => (q + 1, ip, r, d),
+                        codirigent_core::TaskStatus::Assigned
+                        | codirigent_core::TaskStatus::Working => (q, ip + 1, r, d),
+                        codirigent_core::TaskStatus::Verifying
+                        | codirigent_core::TaskStatus::Review => (q, ip, r + 1, d),
+                        codirigent_core::TaskStatus::Done => (q, ip, r, d + 1),
+                    }
+                });
+        let running_items = all_tasks
+            .iter()
+            .filter(|t| {
+                matches!(
+                    t.status,
+                    codirigent_core::TaskStatus::Assigned | codirigent_core::TaskStatus::Working
+                )
+            })
+            .map(|t| self.core_task_to_ui_item(t))
+            .collect();
+        let queued_items = all_tasks
+            .iter()
+            .filter(|t| {
+                matches!(
+                    t.status,
+                    codirigent_core::TaskStatus::Queued | codirigent_core::TaskStatus::Blocked
+                )
+            })
+            .map(|t| self.core_task_to_ui_item(t))
+            .collect();
+        let review_items = all_tasks
+            .iter()
+            .filter(|t| {
+                matches!(
+                    t.status,
+                    codirigent_core::TaskStatus::Verifying | codirigent_core::TaskStatus::Review
+                )
+            })
+            .map(|t| self.core_task_to_ui_item(t))
+            .collect();
+        let done_items = all_tasks
+            .iter()
+            .filter(|t| t.status == codirigent_core::TaskStatus::Done)
+            .map(|t| self.core_task_to_ui_item(t))
+            .collect();
+        let config = manager.assignment().config();
+        let auto_assign_mode = crate::task_board::AutoAssignMode::from_config(
+            config.auto_assign,
+            config.confirm_before_assign,
+        );
+        let pending_assignments = manager
+            .assignment()
+            .pending_assignments()
+            .iter()
+            .map(|p| crate::task_board::PendingAssignmentSummary {
+                task_id: p.task_id.to_string(),
+                session_number: p.session_id.0,
+                task_title: all_tasks
+                    .iter()
+                    .find(|t| t.id == p.task_id)
+                    .map(|t| t.title.clone())
+                    .unwrap_or_else(|| p.task_id.to_string()),
+            })
+            .collect();
+
+        self.task_board
+            .set_task_counts(counts.0, counts.1, counts.2, counts.3);
+        self.task_board
+            .set_snapshot(crate::task_board::TaskBoardSnapshot {
+                running_items,
+                queued_items,
+                review_items,
+                done_items,
+                auto_assign_mode,
+                pending_assignments,
+            });
+
+        titles
+    }
+
+    fn sync_all_session_headers(
+        &mut self,
+        task_titles: Option<&HashMap<codirigent_core::TaskId, String>>,
+    ) {
         let sessions = self.workspace.sessions();
         let focused_id = self.workspace.focused_session_id();
         for session in sessions {
+            let project_name = session_project_name(session);
+            let git_branch = session.git_info.as_ref().map(|gi| gi.branch.clone());
+            let git_dirty_count = session.git_info.as_ref().map(|gi| gi.dirty_count);
+            let session_color = session
+                .color
+                .as_deref()
+                .map(crate::sidebar::Color::from_hex)
+                .unwrap_or_else(|| crate::sidebar::Color::from_hex("#6366f1"));
+            let task = self.task_title_for_session(session, task_titles);
             if let Some(header) = self.terminal_headers.get_mut(&session.id) {
-                // Dirty-check string fields to avoid heap allocations every sync tick
                 if header.session_name != session.name {
                     header.session_name = session.name.clone();
                 }
@@ -941,47 +999,26 @@ impl WorkspaceView {
                 header.status = session.status;
                 header.context_usage = session.context_usage;
                 header.is_focused = focused_id == Some(session.id);
-                let project_name = session
-                    .git_info
-                    .as_ref()
-                    .and_then(|gi| gi.repo_root.file_name())
-                    .or_else(|| session.working_directory.file_name())
-                    .and_then(|n| n.to_str())
-                    .map(|s| s.to_string());
                 if header.project_name != project_name {
                     header.project_name = project_name;
                 }
-                let git_branch = session.git_info.as_ref().map(|gi| gi.branch.as_str());
-                if header.git_branch.as_deref() != git_branch {
-                    header.git_branch = git_branch.map(str::to_owned);
+                if header.git_branch != git_branch {
+                    header.git_branch = git_branch;
                 }
-                let git_dirty_count = session.git_info.as_ref().map(|gi| gi.dirty_count);
                 if header.git_dirty_count != git_dirty_count {
                     header.git_dirty_count = git_dirty_count;
                 }
-
-                let session_color = session
-                    .color
-                    .as_deref()
-                    .map(crate::sidebar::Color::from_hex)
-                    .unwrap_or_else(|| crate::sidebar::Color::from_hex("#6366f1"));
                 if header.session_color != session_color {
                     header.session_color = session_color;
                 }
-
-                let task = session.current_task.as_ref().map(|task_id| {
-                    task_titles
-                        .get(task_id)
-                        .cloned()
-                        .unwrap_or_else(|| task_id.0.to_string())
-                });
                 if header.task != task {
                     header.task = task;
                 }
             }
         }
+    }
 
-        // Update empty cells pool
+    fn sync_empty_cells_state(&mut self) {
         let (rows, cols) = self.workspace.layout_profile().dimensions();
         let occupied: Vec<GridPosition> = self
             .workspace
@@ -995,35 +1032,46 @@ impl WorkspaceView {
             })
             .collect();
         self.empty_cells.setup_for_grid(rows, cols, &occupied);
+    }
 
-        // Sync task board counts from TaskManager — single pass over all tasks
-        if let Some((queue_count, in_progress_count, review_count, done_count)) = task_counts {
-            self.task_board.set_task_counts(
-                queue_count,
-                in_progress_count,
-                review_count,
-                done_count,
-            );
-        }
-        if let Some(snapshot) = task_snapshot {
-            self.task_board.set_snapshot(snapshot);
-        }
+    pub(super) fn sync_layout_derived_state(&mut self) {
+        self.sync_all_session_headers(None);
+        self.sync_empty_cells_state();
+    }
+
+    pub(super) fn sync_task_derived_state(&mut self) {
+        let task_titles = self.sync_task_board_state();
+        self.sync_all_session_headers(Some(&task_titles));
+    }
+
+    /// Synchronize all derived UI state from canonical workspace/task state.
+    ///
+    /// This must only run from explicit mutation paths, never as a render fallback.
+    pub(super) fn refresh_derived_ui_state(&mut self) {
+        let task_titles = self.sync_task_board_state();
+        self.sync_all_session_headers(Some(&task_titles));
+        self.sync_empty_cells_state();
     }
 
     /// Sync a single session's terminal header from workspace state.
     ///
     /// This is a targeted delta update for the common case where only one
     /// session's status changed. Avoids the O(all sessions) cost of
-    /// `sync_ui_state()` for each output poll.
-    ///
-    /// Note: `task` field is intentionally deferred to the 1s fallback
-    /// `sync_ui_state()` because resolving task titles requires iterating
-    /// the task manager, which is not worth the cost on the hot path.
+    /// `refresh_derived_ui_state()` for each output poll.
     pub(super) fn sync_session_header(&mut self, session_id: SessionId) {
         let Some(session) = self.workspace.session(session_id) else {
             return;
         };
         let focused_id = self.workspace.focused_session_id();
+        let project_name = session_project_name(session);
+        let git_branch = session.git_info.as_ref().map(|gi| gi.branch.clone());
+        let git_dirty_count = session.git_info.as_ref().map(|gi| gi.dirty_count);
+        let session_color = session
+            .color
+            .as_deref()
+            .map(crate::sidebar::Color::from_hex)
+            .unwrap_or_else(|| crate::sidebar::Color::from_hex("#6366f1"));
+        let task = self.task_title_for_session(session, None);
 
         if let Some(header) = self.terminal_headers.get_mut(&session_id) {
             header.status = session.status;
@@ -1037,22 +1085,21 @@ impl WorkspaceView {
                 header.group_name = session.group.clone();
             }
 
-            let git_branch = session.git_info.as_ref().map(|gi| gi.branch.as_str());
-            if header.git_branch.as_deref() != git_branch {
-                header.git_branch = git_branch.map(str::to_owned);
+            if header.project_name != project_name {
+                header.project_name = project_name;
             }
-            let git_dirty_count = session.git_info.as_ref().map(|gi| gi.dirty_count);
+
+            if header.git_branch != git_branch {
+                header.git_branch = git_branch;
+            }
             if header.git_dirty_count != git_dirty_count {
                 header.git_dirty_count = git_dirty_count;
             }
-
-            let session_color = session
-                .color
-                .as_deref()
-                .map(crate::sidebar::Color::from_hex)
-                .unwrap_or_else(|| crate::sidebar::Color::from_hex("#6366f1"));
             if header.session_color != session_color {
                 header.session_color = session_color;
+            }
+            if header.task != task {
+                header.task = task;
             }
         }
     }
@@ -1107,7 +1154,7 @@ impl WorkspaceView {
                         }
                     }
                     self.mark_layout_cache_dirty();
-                    self.mark_ui_sync_dirty();
+                    self.sync_layout_derived_state();
                 }
                 crate::top_bar::TopBarEvent::RightPanelToggled => {
                     // Will be wired in plan 05 (right task board)
@@ -1143,7 +1190,7 @@ impl WorkspaceView {
         self.selection.selected_session_id = Some(session_id);
         self.drawer.set_selected_session(Some(session_id));
         self.workspace.focus_session(session_id);
-        self.mark_ui_sync_dirty();
+        self.sync_layout_derived_state();
         self.sync_file_tree_to_focused_session(cx);
         // If the session showed ResponseReady, downgrade the cache to Idle
         // immediately so the badge clears without waiting for the next poll.
@@ -1345,8 +1392,8 @@ impl WorkspaceView {
                 // output wrap vertically until the next resize event.
                 let (target_rows, target_cols) =
                     terminal_view.dimensions_from_pixels(available_width, available_height);
-                let current_rows = terminal_view.terminal().rows();
-                let current_cols = terminal_view.terminal().cols();
+                let current_rows = terminal_view.rows();
+                let current_cols = terminal_view.cols();
 
                 if Self::should_skip_collapsed_resize(
                     current_rows,
@@ -1365,8 +1412,8 @@ impl WorkspaceView {
 
                     // Propagate resize to actual PTY (ConPTY) so the shell
                     // knows the correct terminal dimensions
-                    let rows = terminal_view.terminal().rows();
-                    let cols = terminal_view.terminal().cols();
+                    let rows = terminal_view.rows();
+                    let cols = terminal_view.cols();
                     let last = self.cache.pty_sizes.get(&info.session_id);
                     if last != Some(&(rows, cols)) {
                         self.with_session_manager(|manager| {
@@ -1506,7 +1553,7 @@ impl WorkspaceView {
             let Some(terminal_view) = self.terminals.get(&session_id) else {
                 return;
             };
-            terminal_view.terminal().mode()
+            terminal_view.mode()
         };
 
         // Convert GPUI keystroke to terminal keystroke
@@ -1986,17 +2033,6 @@ impl Render for WorkspaceView {
         self.process_top_bar_events();
         self.process_icon_rail_events();
 
-        // Sync UI state only when metadata changed, with a slow fallback pass
-        // to recover from any missed invalidation.
-        let now = Instant::now();
-        if self.polling.ui_sync_dirty
-            || now.duration_since(self.polling.last_ui_sync) >= Self::UI_SYNC_FALLBACK_INTERVAL
-        {
-            self.sync_ui_state();
-            self.polling.ui_sync_dirty = false;
-            self.polling.last_ui_sync = now;
-        }
-
         // Update workspace bounds from window size
         // GPUI automatically re-renders when window resizes, so we update bounds here
         let window_size = window.viewport_size();
@@ -2126,7 +2162,7 @@ impl Render for WorkspaceView {
                             if let Some(target) = drag.target_index {
                                 this.workspace.swap_sessions(drag.source_index, target);
                                 this.mark_layout_cache_dirty();
-                                this.mark_ui_sync_dirty();
+                                this.sync_layout_derived_state();
                                 this.save_state_to_disk(cx);
                             }
                         }
@@ -2286,6 +2322,8 @@ mod tests {
     //! - [ ] Focus delegation to child components
     //! - [ ] Layout changes trigger re-render
 
+    use std::collections::HashMap;
+
     #[test]
     fn test_core_workspace_is_tested_separately() {
         // Reminder: Core workspace logic has dedicated tests in workspace/tests.rs
@@ -2372,6 +2410,63 @@ mod tests {
                 "codex -a never -s danger-full-access"
             ),
             Some(codirigent_core::CodexExecutionMode::Bypass)
+        );
+    }
+
+    #[test]
+    fn test_session_project_name_prefers_git_repo_root_name() {
+        let mut session = codirigent_core::Session::new(
+            codirigent_core::SessionId(1),
+            "Session 1".to_string(),
+            std::path::PathBuf::from("/workspace/subdir"),
+        );
+        session.git_info = Some(codirigent_core::GitRepoInfo {
+            repo_root: std::path::PathBuf::from("/workspace/project-root"),
+            branch: "main".to_string(),
+            dirty_count: 0,
+            has_staged: false,
+            head_sha: None,
+            unstaged_files: Vec::new(),
+            staged_files: Vec::new(),
+        });
+
+        assert_eq!(
+            super::session_project_name(&session),
+            Some("project-root".to_string())
+        );
+    }
+
+    #[test]
+    fn test_session_project_name_falls_back_to_working_directory_name() {
+        let session = codirigent_core::Session::new(
+            codirigent_core::SessionId(1),
+            "Session 1".to_string(),
+            std::path::PathBuf::from("/workspace/focused-pane"),
+        );
+
+        assert_eq!(
+            super::session_project_name(&session),
+            Some("focused-pane".to_string())
+        );
+    }
+
+    #[test]
+    fn test_resolved_task_title_prefers_cached_title_and_falls_back_to_id() {
+        let task_id = codirigent_core::TaskId::from("task-123");
+        let mut titles = HashMap::new();
+        titles.insert(task_id.clone(), "Review parser".to_string());
+
+        assert_eq!(
+            super::resolved_task_title(&task_id, Some(&titles)),
+            "Review parser".to_string()
+        );
+        assert_eq!(
+            super::resolved_task_title(&codirigent_core::TaskId::from("task-456"), Some(&titles)),
+            "task-456".to_string()
+        );
+        assert_eq!(
+            super::resolved_task_title(&task_id, None),
+            "task-123".to_string()
         );
     }
 

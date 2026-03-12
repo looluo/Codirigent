@@ -123,6 +123,8 @@ pub mod terminal_colors;
 
 // Modules that require both GPUI and terminal (renders terminal in GPUI)
 #[cfg(all(feature = "gpui-full", feature = "terminal"))]
+pub(crate) mod terminal_runtime;
+#[cfg(all(feature = "gpui-full", feature = "terminal"))]
 pub mod terminal_view;
 
 // Re-export commonly used items

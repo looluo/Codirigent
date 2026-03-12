@@ -6,6 +6,7 @@
 use crate::git_status::GitStatusService;
 use crate::pty::{spawn_output_reader_with_notify, PtyHandle};
 use crate::session::SessionState;
+use crate::session_io::SessionIoHandle;
 use anyhow::{anyhow, Context, Result};
 use codirigent_core::{
     CodirigentEvent, EventBus, GitRepoInfo, Session, SessionId, SessionManager, SessionStatus,
@@ -545,8 +546,17 @@ impl SessionManager for DefaultSessionManager {
             .unwrap_or_else(|p| p.into_inner())
             .detect(&working_dir);
 
+        let child_pid = pty.child_pid();
+        let io_handle = SessionIoHandle::spawn(id, pty)?;
+
         // Create session state
-        let state = SessionState::new(session, pty, output_rx, output_notified_clone);
+        let state = SessionState::new(
+            session,
+            child_pid,
+            io_handle,
+            output_rx,
+            output_notified_clone,
+        );
         self.lock_sessions().insert(id, state);
 
         // Publish event
@@ -558,10 +568,12 @@ impl SessionManager for DefaultSessionManager {
     fn close_session(&self, id: SessionId) -> Result<()> {
         info!(%id, "Closing session");
 
-        let _state = self
+        let state = self
             .lock_sessions()
             .remove(&id)
             .ok_or_else(|| anyhow!("Session not found: {}", id))?;
+
+        state.shutdown_io();
 
         self.lock_pending_output_sessions().remove(&id);
 
@@ -573,29 +585,27 @@ impl SessionManager for DefaultSessionManager {
     }
 
     fn send_input(&self, id: SessionId, input: &[u8]) -> Result<()> {
-        let mut sessions = self.lock_sessions();
+        let sessions = self.lock_sessions();
         let state = sessions
-            .get_mut(&id)
+            .get(&id)
             .ok_or_else(|| anyhow!("Session not found: {}", id))?;
 
         state
-            .pty
             .send_input(input)
-            .context("Failed to send input to PTY")?;
+            .context("Failed to queue input for PTY")?;
 
         Ok(())
     }
 
     fn resize(&self, id: SessionId, rows: u16, cols: u16) -> Result<()> {
-        let mut sessions = self.lock_sessions();
+        let sessions = self.lock_sessions();
         let state = sessions
-            .get_mut(&id)
+            .get(&id)
             .ok_or_else(|| anyhow!("Session not found: {}", id))?;
 
         state
-            .pty
             .resize(rows, cols)
-            .context("Failed to resize PTY")?;
+            .context("Failed to queue PTY resize")?;
 
         Ok(())
     }
@@ -712,8 +722,10 @@ mod tests {
         let (tx, rx) = mpsc::channel(8);
         let session = Session::new(id, format!("Session {}", id.0), temp.path().to_path_buf());
         let output_notified = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let child_pid = pty.child_pid();
+        let io_handle = SessionIoHandle::spawn(id, pty).unwrap();
         (
-            SessionState::new(session, pty, rx, output_notified),
+            SessionState::new(session, child_pid, io_handle, rx, output_notified),
             tx,
             temp,
         )
@@ -745,6 +757,21 @@ mod tests {
             .unwrap();
 
         dir
+    }
+
+    fn deterministic_test_line_forwarder() -> Option<String> {
+        Some("__codirigent_test_line_forwarder__".to_string())
+    }
+
+    fn test_shell_command(command: &str) -> Vec<u8> {
+        #[cfg(windows)]
+        {
+            format!("{command}\r\n").into_bytes()
+        }
+        #[cfg(not(windows))]
+        {
+            format!("{command}\n").into_bytes()
+        }
     }
 
     fn create_linked_worktree(repo_path: &Path, branch: &str) -> PathBuf {
@@ -1247,6 +1274,86 @@ mod tests {
         let _ = output;
     }
 
+    // Windows: no reliable non-interactive stdin-to-stdout forwarder works in
+    // ConPTY without shell startup sequences. Queue ordering is already
+    // covered by session_io::tests::test_write_ordering_is_preserved.
+    #[cfg_attr(windows, ignore)]
+    #[tokio::test]
+    async fn test_send_input_round_trips_multiple_lines_through_manager() {
+        let manager = create_manager();
+
+        let id = manager
+            .create_session(
+                "Test".to_string(),
+                std::env::temp_dir(),
+                deterministic_test_line_forwarder(),
+            )
+            .unwrap();
+
+        let ready_marker = format!("phase1_ready_{}", std::process::id());
+        // Use a non-interactive line-forwarding process so the manager test
+        // covers end-to-end PTY writes without depending on shell startup
+        // prompts or OSC/DSR behavior.
+        manager
+            .send_input(id, &test_shell_command(&ready_marker))
+            .unwrap();
+
+        let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut ready_output = String::new();
+        while tokio::time::Instant::now() < ready_deadline {
+            if let Some(output) = manager.try_drain_output(id) {
+                ready_output.push_str(&String::from_utf8_lossy(&output));
+                if ready_output.contains(&ready_marker) {
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(
+            ready_output.contains(&ready_marker),
+            "expected PTY readiness marker before output assertions: {ready_output}"
+        );
+
+        manager
+            .send_input(id, &test_shell_command("phase1_order_a"))
+            .unwrap();
+        manager
+            .send_input(id, &test_shell_command("phase1_order_b"))
+            .unwrap();
+        manager
+            .send_input(id, &test_shell_command("phase1_order_c"))
+            .unwrap();
+
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut combined = String::new();
+
+        while tokio::time::Instant::now() < deadline {
+            if let Some(output) = manager.try_drain_output(id) {
+                combined.push_str(&String::from_utf8_lossy(&output));
+                if combined.contains("phase1_order_a")
+                    && combined.contains("phase1_order_b")
+                    && combined.contains("phase1_order_c")
+                {
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+
+        let first = combined.find("phase1_order_a").unwrap_or(usize::MAX);
+        let second = combined.find("phase1_order_b").unwrap_or(usize::MAX);
+        let third = combined.find("phase1_order_c").unwrap_or(usize::MAX);
+
+        assert!(
+            first < second,
+            "expected phase1_order_a before phase1_order_b in PTY output: {combined}"
+        );
+        assert!(
+            second < third,
+            "expected phase1_order_b before phase1_order_c in PTY output: {combined}"
+        );
+    }
+
     #[test]
     fn test_try_drain_output_nonexistent() {
         let manager = create_manager();
@@ -1354,12 +1461,10 @@ mod tests {
     #[test]
     fn test_create_session_with_nonexistent_working_dir() {
         let manager = create_manager();
+        let temp = tempfile::tempdir().unwrap();
+        let missing = temp.path().join("missing-working-dir");
 
-        let result = manager.create_session(
-            "Test".to_string(),
-            PathBuf::from("/nonexistent/path/that/does/not/exist"),
-            None,
-        );
+        let result = manager.create_session("Test".to_string(), missing, None);
 
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();

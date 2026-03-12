@@ -57,7 +57,7 @@ impl WorkspaceView {
 
         if applied {
             self.mark_layout_cache_dirty();
-            self.mark_ui_sync_dirty();
+            self.sync_layout_derived_state();
             self.save_state_to_disk(cx);
         }
 
@@ -92,7 +92,7 @@ impl WorkspaceView {
 
         let profile_id = saved_profile.id.clone();
         self.mark_layout_cache_dirty();
-        self.mark_ui_sync_dirty();
+        self.sync_layout_derived_state();
         self.top_bar.profile_manager.add_profile(saved_profile);
         self.top_bar.set_active_profile_id(&profile_id);
         self.save_layout_profiles_to_settings(cx);

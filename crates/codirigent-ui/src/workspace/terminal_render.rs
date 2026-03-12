@@ -68,6 +68,7 @@ impl WorkspaceView {
         // Rebuild row caches first — this also refreshes cached_cursor_viewport_pos.
         let cached_rows = terminal_view.render_rows();
         let shaped_rows = terminal_view.shaped_rows(window.text_system());
+        let selection_rects = terminal_view.selection_rects_hsla();
 
         // Both read from cache — pure field access, no terminal state touch.
         let cursor_rect = terminal_view.cursor_rect();
@@ -145,6 +146,7 @@ impl WorkspaceView {
                     oy,
                     cached_rows,
                     shaped_rows,
+                    selection_rects,
                     ime_preedit,
                     cursor_data,
                     cell_width,
@@ -156,8 +158,17 @@ impl WorkspaceView {
                   prepaint_data,
                   window: &mut gpui::Window,
                   cx: &mut gpui::App| {
-                let (ox, oy, cached_rows, shaped_rows, ime_preedit, cursor_data, cell_w, cell_h) =
-                    prepaint_data;
+                let (
+                    ox,
+                    oy,
+                    cached_rows,
+                    shaped_rows,
+                    selection_rects,
+                    ime_preedit,
+                    cursor_data,
+                    cell_w,
+                    cell_h,
+                ) = prepaint_data;
 
                 // Register input handler for IME if context is provided and it's the focused pane
                 if let Some((ref entity, ref focus_handle, is_focused, input_enabled)) =
@@ -192,7 +203,25 @@ impl WorkspaceView {
                     }
                 }
 
-                // 2. Paint shaped text runs
+                // 2. Paint selection overlay without rebuilding terminal row caches.
+                for (rect_row, start_col, end_col, bg_color) in &selection_rects {
+                    let rect_x = ox + *start_col as f32 * cell_w;
+                    let rect_y = oy + *rect_row as f32 * cell_h;
+                    let rect_w = (*end_col - *start_col) as f32 * cell_w;
+                    let rect_bounds = gpui::Bounds {
+                        origin: gpui::Point {
+                            x: px(rect_x),
+                            y: px(rect_y),
+                        },
+                        size: gpui::Size {
+                            width: px(rect_w),
+                            height: px(cell_h),
+                        },
+                    };
+                    window.paint_quad(gpui::fill(rect_bounds, *bg_color));
+                }
+
+                // 3. Paint shaped text runs
                 for row in &shaped_rows {
                     for (line_row, start_col, shaped_line) in row.iter() {
                         let text_x = ox + *start_col as f32 * cell_w;
@@ -205,7 +234,7 @@ impl WorkspaceView {
                     }
                 }
 
-                // 3. Paint IME pre-edit text at the cursor position.
+                // 4. Paint IME pre-edit text at the cursor position.
                 if let Some((preedit_x, preedit_y, preedit_line)) = &ime_preedit {
                     let preedit_origin = gpui::Point {
                         x: px(ox + *preedit_x),
@@ -214,7 +243,7 @@ impl WorkspaceView {
                     let _ = preedit_line.paint(preedit_origin, px(cell_h), window, cx);
                 }
 
-                // 4. Paint cursor
+                // 5. Paint cursor
                 if let Some((cursor, cursor_color)) = &cursor_data {
                     let cx_pos = ox + cursor.x;
                     let cy_pos = oy + cursor.y;

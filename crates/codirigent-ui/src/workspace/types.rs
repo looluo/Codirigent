@@ -4,7 +4,7 @@
 //! implementation, including modal states and UI component data.
 
 use super::CellInfo;
-use codirigent_core::{SessionId, SessionStatus, TaskId};
+use codirigent_core::{SessionId, SessionStatus, SlotId, TaskId};
 use codirigent_session::codex_session_reader::CodexSessionReader;
 use codirigent_session::gemini_session_reader::GeminiSessionReader;
 use gpui::Hsla;
@@ -363,10 +363,6 @@ pub(super) struct PollingState {
     pub last_git_refresh: Instant,
     /// Sessions that need a deferred Enter keypress sent to their PTY.
     pub pending_enters: HashMap<SessionId, (Instant, bool)>,
-    /// Last time sync_ui_state ran (fallback safety sync for missed invalidations).
-    pub last_ui_sync: Instant,
-    /// Whether derived UI state (headers, empty cells, task counts) needs recomputing.
-    pub ui_sync_dirty: bool,
     /// Last time clipboard was checked for changes (time-based, ~1/second).
     pub last_clipboard_check: Instant,
     /// Whether a background git refresh is currently in-flight.
@@ -379,6 +375,8 @@ pub(super) struct PollingState {
     pub file_tree_rebuild_in_flight: bool,
     /// Whether a background clipboard image save is currently in-flight.
     pub clipboard_load_in_flight: bool,
+    /// Whether a background detector maintenance job is currently in-flight.
+    pub detector_maintenance_in_flight: bool,
     /// Sessions currently preparing PTY output on a background thread.
     pub output_prepare_in_flight: HashSet<SessionId>,
     /// Debounced app-state persistence task.
@@ -395,6 +393,13 @@ pub(super) struct PollingState {
     pub project_refresh_generation: u64,
     /// Whether session restoration from disk is currently in-flight.
     pub restore_in_flight: bool,
+    /// Reserved session numbers for session-create bootstraps that have not
+    /// completed yet. Prevents duplicate names when users create sessions
+    /// faster than the background PTY bootstrap finishes.
+    pub pending_session_bootstrap_numbers: HashSet<u64>,
+    /// Reserved split-tree slots for session-create bootstraps that have not
+    /// completed yet. Prevents duplicate creates racing into the same slot.
+    pub pending_session_bootstrap_slots: HashSet<SlotId>,
     /// Last time the legacy fallback safety net drained pending_output_sessions.
     pub last_legacy_fallback: Instant,
     /// Best-effort shell command line capture per session while the shell is idle.
@@ -416,14 +421,13 @@ impl PollingState {
             pending_resize: false,
             last_git_refresh: Instant::now(),
             pending_enters: HashMap::new(),
-            last_ui_sync: Instant::now() - std::time::Duration::from_millis(200),
-            ui_sync_dirty: true,
             last_clipboard_check: Instant::now(),
             git_refresh_in_flight: false,
             jsonl_check_in_flight: false,
             hook_signal_check_in_flight: false,
             file_tree_rebuild_in_flight: false,
             clipboard_load_in_flight: false,
+            detector_maintenance_in_flight: false,
             output_prepare_in_flight: HashSet::new(),
             state_save_task: None,
             state_save_generation: 0,
@@ -432,6 +436,8 @@ impl PollingState {
             last_processed_hook_signal_ts: HashMap::new(),
             project_refresh_generation: 0,
             restore_in_flight: false,
+            pending_session_bootstrap_numbers: HashSet::new(),
+            pending_session_bootstrap_slots: HashSet::new(),
             last_legacy_fallback: Instant::now(),
             shell_input_buffers: HashMap::new(),
         }

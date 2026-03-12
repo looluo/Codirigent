@@ -164,7 +164,7 @@ impl WorkspaceView {
             self.workspace
                 .sync_sessions_from_manager(&manager.list_sessions());
         }
-        self.mark_ui_sync_dirty();
+        self.refresh_derived_ui_state();
         self.save_state_to_disk(cx);
         cx.notify();
     }

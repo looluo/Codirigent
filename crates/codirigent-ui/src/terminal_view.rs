@@ -30,8 +30,8 @@
 //! let theme = CodirigentTheme::dark();
 //! let mut view = TerminalView::new(terminal, theme);
 //!
-//! // Process output and render
-//! view.terminal_mut().process_output(b"Hello, World!");
+//! // Simulate output and render
+//! view.apply_output_for_test(b"Hello, World!");
 //! ```
 
 use std::sync::Arc;
@@ -49,12 +49,9 @@ const MIN_CELL_WIDTH_PX: f32 = 7.0;
 
 use crate::terminal::Terminal;
 use crate::terminal::TerminalSize;
-use crate::terminal_colors::{convert_color, dim_color};
+use crate::terminal_runtime::{TerminalRenderSnapshot, TerminalRuntimeHandle};
 use crate::theme::{CodirigentTheme, Rgba};
-use alacritty_terminal::grid::Scroll;
-use alacritty_terminal::index::{Column, Line};
-use alacritty_terminal::term::cell::Flags as CellFlags;
-use alacritty_terminal::vte::ansi::{Color as TermColor, NamedColor};
+use alacritty_terminal::term::TermMode;
 use codirigent_core::SessionId;
 
 /// A run of text with uniform style for efficient canvas painting.
@@ -199,8 +196,10 @@ impl Selection {
 /// Renders terminal content to the screen, handling cells, cursor,
 /// and selection display.
 pub struct TerminalView {
-    /// The underlying terminal emulator.
-    terminal: Terminal,
+    /// Session associated with this terminal view.
+    session_id: SessionId,
+    /// Background runtime that owns the live terminal state.
+    runtime: TerminalRuntimeHandle,
     /// Theme for color resolution.
     theme: CodirigentTheme,
     /// Width of a single character cell in pixels.
@@ -217,22 +216,28 @@ pub struct TerminalView {
     cursor_shape: CursorShape,
     /// Whether the terminal view is focused.
     focused: bool,
+    /// Cached terminal dimensions from the latest runtime snapshot.
+    rows: u16,
+    /// Cached terminal dimensions from the latest runtime snapshot.
+    cols: u16,
+    /// Cached terminal mode flags from the latest runtime snapshot.
+    mode: TermMode,
+    /// Cached viewport display offset from the latest runtime snapshot.
+    display_offset: usize,
+    /// Generation of the latest applied runtime snapshot.
+    snapshot_generation: u64,
     /// Cached terminal content for canvas rendering.
     cached_content: Option<CachedTerminalContent>,
-    /// Per-row cached terminal content used for partial viewport rebuilds.
-    cached_rows: Option<Vec<CachedTerminalRow>>,
+    /// Per-row cached terminal content from the latest runtime snapshot.
+    cached_rows: Vec<CachedTerminalRow>,
     /// Font family used to build `cached_shaped_rows`.
     cached_shaped_font_family: Option<String>,
     /// Font size used to build `cached_shaped_rows`.
     cached_shaped_font_size: Option<f32>,
     /// Per-row shaped text derived from `cached_rows`.
     cached_shaped_rows: Option<Vec<ShapedTerminalRow>>,
-    /// Whether the content needs to be recomputed.
-    content_dirty: bool,
     /// Dirty viewport rows after a partial content rebuild.
     dirty_rows: Option<Vec<usize>>,
-    /// Whether the next rebuild can reuse existing row caches.
-    partial_rebuild_allowed: bool,
     /// Whether cell dimensions have been initialized from font metrics.
     dimensions_initialized: bool,
     /// Cached GPUI Hsla for terminal background (avoids per-frame conversion).
@@ -247,7 +252,7 @@ pub struct TerminalView {
 
 impl TerminalView {
     /// Create a new terminal view.
-    pub fn new(mut terminal: Terminal, theme: CodirigentTheme) -> Self {
+    pub fn new(terminal: Terminal, theme: CodirigentTheme) -> Self {
         let font_size = theme.terminal_font_size;
         let font_family = theme.terminal_font_family.clone();
         // Approximate cell dimensions until real font metrics arrive via
@@ -256,18 +261,17 @@ impl TerminalView {
         // allocate more rows/cols than will fit after correction.
         let cell_width = (font_size * APPROX_CELL_WIDTH_RATIO).max(MIN_CELL_WIDTH_PX);
         let cell_height = font_size.max(14.0);
-        terminal.resize_with_cells(TerminalSize::new(
-            terminal.rows(),
-            terminal.cols(),
-            cell_width,
-            cell_height,
-        ));
+        let session_id = terminal.session_id();
+        let initial_size =
+            TerminalSize::new(terminal.rows(), terminal.cols(), cell_width, cell_height);
+        let (runtime, snapshot) = TerminalRuntimeHandle::new(terminal, theme.clone(), initial_size);
 
         let cached_terminal_bg: gpui::Hsla = theme.terminal_background.into();
         let cached_terminal_fg: gpui::Hsla = theme.terminal_foreground.into();
 
-        Self {
-            terminal,
+        let mut view = Self {
+            session_id,
+            runtime,
             theme,
             cell_width,
             cell_height,
@@ -276,32 +280,65 @@ impl TerminalView {
             selection: Selection::default(),
             cursor_shape: CursorShape::Block,
             focused: true,
+            rows: 0,
+            cols: 0,
+            mode: TermMode::empty(),
+            display_offset: 0,
+            snapshot_generation: 0,
             cached_content: None,
-            cached_rows: None,
+            cached_rows: Vec::new(),
             cached_shaped_font_family: None,
             cached_shaped_font_size: None,
             cached_shaped_rows: None,
-            content_dirty: true,
             dirty_rows: None,
-            partial_rebuild_allowed: false,
             dimensions_initialized: false,
             cached_terminal_bg,
             cached_terminal_fg,
             cached_cursor_viewport_pos: None,
-        }
+        };
+        let _ = view.apply_snapshot(snapshot);
+        view
     }
 
-    /// Get a reference to the terminal.
-    pub fn terminal(&self) -> &Terminal {
-        &self.terminal
+    /// Get a clone of the terminal runtime handle.
+    pub(crate) fn runtime_handle(&self) -> TerminalRuntimeHandle {
+        self.runtime.clone()
     }
 
-    /// Get a mutable reference to the terminal.
+    /// Apply a terminal snapshot from the background runtime.
     ///
-    /// Marks content as dirty since callers typically modify terminal state.
-    pub fn terminal_mut(&mut self) -> &mut Terminal {
-        self.mark_output_dirty();
-        &mut self.terminal
+    /// Returns `true` when the snapshot was accepted. Stale snapshots are
+    /// dropped to avoid regressing the visible terminal after newer resize,
+    /// scroll, or output updates have already been applied.
+    pub(crate) fn apply_snapshot(&mut self, snapshot: TerminalRenderSnapshot) -> bool {
+        if snapshot.generation < self.snapshot_generation {
+            return false;
+        }
+
+        let requires_full_shaped_rebuild = snapshot.dirty_rows.is_none()
+            || self.rows != snapshot.rows
+            || self.cols != snapshot.cols
+            || self.cached_rows.len() != snapshot.cached_rows.len();
+
+        self.rows = snapshot.rows;
+        self.cols = snapshot.cols;
+        self.mode = snapshot.mode;
+        self.display_offset = snapshot.display_offset;
+        self.snapshot_generation = snapshot.generation;
+        self.cached_rows = snapshot.cached_rows;
+        self.cached_content = None;
+        self.refresh_cursor_cache(snapshot.cursor_viewport_cell);
+
+        if requires_full_shaped_rebuild {
+            self.cached_shaped_font_family = None;
+            self.cached_shaped_font_size = None;
+            self.cached_shaped_rows = None;
+            self.dirty_rows = None;
+        } else {
+            self.dirty_rows = snapshot.dirty_rows;
+        }
+
+        true
     }
 
     /// Get the theme.
@@ -313,8 +350,12 @@ impl TerminalView {
     pub fn set_theme(&mut self, theme: CodirigentTheme) {
         self.cached_terminal_bg = theme.terminal_background.into();
         self.cached_terminal_fg = theme.terminal_foreground.into();
-        self.theme = theme;
-        self.invalidate_content_cache();
+        self.theme = theme.clone();
+        if let Some(snapshot) = self.runtime.set_theme(theme) {
+            let _ = self.apply_snapshot(snapshot);
+        } else {
+            self.mark_dirty();
+        }
     }
 
     /// Get the cell width in pixels.
@@ -335,13 +376,15 @@ impl TerminalView {
         self.cell_width = width;
         self.cell_height = height;
         self.dimensions_initialized = true;
-        self.invalidate_content_cache();
-        self.terminal.resize_with_cells(TerminalSize::new(
-            self.terminal.rows(),
-            self.terminal.cols(),
-            width,
-            height,
-        ));
+        if let Some(snapshot) = self
+            .runtime
+            .resize_with_cells(TerminalSize::new(self.rows, self.cols, width, height))
+        {
+            let _ = self.apply_snapshot(snapshot);
+        } else {
+            self.mark_dirty();
+            self.refresh_cursor_cache(None);
+        }
     }
 
     /// Check if cell dimensions have been initialized from font metrics.
@@ -413,7 +456,27 @@ impl TerminalView {
 
     /// Get the session ID.
     pub fn session_id(&self) -> SessionId {
-        self.terminal.session_id()
+        self.session_id
+    }
+
+    /// Get the current terminal row count.
+    pub fn rows(&self) -> u16 {
+        self.rows
+    }
+
+    /// Get the current terminal column count.
+    pub fn cols(&self) -> u16 {
+        self.cols
+    }
+
+    /// Get the current terminal mode flags.
+    pub fn mode(&self) -> TermMode {
+        self.mode
+    }
+
+    /// Check whether bracketed paste mode is enabled.
+    pub fn bracketed_paste_mode(&self) -> bool {
+        self.mode.contains(TermMode::BRACKETED_PASTE)
     }
 
     /// Scroll up by the specified number of lines (show older content).
@@ -421,10 +484,9 @@ impl TerminalView {
     /// Positive `Scroll::Delta` increases `display_offset`, moving the
     /// viewport up into the scrollback buffer.
     pub fn scroll_up(&mut self, lines: usize) {
-        self.invalidate_content_cache();
-        self.terminal
-            .term_mut()
-            .scroll_display(Scroll::Delta(lines as i32));
+        if let Some(snapshot) = self.runtime.scroll_up(lines) {
+            let _ = self.apply_snapshot(snapshot);
+        }
     }
 
     /// Scroll down by the specified number of lines (show newer content).
@@ -432,10 +494,9 @@ impl TerminalView {
     /// Negative `Scroll::Delta` decreases `display_offset`, moving the
     /// viewport down toward the most recent output.
     pub fn scroll_down(&mut self, lines: usize) {
-        self.invalidate_content_cache();
-        self.terminal
-            .term_mut()
-            .scroll_display(Scroll::Delta(-(lines as i32)));
+        if let Some(snapshot) = self.runtime.scroll_down(lines) {
+            let _ = self.apply_snapshot(snapshot);
+        }
     }
 
     /// Scroll to the bottom (most recent output).
@@ -451,18 +512,18 @@ impl TerminalView {
             return false;
         }
 
-        self.invalidate_content_cache();
-        self.terminal.term_mut().scroll_display(Scroll::Bottom);
-        true
+        self.runtime
+            .scroll_to_bottom()
+            .is_some_and(|snapshot| self.apply_snapshot(snapshot))
     }
 
     /// Check whether the viewport is showing scrollback instead of the live prompt.
     pub fn is_scrolled_back(&self) -> bool {
-        self.terminal.term().renderable_content().display_offset != 0
+        self.display_offset != 0
     }
 
     fn viewport_row_to_grid_line(&self, row: usize) -> i32 {
-        row as i32 - self.terminal.term().grid().display_offset() as i32
+        row as i32 - self.display_offset as i32
     }
 
     /// Clear the terminal screen while preserving the current line (prompt).
@@ -470,8 +531,9 @@ impl TerminalView {
     /// This clears the scrollback and visible content while keeping
     /// the current line (typically the shell prompt) at the top.
     pub fn clear(&mut self) {
-        self.invalidate_content_cache();
-        self.terminal.clear();
+        if let Some(snapshot) = self.runtime.clear() {
+            let _ = self.apply_snapshot(snapshot);
+        }
     }
 
     /// Get cursor rendering information.
@@ -485,7 +547,7 @@ impl TerminalView {
     /// The underlying position is cached in `ensure_row_caches()` so this
     /// is a pure field read — no terminal state access in the render pass.
     pub fn cursor_rect(&self) -> Option<CursorRect> {
-        if !self.terminal.cursor_visible() {
+        if !self.mode.contains(TermMode::SHOW_CURSOR) {
             return None;
         }
 
@@ -519,8 +581,8 @@ impl TerminalView {
     /// Calculate pixel dimensions for the current terminal size.
     #[cfg(test)]
     pub(crate) fn pixel_size(&self) -> (f32, f32) {
-        let width = self.terminal.cols() as f32 * self.cell_width;
-        let height = self.terminal.rows() as f32 * self.cell_height;
+        let width = self.cols as f32 * self.cell_width;
+        let height = self.rows as f32 * self.cell_height;
         (width, height)
     }
 
@@ -537,11 +599,19 @@ impl TerminalView {
     /// dimensions were already at the target size (no-op).
     pub fn resize_to_fit(&mut self, width: f32, height: f32) -> bool {
         let (rows, cols) = self.dimensions_from_pixels(width, height);
-        if rows == self.terminal.rows() && cols == self.terminal.cols() {
+        if rows == self.rows && cols == self.cols {
             return false;
         }
-        self.invalidate_content_cache();
-        self.terminal.resize(rows, cols);
+        if let Some(snapshot) = self.runtime.resize_with_cells(TerminalSize::new(
+            rows,
+            cols,
+            self.cell_width,
+            self.cell_height,
+        )) {
+            let _ = self.apply_snapshot(snapshot);
+        } else {
+            self.mark_dirty();
+        }
         true
     }
 
@@ -553,7 +623,6 @@ impl TerminalView {
         self.selection
             .set_start(self.viewport_row_to_grid_line(row), col);
         self.selection.end = None;
-        self.invalidate_content_cache();
     }
 
     /// Update the selection end position during a drag.
@@ -563,13 +632,11 @@ impl TerminalView {
     pub fn update_selection(&mut self, row: usize, col: usize) {
         self.selection
             .set_end(self.viewport_row_to_grid_line(row), col);
-        self.invalidate_content_cache();
     }
 
     /// Clear the current selection.
     pub fn clear_selection(&mut self) {
         self.selection.clear();
-        self.invalidate_content_cache();
     }
 
     /// Get the currently selected text, if any.
@@ -577,84 +644,16 @@ impl TerminalView {
     /// Returns `None` if no selection is active. Extracts text from the
     /// terminal grid between the normalized selection start and end.
     pub fn get_selected_text(&self) -> Option<String> {
-        let (start, end) = self.selection.normalized()?;
-        let text = crate::clipboard::copy_selection(self.terminal.term(), start, end);
-        if text.is_empty() {
-            None
-        } else {
-            Some(text)
-        }
+        self.runtime.get_selected_text(&self.selection)
     }
 
     /// Mark content as dirty, forcing recomputation on next access.
     pub fn mark_dirty(&mut self) {
-        self.invalidate_content_cache();
-    }
-
-    /// Check if content is dirty (needs recomputation).
-    pub fn is_dirty(&self) -> bool {
-        self.content_dirty
-    }
-
-    fn ensure_row_caches(&mut self) {
-        if !self.content_dirty && self.cached_rows.is_some() {
-            return;
-        }
-
-        let rows = self.terminal.rows() as usize;
-        let cols = self.terminal.cols() as usize;
-        let damage = if self.partial_rebuild_allowed
-            && self
-                .cached_rows
-                .as_ref()
-                .is_some_and(|cached_rows| cached_rows.len() == rows)
-        {
-            let term = self.terminal.term_mut();
-            let damage = match term.damage() {
-                alacritty_terminal::term::TermDamage::Full => None,
-                alacritty_terminal::term::TermDamage::Partial(lines) => {
-                    Some(lines.map(|line| line.line).collect::<Vec<_>>())
-                }
-            };
-            term.reset_damage();
-            damage
-        } else {
-            self.terminal.term_mut().reset_damage();
-            None
-        };
-
-        if let Some(dirty_rows) = damage {
-            let rebuilt_rows = dirty_rows
-                .iter()
-                .copied()
-                .filter(|row| *row < rows)
-                .map(|row| (row, self.build_row_cache(row, cols)))
-                .collect::<Vec<_>>();
-            if let Some(cached_rows) = self.cached_rows.as_mut() {
-                for (row, rebuilt_row) in rebuilt_rows {
-                    cached_rows[row] = rebuilt_row;
-                }
-                self.dirty_rows = Some(dirty_rows);
-                self.cached_content = None;
-                self.content_dirty = false;
-                self.refresh_cursor_cache(rows);
-                return;
-            }
-        }
-
-        self.cached_rows = Some(
-            (0..rows)
-                .map(|row| self.build_row_cache(row, cols))
-                .collect(),
-        );
         self.cached_content = None;
         self.cached_shaped_font_family = None;
         self.cached_shaped_font_size = None;
         self.cached_shaped_rows = None;
         self.dirty_rows = None;
-        self.content_dirty = false;
-        self.partial_rebuild_allowed = false;
-        self.refresh_cursor_cache(rows);
     }
 
     /// Get cached terminal content, flattening row caches only when requested.
@@ -662,31 +661,16 @@ impl TerminalView {
     /// Rendering uses row caches directly; this flattened view is retained for
     /// tests and any future callers that need a contiguous snapshot.
     pub fn cached_content(&mut self) -> &CachedTerminalContent {
-        self.ensure_row_caches();
-        if self.cached_content.is_none() {
-            let rows = self.terminal.rows() as usize;
-            let cols = self.terminal.cols() as usize;
-            let content = self
-                .cached_rows
-                .as_ref()
-                .map(|cached_rows| Self::flatten_cached_rows(cached_rows, rows, cols))
-                .unwrap_or_else(|| CachedTerminalContent {
-                    bg_rects_hsla: Arc::default(),
-                    text_runs_hsla: Arc::default(),
-                    rows,
-                    cols,
-                });
-            self.cached_content = Some(content);
-        }
-        self.cached_content
-            .as_ref()
-            .expect("BUG: cached_content must be Some after rebuild")
+        self.cached_content.get_or_insert_with(|| {
+            let rows = self.rows as usize;
+            let cols = self.cols as usize;
+            Self::flatten_cached_rows(&self.cached_rows, rows, cols)
+        })
     }
 
     /// Get per-row cached terminal content for rendering.
-    pub(crate) fn render_rows(&mut self) -> Vec<CachedTerminalRow> {
-        self.ensure_row_caches();
-        self.cached_rows.clone().unwrap_or_default()
+    pub(crate) fn render_rows(&self) -> Vec<CachedTerminalRow> {
+        self.cached_rows.clone()
     }
 
     /// Get per-row shaped text, rebuilding only dirty rows when content changes.
@@ -696,7 +680,6 @@ impl TerminalView {
     ) -> Vec<ShapedTerminalRow> {
         let font_family = self.font_family.clone();
         let font_size = self.font_size;
-        self.ensure_row_caches();
 
         let font_changed = self.cached_shaped_font_family.as_ref() != Some(&font_family)
             || self
@@ -704,175 +687,45 @@ impl TerminalView {
                 .map_or(true, |size| (size - font_size).abs() > 0.01);
         let row_shapes_need_full_rebuild = font_changed
             || self.cached_shaped_rows.is_none()
-            || self
-                .cached_rows
-                .as_ref()
-                .zip(self.cached_shaped_rows.as_ref())
-                .map_or(true, |(rows, row_shapes)| rows.len() != row_shapes.len());
+            || self.cached_rows.len()
+                != self
+                    .cached_shaped_rows
+                    .as_ref()
+                    .map_or(0, |row_shapes| row_shapes.len());
 
         if row_shapes_need_full_rebuild {
             let row_shapes = self
                 .cached_rows
-                .as_ref()
-                .map(|rows| {
-                    rows.iter()
-                        .map(|row| {
-                            shape_text_runs(
-                                text_system,
-                                row.text_runs_hsla.as_ref(),
-                                &font_family,
-                                font_size,
-                            )
-                        })
-                        .collect::<Vec<_>>()
+                .iter()
+                .map(|row| {
+                    shape_text_runs(
+                        text_system,
+                        row.text_runs_hsla.as_ref(),
+                        &font_family,
+                        font_size,
+                    )
                 })
-                .unwrap_or_default();
+                .collect::<Vec<_>>();
             self.cached_shaped_font_family = Some(font_family);
             self.cached_shaped_font_size = Some(font_size);
             self.cached_shaped_rows = Some(row_shapes);
             self.dirty_rows = None;
         } else if let Some(dirty_rows) = self.dirty_rows.take() {
             if let Some(row_shapes) = self.cached_shaped_rows.as_mut() {
-                if let Some(rows) = self.cached_rows.as_ref() {
-                    for row in dirty_rows {
-                        if row >= rows.len() || row >= row_shapes.len() {
-                            continue;
-                        }
-                        row_shapes[row] = shape_text_runs(
-                            text_system,
-                            rows[row].text_runs_hsla.as_ref(),
-                            &font_family,
-                            font_size,
-                        );
+                for row in dirty_rows {
+                    if row >= self.cached_rows.len() || row >= row_shapes.len() {
+                        continue;
                     }
+                    row_shapes[row] = shape_text_runs(
+                        text_system,
+                        self.cached_rows[row].text_runs_hsla.as_ref(),
+                        &font_family,
+                        font_size,
+                    );
                 }
             }
         }
         self.cached_shaped_rows.clone().unwrap_or_default()
-    }
-
-    fn build_row_cache(&self, row: usize, cols: usize) -> CachedTerminalRow {
-        let display_offset = self.terminal.term().grid().display_offset();
-        let grid_line = Line(row as i32) - display_offset;
-        let grid = self.terminal.term().grid();
-
-        let mut text_runs: Vec<TextRunSegment> = Vec::new();
-        let mut background_rects: Vec<(usize, usize, usize, Rgba)> = Vec::new();
-        let mut current_run: Option<TextRunSegment> = None;
-
-        for col in 0..cols {
-            let cell = &grid[grid_line][Column(col)];
-            let c = cell.c;
-
-            if cell.flags.contains(CellFlags::WIDE_CHAR_SPACER) {
-                let bg = convert_color(cell.bg, &self.theme);
-                if bg != self.theme.terminal_background {
-                    let merged = background_rects.last_mut().and_then(
-                        |last: &mut (usize, usize, usize, Rgba)| {
-                            if last.0 == row && last.2 == col && last.3 == bg {
-                                last.2 = col + 1;
-                                Some(())
-                            } else {
-                                None
-                            }
-                        },
-                    );
-                    if merged.is_none() {
-                        background_rects.push((row, col, col + 1, bg));
-                    }
-                }
-                continue;
-            }
-
-            if c == ' ' && cell.bg == TermColor::Named(NamedColor::Background) {
-                continue;
-            }
-
-            let mut foreground = convert_color(cell.fg, &self.theme);
-            let mut background = convert_color(cell.bg, &self.theme);
-
-            if cell.flags.contains(CellFlags::INVERSE) {
-                std::mem::swap(&mut foreground, &mut background);
-            }
-            if self.selection.contains(grid_line.0, col) {
-                foreground = self.theme.terminal_selection_fg;
-                background = self.theme.terminal_selection_bg;
-            }
-            if cell.flags.contains(CellFlags::DIM) {
-                foreground = dim_color(foreground);
-            }
-
-            let same_style = current_run.as_ref().is_some_and(|run| {
-                run.row == row
-                    && run.foreground == foreground
-                    && run.bold == cell.flags.contains(CellFlags::BOLD)
-                    && run.italic == cell.flags.contains(CellFlags::ITALIC)
-                    && run.underline == cell.flags.contains(CellFlags::UNDERLINE)
-                    && run.strikethrough == cell.flags.contains(CellFlags::STRIKEOUT)
-                    && run.start_col + run.cell_count == col
-            });
-
-            if same_style {
-                let run = current_run
-                    .as_mut()
-                    .expect("BUG: current_run must be Some when same_style is true");
-                run.text.push(c);
-                run.cell_count += 1;
-            } else {
-                if let Some(run) = current_run.take() {
-                    text_runs.push(run);
-                }
-                current_run = Some(TextRunSegment {
-                    text: String::from(c),
-                    foreground,
-                    bold: cell.flags.contains(CellFlags::BOLD),
-                    italic: cell.flags.contains(CellFlags::ITALIC),
-                    underline: cell.flags.contains(CellFlags::UNDERLINE),
-                    strikethrough: cell.flags.contains(CellFlags::STRIKEOUT),
-                    row,
-                    start_col: col,
-                    cell_count: 1,
-                });
-            }
-
-            if background != self.theme.terminal_background {
-                let merged = background_rects.last_mut().and_then(
-                    |last: &mut (usize, usize, usize, Rgba)| {
-                        if last.0 == row && last.2 == col && last.3 == background {
-                            last.2 = col + 1;
-                            Some(())
-                        } else {
-                            None
-                        }
-                    },
-                );
-                if merged.is_none() {
-                    background_rects.push((row, col, col + 1, background));
-                }
-            }
-        }
-
-        if let Some(run) = current_run.take() {
-            text_runs.push(run);
-        }
-
-        CachedTerminalRow {
-            bg_rects_hsla: Arc::new(
-                background_rects
-                    .into_iter()
-                    .map(|(r, start, end, color)| (r, start, end, color.into()))
-                    .collect(),
-            ),
-            text_runs_hsla: Arc::new(
-                text_runs
-                    .into_iter()
-                    .map(|run| {
-                        let fg: gpui::Hsla = run.foreground.into();
-                        (run, fg)
-                    })
-                    .collect(),
-            ),
-        }
     }
 
     fn flatten_cached_rows(
@@ -907,8 +760,8 @@ impl TerminalView {
         let col = (x / self.cell_width).floor() as usize;
         let row = (y / self.cell_height).floor() as usize;
 
-        let max_row = self.terminal.rows() as usize;
-        let max_col = self.terminal.cols() as usize;
+        let max_row = self.rows as usize;
+        let max_col = self.cols as usize;
 
         if row < max_row && col < max_col {
             Some((row, col))
@@ -924,8 +777,8 @@ impl TerminalView {
     /// whether the position was above (`-1`), within (`0`), or below (`1`)
     /// the viewport, allowing callers to trigger auto-scroll during selection.
     pub fn pixel_to_cell_clamped(&self, x: f32, y: f32) -> (usize, usize, i32) {
-        let max_row = self.terminal.rows() as usize;
-        let max_col = self.terminal.cols() as usize;
+        let max_row = self.rows as usize;
+        let max_col = self.cols as usize;
 
         if max_row == 0 || max_col == 0 {
             return (0, 0, 0);
@@ -956,39 +809,63 @@ impl TerminalView {
         (row, col, scroll_dir)
     }
 
+    /// Get selection background rectangles for the current viewport.
+    pub(crate) fn selection_rects_hsla(&self) -> Vec<(usize, usize, usize, gpui::Hsla)> {
+        let Some(((start_line, start_col), (end_line, end_col))) = self.selection.normalized()
+        else {
+            return Vec::new();
+        };
+
+        let max_col = self.cols as usize;
+        if max_col == 0 {
+            return Vec::new();
+        }
+
+        let viewport_start_line = -(self.display_offset as i32);
+        let viewport_end_line = viewport_start_line + self.rows as i32 - 1;
+        let visible_start = start_line.max(viewport_start_line);
+        let visible_end = end_line.min(viewport_end_line);
+        if visible_start > visible_end {
+            return Vec::new();
+        }
+
+        let selection_bg: gpui::Hsla = self.theme.terminal_selection_bg.into();
+        let mut rects = Vec::new();
+        for line in visible_start..=visible_end {
+            let row = (line + self.display_offset as i32) as usize;
+            let start = if line == start_line {
+                start_col.min(max_col)
+            } else {
+                0
+            };
+            let end = if line == end_line {
+                end_col.saturating_add(1).min(max_col)
+            } else {
+                max_col
+            };
+            if start < end {
+                rects.push((row, start, end, selection_bg));
+            }
+        }
+
+        rects
+    }
+
     /// Snapshot the cursor viewport position into `cached_cursor_viewport_pos`.
-    ///
-    /// Called at the end of `ensure_row_caches()` so the render pass can read
-    /// cursor/IME positions without touching terminal state.
-    fn refresh_cursor_cache(&mut self, viewport_rows: usize) {
-        let content = self.terminal.term().renderable_content();
-        let viewport_line = content.cursor.point.line.0 + content.display_offset as i32;
-        if viewport_line >= 0 && (viewport_line as usize) < viewport_rows {
-            let col = content.cursor.point.column.0;
-            self.cached_cursor_viewport_pos = Some((
-                col as f32 * self.cell_width,
-                viewport_line as f32 * self.cell_height,
-            ));
+    fn refresh_cursor_cache(&mut self, cursor_viewport_cell: Option<(usize, usize)>) {
+        if let Some((row, col)) = cursor_viewport_cell {
+            self.cached_cursor_viewport_pos =
+                Some((col as f32 * self.cell_width, row as f32 * self.cell_height));
         } else {
             self.cached_cursor_viewport_pos = None;
         }
     }
 
-    fn mark_output_dirty(&mut self) {
-        self.content_dirty = true;
-        self.partial_rebuild_allowed = self.cached_rows.is_some();
-        self.cached_content = None;
-    }
-
-    fn invalidate_content_cache(&mut self) {
-        self.content_dirty = true;
-        self.partial_rebuild_allowed = false;
-        self.cached_content = None;
-        self.cached_rows = None;
-        self.cached_shaped_font_family = None;
-        self.cached_shaped_font_size = None;
-        self.cached_shaped_rows = None;
-        self.dirty_rows = None;
+    #[cfg(test)]
+    pub(crate) fn apply_output_for_test(&mut self, data: &[u8]) {
+        if let Some(snapshot) = self.runtime.apply_output(data) {
+            let _ = self.apply_snapshot(snapshot);
+        }
     }
 }
 
@@ -1122,6 +999,7 @@ pub struct CursorRect {
 mod tests {
     use super::*;
     use crate::terminal_colors::brighten_color;
+    use crate::terminal_colors::dim_color;
 
     fn create_test_view() -> TerminalView {
         let (tx, _rx) = tokio::sync::mpsc::unbounded_channel();
@@ -1222,8 +1100,8 @@ mod tests {
     #[test]
     fn test_terminal_view_creation() {
         let view = create_test_view();
-        assert_eq!(view.terminal().rows(), 24);
-        assert_eq!(view.terminal().cols(), 80);
+        assert_eq!(view.rows(), 24);
+        assert_eq!(view.cols(), 80);
         assert!(view.is_focused());
     }
 
@@ -1262,8 +1140,8 @@ mod tests {
     fn test_pixel_size() {
         let view = create_test_view();
         let (width, height) = view.pixel_size();
-        assert_eq!(width, view.cell_width() * view.terminal().cols() as f32);
-        assert_eq!(height, view.cell_height() * view.terminal().rows() as f32);
+        assert_eq!(width, view.cell_width() * view.cols() as f32);
+        assert_eq!(height, view.cell_height() * view.rows() as f32);
     }
 
     #[test]
@@ -1289,11 +1167,7 @@ mod tests {
         assert_eq!(view.pixel_to_cell_clamped(40.0, 32.0), (2, 5, 0));
         assert_eq!(
             view.pixel_to_cell_clamped(10_000.0, 10_000.0),
-            (
-                view.terminal().rows() as usize - 1,
-                view.terminal().cols() as usize - 1,
-                1,
-            )
+            (view.rows() as usize - 1, view.cols() as usize - 1, 1)
         );
     }
 
@@ -1327,7 +1201,7 @@ mod tests {
     #[test]
     fn test_cached_content_with_content() {
         let mut view = create_test_view();
-        view.terminal_mut().process_output(b"Hello");
+        view.apply_output_for_test(b"Hello");
         let content = view.cached_content();
         assert!(
             !content.text_runs_hsla.is_empty(),
@@ -1344,14 +1218,8 @@ mod tests {
     fn test_resize_to_fit() {
         let mut view = create_test_view();
         view.resize_to_fit(400.0, 200.0);
-        assert_eq!(
-            view.terminal().cols(),
-            (400.0 / view.cell_width()).floor() as u16
-        );
-        assert_eq!(
-            view.terminal().rows(),
-            (200.0 / view.cell_height()).floor() as u16
-        );
+        assert_eq!(view.cols(), (400.0 / view.cell_width()).floor() as u16);
+        assert_eq!(view.rows(), (200.0 / view.cell_height()).floor() as u16);
     }
 
     #[test]
@@ -1368,7 +1236,7 @@ mod tests {
         let mut view = create_test_view();
         // Simulate multi-line output with Windows-style \r\n endings
         // This mimics what ConPTY sends for a simple dir/ls listing
-        view.terminal_mut().process_output(
+        view.apply_output_for_test(
             b"file1.txt\x1b[K\r\nfile2.txt\x1b[K\r\nfile3.txt\x1b[K\r\nfile4.txt\x1b[K\r\n",
         );
         let content = view.cached_content();
@@ -1416,7 +1284,7 @@ mod tests {
         for i in 0..40 {
             output.push_str(&format!("row{i:02}\r\n"));
         }
-        view.terminal_mut().process_output(output.as_bytes());
+        view.apply_output_for_test(output.as_bytes());
         view.scroll_up(3);
 
         view.start_selection(0, 1);
@@ -1460,7 +1328,7 @@ mod tests {
     #[test]
     fn test_get_selected_text_with_content() {
         let mut view = create_test_view();
-        view.terminal_mut().process_output(b"Hello, World!");
+        view.apply_output_for_test(b"Hello, World!");
         view.start_selection(0, 0);
         view.update_selection(0, 4);
         let text = view.get_selected_text();
@@ -1488,7 +1356,7 @@ mod tests {
         for i in 0..40 {
             output.push_str(&format!("row{i:02}\r\n"));
         }
-        view.terminal_mut().process_output(output.as_bytes());
+        view.apply_output_for_test(output.as_bytes());
         view.scroll_up(5);
 
         view.start_selection(0, 0);
@@ -1509,7 +1377,7 @@ mod tests {
     fn test_cached_content_row_indices_with_ansi() {
         let mut view = create_test_view();
         // More realistic ConPTY output with ANSI sequences
-        view.terminal_mut().process_output(
+        view.apply_output_for_test(
             b"\x1b[?25l\x1b[2J\x1b[H\
             Row0 text here\x1b[K\r\n\
             Row1 text here\x1b[K\r\n\
@@ -1549,8 +1417,7 @@ mod tests {
         let mut view = create_test_view();
         // '中' (U+4E2D) is a CJK character that occupies 2 columns.
         // \x1b[41m sets red background; \x1b[0m resets.
-        view.terminal_mut()
-            .process_output("\x1b[41m中\x1b[0m".as_bytes());
+        view.apply_output_for_test("\x1b[41m中\x1b[0m".as_bytes());
         let content = view.cached_content();
         // The background rect must span both columns of the wide char (start=0, end=2).
         let has_two_col_rect = content
@@ -1566,5 +1433,45 @@ mod tests {
                 .map(|(r, s, e, _)| (r, s, e))
                 .collect::<Vec<_>>()
         );
+    }
+
+    #[test]
+    fn test_apply_snapshot_ignores_stale_generation() {
+        let mut view = create_test_view();
+        view.apply_output_for_test(b"new");
+        let current = view.rows();
+        let stale = TerminalRenderSnapshot {
+            generation: 0,
+            rows: 2,
+            cols: 2,
+            mode: TermMode::empty(),
+            display_offset: 0,
+            cached_rows: Vec::new(),
+            dirty_rows: None,
+            cursor_viewport_cell: None,
+        };
+
+        assert!(!view.apply_snapshot(stale));
+        assert_eq!(view.rows(), current);
+    }
+
+    #[test]
+    fn test_selection_rects_follow_scrollback() {
+        let mut view = create_test_view();
+
+        let mut output = String::new();
+        for i in 0..40 {
+            output.push_str(&format!("row{i:02}\r\n"));
+        }
+        view.apply_output_for_test(output.as_bytes());
+        view.scroll_up(3);
+        view.start_selection(0, 0);
+        view.update_selection(0, 4);
+
+        let rects = view.selection_rects_hsla();
+        assert_eq!(rects.len(), 1);
+        assert_eq!(rects[0].0, 0);
+        assert_eq!(rects[0].1, 0);
+        assert_eq!(rects[0].2, 5);
     }
 }

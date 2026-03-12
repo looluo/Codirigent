@@ -13,6 +13,7 @@ use super::cli_helpers::clear_command;
 use super::cli_helpers::is_safe_cli_session_id;
 use super::gpui::WorkspaceView;
 use super::types::{CachedCliStatus, CliStatusSource, ProcessedHookSignal};
+use crate::terminal_runtime::TerminalRenderSnapshot;
 use codirigent_core::{
     hook_signals_dir, AssignmentAction, CliType, CodexExecutionMode, CodirigentEvent, EventBus,
     GitRepoInfo, ProcessMonitor, Session, SessionId, SessionManager, SessionStatus, SessionUpdate,
@@ -34,6 +35,11 @@ use tracing::{info, trace, warn};
 const CLI_TYPE_CLAUDE: &str = "claude";
 const CLI_TYPE_GEMINI: &str = "gemini";
 const CLI_TYPE_CODEX: &str = "codex";
+
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct DetectorMaintenanceBatch {
+    session_ids: Vec<SessionId>,
+}
 
 /// Unix timestamp (seconds) recorded at process startup, acting as a
 /// per-process "run epoch". Hook signals written before this moment belong to
@@ -112,6 +118,38 @@ fn apply_cwd_session_update_from_manager(
     workspace_session.group = manager_session.group.clone();
     workspace_session.color = manager_session.color.clone();
     workspace_session.git_info = None;
+}
+
+fn merge_detector_maintenance_session_ids(
+    changed_ids: Vec<SessionId>,
+    stale_candidates: Vec<SessionId>,
+) -> Vec<SessionId> {
+    let mut seen = HashSet::new();
+    changed_ids
+        .into_iter()
+        .chain(stale_candidates)
+        .filter(|session_id| seen.insert(*session_id))
+        .collect()
+}
+
+fn collect_detector_maintenance_batch(
+    detector: &std::sync::Arc<std::sync::Mutex<codirigent_detector::InputDetector>>,
+    cli_readers: &std::sync::Arc<std::sync::Mutex<super::types::CliReaders>>,
+) -> DetectorMaintenanceBatch {
+    let changed_ids = detector
+        .lock()
+        .ok()
+        .map(|mut detector| detector.tick())
+        .unwrap_or_default();
+    let stale_candidates = cli_readers
+        .lock()
+        .ok()
+        .map(|readers| readers.cached_status.keys().copied().collect())
+        .unwrap_or_default();
+
+    DetectorMaintenanceBatch {
+        session_ids: merge_detector_maintenance_session_ids(changed_ids, stale_candidates),
+    }
 }
 
 fn prioritize_and_partition_output_sessions<F>(
@@ -220,8 +258,9 @@ fn cli_type_from_hook_signal_name(cli_type_name: &str) -> Option<CliType> {
 #[derive(Debug)]
 struct PreparedSessionOutput {
     session_id: SessionId,
-    data: Vec<u8>,
+    bytes_drained: usize,
     has_more: bool,
+    render_snapshot: Option<TerminalRenderSnapshot>,
     detected_cli_type: Option<CliType>,
     cwd_session: Option<Session>,
 }
@@ -500,64 +539,67 @@ impl WorkspaceView {
     }
 
     pub(super) fn poll_maintenance(&mut self, cx: &mut Context<Self>) {
-        let any_status_dirty = self.tick_detector_statuses();
         self.spawn_background_hook_signal_check(cx);
         self.spawn_background_jsonl_check(cx);
         self.cleanup_compaction_timeouts();
         self.cleanup_stale_proposals();
         self.schedule_background_git_refresh(cx);
 
-        if any_status_dirty || self.update_clipboard_preview(cx) {
+        if self.update_clipboard_preview(cx) {
             cx.notify();
         }
     }
 
-    /// Advance process-state detection on a maintenance cadence, then sync any
-    /// resulting status changes into the workspace cache.
-    ///
-    /// This is required on shells without OSC 133 integration (notably the
-    /// Windows PTY path), where `process_output()` can move a session into
-    /// `Working` but only `tick()` can later decay it back to `Idle`.
-    fn tick_detector_statuses(&mut self) -> bool {
-        let has_sessions = !self.terminals.is_empty();
-        if !has_sessions {
-            return false;
+    pub(super) fn spawn_background_detector_maintenance(&mut self, cx: &mut Context<Self>) {
+        if self.terminals.is_empty() || self.polling.detector_maintenance_in_flight {
+            return;
         }
 
-        // tick() returns only sessions whose detector status actually changed,
-        // so we only run the full reconciler for those — avoiding per-session
-        // lock acquisition for the common case where nothing changed.
-        let changed_ids = self.with_detector(|detector| detector.tick());
+        self.polling.detector_maintenance_in_flight = true;
+        trace!("spawn_background_detector_maintenance");
 
-        let mut dirty = false;
+        let detector = self.detector.clone();
+        let cli_readers = self.cli_readers.clone();
 
-        if !changed_ids.is_empty() {
-            trace!(changed = changed_ids.len(), "tick_detector_statuses");
-            for session_id in changed_ids {
-                dirty |= self.sync_session_status(session_id);
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+            let batch = cx
+                .background_executor()
+                .spawn(async move { collect_detector_maintenance_batch(&detector, &cli_readers) })
+                .await;
+
+            let _ = this.update(cx, |this, cx| {
+                this.polling.detector_maintenance_in_flight = false;
+                this.apply_detector_maintenance_batch(batch, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn apply_detector_maintenance_batch(
+        &mut self,
+        batch: DetectorMaintenanceBatch,
+        cx: &mut Context<Self>,
+    ) {
+        if batch.session_ids.is_empty() {
+            return;
+        }
+
+        trace!(
+            changed = batch.session_ids.len(),
+            "apply_detector_maintenance_batch"
+        );
+
+        let mut any_dirty = false;
+        for session_id in batch.session_ids {
+            if self.sync_session_status(session_id) {
+                self.sync_session_header(session_id);
+                any_dirty = true;
             }
         }
 
-        // Stale-cache sweep: sessions with cached statuses that are
-        // unchanged in the detector (not in `changed_ids`) still need
-        // periodic reconciliation. This ensures:
-        // - NeedsAttention entries hit the 30s staleness check
-        // - Working/ResponseReady entries hit TTL eviction
-        // This is cheap: only sessions with a cached status are checked.
-        //
-        // The lock is scoped to the collection phase so the mutable
-        // `sync_session_status` call below does not overlap the borrow.
-        let stale_candidates: Vec<SessionId> = self
-            .cli_readers
-            .lock()
-            .ok()
-            .map(|readers| readers.cached_status.keys().copied().collect())
-            .unwrap_or_default();
-        for session_id in stale_candidates {
-            dirty |= self.sync_session_status(session_id);
+        if any_dirty {
+            cx.notify();
         }
-
-        dirty
     }
 
     fn schedule_output_preparation(&mut self, cx: &mut Context<Self>) -> bool {
@@ -696,6 +738,20 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) {
         trace!(?session_id, "schedule_session_output_preparation");
+        let Some(runtime) = self
+            .terminals
+            .get(&session_id)
+            .map(|tv| tv.runtime_handle())
+        else {
+            trace!(
+                ?session_id,
+                "deferring output preparation until terminal runtime attaches"
+            );
+            self.output_dispatcher.mark_ready(session_id);
+            self.with_session_manager(|manager| manager.mark_output_pending(session_id));
+            return;
+        };
+
         // Guard: prevent double-dispatch via the dispatcher's in-flight set.
         if !self.output_dispatcher.mark_in_flight(session_id) {
             return;
@@ -729,6 +785,8 @@ impl WorkspaceView {
                     }?;
 
                     let data = drained.data;
+                    let bytes_drained = data.len();
+                    let render_snapshot = runtime.apply_output(&data);
                     let detected_cli_type = detect_cli_from_output(&data);
 
                     {
@@ -779,8 +837,9 @@ impl WorkspaceView {
 
                     Some(PreparedSessionOutput {
                         session_id,
-                        data,
+                        bytes_drained,
                         has_more: drained.has_more,
+                        render_snapshot,
                         detected_cli_type,
                         cwd_session,
                     })
@@ -820,12 +879,12 @@ impl WorkspaceView {
     ) {
         let PreparedSessionOutput {
             session_id,
-            data,
+            bytes_drained,
             has_more,
+            render_snapshot,
             detected_cli_type,
             cwd_session,
         } = prepared;
-        let bytes_drained = data.len();
         trace!(
             ?session_id,
             bytes_drained,
@@ -834,9 +893,10 @@ impl WorkspaceView {
         );
         let mut any_dirty = false;
 
-        if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
-            terminal_view.terminal_mut().process_output(&data);
-            any_dirty = true;
+        if let Some(snapshot) = render_snapshot {
+            if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
+                any_dirty |= terminal_view.apply_snapshot(snapshot);
+            }
         }
 
         if let Some(cli_type) = detected_cli_type {
@@ -867,7 +927,6 @@ impl WorkspaceView {
             }
 
             self.spawn_session_git_refresh(session_id, mgr_session.working_directory.clone(), cx);
-            self.mark_ui_sync_dirty();
             any_dirty = true;
         }
 
@@ -993,7 +1052,6 @@ impl WorkspaceView {
             let old_status = self.workspace.session(session_id).map(|s| s.status);
             let mut just_started_compaction = false;
             if self.workspace.update_session_status(session_id, status) {
-                self.mark_ui_sync_dirty();
                 any_dirty = true;
                 // Sync task board with the canonical (JSONL-corrected) status
                 if let Some(old) = old_status {
@@ -1025,7 +1083,6 @@ impl WorkspaceView {
                         if let Some(session) = self.workspace.session_mut(session_id) {
                             session.current_task = None;
                         }
-                        self.mark_ui_sync_dirty();
                         // Start context clear and reuse compaction infrastructure
                         let cli_type = self
                             .clipboard
@@ -1048,6 +1105,7 @@ impl WorkspaceView {
                         }
                     }
                 }
+                self.sync_task_derived_state();
             }
             // NeedsAttention is NOT treated as idle because session is blocked
             // Skip if we just started compaction and wait for /clear to finish
@@ -1643,7 +1701,6 @@ impl WorkspaceView {
                     }
                 }
                 if git_changed {
-                    this.mark_ui_sync_dirty();
                     cx.notify();
                 }
             });
@@ -1703,7 +1760,6 @@ impl WorkspaceView {
                     changed |= update_cached_session_git_info(session, &git_info);
                 }
                 if changed {
-                    this.mark_ui_sync_dirty();
                     cx.notify();
                 }
             });
@@ -2195,8 +2251,55 @@ impl WorkspaceView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codirigent_core::{ImageData, ImageFormat};
+    use codirigent_core::{DefaultEventBus, ImageData, ImageFormat};
     use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use std::time::Instant;
+
+    fn temp_fixture_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(name)
+    }
+
+    #[test]
+    fn detector_maintenance_merge_dedupes_and_preserves_priority() {
+        let merged = merge_detector_maintenance_session_ids(
+            vec![SessionId(2), SessionId(1), SessionId(2)],
+            vec![SessionId(3), SessionId(1), SessionId(4)],
+        );
+
+        assert_eq!(
+            merged,
+            vec![SessionId(2), SessionId(1), SessionId(3), SessionId(4)]
+        );
+    }
+
+    #[test]
+    fn detector_maintenance_batch_includes_stale_cached_sessions() {
+        let detector = Arc::new(Mutex::new(codirigent_detector::InputDetector::new(
+            codirigent_detector::DetectorConfig::default(),
+            Arc::new(DefaultEventBus::new(16)),
+        )));
+        let cli_readers = Arc::new(Mutex::new(super::super::types::CliReaders::new()));
+        let stale_id = SessionId(17);
+
+        cli_readers
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .cached_status
+            .insert(
+                stale_id,
+                CachedCliStatus {
+                    status: SessionStatus::NeedsAttention,
+                    seen_at: Instant::now(),
+                    source: CliStatusSource::Hook,
+                    status_since: Instant::now(),
+                    ttl: Duration::from_secs(30),
+                },
+            );
+
+        let batch = collect_detector_maintenance_batch(&detector, &cli_readers);
+        assert_eq!(batch.session_ids, vec![stale_id]);
+    }
 
     fn codex_input(
         session_id: u64,
@@ -2420,16 +2523,13 @@ mod tests {
 
     #[test]
     fn git_refresh_updates_git_info_without_overwriting_custom_group() {
-        let mut session = Session::new(
-            SessionId(1),
-            "Session 1".to_string(),
-            PathBuf::from("/tmp/project"),
-        );
+        let project_path = temp_fixture_path("project");
+        let mut session = Session::new(SessionId(1), "Session 1".to_string(), project_path.clone());
         session.group = Some("custom-group".to_string());
         session.color = Some("#f43f5e".to_string());
 
         let git_info = Some(GitRepoInfo {
-            repo_root: PathBuf::from("/tmp/project"),
+            repo_root: project_path,
             branch: "feature/custom-group".to_string(),
             dirty_count: 2,
             has_staged: false,
@@ -2446,15 +2546,14 @@ mod tests {
 
     #[test]
     fn cwd_session_update_preserves_custom_group_from_manager() {
-        let mut workspace_session = Session::new(
-            SessionId(1),
-            "Session 1".to_string(),
-            PathBuf::from("/tmp/project"),
-        );
+        let project_path = temp_fixture_path("project");
+        let other_project_path = temp_fixture_path("other-project");
+        let mut workspace_session =
+            Session::new(SessionId(1), "Session 1".to_string(), project_path.clone());
         workspace_session.group = Some("custom-group".to_string());
         workspace_session.color = Some("#f43f5e".to_string());
         workspace_session.git_info = Some(GitRepoInfo {
-            repo_root: PathBuf::from("/tmp/project"),
+            repo_root: project_path,
             branch: "main".to_string(),
             dirty_count: 1,
             has_staged: false,
@@ -2464,14 +2563,11 @@ mod tests {
         });
 
         let mut manager_session = workspace_session.clone();
-        manager_session.working_directory = PathBuf::from("/tmp/other-project");
+        manager_session.working_directory = other_project_path.clone();
 
         apply_cwd_session_update_from_manager(&mut workspace_session, &manager_session);
 
-        assert_eq!(
-            workspace_session.working_directory,
-            PathBuf::from("/tmp/other-project")
-        );
+        assert_eq!(workspace_session.working_directory, other_project_path);
         assert_eq!(workspace_session.group.as_deref(), Some("custom-group"));
         assert_eq!(workspace_session.color.as_deref(), Some("#f43f5e"));
         assert!(workspace_session.git_info.is_none());
