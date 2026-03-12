@@ -1,6 +1,6 @@
 use super::*;
-use crate::workspace::types::CachedCliStatus;
-use codirigent_core::{DefaultEventBus, ImageData, ImageFormat};
+use crate::workspace::types::{CachedCliStatus, CliStatusSource};
+use codirigent_core::{DefaultEventBus, ImageData, ImageFormat, SessionStatus};
 use std::sync::{Arc, Mutex};
 use std::time::Instant;
 
