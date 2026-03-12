@@ -430,6 +430,7 @@ impl WorkspaceView {
         super::impl_output_polling::init_app_start_ts();
 
         Self::start_output_polling(cx);
+        Self::start_detector_maintenance_polling(cx);
         Self::start_maintenance_polling(cx);
         Self::start_modal_cursor_blink(cx);
 
@@ -573,6 +574,22 @@ impl WorkspaceView {
                 .await;
             let result = this.update(cx, |this, cx| {
                 this.poll_maintenance(cx);
+            });
+            if result.is_err() {
+                break;
+            }
+        })
+        .detach();
+    }
+
+    /// Start detector maintenance polling off the UI thread.
+    fn start_detector_maintenance_polling(cx: &mut Context<Self>) {
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| loop {
+            cx.background_executor()
+                .timer(Duration::from_millis(Self::MAINTENANCE_POLL_INTERVAL_MS))
+                .await;
+            let result = this.update(cx, |this, cx| {
+                this.spawn_background_detector_maintenance(cx);
             });
             if result.is_err() {
                 break;

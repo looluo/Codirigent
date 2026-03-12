@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress. This document defines the planned refactor for the remaining UI-thread-bound session workflow in Codirigent, and now reflects implemented progress through Phase 3.
+In progress. This document defines the planned refactor for the remaining UI-thread-bound session workflow in Codirigent, and now reflects implemented progress through Phase 4.
 
 ## Progress Snapshot
 
@@ -12,7 +12,7 @@ In progress. This document defines the planned refactor for the remaining UI-thr
 | Phase 1: PTY Command Queue | Complete | Queue-backed PTY writes/resizes landed with a dedicated worker, tests, and full verification gate. |
 | Phase 2: Async Session Bootstrap | Complete | Session create/restore bootstrap now runs on the background executor, with UI-side attach/finalization only. |
 | Phase 3: Terminal Runtime Offload | Complete | Terminal parsing/state mutation now runs in a background runtime and the UI consumes snapshots only. |
-| Phase 4: Detector Worker | Pending | Not started. |
+| Phase 4: Detector Worker | Complete | Detector tick and stale cached-status collection now run on the background executor; UI only applies targeted status deltas. |
 | Phase 5: Derived UI State Cleanup | Pending | Not started. |
 
 ### Phase 1 Completion Notes
@@ -131,6 +131,46 @@ cargo test -p codirigent-ui --lib --features gpui-full
 ```
 
 Manual Phase 3 focus-mode validation is still pending on a live app run. The automated gate is green, but the specific “single-session focus mode under sustained output” interaction still needs hands-on review.
+
+### Phase 4 Completion Notes
+
+Implemented:
+
+- Split detector maintenance out of the UI-side maintenance poll by adding a dedicated detector-maintenance polling loop in `crates/codirigent-ui/src/workspace/gpui.rs`.
+- Added a background detector-maintenance batch collector in `crates/codirigent-ui/src/workspace/impl_output_polling.rs` that performs `detector.tick()` and stale cached-status enumeration off the UI thread.
+- Added `detector_maintenance_in_flight` tracking in `crates/codirigent-ui/src/workspace/types.rs` so the new maintenance loop cannot enqueue overlapping detector jobs.
+- Kept status reconciliation, header refreshes, task transitions, and notifications on the UI thread, but reduced the UI work to applying a precomputed list of affected session IDs.
+- Removed detector tick work from `WorkspaceView::poll_maintenance()`, leaving hook/JSONL scans, compaction cleanup, git refresh scheduling, and clipboard preview updates on the existing maintenance loop.
+
+Phase 4 tests added:
+
+- Unit test for detector-maintenance ID merging to ensure changed detector results keep priority while duplicate session IDs are removed.
+- Unit test for detector-maintenance batch collection to ensure stale cached-status sessions are still reconciled even when the detector itself reports no changes.
+
+Cross-platform and branch-hygiene checks performed during Phase 4:
+
+- The new tests use platform-neutral fixtures only and do not introduce Unix-only filesystem assumptions.
+- Touched production source files remain free of new `unwrap()` calls under the repo's CI unwrap-count rule.
+
+Verification completed successfully with:
+
+```bash
+cargo clean
+cargo fmt --all -- --check
+cargo check --workspace --all-targets --all-features
+cargo build --workspace --all-features
+cargo test --all --all-targets --all-features
+cargo clippy --all --all-targets --all-features -- -D warnings
+cargo check -p codirigent-ui --features gpui-full
+```
+
+Targeted phase validation run before the full gate:
+
+```bash
+cargo fmt --all -- --check
+cargo check -p codirigent-ui --features gpui-full
+cargo test -p codirigent-ui --lib --all-features
+```
 
 ## Problem Statement
 

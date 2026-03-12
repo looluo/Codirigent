@@ -36,6 +36,11 @@ const CLI_TYPE_CLAUDE: &str = "claude";
 const CLI_TYPE_GEMINI: &str = "gemini";
 const CLI_TYPE_CODEX: &str = "codex";
 
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
+struct DetectorMaintenanceBatch {
+    session_ids: Vec<SessionId>,
+}
+
 /// Unix timestamp (seconds) recorded at process startup, acting as a
 /// per-process "run epoch". Hook signals written before this moment belong to
 /// a previous Codirigent run and must be ignored, regardless of the 600-second
@@ -113,6 +118,38 @@ fn apply_cwd_session_update_from_manager(
     workspace_session.group = manager_session.group.clone();
     workspace_session.color = manager_session.color.clone();
     workspace_session.git_info = None;
+}
+
+fn merge_detector_maintenance_session_ids(
+    changed_ids: Vec<SessionId>,
+    stale_candidates: Vec<SessionId>,
+) -> Vec<SessionId> {
+    let mut seen = HashSet::new();
+    changed_ids
+        .into_iter()
+        .chain(stale_candidates)
+        .filter(|session_id| seen.insert(*session_id))
+        .collect()
+}
+
+fn collect_detector_maintenance_batch(
+    detector: &std::sync::Arc<std::sync::Mutex<codirigent_detector::InputDetector>>,
+    cli_readers: &std::sync::Arc<std::sync::Mutex<super::types::CliReaders>>,
+) -> DetectorMaintenanceBatch {
+    let changed_ids = detector
+        .lock()
+        .ok()
+        .map(|mut detector| detector.tick())
+        .unwrap_or_default();
+    let stale_candidates = cli_readers
+        .lock()
+        .ok()
+        .map(|readers| readers.cached_status.keys().copied().collect())
+        .unwrap_or_default();
+
+    DetectorMaintenanceBatch {
+        session_ids: merge_detector_maintenance_session_ids(changed_ids, stale_candidates),
+    }
 }
 
 fn prioritize_and_partition_output_sessions<F>(
@@ -502,64 +539,67 @@ impl WorkspaceView {
     }
 
     pub(super) fn poll_maintenance(&mut self, cx: &mut Context<Self>) {
-        let any_status_dirty = self.tick_detector_statuses();
         self.spawn_background_hook_signal_check(cx);
         self.spawn_background_jsonl_check(cx);
         self.cleanup_compaction_timeouts();
         self.cleanup_stale_proposals();
         self.schedule_background_git_refresh(cx);
 
-        if any_status_dirty || self.update_clipboard_preview(cx) {
+        if self.update_clipboard_preview(cx) {
             cx.notify();
         }
     }
 
-    /// Advance process-state detection on a maintenance cadence, then sync any
-    /// resulting status changes into the workspace cache.
-    ///
-    /// This is required on shells without OSC 133 integration (notably the
-    /// Windows PTY path), where `process_output()` can move a session into
-    /// `Working` but only `tick()` can later decay it back to `Idle`.
-    fn tick_detector_statuses(&mut self) -> bool {
-        let has_sessions = !self.terminals.is_empty();
-        if !has_sessions {
-            return false;
+    pub(super) fn spawn_background_detector_maintenance(&mut self, cx: &mut Context<Self>) {
+        if self.terminals.is_empty() || self.polling.detector_maintenance_in_flight {
+            return;
         }
 
-        // tick() returns only sessions whose detector status actually changed,
-        // so we only run the full reconciler for those — avoiding per-session
-        // lock acquisition for the common case where nothing changed.
-        let changed_ids = self.with_detector(|detector| detector.tick());
+        self.polling.detector_maintenance_in_flight = true;
+        trace!("spawn_background_detector_maintenance");
 
-        let mut dirty = false;
+        let detector = self.detector.clone();
+        let cli_readers = self.cli_readers.clone();
 
-        if !changed_ids.is_empty() {
-            trace!(changed = changed_ids.len(), "tick_detector_statuses");
-            for session_id in changed_ids {
-                dirty |= self.sync_session_status(session_id);
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+            let batch = cx
+                .background_executor()
+                .spawn(async move { collect_detector_maintenance_batch(&detector, &cli_readers) })
+                .await;
+
+            let _ = this.update(cx, |this, cx| {
+                this.polling.detector_maintenance_in_flight = false;
+                this.apply_detector_maintenance_batch(batch, cx);
+            });
+        })
+        .detach();
+    }
+
+    fn apply_detector_maintenance_batch(
+        &mut self,
+        batch: DetectorMaintenanceBatch,
+        cx: &mut Context<Self>,
+    ) {
+        if batch.session_ids.is_empty() {
+            return;
+        }
+
+        trace!(
+            changed = batch.session_ids.len(),
+            "apply_detector_maintenance_batch"
+        );
+
+        let mut any_dirty = false;
+        for session_id in batch.session_ids {
+            if self.sync_session_status(session_id) {
+                self.sync_session_header(session_id);
+                any_dirty = true;
             }
         }
 
-        // Stale-cache sweep: sessions with cached statuses that are
-        // unchanged in the detector (not in `changed_ids`) still need
-        // periodic reconciliation. This ensures:
-        // - NeedsAttention entries hit the 30s staleness check
-        // - Working/ResponseReady entries hit TTL eviction
-        // This is cheap: only sessions with a cached status are checked.
-        //
-        // The lock is scoped to the collection phase so the mutable
-        // `sync_session_status` call below does not overlap the borrow.
-        let stale_candidates: Vec<SessionId> = self
-            .cli_readers
-            .lock()
-            .ok()
-            .map(|readers| readers.cached_status.keys().copied().collect())
-            .unwrap_or_default();
-        for session_id in stale_candidates {
-            dirty |= self.sync_session_status(session_id);
+        if any_dirty {
+            cx.notify();
         }
-
-        dirty
     }
 
     fn schedule_output_preparation(&mut self, cx: &mut Context<Self>) -> bool {
@@ -2215,11 +2255,54 @@ impl WorkspaceView {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use codirigent_core::{ImageData, ImageFormat};
+    use codirigent_core::{DefaultEventBus, ImageData, ImageFormat};
     use std::path::PathBuf;
+    use std::sync::{Arc, Mutex};
+    use std::time::Instant;
 
     fn temp_fixture_path(name: &str) -> PathBuf {
         std::env::temp_dir().join(name)
+    }
+
+    #[test]
+    fn detector_maintenance_merge_dedupes_and_preserves_priority() {
+        let merged = merge_detector_maintenance_session_ids(
+            vec![SessionId(2), SessionId(1), SessionId(2)],
+            vec![SessionId(3), SessionId(1), SessionId(4)],
+        );
+
+        assert_eq!(
+            merged,
+            vec![SessionId(2), SessionId(1), SessionId(3), SessionId(4)]
+        );
+    }
+
+    #[test]
+    fn detector_maintenance_batch_includes_stale_cached_sessions() {
+        let detector = Arc::new(Mutex::new(codirigent_detector::InputDetector::new(
+            codirigent_detector::DetectorConfig::default(),
+            Arc::new(DefaultEventBus::new(16)),
+        )));
+        let cli_readers = Arc::new(Mutex::new(super::super::types::CliReaders::new()));
+        let stale_id = SessionId(17);
+
+        cli_readers
+            .lock()
+            .unwrap_or_else(|poison| poison.into_inner())
+            .cached_status
+            .insert(
+                stale_id,
+                CachedCliStatus {
+                    status: SessionStatus::NeedsAttention,
+                    seen_at: Instant::now(),
+                    source: CliStatusSource::Hook,
+                    status_since: Instant::now(),
+                    ttl: Duration::from_secs(30),
+                },
+            );
+
+        let batch = collect_detector_maintenance_batch(&detector, &cli_readers);
+        assert_eq!(batch.session_ids, vec![stale_id]);
     }
 
     fn codex_input(
