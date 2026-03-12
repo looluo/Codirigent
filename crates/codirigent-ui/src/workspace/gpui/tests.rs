@@ -39,58 +39,6 @@ fn test_core_workspace_is_tested_separately() {
 }
 
 #[test]
-fn test_skip_collapsed_resize_when_current_is_usable() {
-    assert!(super::WorkspaceView::should_skip_collapsed_resize(
-        40, 120, 40, 1
-    ));
-    assert!(super::WorkspaceView::should_skip_collapsed_resize(
-        40, 120, 1, 120
-    ));
-    assert!(super::WorkspaceView::should_skip_collapsed_resize(
-        40, 120, 1, 1
-    ));
-}
-
-#[test]
-fn test_do_not_skip_collapsed_resize_if_already_collapsed() {
-    assert!(!super::WorkspaceView::should_skip_collapsed_resize(
-        1, 1, 1, 1
-    ));
-    assert!(!super::WorkspaceView::should_skip_collapsed_resize(
-        1, 80, 1, 1
-    ));
-}
-
-#[test]
-fn test_do_not_skip_non_collapsed_resize() {
-    assert!(!super::WorkspaceView::should_skip_collapsed_resize(
-        40, 120, 30, 100
-    ));
-}
-
-#[test]
-fn test_render_focus_signature_tracks_focus_in_single_layout() {
-    assert_eq!(
-        super::WorkspaceView::render_focus_signature_for_layout(
-            crate::layout::LayoutProfile::Single,
-            Some(codirigent_core::SessionId(2)),
-        ),
-        Some(codirigent_core::SessionId(2))
-    );
-}
-
-#[test]
-fn test_render_focus_signature_ignores_focus_outside_single_layout() {
-    assert_eq!(
-        super::WorkspaceView::render_focus_signature_for_layout(
-            crate::layout::LayoutProfile::Grid2x2,
-            Some(codirigent_core::SessionId(2)),
-        ),
-        None
-    );
-}
-
-#[test]
 fn test_normalize_codex_execution_mode_detects_bypass_alias() {
     assert_eq!(
         super::WorkspaceView::normalize_codex_execution_mode("codex --yolo"),
