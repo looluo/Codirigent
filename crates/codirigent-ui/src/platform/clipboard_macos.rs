@@ -335,7 +335,9 @@ fn urlencoding_decode(input: &str) -> String {
             for _ in 0..2 {
                 if let Some(&next) = chars.peek() {
                     if next.is_ascii_hexdigit() {
-                        hex.push(chars.next().unwrap());
+                        if let Some(next) = chars.next() {
+                            hex.push(next);
+                        }
                     } else {
                         break;
                     }
