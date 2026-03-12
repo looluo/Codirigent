@@ -529,11 +529,15 @@ mod tests {
         ))))
     }
 
+    fn sample_working_dir() -> PathBuf {
+        std::env::temp_dir()
+    }
+
     #[test]
     fn next_available_session_number_skips_existing_and_reserved_values() {
         let sessions = vec![
-            Session::new(SessionId(1), "Session 1".to_string(), PathBuf::from("/tmp")),
-            Session::new(SessionId(2), "Session 3".to_string(), PathBuf::from("/tmp")),
+            Session::new(SessionId(1), "Session 1".to_string(), sample_working_dir()),
+            Session::new(SessionId(2), "Session 3".to_string(), sample_working_dir()),
         ];
         let reserved = HashSet::from([2u64, 4u64]);
 
@@ -544,7 +548,7 @@ mod tests {
     fn restore_resume_commands_preserve_cli_order() {
         let plan = RestoreSessionPlan {
             session_name: "Session 1".to_string(),
-            working_dir: PathBuf::from("/tmp"),
+            working_dir: sample_working_dir(),
             group: None,
             color: None,
             claude_resume: Some("claude --resume abc\r".to_string()),
@@ -593,9 +597,10 @@ mod tests {
     #[test]
     fn bootstrap_session_invalid_working_directory_returns_error_without_creating_session() {
         let session_manager = create_test_session_manager();
+        let temp = TempDir::new().unwrap();
         let request = SessionBootstrapRequest {
             session_name: "Session 1".to_string(),
-            working_dir: PathBuf::from("/definitely/missing/codirigent-session-bootstrap"),
+            working_dir: temp.path().join("missing-session-bootstrap"),
             shell: None,
         };
 
@@ -659,23 +664,25 @@ mod tests {
 
     #[test]
     fn build_restore_plan_preserves_saved_custom_grid_layout() {
+        let fallback_dir = sample_working_dir();
         let state = AppState {
             sessions: vec![Session::new(
                 SessionId(1),
                 "Session 1".to_string(),
-                PathBuf::from("/tmp"),
+                fallback_dir.clone(),
             )],
             layout: LayoutMode::Grid { rows: 1, cols: 4 },
             updated_at: None,
             window_bounds: None,
         };
 
-        let plan = WorkspaceView::build_restore_plan(state, PathBuf::from("/tmp")).unwrap();
+        let plan = WorkspaceView::build_restore_plan(state, fallback_dir).unwrap();
         assert_eq!(plan.layout, LayoutMode::Grid { rows: 1, cols: 4 });
     }
 
     #[test]
     fn build_restore_plan_preserves_saved_split_tree_layout() {
+        let fallback_dir = sample_working_dir();
         let split_tree = LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.5,
@@ -686,7 +693,7 @@ mod tests {
             sessions: vec![Session::new(
                 SessionId(1),
                 "Session 1".to_string(),
-                PathBuf::from("/tmp"),
+                fallback_dir.clone(),
             )],
             layout: LayoutMode::SplitTree {
                 root: split_tree.clone(),
@@ -695,7 +702,7 @@ mod tests {
             window_bounds: None,
         };
 
-        let plan = WorkspaceView::build_restore_plan(state, PathBuf::from("/tmp")).unwrap();
+        let plan = WorkspaceView::build_restore_plan(state, fallback_dir).unwrap();
         assert_eq!(
             plan.layout,
             LayoutMode::SplitTree {
@@ -1256,7 +1263,7 @@ impl WorkspaceView {
             .filter(|p| p.is_dir())
             .or_else(|| self.project.project_root.clone())
             .or_else(|| std::env::current_dir().ok())
-            .unwrap_or_else(|| PathBuf::from("/tmp"));
+            .unwrap_or_else(std::env::temp_dir);
 
         let shell = self.configured_shell();
         let request = SessionBootstrapRequest {
