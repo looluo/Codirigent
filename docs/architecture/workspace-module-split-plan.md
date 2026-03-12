@@ -318,6 +318,10 @@ cargo check -p codirigent-ui --features gpui-full
 git diff --check
 ```
 
+Additional verification requirement:
+
+- inspect the task diff and confirm no new production `unwrap()` or `expect()` calls were introduced
+
 ##### Task A2: Scaffold `gpui` internal modules
 
 Create the internal directory and child files under `crates/codirigent-ui/src/workspace/gpui/`:
@@ -376,6 +380,10 @@ cargo check -p codirigent-ui --features gpui-full
 git diff --check
 ```
 
+Additional verification requirement:
+
+- inspect the task diff and confirm no new production `unwrap()` or `expect()` calls were introduced
+
 ##### Task A3: Externalize root test modules
 
 Create dedicated test files:
@@ -420,6 +428,10 @@ cargo check -p codirigent-ui --features gpui-full
 git diff --check
 ```
 
+Additional verification requirement:
+
+- inspect the task diff and confirm no new production `unwrap()` or `expect()` calls were introduced
+
 ##### Task A4: Ownership comments and import hygiene
 
 This is the final scaffolding pass before logic moves begin.
@@ -449,6 +461,10 @@ cargo clippy --all --all-targets --all-features -- -D warnings
 cargo check -p codirigent-ui --features gpui-full
 git diff --check
 ```
+
+Additional verification requirement:
+
+- inspect the task diff and confirm no new production `unwrap()` or `expect()` calls were introduced
 
 #### Phase A Cross-Platform Requirements
 
@@ -532,7 +548,7 @@ This refactor must prove behavior did not change.
 - existing unit tests stay green
 - existing integration tests stay green
 - no new warnings
-- no new `unwrap()` in production paths
+- no new production `unwrap()` or `expect()` paths
 
 ### Focused regression tests
 
