@@ -1274,6 +1274,10 @@ mod tests {
         let _ = output;
     }
 
+    // Windows: no reliable non-interactive stdin-to-stdout forwarder works in
+    // ConPTY without shell startup sequences. Queue ordering is already
+    // covered by session_io::tests::test_write_ordering_is_preserved.
+    #[cfg_attr(windows, ignore)]
     #[tokio::test]
     async fn test_send_input_round_trips_multiple_lines_through_manager() {
         let manager = create_manager();
