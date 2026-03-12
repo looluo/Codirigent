@@ -646,15 +646,19 @@ mod tests {
     fn codex_execution_mode_can_be_inferred_from_turn_context() {
         let tmp = TempDir::new().unwrap();
         let path = tmp.path().join("rollout.jsonl");
-        fs::write(
-            &path,
-            concat!(
-                r#"{"type":"session_meta","payload":{"cwd":"/tmp"}}"#,
-                "\n",
-                r#"{"type":"turn_context","payload":{"approval_policy":"never","sandbox_policy":{"type":"danger-full-access"}}}"#
-            ),
-        )
-        .unwrap();
+        let cwd = tmp.path().display().to_string();
+        let session_meta = serde_json::json!({
+            "type": "session_meta",
+            "payload": { "cwd": cwd },
+        });
+        let turn_context = serde_json::json!({
+            "type": "turn_context",
+            "payload": {
+                "approval_policy": "never",
+                "sandbox_policy": { "type": "danger-full-access" },
+            },
+        });
+        fs::write(&path, format!("{session_meta}\n{turn_context}")).unwrap();
 
         assert_eq!(
             read_codex_execution_mode(&path),
@@ -797,6 +801,8 @@ impl WorkspaceView {
         self.terminals.remove(&session_id);
         self.pty_write_receivers.remove(&session_id);
         self.terminal_headers.remove(&session_id);
+        self.output_dispatcher.remove_session(session_id);
+        self.polling.output_prepare_in_flight.remove(&session_id);
         self.with_detector(|detector| detector.stop_monitoring(session_id));
         self.with_session_manager(|manager| {
             if let Err(error) = manager.close_session(session_id) {
@@ -848,6 +854,8 @@ impl WorkspaceView {
         self.mark_layout_cache_dirty();
         let header = self.build_terminal_header(&session, session_name, group, color);
         self.terminal_headers.insert(session_id, header);
+        self.output_dispatcher.mark_ready(session_id);
+        self.with_session_manager(|manager| manager.mark_output_pending(session_id));
         true
     }
 

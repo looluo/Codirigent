@@ -661,15 +661,11 @@ impl TerminalView {
     /// Rendering uses row caches directly; this flattened view is retained for
     /// tests and any future callers that need a contiguous snapshot.
     pub fn cached_content(&mut self) -> &CachedTerminalContent {
-        if self.cached_content.is_none() {
+        self.cached_content.get_or_insert_with(|| {
             let rows = self.rows as usize;
             let cols = self.cols as usize;
-            let content = Self::flatten_cached_rows(&self.cached_rows, rows, cols);
-            self.cached_content = Some(content);
-        }
-        self.cached_content
-            .as_ref()
-            .expect("BUG: cached_content must be Some after rebuild")
+            Self::flatten_cached_rows(&self.cached_rows, rows, cols)
+        })
     }
 
     /// Get per-row cached terminal content for rendering.

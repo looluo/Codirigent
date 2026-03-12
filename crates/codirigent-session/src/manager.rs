@@ -759,6 +759,17 @@ mod tests {
         dir
     }
 
+    fn deterministic_test_shell() -> Option<String> {
+        #[cfg(windows)]
+        {
+            Some("cmd.exe".to_string())
+        }
+        #[cfg(not(windows))]
+        {
+            Some("/bin/sh".to_string())
+        }
+    }
+
     fn create_linked_worktree(repo_path: &Path, branch: &str) -> PathBuf {
         let repo = Repository::open(repo_path).unwrap();
         let head = repo.head().unwrap().peel_to_commit().unwrap();
@@ -1264,14 +1275,39 @@ mod tests {
         let manager = create_manager();
 
         let id = manager
-            .create_session("Test".to_string(), std::env::temp_dir(), None)
+            .create_session(
+                "Test".to_string(),
+                std::env::temp_dir(),
+                deterministic_test_shell(),
+            )
             .unwrap();
+
+        let ready_marker = format!("phase1_ready_{}", std::process::id());
+        manager
+            .send_input(id, format!("echo {ready_marker}\n").as_bytes())
+            .unwrap();
+
+        let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
+        let mut ready_output = String::new();
+        while tokio::time::Instant::now() < ready_deadline {
+            if let Some(output) = manager.try_drain_output(id) {
+                ready_output.push_str(&String::from_utf8_lossy(&output));
+                if ready_output.contains(&ready_marker) {
+                    break;
+                }
+            }
+            tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+        }
+        assert!(
+            ready_output.contains(&ready_marker),
+            "expected shell readiness marker before order assertions: {ready_output}"
+        );
 
         manager.send_input(id, b"echo phase1_order_a\n").unwrap();
         manager.send_input(id, b"echo phase1_order_b\n").unwrap();
         manager.send_input(id, b"echo phase1_order_c\n").unwrap();
 
-        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(3);
+        let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut combined = String::new();
 
         while tokio::time::Instant::now() < deadline {
@@ -1408,12 +1444,10 @@ mod tests {
     #[test]
     fn test_create_session_with_nonexistent_working_dir() {
         let manager = create_manager();
+        let temp = tempfile::tempdir().unwrap();
+        let missing = temp.path().join("missing-working-dir");
 
-        let result = manager.create_session(
-            "Test".to_string(),
-            PathBuf::from("/nonexistent/path/that/does/not/exist"),
-            None,
-        );
+        let result = manager.create_session("Test".to_string(), missing, None);
 
         assert!(result.is_err());
         let err = result.unwrap_err().to_string();

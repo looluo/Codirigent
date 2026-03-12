@@ -698,6 +698,20 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) {
         trace!(?session_id, "schedule_session_output_preparation");
+        let Some(runtime) = self
+            .terminals
+            .get(&session_id)
+            .map(|tv| tv.runtime_handle())
+        else {
+            trace!(
+                ?session_id,
+                "deferring output preparation until terminal runtime attaches"
+            );
+            self.output_dispatcher.mark_ready(session_id);
+            self.with_session_manager(|manager| manager.mark_output_pending(session_id));
+            return;
+        };
+
         // Guard: prevent double-dispatch via the dispatcher's in-flight set.
         if !self.output_dispatcher.mark_in_flight(session_id) {
             return;
@@ -716,10 +730,6 @@ impl WorkspaceView {
         let session_manager = self.session_manager.clone();
         let detector = self.detector.clone();
         let update_tx = self.update_tx.clone();
-        let runtime = self
-            .terminals
-            .get(&session_id)
-            .map(|tv| tv.runtime_handle());
 
         cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
             let prepared = cx
@@ -736,9 +746,7 @@ impl WorkspaceView {
 
                     let data = drained.data;
                     let bytes_drained = data.len();
-                    let render_snapshot = runtime
-                        .as_ref()
-                        .and_then(|runtime| runtime.apply_output(&data));
+                    let render_snapshot = runtime.apply_output(&data);
                     let detected_cli_type = detect_cli_from_output(&data);
 
                     {
@@ -2210,6 +2218,10 @@ mod tests {
     use codirigent_core::{ImageData, ImageFormat};
     use std::path::PathBuf;
 
+    fn temp_fixture_path(name: &str) -> PathBuf {
+        std::env::temp_dir().join(name)
+    }
+
     fn codex_input(
         session_id: u64,
         working_dir: &str,
@@ -2432,16 +2444,13 @@ mod tests {
 
     #[test]
     fn git_refresh_updates_git_info_without_overwriting_custom_group() {
-        let mut session = Session::new(
-            SessionId(1),
-            "Session 1".to_string(),
-            PathBuf::from("/tmp/project"),
-        );
+        let project_path = temp_fixture_path("project");
+        let mut session = Session::new(SessionId(1), "Session 1".to_string(), project_path.clone());
         session.group = Some("custom-group".to_string());
         session.color = Some("#f43f5e".to_string());
 
         let git_info = Some(GitRepoInfo {
-            repo_root: PathBuf::from("/tmp/project"),
+            repo_root: project_path,
             branch: "feature/custom-group".to_string(),
             dirty_count: 2,
             has_staged: false,
@@ -2458,15 +2467,14 @@ mod tests {
 
     #[test]
     fn cwd_session_update_preserves_custom_group_from_manager() {
-        let mut workspace_session = Session::new(
-            SessionId(1),
-            "Session 1".to_string(),
-            PathBuf::from("/tmp/project"),
-        );
+        let project_path = temp_fixture_path("project");
+        let other_project_path = temp_fixture_path("other-project");
+        let mut workspace_session =
+            Session::new(SessionId(1), "Session 1".to_string(), project_path.clone());
         workspace_session.group = Some("custom-group".to_string());
         workspace_session.color = Some("#f43f5e".to_string());
         workspace_session.git_info = Some(GitRepoInfo {
-            repo_root: PathBuf::from("/tmp/project"),
+            repo_root: project_path,
             branch: "main".to_string(),
             dirty_count: 1,
             has_staged: false,
@@ -2476,14 +2484,11 @@ mod tests {
         });
 
         let mut manager_session = workspace_session.clone();
-        manager_session.working_directory = PathBuf::from("/tmp/other-project");
+        manager_session.working_directory = other_project_path.clone();
 
         apply_cwd_session_update_from_manager(&mut workspace_session, &manager_session);
 
-        assert_eq!(
-            workspace_session.working_directory,
-            PathBuf::from("/tmp/other-project")
-        );
+        assert_eq!(workspace_session.working_directory, other_project_path);
         assert_eq!(workspace_session.group.as_deref(), Some("custom-group"));
         assert_eq!(workspace_session.color.as_deref(), Some("#f43f5e"));
         assert!(workspace_session.git_info.is_none());
