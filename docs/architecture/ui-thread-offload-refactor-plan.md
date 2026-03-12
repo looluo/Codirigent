@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress. This document defines the planned refactor for the remaining UI-thread-bound session workflow in Codirigent, and now reflects implemented progress through Phase 1.
+In progress. This document defines the planned refactor for the remaining UI-thread-bound session workflow in Codirigent, and now reflects implemented progress through Phase 2.
 
 ## Progress Snapshot
 
@@ -10,7 +10,7 @@ In progress. This document defines the planned refactor for the remaining UI-thr
 | --- | --- | --- |
 | Phase 0: Instrumentation And Baseline | Pending | Planned first in the roadmap, but not yet implemented. |
 | Phase 1: PTY Command Queue | Complete | Queue-backed PTY writes/resizes landed with a dedicated worker, tests, and full verification gate. |
-| Phase 2: Async Session Bootstrap | Pending | Not started. |
+| Phase 2: Async Session Bootstrap | Complete | Session create/restore bootstrap now runs on the background executor, with UI-side attach/finalization only. |
 | Phase 3: Terminal Runtime Offload | Pending | Not started. |
 | Phase 4: Detector Worker | Pending | Not started. |
 | Phase 5: Derived UI State Cleanup | Pending | Not started. |
@@ -29,6 +29,41 @@ Additional fixes made while validating the phase:
 
 - Initialized the cached cursor position earlier in `TerminalView` so the all-features UI test suite remains green.
 - Fixed terminal-editor detection for Windows-style paths in `editor_detection.rs`.
+
+Verification completed successfully with:
+
+```bash
+cargo clean
+cargo fmt --all -- --check
+cargo check --workspace --all-targets --all-features
+cargo build --workspace --all-features
+cargo test --all --all-targets --all-features
+cargo clippy --all --all-targets --all-features -- -D warnings
+cargo check -p codirigent-ui --features gpui-full
+```
+
+### Phase 2 Completion Notes
+
+Implemented:
+
+- Added a background bootstrap path in `crates/codirigent-ui/src/workspace/impl_session_lifecycle.rs` that performs `DefaultSessionManager::create_session()` off the UI thread and returns a structured bootstrap result.
+- Refactored `WorkspaceView::create_session_inner()` so the UI thread only reserves the target slot/session number, submits the bootstrap task, and later attaches the completed session.
+- Added reservation tracking in `crates/codirigent-ui/src/workspace/types.rs` for in-flight session numbers and split-tree slots so repeated create requests cannot race into duplicate names or duplicate slot claims.
+- Refactored restore so saved sessions are bootstrapped on the background executor in small batches, then finalized on the UI thread with header creation, detector monitoring, resume-command replay, and layout reapplication.
+- Added cleanup paths that discard a bootstrapped manager session if the workspace can no longer attach it, preventing session-manager leaks when late results cannot be placed in the workspace.
+- Preserved restore responsiveness by keeping layout staging/focus updates on the UI thread while moving PTY spawn, working-directory validation, and session registration off-thread.
+
+Phase 2 tests added:
+
+- Unit test for session-number allocation that skips both existing and reserved values.
+- Unit test for restore resume-command ordering across Claude, Codex, and Gemini.
+- Unit test for successful bootstrap result assembly, including normalized working directory and child PID capture.
+- Unit test for invalid working directory failure with no orphaned session-manager state.
+
+Additional fixes made while validating the phase:
+
+- Updated the bootstrap metadata test to compare normalized working-directory paths, matching runtime semantics.
+- Scoped the macOS clipboard pasteboard probe helper to tests so the all-features warning-free gate remains green under `clippy -D warnings`.
 
 Verification completed successfully with:
 

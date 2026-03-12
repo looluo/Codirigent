@@ -16,11 +16,14 @@ use codirigent_core::{
     CodexExecutionMode, CodirigentEvent, EventBus, GridPosition, LayoutMode, ProcessMonitor,
     Session, SessionId, SessionManager, SessionStatus, SlotId,
 };
+use codirigent_session::DefaultSessionManager;
 use gpui::Context;
 use serde::Deserialize;
+use std::collections::HashSet;
 use std::fs;
 use std::io::{BufRead, BufReader};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use tracing::{info, warn};
 
@@ -41,6 +44,92 @@ struct RestoreSessionPlan {
 struct RestorePlan {
     layout: LayoutMode,
     sessions: Vec<RestoreSessionPlan>,
+}
+
+#[derive(Debug)]
+struct SessionBootstrapRequest {
+    session_name: String,
+    working_dir: PathBuf,
+    shell: Option<String>,
+}
+
+#[derive(Debug)]
+struct SessionBootstrapResult {
+    request: SessionBootstrapRequest,
+    session_id: SessionId,
+    session: Session,
+    child_pid: Option<u32>,
+}
+
+#[derive(Debug)]
+struct CompletedRestoreBootstrap {
+    plan: RestoreSessionPlan,
+    result: Result<SessionBootstrapResult, String>,
+}
+
+fn next_available_session_number(
+    existing_sessions: &[Session],
+    reserved_numbers: &HashSet<u64>,
+) -> u64 {
+    let existing_numbers: HashSet<u64> = existing_sessions
+        .iter()
+        .filter_map(|session| {
+            session
+                .name
+                .strip_prefix(SESSION_NAME_PREFIX)
+                .and_then(|number| number.parse::<u64>().ok())
+        })
+        .collect();
+
+    let mut num = 1u64;
+    while existing_numbers.contains(&num) || reserved_numbers.contains(&num) {
+        num += 1;
+    }
+    num
+}
+
+fn restore_resume_commands(plan: &RestoreSessionPlan) -> Vec<&str> {
+    [
+        plan.claude_resume.as_deref(),
+        plan.codex_resume.as_deref(),
+        plan.gemini_resume.as_deref(),
+    ]
+    .into_iter()
+    .flatten()
+    .collect()
+}
+
+fn bootstrap_session(
+    session_manager: Arc<Mutex<DefaultSessionManager>>,
+    request: SessionBootstrapRequest,
+) -> Result<SessionBootstrapResult, String> {
+    let manager = session_manager
+        .lock()
+        .map_err(|_| "session manager mutex poisoned".to_string())?;
+
+    let session_id = manager
+        .create_session(
+            request.session_name.clone(),
+            request.working_dir.clone(),
+            request.shell.clone(),
+        )
+        .map_err(|error| error.to_string())?;
+
+    let child_pid = manager.get_child_pid(session_id);
+    let session = manager.get_session(session_id).unwrap_or_else(|| {
+        Session::new(
+            session_id,
+            request.session_name.clone(),
+            request.working_dir.clone(),
+        )
+    });
+
+    Ok(SessionBootstrapResult {
+        request,
+        session_id,
+        session,
+        child_pid,
+    })
 }
 
 fn layout_profile_for_restore(layout: &LayoutMode) -> Option<crate::layout::LayoutProfile> {
@@ -426,8 +515,96 @@ fn build_resume_command(program: &str, session_id: &str, extra_args: &[&str]) ->
 #[allow(clippy::items_after_test_module)]
 mod tests {
     use super::*;
-    use codirigent_core::{AppState, LayoutNode, Session, SessionId, SplitDirection};
+    use codirigent_core::{
+        AppState, DefaultEventBus, LayoutNode, Session, SessionId, SessionManager, SplitDirection,
+    };
+    use codirigent_session::{normalize_path, DefaultSessionManager};
+    use std::collections::HashSet;
+    use std::sync::{Arc, Mutex};
     use tempfile::TempDir;
+
+    fn create_test_session_manager() -> Arc<Mutex<DefaultSessionManager>> {
+        Arc::new(Mutex::new(DefaultSessionManager::new(Arc::new(
+            DefaultEventBus::new(16),
+        ))))
+    }
+
+    #[test]
+    fn next_available_session_number_skips_existing_and_reserved_values() {
+        let sessions = vec![
+            Session::new(SessionId(1), "Session 1".to_string(), PathBuf::from("/tmp")),
+            Session::new(SessionId(2), "Session 3".to_string(), PathBuf::from("/tmp")),
+        ];
+        let reserved = HashSet::from([2u64, 4u64]);
+
+        assert_eq!(next_available_session_number(&sessions, &reserved), 5);
+    }
+
+    #[test]
+    fn restore_resume_commands_preserve_cli_order() {
+        let plan = RestoreSessionPlan {
+            session_name: "Session 1".to_string(),
+            working_dir: PathBuf::from("/tmp"),
+            group: None,
+            color: None,
+            claude_resume: Some("claude --resume abc\r".to_string()),
+            codex_resume: Some("codex resume def\r".to_string()),
+            codex_execution_mode: None,
+            codex_started_at: None,
+            gemini_resume: Some("gemini --resume ghi\r".to_string()),
+        };
+
+        assert_eq!(
+            restore_resume_commands(&plan),
+            vec![
+                "claude --resume abc\r",
+                "codex resume def\r",
+                "gemini --resume ghi\r",
+            ]
+        );
+    }
+
+    #[test]
+    fn bootstrap_session_returns_session_metadata() {
+        let session_manager = create_test_session_manager();
+        let temp = TempDir::new().unwrap();
+        let request = SessionBootstrapRequest {
+            session_name: "Session 1".to_string(),
+            working_dir: temp.path().to_path_buf(),
+            shell: None,
+        };
+
+        let result = bootstrap_session(session_manager.clone(), request).unwrap();
+
+        assert_eq!(result.session.name, "Session 1");
+        assert_eq!(
+            result.session.working_directory,
+            normalize_path(temp.path())
+        );
+        assert_eq!(result.request.session_name, "Session 1");
+        assert!(
+            result.child_pid.is_some(),
+            "bootstrap should capture a PTY child pid"
+        );
+        let manager = session_manager.lock().unwrap_or_else(|p| p.into_inner());
+        assert!(manager.get_session(result.session_id).is_some());
+    }
+
+    #[test]
+    fn bootstrap_session_invalid_working_directory_returns_error_without_creating_session() {
+        let session_manager = create_test_session_manager();
+        let request = SessionBootstrapRequest {
+            session_name: "Session 1".to_string(),
+            working_dir: PathBuf::from("/definitely/missing/codirigent-session-bootstrap"),
+            shell: None,
+        };
+
+        let result = bootstrap_session(session_manager.clone(), request);
+        assert!(result.is_err());
+
+        let manager = session_manager.lock().unwrap_or_else(|p| p.into_inner());
+        assert_eq!(manager.session_count(), 0);
+    }
 
     #[test]
     fn codex_resume_command_uses_resume_subcommand() {
@@ -556,6 +733,266 @@ mod tests {
 }
 
 impl WorkspaceView {
+    fn release_session_create_reservation(
+        &mut self,
+        reserved_number: u64,
+        target_slot: Option<SlotId>,
+    ) {
+        self.polling
+            .pending_session_bootstrap_numbers
+            .remove(&reserved_number);
+        if let Some(slot) = target_slot {
+            self.polling.pending_session_bootstrap_slots.remove(&slot);
+        }
+    }
+
+    fn build_terminal_header(
+        &self,
+        session: &Session,
+        session_name: &str,
+        group: Option<&String>,
+        color: Option<&String>,
+    ) -> TerminalHeader {
+        let mut header = TerminalHeader::new(session_name, SessionStatus::Idle);
+        if let Some(ref git_info) = session.git_info {
+            header = header.with_git_info(git_info.branch.clone(), git_info.dirty_count);
+        }
+
+        let dir_name = session
+            .git_info
+            .as_ref()
+            .and_then(|git_info| git_info.repo_root.file_name())
+            .or_else(|| session.working_directory.file_name())
+            .and_then(|name| name.to_str())
+            .unwrap_or("unknown");
+        header = header.with_project_name(dir_name);
+
+        if let Some(group) = group {
+            header.group_name = Some(group.clone());
+        }
+        if let Some(color) = color {
+            header.session_color = crate::sidebar::Color::from_hex(color);
+        }
+
+        header
+    }
+
+    fn create_terminal_view_for_session(&mut self, session_id: SessionId) {
+        let (pty_tx, pty_rx) = tokio::sync::mpsc::unbounded_channel();
+        let terminal = Terminal::new(24, 80, session_id, pty_tx);
+        let theme = self.workspace.theme();
+        let terminal_view = TerminalView::new(terminal, theme.clone());
+        self.terminals.insert(session_id, terminal_view);
+        self.pty_write_receivers.insert(session_id, pty_rx);
+    }
+
+    fn discard_bootstrapped_session(&mut self, session_id: SessionId) {
+        self.terminals.remove(&session_id);
+        self.pty_write_receivers.remove(&session_id);
+        self.terminal_headers.remove(&session_id);
+        self.with_detector(|detector| detector.stop_monitoring(session_id));
+        self.with_session_manager(|manager| {
+            if let Err(error) = manager.close_session(session_id) {
+                warn!(
+                    ?session_id,
+                    %error,
+                    "Failed to discard unattached bootstrapped session"
+                );
+            }
+        });
+    }
+
+    fn attach_bootstrapped_session(
+        &mut self,
+        session: Session,
+        session_name: &str,
+        target_slot: Option<SlotId>,
+        group: Option<&String>,
+        color: Option<&String>,
+    ) -> bool {
+        let session_id = session.id;
+        self.create_terminal_view_for_session(session_id);
+
+        let added = match target_slot {
+            Some(slot) => {
+                if self.workspace.add_session_to_slot(session.clone(), slot) {
+                    true
+                } else {
+                    warn!(
+                        ?session_id,
+                        ?slot,
+                        "Reserved slot unavailable when session bootstrap completed; falling back"
+                    );
+                    self.workspace.add_session(session.clone())
+                }
+            }
+            None => self.workspace.add_session(session.clone()),
+        };
+
+        if !added {
+            self.discard_bootstrapped_session(session_id);
+            warn!(
+                ?session_id,
+                "Discarded bootstrapped session because the workspace could not attach it"
+            );
+            return false;
+        }
+
+        self.mark_layout_cache_dirty();
+        let header = self.build_terminal_header(&session, session_name, group, color);
+        self.terminal_headers.insert(session_id, header);
+        true
+    }
+
+    fn start_bootstrapped_session_monitoring(
+        &mut self,
+        session_id: SessionId,
+        child_pid: Option<u32>,
+    ) {
+        if let Some(pid) = child_pid {
+            self.with_detector(|detector| {
+                if let Err(error) = detector.start_monitoring(session_id, pid) {
+                    warn!(
+                        ?session_id,
+                        %error,
+                        "Failed to start monitoring bootstrapped session"
+                    );
+                }
+            });
+        }
+    }
+
+    fn finalize_created_session_bootstrap(
+        &mut self,
+        bootstrapped: SessionBootstrapResult,
+        target_slot: Option<SlotId>,
+        cx: &mut Context<Self>,
+    ) {
+        self.start_bootstrapped_session_monitoring(bootstrapped.session_id, bootstrapped.child_pid);
+
+        if !self.attach_bootstrapped_session(
+            bootstrapped.session.clone(),
+            &bootstrapped.request.session_name,
+            target_slot,
+            None,
+            None,
+        ) {
+            return;
+        }
+
+        self.select_session_with_cx(bootstrapped.session_id, cx);
+
+        if let Some(slot) = target_slot {
+            info!(
+                name = %bootstrapped.request.session_name,
+                ?slot,
+                "Created new session in slot via background bootstrap"
+            );
+        } else {
+            info!(
+                name = %bootstrapped.request.session_name,
+                "Created new session via background bootstrap"
+            );
+        }
+
+        self.mark_ui_sync_dirty();
+        self.save_state_to_disk(cx);
+        cx.notify();
+    }
+
+    fn finalize_restored_session_bootstrap(
+        &mut self,
+        bootstrapped: SessionBootstrapResult,
+        plan: RestoreSessionPlan,
+    ) {
+        self.start_bootstrapped_session_monitoring(bootstrapped.session_id, bootstrapped.child_pid);
+
+        if plan.codex_execution_mode.is_some() || plan.codex_started_at.is_some() {
+            let codex_execution_mode = plan.codex_execution_mode;
+            let codex_started_at = plan.codex_started_at;
+            if let Ok(manager) = self.session_manager.lock() {
+                manager.with_session_state_mut(bootstrapped.session_id, |state| {
+                    state.session.codex_execution_mode = codex_execution_mode;
+                    state.session.codex_started_at = codex_started_at;
+                });
+            }
+        }
+
+        let mut session = bootstrapped.session;
+        session.group = plan.group.clone();
+        session.color = plan.color.clone();
+        session.codex_execution_mode = plan.codex_execution_mode;
+        session.codex_started_at = plan.codex_started_at;
+
+        if !self.attach_bootstrapped_session(
+            session,
+            &plan.session_name,
+            None,
+            plan.group.as_ref(),
+            plan.color.as_ref(),
+        ) {
+            return;
+        }
+
+        if plan.group.is_some() || plan.color.is_some() {
+            self.with_session_manager(|manager| {
+                let _ = manager.set_session_group(
+                    bootstrapped.session_id,
+                    plan.group.clone(),
+                    plan.color.clone(),
+                );
+            });
+        }
+
+        for command in restore_resume_commands(&plan) {
+            if let Ok(manager) = self.session_manager.lock() {
+                if let Err(error) = manager.send_input(bootstrapped.session_id, command.as_bytes())
+                {
+                    warn!(
+                        ?bootstrapped.session_id,
+                        %error,
+                        "Failed to send resume command"
+                    );
+                }
+            }
+        }
+    }
+
+    fn spawn_create_session_bootstrap(
+        &mut self,
+        request: SessionBootstrapRequest,
+        reserved_number: u64,
+        target_slot: Option<SlotId>,
+        cx: &mut Context<Self>,
+    ) {
+        let session_manager = self.session_manager.clone();
+        let session_name = request.session_name.clone();
+
+        cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+            let result = cx
+                .background_executor()
+                .spawn(async move { bootstrap_session(session_manager, request) })
+                .await;
+
+            let _ = this.update(cx, |this, cx| {
+                this.release_session_create_reservation(reserved_number, target_slot);
+                match result {
+                    Ok(bootstrapped) => {
+                        this.finalize_created_session_bootstrap(bootstrapped, target_slot, cx);
+                    }
+                    Err(error) => {
+                        warn!(
+                            name = %session_name,
+                            %error,
+                            "Failed to create session via background bootstrap"
+                        );
+                    }
+                }
+            });
+        })
+        .detach();
+    }
+
     fn build_restore_plan(
         state: codirigent_core::AppState,
         fallback_dir: PathBuf,
@@ -665,6 +1102,7 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) {
         if plan.sessions.is_empty() {
+            self.polling.restore_in_flight = false;
             return;
         }
 
@@ -675,7 +1113,9 @@ impl WorkspaceView {
         let staging_layout = staging_layout_for_restore(&desired_layout, session_count);
         let reapply_saved_layout = staging_layout != desired_layout;
         self.apply_restored_layout_mode(&staging_layout);
+        self.polling.restore_in_flight = true;
         let restore_sessions = plan.sessions;
+        let session_manager = self.session_manager.clone();
         cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
             let mut remaining = restore_sessions.into_iter().peekable();
             while remaining.peek().is_some() {
@@ -683,10 +1123,45 @@ impl WorkspaceView {
                 let is_last_batch = remaining.peek().is_none();
                 let shell = shell.clone();
                 let desired_layout = desired_layout.clone();
+                let session_manager = session_manager.clone();
+
+                let completions = cx
+                    .background_executor()
+                    .spawn(async move {
+                        batch
+                            .into_iter()
+                            .map(|plan| {
+                                let request = SessionBootstrapRequest {
+                                    session_name: plan.session_name.clone(),
+                                    working_dir: plan.working_dir.clone(),
+                                    shell: shell.clone(),
+                                };
+                                CompletedRestoreBootstrap {
+                                    plan,
+                                    result: bootstrap_session(session_manager.clone(), request),
+                                }
+                            })
+                            .collect::<Vec<_>>()
+                    })
+                    .await;
 
                 let _ = this.update(cx, |this, cx| {
-                    for plan in batch {
-                        this.restore_session_from_plan(plan, shell.clone());
+                    for completion in completions {
+                        match completion.result {
+                            Ok(bootstrapped) => {
+                                this.finalize_restored_session_bootstrap(
+                                    bootstrapped,
+                                    completion.plan,
+                                );
+                            }
+                            Err(error) => {
+                                warn!(
+                                    name = %completion.plan.session_name,
+                                    %error,
+                                    "Failed to restore session via background bootstrap"
+                                );
+                            }
+                        }
                     }
 
                     if is_last_batch {
@@ -696,6 +1171,7 @@ impl WorkspaceView {
                         if let Some(first_id) = this.workspace.sessions().first().map(|s| s.id) {
                             this.select_session_with_cx(first_id, cx);
                         }
+                        this.polling.restore_in_flight = false;
                         info!("Session restoration complete");
                     }
 
@@ -741,103 +1217,6 @@ impl WorkspaceView {
         self.mark_layout_cache_dirty();
     }
 
-    fn restore_session_from_plan(&mut self, plan: RestoreSessionPlan, shell: Option<String>) {
-        let session_id = self.with_session_manager(|manager| {
-            match manager.create_session(
-                plan.session_name.clone(),
-                plan.working_dir.clone(),
-                shell.clone(),
-            ) {
-                Ok(id) => Some(id),
-                Err(e) => {
-                    warn!(name = %plan.session_name, "Failed to restore session: {}", e);
-                    None
-                }
-            }
-        });
-        let session_id = match session_id {
-            Some(id) => id,
-            None => return,
-        };
-
-        if plan.codex_execution_mode.is_some() || plan.codex_started_at.is_some() {
-            let codex_execution_mode = plan.codex_execution_mode;
-            let codex_started_at = plan.codex_started_at;
-            if let Ok(mgr) = self.session_manager.lock() {
-                mgr.with_session_state_mut(session_id, |state| {
-                    state.session.codex_execution_mode = codex_execution_mode;
-                    state.session.codex_started_at = codex_started_at;
-                });
-            }
-        }
-
-        for cmd in [
-            plan.claude_resume.as_deref(),
-            plan.codex_resume.as_deref(),
-            plan.gemini_resume.as_deref(),
-        ]
-        .into_iter()
-        .flatten()
-        {
-            if let Ok(mgr) = self.session_manager.lock() {
-                if let Err(e) = mgr.send_input(session_id, cmd.as_bytes()) {
-                    warn!(?session_id, error = %e, "Failed to send resume command");
-                }
-            }
-        }
-
-        if plan.group.is_some() || plan.color.is_some() {
-            self.with_session_manager(|manager| {
-                let _ =
-                    manager.set_session_group(session_id, plan.group.clone(), plan.color.clone());
-            });
-        }
-
-        let child_pid = self.with_session_manager(|manager| manager.get_child_pid(session_id));
-        if let Some(pid) = child_pid {
-            self.with_detector(|detector| {
-                let _ = detector.start_monitoring(session_id, pid);
-            });
-        }
-
-        let (pty_tx, pty_rx) = tokio::sync::mpsc::unbounded_channel();
-        let terminal = Terminal::new(24, 80, session_id, pty_tx);
-        let theme = self.workspace.theme();
-        let terminal_view = TerminalView::new(terminal, theme.clone());
-        self.terminals.insert(session_id, terminal_view);
-        self.pty_write_receivers.insert(session_id, pty_rx);
-
-        let session = self.with_session_manager(|manager| {
-            manager.get_session(session_id).unwrap_or_else(|| {
-                Session::new(
-                    session_id,
-                    plan.session_name.clone(),
-                    plan.working_dir.clone(),
-                )
-            })
-        });
-
-        if self.workspace.add_session(session.clone()) {
-            self.mark_layout_cache_dirty();
-            let mut header = TerminalHeader::new(&plan.session_name, SessionStatus::Idle);
-            if let Some(ref gi) = session.git_info {
-                header = header.with_git_info(gi.branch.clone(), gi.dirty_count);
-            }
-            if let Some(ref group) = plan.group {
-                header.group_name = Some(group.clone());
-            }
-            if let Some(ref color) = plan.color {
-                header.session_color = crate::sidebar::Color::from_hex(color);
-            }
-            self.terminal_headers.insert(session_id, header);
-        }
-
-        if let Some(ws_session) = self.workspace.session_mut(session_id) {
-            ws_session.codex_execution_mode = plan.codex_execution_mode;
-            ws_session.codex_started_at = plan.codex_started_at;
-        }
-    }
-
     /// Create a new terminal session in the focused pane.
     pub fn create_session(&mut self, cx: &mut Context<Self>) {
         self.create_session_inner(None, cx);
@@ -853,22 +1232,20 @@ impl WorkspaceView {
     /// when `Some(slot)`, adds to that specific slot.
     fn create_session_inner(&mut self, target_slot: Option<SlotId>, cx: &mut Context<Self>) {
         // Find the lowest available session number (reuse gaps from closed sessions)
-        let existing_numbers: std::collections::HashSet<u64> = self
-            .workspace
-            .sessions()
-            .iter()
-            .filter_map(|s| {
-                s.name
-                    .strip_prefix(SESSION_NAME_PREFIX)
-                    .and_then(|n| n.parse::<u64>().ok())
-            })
-            .collect();
-        let mut num = 1u64;
-        while existing_numbers.contains(&num) {
-            num += 1;
+        if let Some(slot) = target_slot {
+            if self.polling.pending_session_bootstrap_slots.contains(&slot) {
+                warn!(?slot, "Session creation already pending for slot");
+                return;
+            }
+            self.polling.pending_session_bootstrap_slots.insert(slot);
         }
+        let num = next_available_session_number(
+            self.workspace.sessions(),
+            &self.polling.pending_session_bootstrap_numbers,
+        );
+        self.polling.pending_session_bootstrap_numbers.insert(num);
         let name = format!("{}{}", SESSION_NAME_PREFIX, num);
-        self.next_session_id = num + 1;
+        self.next_session_id = self.next_session_id.max(num + 1);
 
         let working_dir = self
             .effective_user_settings()
@@ -882,88 +1259,12 @@ impl WorkspaceView {
             .unwrap_or_else(|| PathBuf::from("/tmp"));
 
         let shell = self.configured_shell();
-
-        // Create session with real PTY via session manager
-        let session_id = self.with_session_manager(|manager| {
-            match manager.create_session(name.clone(), working_dir.clone(), shell) {
-                Ok(id) => Some(id),
-                Err(e) => {
-                    warn!("Failed to create session: {}", e);
-                    None
-                }
-            }
-        });
-        let session_id = match session_id {
-            Some(id) => id,
-            None => return,
+        let request = SessionBootstrapRequest {
+            session_name: name,
+            working_dir,
+            shell,
         };
-
-        // Get child PID for monitoring
-        let child_pid = self.with_session_manager(|manager| manager.get_child_pid(session_id));
-
-        // Start monitoring session status
-        if let Some(pid) = child_pid {
-            self.with_detector(|detector| {
-                if let Err(e) = detector.start_monitoring(session_id, pid) {
-                    warn!("Failed to start monitoring session {}: {}", session_id, e);
-                }
-            });
-        }
-
-        // Create terminal emulator for this session with PTY writer channel
-        // so VTE can forward protocol responses (e.g. DSR cursor position) back
-        let (pty_tx, pty_rx) = tokio::sync::mpsc::unbounded_channel();
-        let terminal = Terminal::new(24, 80, session_id, pty_tx);
-        let theme = self.workspace.theme();
-        let terminal_view = TerminalView::new(terminal, theme.clone());
-        self.terminals.insert(session_id, terminal_view);
-        self.pty_write_receivers.insert(session_id, pty_rx);
-
-        // Get session from manager (has git_info populated during creation)
-        let session = self.with_session_manager(|manager| {
-            manager
-                .get_session(session_id)
-                .unwrap_or_else(|| Session::new(session_id, name.clone(), working_dir))
-        });
-
-        let added = match target_slot {
-            Some(slot) => self.workspace.add_session_to_slot(session.clone(), slot),
-            None => self.workspace.add_session(session.clone()),
-        };
-
-        if added {
-            self.mark_layout_cache_dirty();
-            let mut header = TerminalHeader::new(&name, SessionStatus::Idle);
-
-            // Populate git info on header if available from session manager
-            if let Some(ref gi) = session.git_info {
-                header = header.with_git_info(gi.branch.clone(), gi.dirty_count);
-            }
-
-            // Populate project name from git repo root or working directory
-            let dir_name = session
-                .git_info
-                .as_ref()
-                .and_then(|gi| gi.repo_root.file_name())
-                .or_else(|| session.working_directory.file_name())
-                .and_then(|n| n.to_str())
-                .unwrap_or("unknown");
-            header = header.with_project_name(dir_name);
-
-            self.terminal_headers.insert(session_id, header);
-
-            // Auto-select the newly created session for natural UX
-            self.select_session_with_cx(session_id, cx);
-
-            if let Some(slot) = target_slot {
-                info!(%name, ?slot, "Created new session in slot with PTY");
-            } else {
-                info!(%name, "Created new session with PTY");
-            }
-            self.mark_ui_sync_dirty();
-            self.save_state_to_disk(cx);
-            cx.notify();
-        }
+        self.spawn_create_session_bootstrap(request, num, target_slot, cx);
     }
 
     /// Restore sessions from disk on startup without blocking the UI thread.
@@ -998,9 +1299,10 @@ impl WorkspaceView {
                 .await;
 
             let _ = this.update(cx, |this, cx| {
-                this.polling.restore_in_flight = false;
                 if let Some(plan) = restore_plan {
                     this.apply_restore_plan(plan, shell.clone(), cx);
+                } else {
+                    this.polling.restore_in_flight = false;
                 }
             });
         })

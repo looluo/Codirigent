@@ -4,7 +4,7 @@
 //! implementation, including modal states and UI component data.
 
 use super::CellInfo;
-use codirigent_core::{SessionId, SessionStatus, TaskId};
+use codirigent_core::{SessionId, SessionStatus, SlotId, TaskId};
 use codirigent_session::codex_session_reader::CodexSessionReader;
 use codirigent_session::gemini_session_reader::GeminiSessionReader;
 use gpui::Hsla;
@@ -395,6 +395,13 @@ pub(super) struct PollingState {
     pub project_refresh_generation: u64,
     /// Whether session restoration from disk is currently in-flight.
     pub restore_in_flight: bool,
+    /// Reserved session numbers for session-create bootstraps that have not
+    /// completed yet. Prevents duplicate names when users create sessions
+    /// faster than the background PTY bootstrap finishes.
+    pub pending_session_bootstrap_numbers: HashSet<u64>,
+    /// Reserved split-tree slots for session-create bootstraps that have not
+    /// completed yet. Prevents duplicate creates racing into the same slot.
+    pub pending_session_bootstrap_slots: HashSet<SlotId>,
     /// Last time the legacy fallback safety net drained pending_output_sessions.
     pub last_legacy_fallback: Instant,
     /// Best-effort shell command line capture per session while the shell is idle.
@@ -432,6 +439,8 @@ impl PollingState {
             last_processed_hook_signal_ts: HashMap::new(),
             project_refresh_generation: 0,
             restore_in_flight: false,
+            pending_session_bootstrap_numbers: HashSet::new(),
+            pending_session_bootstrap_slots: HashSet::new(),
             last_legacy_fallback: Instant::now(),
             shell_input_buffers: HashMap::new(),
         }

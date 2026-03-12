@@ -24,6 +24,7 @@ use codirigent_core::{ClipboardContent, ImageData, ImageFormat};
 use objc2::rc::Retained;
 use objc2_app_kit::NSPasteboard;
 use objc2_foundation::{NSData, NSString};
+use std::panic::catch_unwind;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicIsize, Ordering};
 #[cfg(test)]
@@ -67,6 +68,18 @@ where
     }
 }
 
+fn with_general_pasteboard<F, R>(f: F) -> Option<R>
+where
+    F: FnOnce(&NSPasteboard) -> R + Send,
+    R: Send,
+{
+    with_clipboard_access(move || {
+        catch_unwind(NSPasteboard::generalPasteboard)
+            .ok()
+            .map(|pasteboard| f(&pasteboard))
+    })
+}
+
 /// Returns non-zero if the current thread is the main thread.
 #[cfg(not(test))]
 fn pthread_main_np() -> i32 {
@@ -108,6 +121,11 @@ pub struct MacOSSmartClipboard {
 }
 
 impl MacOSSmartClipboard {
+    #[cfg(test)]
+    fn has_general_pasteboard() -> bool {
+        with_general_pasteboard(|_| ()).is_some()
+    }
+
     /// Create a new macOS clipboard provider.
     ///
     /// Initializes the clipboard provider and captures the current
@@ -158,10 +176,7 @@ impl MacOSSmartClipboard {
     ///
     /// Thread-safe via `with_clipboard_access`.
     fn get_current_change_count() -> isize {
-        with_clipboard_access(|| {
-            let pasteboard = NSPasteboard::generalPasteboard();
-            pasteboard.changeCount()
-        })
+        with_general_pasteboard(|pasteboard| pasteboard.changeCount()).unwrap_or_default()
     }
 
     /// Check if the clipboard contains a specific type.
@@ -170,8 +185,7 @@ impl MacOSSmartClipboard {
     fn has_type(type_string: &NSString) -> bool {
         // We need to convert to owned string to avoid sending reference across threads
         let type_str = type_string.to_string();
-        with_clipboard_access(move || {
-            let pasteboard = NSPasteboard::generalPasteboard();
+        with_general_pasteboard(move |pasteboard| {
             let type_ns = NSString::from_str(&type_str);
             let types = pasteboard.types();
             if let Some(types) = types {
@@ -180,6 +194,7 @@ impl MacOSSmartClipboard {
                 false
             }
         })
+        .unwrap_or(false)
     }
 
     /// Read string data from the clipboard for a given type.
@@ -187,12 +202,12 @@ impl MacOSSmartClipboard {
     /// Thread-safe via `with_clipboard_access`.
     fn read_string_for_type(type_string: &NSString) -> Option<String> {
         let type_str = type_string.to_string();
-        with_clipboard_access(move || {
-            let pasteboard = NSPasteboard::generalPasteboard();
+        with_general_pasteboard(move |pasteboard| {
             let type_ns = NSString::from_str(&type_str);
             let ns_string = pasteboard.stringForType(&type_ns)?;
             Some(ns_string.to_string())
         })
+        .flatten()
     }
 
     /// Read raw data from the clipboard for a given type.
@@ -200,12 +215,12 @@ impl MacOSSmartClipboard {
     /// Thread-safe via `with_clipboard_access`.
     fn read_data_for_type(type_string: &NSString) -> Option<Vec<u8>> {
         let type_str = type_string.to_string();
-        with_clipboard_access(move || {
-            let pasteboard = NSPasteboard::generalPasteboard();
+        with_general_pasteboard(move |pasteboard| {
             let type_ns = NSString::from_str(&type_str);
             let ns_data = pasteboard.dataForType(&type_ns)?;
             Some(ns_data.to_vec())
         })
+        .flatten()
     }
 
     /// Get the pasteboard type string for plain text.
@@ -389,8 +404,7 @@ impl SmartClipboardProvider for MacOSSmartClipboard {
     /// Clears the clipboard and writes the text as UTF-8 plain text.
     /// Thread-safe via `with_clipboard_access`.
     fn write_text(&self, text: String) -> Result<()> {
-        with_clipboard_access(move || {
-            let pasteboard = NSPasteboard::generalPasteboard();
+        with_general_pasteboard(move |pasteboard| {
             pasteboard.clearContents();
 
             let ns_string = NSString::from_str(&text);
@@ -403,6 +417,7 @@ impl SmartClipboardProvider for MacOSSmartClipboard {
                 Err(anyhow!("Failed to write text to clipboard"))
             }
         })
+        .unwrap_or_else(|| Err(anyhow!("macOS general pasteboard is unavailable")))
     }
 
     /// Write image to clipboard.
@@ -411,8 +426,7 @@ impl SmartClipboardProvider for MacOSSmartClipboard {
     /// Thread-safe via `with_clipboard_access`.
     fn write_image(&self, image: &ImageData) -> Result<()> {
         let image_bytes = image.bytes.clone();
-        with_clipboard_access(move || {
-            let pasteboard = NSPasteboard::generalPasteboard();
+        with_general_pasteboard(move |pasteboard| {
             pasteboard.clearContents();
 
             // Create NSData from the image bytes
@@ -426,6 +440,7 @@ impl SmartClipboardProvider for MacOSSmartClipboard {
                 Err(anyhow!("Failed to write image to clipboard"))
             }
         })
+        .unwrap_or_else(|| Err(anyhow!("macOS general pasteboard is unavailable")))
     }
 
     /// Check if clipboard has image content.
@@ -481,6 +496,9 @@ mod tests {
     #[test]
     #[serial(clipboard)]
     fn test_macos_clipboard_read_text() {
+        if !MacOSSmartClipboard::has_general_pasteboard() {
+            return;
+        }
         let clipboard = MacOSSmartClipboard::new();
         let test_text = "serial_test_read_text";
         clipboard.write_text(test_text.to_string()).unwrap();
@@ -498,6 +516,9 @@ mod tests {
     #[test]
     #[serial(clipboard)]
     fn test_macos_clipboard_write_text() {
+        if !MacOSSmartClipboard::has_general_pasteboard() {
+            return;
+        }
         let clipboard = MacOSSmartClipboard::new();
         let test_text = "serial_test_write_text";
         let result = clipboard.write_text(test_text.to_string());
@@ -511,6 +532,9 @@ mod tests {
     #[test]
     #[serial(clipboard)]
     fn test_macos_clipboard_has_changed() {
+        if !MacOSSmartClipboard::has_general_pasteboard() {
+            return;
+        }
         let clipboard = MacOSSmartClipboard::new();
 
         // First check captures current state
@@ -531,6 +555,9 @@ mod tests {
     #[test]
     #[serial(clipboard)]
     fn test_macos_clipboard_has_image() {
+        if !MacOSSmartClipboard::has_general_pasteboard() {
+            return;
+        }
         let clipboard = MacOSSmartClipboard::new();
 
         // Write an image and verify has_image returns true
@@ -552,6 +579,9 @@ mod tests {
     #[test]
     #[serial(clipboard)]
     fn test_macos_clipboard_write_image() {
+        if !MacOSSmartClipboard::has_general_pasteboard() {
+            return;
+        }
         let clipboard = MacOSSmartClipboard::new();
 
         // Create a minimal valid PNG (8x8 pixels, all black)
