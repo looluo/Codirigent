@@ -230,6 +230,244 @@ Checks:
 - compile with no logic changes
 - no public module path changes
 
+#### Phase A Scope
+
+Phase A is intentionally mechanical. It prepares the file layout for later moves without changing behavior, execution order, ownership, or public paths.
+
+Deliverables:
+
+- internal submodule directories exist under the two primary roots
+- root modules declare the new child modules
+- test modules are moved out of the root files into dedicated `tests.rs` files where useful
+- the verification gate passes after every Phase A task
+
+Phase A must not:
+
+- move behavior between functions
+- split logic across files in the same task that introduces the new files
+- change `workspace/mod.rs`
+- change any `pub` surface
+- introduce new target-specific code paths
+
+#### Phase A Task Breakdown
+
+##### Task A1: Scaffold `impl_output_polling` internal modules
+
+Create the internal directory and child files under `crates/codirigent-ui/src/workspace/impl_output_polling/`:
+
+- `output_runtime.rs`
+- `status_reconcile.rs`
+- `cli_pollers.rs`
+- `hook_signals.rs`
+- `git_refresh.rs`
+- `terminal_input.rs`
+
+Update `crates/codirigent-ui/src/workspace/impl_output_polling.rs` to declare these child modules, but keep all existing function bodies in the root file for this task.
+
+Expected dependency shape after Task A1:
+
+- `impl_output_polling.rs` remains the owner of shared types, constants, and orchestration entry points
+- `output_runtime.rs` will later depend on:
+  - `WorkspaceView`
+  - `output_dispatcher`
+  - terminal runtime snapshot application
+  - `sync_session_status()`
+  - OSC 7 / OSC 133 extraction helpers
+- `status_reconcile.rs` will later depend on:
+  - `WorkspaceView`
+  - `status_engine`
+  - `status_providers`
+  - task-manager side effects
+  - compaction and notification follow-up
+- `cli_pollers.rs` will later depend on:
+  - `CliReaders`
+  - JSONL / rollout parsing helpers
+  - cached CLI status update logic
+  - root-owned status-apply entry points
+- `hook_signals.rs` will later depend on:
+  - hook signal file parsing
+  - run-epoch helpers
+  - cached hook-signal application
+  - root-owned status-apply entry points
+- `git_refresh.rs` will later depend on:
+  - session manager git refresh helpers
+  - cached git-info apply helpers
+  - focused-session file-tree refresh hooks
+- `terminal_input.rs` will later depend on:
+  - deferred enter handling
+  - VTE response forwarding
+  - compaction input follow-up helpers
+
+Dependency rules for this task:
+
+- child modules may depend on the root module and existing workspace utilities
+- child modules must not call each other in both directions
+- any helper needed by more than one child module stays in the root until a clearly shared abstraction exists
+
+Verification after Task A1:
+
+```bash
+cargo clean
+cargo fmt --all -- --check
+cargo check --workspace --all-targets --all-features
+cargo build --workspace --all-features
+cargo test --all --all-targets --all-features
+cargo test -p codirigent-ui --lib --features gpui-full
+cargo clippy --all --all-targets --all-features -- -D warnings
+cargo check -p codirigent-ui --features gpui-full
+git diff --check
+```
+
+##### Task A2: Scaffold `gpui` internal modules
+
+Create the internal directory and child files under `crates/codirigent-ui/src/workspace/gpui/`:
+
+- `session_metadata.rs`
+- `derived_state.rs`
+- `ui_events.rs`
+- `layout_sync.rs`
+
+Update `crates/codirigent-ui/src/workspace/gpui.rs` to declare these child modules, but keep all existing function bodies in the root file for this task.
+
+Expected dependency shape after Task A2:
+
+- `gpui.rs` remains the owner of:
+  - `WorkspaceView`
+  - constructor wiring
+  - `Render`, `Focusable`, and IME trait impls
+  - root-level constants
+- `session_metadata.rs` will later contain the lightest-weight helpers and should depend only on:
+  - session data
+  - task-title lookup inputs
+  - standard library collections/path formatting
+- `derived_state.rs` will later depend on:
+  - `WorkspaceView`
+  - task-board state
+  - terminal header state
+  - empty-cell state
+  - `session_metadata` helpers
+- `ui_events.rs` will later depend on:
+  - `WorkspaceView`
+  - top bar / icon rail / task board event sources
+  - root-owned mutation helpers such as layout or session actions
+- `layout_sync.rs` will later depend on:
+  - `WorkspaceView`
+  - layout cache invalidation
+  - focus/layout transitions
+  - terminal dimension and resize coordination
+
+Dependency rules for this task:
+
+- `session_metadata.rs` should stay leaf-like and not depend on render/event modules
+- `derived_state.rs` may use `session_metadata.rs`, but `session_metadata.rs` must not depend back on `derived_state.rs`
+- `ui_events.rs` and `layout_sync.rs` should coordinate through root-owned methods on `WorkspaceView`, not through sibling-to-sibling private imports
+
+Verification after Task A2:
+
+```bash
+cargo clean
+cargo fmt --all -- --check
+cargo check --workspace --all-targets --all-features
+cargo build --workspace --all-features
+cargo test --all --all-targets --all-features
+cargo test -p codirigent-ui --lib --features gpui-full
+cargo clippy --all --all-targets --all-features -- -D warnings
+cargo check -p codirigent-ui --features gpui-full
+git diff --check
+```
+
+##### Task A3: Externalize root test modules
+
+Create dedicated test files:
+
+- `crates/codirigent-ui/src/workspace/impl_output_polling/tests.rs`
+- `crates/codirigent-ui/src/workspace/gpui/tests.rs`
+
+Update the bottom of the root files so they use `#[cfg(test)] mod tests;` instead of large inline test blocks.
+
+Testing structure after Task A3:
+
+- `workspace/tests.rs` remains unchanged because it covers the broader workspace module
+- `gpui/tests.rs` initially receives the current root tests from `gpui.rs` with no assertion changes
+- `impl_output_polling/tests.rs` initially receives the current root tests from `impl_output_polling.rs` with no assertion changes
+
+Planned later ownership moves after Phase A:
+
+- session metadata tests move from `gpui/tests.rs` into `gpui/session_metadata.rs` once the helpers move
+- derived-state reducer tests move from `gpui/tests.rs` into `gpui/derived_state.rs`
+- hook-signal tests move from `impl_output_polling/tests.rs` into `impl_output_polling/hook_signals.rs`
+- git refresh tests move from `impl_output_polling/tests.rs` into `impl_output_polling/git_refresh.rs`
+- output scheduling and prepared-output tests move from `impl_output_polling/tests.rs` into `impl_output_polling/output_runtime.rs`
+- status reconciliation side-effect tests move from `impl_output_polling/tests.rs` into `impl_output_polling/status_reconcile.rs`
+
+Rules for test motion:
+
+- Phase A must keep test names and assertions stable
+- tests should move with the code they validate once a later phase extracts that code
+- do not centralize new tests back into the root if the extracted child module can own them cleanly
+
+Verification after Task A3:
+
+```bash
+cargo clean
+cargo fmt --all -- --check
+cargo check --workspace --all-targets --all-features
+cargo build --workspace --all-features
+cargo test --all --all-targets --all-features
+cargo test -p codirigent-ui --lib --features gpui-full
+cargo clippy --all --all-targets --all-features -- -D warnings
+cargo check -p codirigent-ui --features gpui-full
+git diff --check
+```
+
+##### Task A4: Ownership comments and import hygiene
+
+This is the final scaffolding pass before logic moves begin.
+
+Update the roots and newly created child files so they clearly document ownership and future responsibility, while keeping code motion at zero:
+
+- note which responsibilities stay in the root permanently
+- note which responsibilities are expected to migrate in Phase B or Phase C
+- remove any unused imports introduced by the new `mod` declarations
+
+This task is complete when a reviewer can open either root file and understand:
+
+- why the child modules exist
+- which clusters are scheduled to move next
+- that no behavior moved yet
+
+Verification after Task A4:
+
+```bash
+cargo clean
+cargo fmt --all -- --check
+cargo check --workspace --all-targets --all-features
+cargo build --workspace --all-features
+cargo test --all --all-targets --all-features
+cargo test -p codirigent-ui --lib --features gpui-full
+cargo clippy --all --all-targets --all-features -- -D warnings
+cargo check -p codirigent-ui --features gpui-full
+git diff --check
+```
+
+#### Phase A Cross-Platform Requirements
+
+Phase A is structural, but it still needs to preserve cross-platform correctness.
+
+Rules:
+
+- every new child module must remain under the same feature gate as its root
+- do not add `target_os` conditionals unless the moved code already requires them
+- do not introduce Unix-only filesystem literals in tests or production code
+- use platform-neutral temp paths such as `std::env::temp_dir()` in any touched test code
+- avoid assumptions about path separators, shell names, clipboard backends, or terminal behavior that differ between macOS and Windows
+- keep macOS-specific and Windows-specific dependencies where they already live today instead of re-scattering them during the split
+
+Merge expectation:
+
+- the Phase A verification gate should pass on the active development host after every task
+- before merge, the same gate should also be exercised on both macOS and Windows because this module tree includes platform-aware clipboard, terminal, and editor-detection paths
+
 ### Phase B: Split `impl_output_polling.rs`
 
 Recommended order:
