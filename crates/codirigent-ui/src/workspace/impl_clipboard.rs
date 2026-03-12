@@ -114,7 +114,7 @@ impl WorkspaceView {
         let bracketed = self
             .terminals
             .get(&session_id)
-            .map(|tv| tv.terminal().bracketed_paste_mode())
+            .map(|tv| tv.bracketed_paste_mode())
             .unwrap_or(false);
         let clipboard = self.clipboard.smart_clipboard.clone();
         let cli_type = self

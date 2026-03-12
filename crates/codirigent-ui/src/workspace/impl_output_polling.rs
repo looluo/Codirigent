@@ -13,6 +13,7 @@ use super::cli_helpers::clear_command;
 use super::cli_helpers::is_safe_cli_session_id;
 use super::gpui::WorkspaceView;
 use super::types::{CachedCliStatus, CliStatusSource, ProcessedHookSignal};
+use crate::terminal_runtime::TerminalRenderSnapshot;
 use codirigent_core::{
     hook_signals_dir, AssignmentAction, CliType, CodexExecutionMode, CodirigentEvent, EventBus,
     GitRepoInfo, ProcessMonitor, Session, SessionId, SessionManager, SessionStatus, SessionUpdate,
@@ -220,8 +221,9 @@ fn cli_type_from_hook_signal_name(cli_type_name: &str) -> Option<CliType> {
 #[derive(Debug)]
 struct PreparedSessionOutput {
     session_id: SessionId,
-    data: Vec<u8>,
+    bytes_drained: usize,
     has_more: bool,
+    render_snapshot: Option<TerminalRenderSnapshot>,
     detected_cli_type: Option<CliType>,
     cwd_session: Option<Session>,
 }
@@ -714,6 +716,10 @@ impl WorkspaceView {
         let session_manager = self.session_manager.clone();
         let detector = self.detector.clone();
         let update_tx = self.update_tx.clone();
+        let runtime = self
+            .terminals
+            .get(&session_id)
+            .map(|tv| tv.runtime_handle());
 
         cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
             let prepared = cx
@@ -729,6 +735,10 @@ impl WorkspaceView {
                     }?;
 
                     let data = drained.data;
+                    let bytes_drained = data.len();
+                    let render_snapshot = runtime
+                        .as_ref()
+                        .and_then(|runtime| runtime.apply_output(&data));
                     let detected_cli_type = detect_cli_from_output(&data);
 
                     {
@@ -779,8 +789,9 @@ impl WorkspaceView {
 
                     Some(PreparedSessionOutput {
                         session_id,
-                        data,
+                        bytes_drained,
                         has_more: drained.has_more,
+                        render_snapshot,
                         detected_cli_type,
                         cwd_session,
                     })
@@ -820,12 +831,12 @@ impl WorkspaceView {
     ) {
         let PreparedSessionOutput {
             session_id,
-            data,
+            bytes_drained,
             has_more,
+            render_snapshot,
             detected_cli_type,
             cwd_session,
         } = prepared;
-        let bytes_drained = data.len();
         trace!(
             ?session_id,
             bytes_drained,
@@ -834,9 +845,10 @@ impl WorkspaceView {
         );
         let mut any_dirty = false;
 
-        if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
-            terminal_view.terminal_mut().process_output(&data);
-            any_dirty = true;
+        if let Some(snapshot) = render_snapshot {
+            if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
+                any_dirty |= terminal_view.apply_snapshot(snapshot);
+            }
         }
 
         if let Some(cli_type) = detected_cli_type {

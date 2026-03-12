@@ -666,6 +666,10 @@ impl super::gpui::WorkspaceView {
                         t.font_size_small = (ui_size - 2.0).max(8.0);
                         t.font_size_large = ui_size + 2.0;
                         t.terminal_font_size = term_size;
+                        let terminal_theme = t.clone();
+                        for tv in this.terminals_mut().values_mut() {
+                            tv.set_theme(terminal_theme.clone());
+                        }
                     },
                 ),
             ))

@@ -1345,8 +1345,8 @@ impl WorkspaceView {
                 // output wrap vertically until the next resize event.
                 let (target_rows, target_cols) =
                     terminal_view.dimensions_from_pixels(available_width, available_height);
-                let current_rows = terminal_view.terminal().rows();
-                let current_cols = terminal_view.terminal().cols();
+                let current_rows = terminal_view.rows();
+                let current_cols = terminal_view.cols();
 
                 if Self::should_skip_collapsed_resize(
                     current_rows,
@@ -1365,8 +1365,8 @@ impl WorkspaceView {
 
                     // Propagate resize to actual PTY (ConPTY) so the shell
                     // knows the correct terminal dimensions
-                    let rows = terminal_view.terminal().rows();
-                    let cols = terminal_view.terminal().cols();
+                    let rows = terminal_view.rows();
+                    let cols = terminal_view.cols();
                     let last = self.cache.pty_sizes.get(&info.session_id);
                     if last != Some(&(rows, cols)) {
                         self.with_session_manager(|manager| {
@@ -1506,7 +1506,7 @@ impl WorkspaceView {
             let Some(terminal_view) = self.terminals.get(&session_id) else {
                 return;
             };
-            terminal_view.terminal().mode()
+            terminal_view.mode()
         };
 
         // Convert GPUI keystroke to terminal keystroke

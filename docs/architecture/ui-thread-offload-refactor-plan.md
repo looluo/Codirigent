@@ -2,7 +2,7 @@
 
 ## Status
 
-In progress. This document defines the planned refactor for the remaining UI-thread-bound session workflow in Codirigent, and now reflects implemented progress through Phase 2.
+In progress. This document defines the planned refactor for the remaining UI-thread-bound session workflow in Codirigent, and now reflects implemented progress through Phase 3.
 
 ## Progress Snapshot
 
@@ -11,7 +11,7 @@ In progress. This document defines the planned refactor for the remaining UI-thr
 | Phase 0: Instrumentation And Baseline | Pending | Planned first in the roadmap, but not yet implemented. |
 | Phase 1: PTY Command Queue | Complete | Queue-backed PTY writes/resizes landed with a dedicated worker, tests, and full verification gate. |
 | Phase 2: Async Session Bootstrap | Complete | Session create/restore bootstrap now runs on the background executor, with UI-side attach/finalization only. |
-| Phase 3: Terminal Runtime Offload | Pending | Not started. |
+| Phase 3: Terminal Runtime Offload | Complete | Terminal parsing/state mutation now runs in a background runtime and the UI consumes snapshots only. |
 | Phase 4: Detector Worker | Pending | Not started. |
 | Phase 5: Derived UI State Cleanup | Pending | Not started. |
 
@@ -64,6 +64,8 @@ Additional fixes made while validating the phase:
 
 - Updated the bootstrap metadata test to compare normalized working-directory paths, matching runtime semantics.
 - Scoped the macOS clipboard pasteboard probe helper to tests so the all-features warning-free gate remains green under `clippy -D warnings`.
+- Replaced Unix-only `"/tmp"` usage in the new lifecycle tests and the session-create fallback path with `std::env::temp_dir()` so the Phase 2 change set does not hardcode Unix filesystem assumptions.
+- Removed the remaining production-path `unwrap()` from the macOS clipboard URL-decoding helper to keep the branch aligned with the no-`unwrap()` rule for shipped code.
 
 Verification completed successfully with:
 
@@ -76,6 +78,59 @@ cargo test --all --all-targets --all-features
 cargo clippy --all --all-targets --all-features -- -D warnings
 cargo check -p codirigent-ui --features gpui-full
 ```
+
+Post-phase follow-up verification:
+
+```bash
+cargo fmt --all -- --check
+cargo test -p codirigent-ui --lib
+cargo check -p codirigent-ui --features gpui-full
+```
+
+Windows-target follow-up:
+
+- Attempted `cargo check -p codirigent-ui --lib --tests --target x86_64-pc-windows-msvc --features gpui-full`.
+- The check was blocked on this macOS host before reaching project code because the Windows target C toolchain/dependencies were unavailable (`ring`/`libz-sys` failed due to missing SDK headers and `vcpkg` setup).
+- The project-side portability fixes for Phase 2 were still applied: Unix-only fallback/test paths were removed from the new lifecycle code, so the branch no longer embeds those assumptions.
+
+### Phase 3 Completion Notes
+
+Implemented:
+
+- Added `crates/codirigent-ui/src/terminal_runtime.rs` with a background-owned `TerminalRuntimeHandle` that owns terminal parsing/state mutation and publishes immutable `TerminalRenderSnapshot` values.
+- Refactored `crates/codirigent-ui/src/terminal_view.rs` so `TerminalView` now holds the latest committed snapshot plus UI-only caches instead of a live mutable `Terminal`.
+- Moved `Terminal::process_output()` off the UI thread by changing `crates/codirigent-ui/src/workspace/impl_output_polling.rs` to apply PTY bytes inside the background output-preparation step and send only render snapshots plus metadata back to the UI.
+- Updated `crates/codirigent-ui/src/workspace/terminal_render.rs` to render selection as a UI overlay on top of snapshot-backed row caches, avoiding selection-triggered terminal-state work on the UI thread.
+- Updated workspace call sites in `gpui.rs` and `impl_clipboard.rs` to use snapshot-backed terminal accessors (`rows`, `cols`, `mode`, `bracketed_paste_mode`) instead of reaching into a live terminal.
+- Propagated theme changes into terminal runtimes in `settings_panels.rs` so snapshot colors stay aligned with the active workspace theme.
+
+Phase 3 tests added or updated:
+
+- Runtime tests for generation advancement, resize propagation, and background selection extraction in `terminal_runtime.rs`.
+- Terminal view tests updated to use runtime-backed output application instead of direct terminal mutation.
+- Added a stale-snapshot rejection test to verify generation guards in `TerminalView`.
+- Added a scrollback-selection overlay test to verify viewport-relative selection rendering on top of snapshots.
+
+Verification completed successfully with:
+
+```bash
+cargo clean
+cargo fmt --all -- --check
+cargo check --workspace --all-targets --all-features
+cargo build --workspace --all-features
+cargo test --all --all-targets --all-features
+cargo clippy --all --all-targets --all-features -- -D warnings
+cargo check -p codirigent-ui --features gpui-full
+```
+
+Targeted phase validation run before the full gate:
+
+```bash
+cargo check -p codirigent-ui --features gpui-full
+cargo test -p codirigent-ui --lib --features gpui-full
+```
+
+Manual Phase 3 focus-mode validation is still pending on a live app run. The automated gate is green, but the specific “single-session focus mode under sustained output” interaction still needs hands-on review.
 
 ## Problem Statement
 
