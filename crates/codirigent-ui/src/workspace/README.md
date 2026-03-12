@@ -75,4 +75,5 @@ The workspace layer is verified with:
 cargo test -p codirigent-ui --lib workspace::
 ```
 
-For refactor verification, use the full workspace gate documented in `docs/architecture/workspace-module-split-plan.md`.
+For durable architecture docs and lookup guidance, use
+`docs/architecture/workspace/`.
