@@ -1288,7 +1288,7 @@ mod tests {
 
         let ready_marker = format!("phase1_ready_{}", std::process::id());
         manager
-            .send_input(id, &test_shell_command(&format!("echo {ready_marker}")))
+            .send_input(id, &test_shell_command(&ready_marker))
             .unwrap();
 
         let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -1308,13 +1308,13 @@ mod tests {
         );
 
         manager
-            .send_input(id, &test_shell_command("echo phase1_order_a"))
+            .send_input(id, &test_shell_command("phase1_order_a"))
             .unwrap();
         manager
-            .send_input(id, &test_shell_command("echo phase1_order_b"))
+            .send_input(id, &test_shell_command("phase1_order_b"))
             .unwrap();
         manager
-            .send_input(id, &test_shell_command("echo phase1_order_c"))
+            .send_input(id, &test_shell_command("phase1_order_c"))
             .unwrap();
 
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
