@@ -762,11 +762,22 @@ mod tests {
     fn deterministic_test_shell() -> Option<String> {
         #[cfg(windows)]
         {
-            Some("cmd.exe".to_string())
+            Some("cmd".to_string())
         }
         #[cfg(not(windows))]
         {
             Some("/bin/sh".to_string())
+        }
+    }
+
+    fn test_shell_command(command: &str) -> Vec<u8> {
+        #[cfg(windows)]
+        {
+            format!("{command}\r\n").into_bytes()
+        }
+        #[cfg(not(windows))]
+        {
+            format!("{command}\n").into_bytes()
         }
     }
 
@@ -1284,7 +1295,7 @@ mod tests {
 
         let ready_marker = format!("phase1_ready_{}", std::process::id());
         manager
-            .send_input(id, format!("echo {ready_marker}\n").as_bytes())
+            .send_input(id, &test_shell_command(&format!("echo {ready_marker}")))
             .unwrap();
 
         let ready_deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
@@ -1303,9 +1314,15 @@ mod tests {
             "expected shell readiness marker before order assertions: {ready_output}"
         );
 
-        manager.send_input(id, b"echo phase1_order_a\n").unwrap();
-        manager.send_input(id, b"echo phase1_order_b\n").unwrap();
-        manager.send_input(id, b"echo phase1_order_c\n").unwrap();
+        manager
+            .send_input(id, &test_shell_command("echo phase1_order_a"))
+            .unwrap();
+        manager
+            .send_input(id, &test_shell_command("echo phase1_order_b"))
+            .unwrap();
+        manager
+            .send_input(id, &test_shell_command("echo phase1_order_c"))
+            .unwrap();
 
         let deadline = tokio::time::Instant::now() + std::time::Duration::from_secs(5);
         let mut combined = String::new();
