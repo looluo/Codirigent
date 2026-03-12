@@ -9,6 +9,12 @@
 //! - GPUI `Render` trait implementation for drawing the UI
 //! - GPUI `Focusable` trait for keyboard focus management
 //!
+//! Split note:
+//! - The root keeps `WorkspaceView`, constructor wiring, trait impls, and
+//!   orchestration entry points.
+//! - Lower-coupling helper clusters now live under `workspace/gpui/` without
+//!   changing public module paths.
+//!
 //! # Example
 //!
 //! ```ignore
@@ -19,15 +25,22 @@
 //! let workspace = WorkspaceView::new(app, cx);
 //! ```
 
+mod derived_state;
+mod layout_sync;
+mod session_metadata;
+mod ui_events;
+
+// The root still owns `WorkspaceView`, trait impls, and high-level
+// orchestration. Child modules hold lower-coupling helper clusters.
+
 use super::core::Workspace;
 use super::editor_detection::detect_monospace_fonts;
 use super::types::{
     CacheState, CliReaders, ModalState, PollingState, RenderLayoutSignature, SelectionState,
-    TerminalResizeSignature, CELL_BORDER_WIDTH, FONT_SIZE_BASE_DEFAULT, HEADER_HEIGHT, REM_BASE,
-    TERMINAL_CONTENT_PADDING,
+    FONT_SIZE_BASE_DEFAULT, REM_BASE,
 };
 use crate::clipboard_preview::ClipboardPreview;
-use crate::empty_session::{EmptySessionEvent, EmptySessionPool};
+use crate::empty_session::EmptySessionPool;
 use crate::input::{key_to_bytes, TerminalKeystroke, TerminalModifiers};
 use crate::sidebar::{FileTreePanel, WorktreePanel};
 use crate::task_board::TaskBoardPanel;
@@ -37,9 +50,8 @@ use crate::theme::CodirigentTheme;
 use crate::toolbar::CustomLayoutPicker;
 use codirigent_core::compaction::{CompactionConfig, CompactionService};
 use codirigent_core::{
-    CodexExecutionMode, CodirigentEvent, DefaultEventBus, EventBus, FileStorageService,
-    GridPosition, ProcessMonitor, SessionId, SessionManager, SessionStatus, TaskManager,
-    TaskManagerConfig,
+    CodexExecutionMode, DefaultEventBus, FileStorageService, ProcessMonitor, SessionId,
+    SessionManager, SessionStatus, TaskManager, TaskManagerConfig,
 };
 use codirigent_detector::{InputDetector, NotificationManager};
 use codirigent_filetree::FileTree;
@@ -54,28 +66,8 @@ use gpui::{
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
-use std::time::{Duration, Instant};
-use tracing::{info, warn};
-
-fn session_project_name(session: &codirigent_core::Session) -> Option<String> {
-    session
-        .git_info
-        .as_ref()
-        .and_then(|git_info| git_info.repo_root.file_name())
-        .or_else(|| session.working_directory.file_name())
-        .and_then(|name| name.to_str())
-        .map(str::to_owned)
-}
-
-fn resolved_task_title(
-    task_id: &codirigent_core::TaskId,
-    task_titles: Option<&HashMap<codirigent_core::TaskId, String>>,
-) -> String {
-    task_titles
-        .and_then(|titles| titles.get(task_id))
-        .cloned()
-        .unwrap_or_else(|| task_id.0.to_string())
-}
+use std::time::Duration;
+use tracing::warn;
 
 /// GPUI View wrapper for Workspace.
 ///
@@ -170,19 +162,6 @@ impl WorkspaceView {
     const MAINTENANCE_POLL_INTERVAL_MS: u64 = 250;
     /// Debounce window for persisted app-state saves.
     const STATE_SAVE_DEBOUNCE: Duration = Duration::from_millis(200);
-
-    /// Returns true when a computed target size is a transient collapse that
-    /// should be ignored to avoid 1-column/1-row PTY resizes.
-    fn should_skip_collapsed_resize(
-        current_rows: u16,
-        current_cols: u16,
-        target_rows: u16,
-        target_cols: u16,
-    ) -> bool {
-        let target_collapsed = target_rows <= 1 || target_cols <= 1;
-        let current_usable = current_rows > 1 && current_cols > 1;
-        target_collapsed && current_usable
-    }
 
     fn session_is_shell_idle(&self, session_id: SessionId) -> bool {
         self.with_detector(|detector| {
@@ -700,24 +679,6 @@ impl WorkspaceView {
         (file_tree, None, project_root)
     }
 
-    /// Check if a session should be created at the given position.
-    /// Returns true if this is not a duplicate click (same position within 100ms).
-    pub(super) fn should_create_session_at(&mut self, position: GridPosition) -> bool {
-        let now = Instant::now();
-
-        // Check if this is a duplicate click
-        if let Some((last_pos, last_time)) = self.selection.last_click_position {
-            if last_pos == position && now.duration_since(last_time) < Duration::from_millis(100) {
-                info!(?position, "Ignoring duplicate click within 100ms");
-                return false;
-            }
-        }
-
-        // Update last click position
-        self.selection.last_click_position = Some((position, now));
-        true
-    }
-
     fn persisted_layout_mode(&self) -> codirigent_core::LayoutMode {
         match self.workspace.layout_state() {
             crate::layout::WorkspaceLayoutState::Grid(state) => state.profile().to_mode(),
@@ -726,48 +687,6 @@ impl WorkspaceView {
                     root: state.tree().clone(),
                 }
             }
-        }
-    }
-
-    /// Mark layout-derived render caches as dirty after structural changes.
-    pub(super) fn mark_layout_cache_dirty(&mut self) {
-        self.cache.render_cell_info_dirty = true;
-        self.cache.layout_generation = self.cache.layout_generation.saturating_add(1);
-        self.cache.last_resize_signature = None;
-        self.cache.pending_resize_signature = None;
-    }
-
-    fn current_resize_signature(
-        &self,
-        cell_width: f32,
-        cell_height: f32,
-    ) -> Option<TerminalResizeSignature> {
-        Some(TerminalResizeSignature {
-            layout_generation: self.cache.layout_generation,
-            layout: self.cache.render_layout_signature?,
-            cell_width,
-            cell_height,
-        })
-    }
-
-    fn render_focus_signature(&self) -> Option<SessionId> {
-        Self::render_focus_signature_for_layout(
-            self.workspace.layout_profile(),
-            self.workspace.focused_session_id(),
-        )
-    }
-
-    fn render_focus_signature_for_layout(
-        layout_profile: crate::layout::LayoutProfile,
-        focused_session_id: Option<SessionId>,
-    ) -> Option<SessionId> {
-        // Only single-pane mode swaps which session is visibly rendered when focus
-        // changes. Multi-pane layouts already render every visible session, so
-        // focus changes alone should not invalidate the cell-layout cache.
-        if layout_profile == crate::layout::LayoutProfile::Single {
-            focused_session_id
-        } else {
-            None
         }
     }
 
@@ -827,409 +746,9 @@ impl WorkspaceView {
             }));
     }
 
-    /// Cycle to next layout.
-    pub fn next_layout(&mut self, cx: &mut Context<Self>) {
-        self.workspace.next_layout();
-        self.mark_layout_cache_dirty();
-        self.sync_layout_derived_state();
-        self.event_bus.publish(CodirigentEvent::LayoutChanged {
-            mode: self.workspace.layout_profile().to_mode(),
-        });
-        cx.notify();
-    }
-
-    /// Toggle sidebar visibility.
-    pub fn toggle_sidebar(&mut self, cx: &mut Context<Self>) {
-        self.workspace.toggle_sidebar();
-        self.mark_layout_cache_dirty();
-        self.sync_layout_derived_state();
-        cx.notify();
-    }
-
-    /// Focus a session by number (1-9).
-    pub fn focus_session_number(&mut self, number: usize, cx: &mut Context<Self>) {
-        if self.workspace.focus_session_number(number) {
-            if let Some(id) = self.workspace.focused_session_id() {
-                self.event_bus
-                    .publish(CodirigentEvent::SessionFocused { id });
-            }
-            self.sync_layout_derived_state();
-            self.sync_file_tree_to_focused_session(cx);
-            cx.notify();
-        }
-    }
-
-    fn task_title_for_session(
-        &self,
-        session: &codirigent_core::Session,
-        task_titles: Option<&HashMap<codirigent_core::TaskId, String>>,
-    ) -> Option<String> {
-        let task_id = session.current_task.as_ref()?;
-        if let Some(task_titles) = task_titles {
-            return Some(resolved_task_title(task_id, Some(task_titles)));
-        }
-
-        if let Ok(manager) = self.task_manager.lock() {
-            return Some(
-                manager
-                    .get_task(task_id)
-                    .map(|task| task.title.clone())
-                    .unwrap_or_else(|| task_id.0.to_string()),
-            );
-        }
-
-        Some(task_id.0.to_string())
-    }
-
-    fn sync_task_board_state(&mut self) -> HashMap<codirigent_core::TaskId, String> {
-        let Ok(manager) = self.task_manager.lock() else {
-            return HashMap::new();
-        };
-
-        let mut titles = HashMap::new();
-        let all_tasks = manager.list_tasks();
-        let counts =
-            all_tasks
-                .iter()
-                .fold((0usize, 0usize, 0usize, 0usize), |(q, ip, r, d), task| {
-                    titles.insert(task.id.clone(), task.title.clone());
-                    match task.status {
-                        codirigent_core::TaskStatus::Queued
-                        | codirigent_core::TaskStatus::Blocked => (q + 1, ip, r, d),
-                        codirigent_core::TaskStatus::Assigned
-                        | codirigent_core::TaskStatus::Working => (q, ip + 1, r, d),
-                        codirigent_core::TaskStatus::Verifying
-                        | codirigent_core::TaskStatus::Review => (q, ip, r + 1, d),
-                        codirigent_core::TaskStatus::Done => (q, ip, r, d + 1),
-                    }
-                });
-        let running_items = all_tasks
-            .iter()
-            .filter(|t| {
-                matches!(
-                    t.status,
-                    codirigent_core::TaskStatus::Assigned | codirigent_core::TaskStatus::Working
-                )
-            })
-            .map(|t| self.core_task_to_ui_item(t))
-            .collect();
-        let queued_items = all_tasks
-            .iter()
-            .filter(|t| {
-                matches!(
-                    t.status,
-                    codirigent_core::TaskStatus::Queued | codirigent_core::TaskStatus::Blocked
-                )
-            })
-            .map(|t| self.core_task_to_ui_item(t))
-            .collect();
-        let review_items = all_tasks
-            .iter()
-            .filter(|t| {
-                matches!(
-                    t.status,
-                    codirigent_core::TaskStatus::Verifying | codirigent_core::TaskStatus::Review
-                )
-            })
-            .map(|t| self.core_task_to_ui_item(t))
-            .collect();
-        let done_items = all_tasks
-            .iter()
-            .filter(|t| t.status == codirigent_core::TaskStatus::Done)
-            .map(|t| self.core_task_to_ui_item(t))
-            .collect();
-        let config = manager.assignment().config();
-        let auto_assign_mode = crate::task_board::AutoAssignMode::from_config(
-            config.auto_assign,
-            config.confirm_before_assign,
-        );
-        let pending_assignments = manager
-            .assignment()
-            .pending_assignments()
-            .iter()
-            .map(|p| crate::task_board::PendingAssignmentSummary {
-                task_id: p.task_id.to_string(),
-                session_number: p.session_id.0,
-                task_title: all_tasks
-                    .iter()
-                    .find(|t| t.id == p.task_id)
-                    .map(|t| t.title.clone())
-                    .unwrap_or_else(|| p.task_id.to_string()),
-            })
-            .collect();
-
-        self.task_board
-            .set_task_counts(counts.0, counts.1, counts.2, counts.3);
-        self.task_board
-            .set_snapshot(crate::task_board::TaskBoardSnapshot {
-                running_items,
-                queued_items,
-                review_items,
-                done_items,
-                auto_assign_mode,
-                pending_assignments,
-            });
-
-        titles
-    }
-
-    fn sync_all_session_headers(
-        &mut self,
-        task_titles: Option<&HashMap<codirigent_core::TaskId, String>>,
-    ) {
-        let sessions = self.workspace.sessions();
-        let focused_id = self.workspace.focused_session_id();
-        for session in sessions {
-            let project_name = session_project_name(session);
-            let git_branch = session.git_info.as_ref().map(|gi| gi.branch.clone());
-            let git_dirty_count = session.git_info.as_ref().map(|gi| gi.dirty_count);
-            let session_color = session
-                .color
-                .as_deref()
-                .map(crate::sidebar::Color::from_hex)
-                .unwrap_or_else(|| crate::sidebar::Color::from_hex("#6366f1"));
-            let task = self.task_title_for_session(session, task_titles);
-            if let Some(header) = self.terminal_headers.get_mut(&session.id) {
-                if header.session_name != session.name {
-                    header.session_name = session.name.clone();
-                }
-                if header.group_name != session.group {
-                    header.group_name = session.group.clone();
-                }
-                header.status = session.status;
-                header.context_usage = session.context_usage;
-                header.is_focused = focused_id == Some(session.id);
-                if header.project_name != project_name {
-                    header.project_name = project_name;
-                }
-                if header.git_branch != git_branch {
-                    header.git_branch = git_branch;
-                }
-                if header.git_dirty_count != git_dirty_count {
-                    header.git_dirty_count = git_dirty_count;
-                }
-                if header.session_color != session_color {
-                    header.session_color = session_color;
-                }
-                if header.task != task {
-                    header.task = task;
-                }
-            }
-        }
-    }
-
-    fn sync_empty_cells_state(&mut self) {
-        let (rows, cols) = self.workspace.layout_profile().dimensions();
-        let occupied: Vec<GridPosition> = self
-            .workspace
-            .sessions()
-            .iter()
-            .enumerate()
-            .map(|(i, _)| {
-                let row = i as u32 / cols;
-                let col = i as u32 % cols;
-                GridPosition { row, col }
-            })
-            .collect();
-        self.empty_cells.setup_for_grid(rows, cols, &occupied);
-    }
-
-    pub(super) fn sync_layout_derived_state(&mut self) {
-        self.sync_all_session_headers(None);
-        self.sync_empty_cells_state();
-    }
-
-    pub(super) fn sync_task_derived_state(&mut self) {
-        let task_titles = self.sync_task_board_state();
-        self.sync_all_session_headers(Some(&task_titles));
-    }
-
-    /// Synchronize all derived UI state from canonical workspace/task state.
-    ///
-    /// This must only run from explicit mutation paths, never as a render fallback.
-    pub(super) fn refresh_derived_ui_state(&mut self) {
-        let task_titles = self.sync_task_board_state();
-        self.sync_all_session_headers(Some(&task_titles));
-        self.sync_empty_cells_state();
-    }
-
-    /// Sync a single session's terminal header from workspace state.
-    ///
-    /// This is a targeted delta update for the common case where only one
-    /// session's status changed. Avoids the O(all sessions) cost of
-    /// `refresh_derived_ui_state()` for each output poll.
-    pub(super) fn sync_session_header(&mut self, session_id: SessionId) {
-        let Some(session) = self.workspace.session(session_id) else {
-            return;
-        };
-        let focused_id = self.workspace.focused_session_id();
-        let project_name = session_project_name(session);
-        let git_branch = session.git_info.as_ref().map(|gi| gi.branch.clone());
-        let git_dirty_count = session.git_info.as_ref().map(|gi| gi.dirty_count);
-        let session_color = session
-            .color
-            .as_deref()
-            .map(crate::sidebar::Color::from_hex)
-            .unwrap_or_else(|| crate::sidebar::Color::from_hex("#6366f1"));
-        let task = self.task_title_for_session(session, None);
-
-        if let Some(header) = self.terminal_headers.get_mut(&session_id) {
-            header.status = session.status;
-            header.context_usage = session.context_usage;
-            header.is_focused = focused_id == Some(session_id);
-
-            if header.session_name != session.name {
-                header.session_name = session.name.clone();
-            }
-            if header.group_name != session.group {
-                header.group_name = session.group.clone();
-            }
-
-            if header.project_name != project_name {
-                header.project_name = project_name;
-            }
-
-            if header.git_branch != git_branch {
-                header.git_branch = git_branch;
-            }
-            if header.git_dirty_count != git_dirty_count {
-                header.git_dirty_count = git_dirty_count;
-            }
-            if header.session_color != session_color {
-                header.session_color = session_color;
-            }
-            if header.task != task {
-                header.task = task;
-            }
-        }
-    }
-
     /// Get a terminal header for a session.
     pub fn get_terminal_header(&self, id: SessionId) -> Option<&TerminalHeader> {
         self.terminal_headers.get(&id)
-    }
-
-    /// Process pending events from all UI components.
-    ///
-    /// This method is called at the start of each render cycle to handle
-    /// any pending events from task board, empty session cells, etc.
-    fn process_ui_events(&mut self, cx: &mut Context<Self>) {
-        // Process task board events
-        for event in self.task_board.take_events() {
-            self.handle_task_board_event(event, cx);
-        }
-
-        // Process empty session events
-        for event in self.empty_cells.take_events() {
-            self.handle_empty_session_event(event, cx);
-        }
-    }
-
-    /// Process pending top bar events and translate to workspace actions.
-    pub(super) fn process_top_bar_events(&mut self) {
-        let events = self.top_bar.drain_events();
-        for event in events {
-            match event {
-                crate::top_bar::TopBarEvent::LayoutSelected(layout_mode) => {
-                    match layout_mode {
-                        codirigent_core::LayoutMode::Grid { rows, cols } => {
-                            let profile = match (rows, cols) {
-                                (2, 2) => crate::layout::LayoutProfile::Grid2x2,
-                                (4, 1) => crate::layout::LayoutProfile::Stack1x4,
-                                (2, 3) => crate::layout::LayoutProfile::Grid2x3,
-                                (3, 3) => crate::layout::LayoutProfile::Grid3x3,
-                                _ => crate::layout::LayoutProfile::Custom { rows, cols },
-                            };
-                            self.workspace.set_layout(profile);
-                        }
-                        codirigent_core::LayoutMode::Single => {
-                            self.workspace
-                                .set_layout(crate::layout::LayoutProfile::Single);
-                        }
-                        codirigent_core::LayoutMode::SplitTree { root } => {
-                            self.workspace.set_split_tree(root);
-                        }
-                        codirigent_core::LayoutMode::Custom { .. } => {
-                            // Custom positional layouts not used from tabs
-                        }
-                    }
-                    self.mark_layout_cache_dirty();
-                    self.sync_layout_derived_state();
-                }
-                crate::top_bar::TopBarEvent::RightPanelToggled => {
-                    // Will be wired in plan 05 (right task board)
-                }
-                crate::top_bar::TopBarEvent::CustomLayoutRequested => {
-                    if self.custom_picker.is_open {
-                        self.custom_picker.close();
-                    } else {
-                        let current_tree = if self.workspace.is_split_tree_mode() {
-                            self.workspace
-                                .layout_state()
-                                .as_split_tree()
-                                .map(|s| s.tree().clone())
-                        } else {
-                            None
-                        };
-                        let (rows, cols) = self.workspace.layout_profile().dimensions();
-                        self.custom_picker.open_with_state(current_tree, rows, cols);
-                    }
-                }
-                crate::top_bar::TopBarEvent::NewSessionRequested => {
-                    // Future: delegate to create_session logic
-                }
-                crate::top_bar::TopBarEvent::BroadcastToggled(_) => {
-                    // Broadcast feature removed
-                }
-            }
-        }
-    }
-
-    /// Select a session (updates drawer context and grid focus).
-    pub(super) fn select_session_with_cx(&mut self, session_id: SessionId, cx: &mut Context<Self>) {
-        self.selection.selected_session_id = Some(session_id);
-        self.drawer.set_selected_session(Some(session_id));
-        self.workspace.focus_session(session_id);
-        self.sync_layout_derived_state();
-        self.sync_file_tree_to_focused_session(cx);
-        // If the session showed ResponseReady, downgrade the cache to Idle
-        // immediately so the badge clears without waiting for the next poll.
-        if let Ok(mut readers) = self.cli_readers.lock() {
-            if let Some(cached) = readers.cached_status.get_mut(&session_id) {
-                if cached.status == codirigent_core::SessionStatus::ResponseReady {
-                    cached.status = codirigent_core::SessionStatus::Idle;
-                    cached.status_since = std::time::Instant::now();
-                }
-            }
-        }
-    }
-
-    /// Process icon rail events (drawer toggling, settings).
-    pub(super) fn process_icon_rail_events(&mut self) {
-        let events = self.icon_rail.drain_events();
-        for event in events {
-            match event {
-                crate::icon_rail::IconRailEvent::DrawerToggled(panel) => {
-                    self.drawer.set_active_panel(panel);
-                }
-                crate::icon_rail::IconRailEvent::SettingsRequested => {
-                    self.open_settings();
-                }
-            }
-        }
-    }
-
-    /// Handle empty session cell events.
-    fn handle_empty_session_event(&mut self, event: EmptySessionEvent, cx: &mut Context<Self>) {
-        match event {
-            EmptySessionEvent::CreateSessionClicked { position } => {
-                info!(?position, "Create session at position");
-                if self.should_create_session_at(position) {
-                    self.create_session(cx);
-                }
-            }
-        }
-        cx.notify();
     }
 
     /// Get a reference to the underlying workspace.
@@ -1361,75 +880,6 @@ impl WorkspaceView {
     /// Used by the render module for canvas-based rendering with content caching.
     pub(super) fn terminals_mut(&mut self) -> &mut HashMap<SessionId, TerminalView> {
         &mut self.terminals
-    }
-
-    /// Resize all terminals to fit their current grid cell bounds.
-    ///
-    /// This should be called when the window is resized or the layout changes,
-    /// to ensure terminals have the correct character dimensions for their pixel bounds.
-    /// Returns `true` if any terminal was actually resized.
-    fn resize_terminals_to_grid(&mut self) -> bool {
-        // Layout constants from types.rs: HEADER_HEIGHT, TERMINAL_CONTENT_PADDING, CELL_BORDER_WIDTH
-        let mut resized_any = false;
-
-        for &info in &self.cache.render_cell_info {
-            if let Some(terminal_view) = self.terminals.get_mut(&info.session_id) {
-                // Subtract all chrome between the grid cell bounds and the
-                // actual terminal canvas drawing area:
-                //   - border: .border_1() on session cell (1px each side)
-                //   - padding: canvas prepaint offsets by TERMINAL_CONTENT_PADDING
-                //   - header: 32px header bar above terminal content
-                let padding2 = TERMINAL_CONTENT_PADDING * 2.0;
-                let available_width =
-                    (info.bounds.size.width - CELL_BORDER_WIDTH - padding2).max(0.0);
-                let available_height =
-                    (info.bounds.size.height - CELL_BORDER_WIDTH - HEADER_HEIGHT - padding2)
-                        .max(0.0);
-
-                // Convert first so we can guard against transient layout collapses.
-                // During some intermediate layout passes, bounds briefly report near-zero
-                // sizes, which would otherwise force the PTY to 1 column/row and make
-                // output wrap vertically until the next resize event.
-                let (target_rows, target_cols) =
-                    terminal_view.dimensions_from_pixels(available_width, available_height);
-                let current_rows = terminal_view.rows();
-                let current_cols = terminal_view.cols();
-
-                if Self::should_skip_collapsed_resize(
-                    current_rows,
-                    current_cols,
-                    target_rows,
-                    target_cols,
-                ) {
-                    continue;
-                }
-
-                // Resize terminal emulator to fit the remaining space
-                let did_resize = terminal_view.resize_to_fit(available_width, available_height);
-
-                if did_resize {
-                    resized_any = true;
-
-                    // Propagate resize to actual PTY (ConPTY) so the shell
-                    // knows the correct terminal dimensions
-                    let rows = terminal_view.rows();
-                    let cols = terminal_view.cols();
-                    let last = self.cache.pty_sizes.get(&info.session_id);
-                    if last != Some(&(rows, cols)) {
-                        self.with_session_manager(|manager| {
-                            if let Err(e) = manager.resize(info.session_id, rows, cols) {
-                                warn!(
-                                    "Failed to resize PTY for session {}: {}",
-                                    info.session_id, e
-                                );
-                            }
-                        });
-                        self.cache.pty_sizes.insert(info.session_id, (rows, cols));
-                    }
-                }
-            }
-        }
-        resized_any
     }
 
     /// Handle keyboard input for the focused session.
@@ -2182,92 +1632,6 @@ impl Render for WorkspaceView {
     }
 }
 
-impl WorkspaceView {
-    /// Sync terminal cell dimensions with font metrics, then throttle-trigger PTY resize.
-    ///
-    /// Uses a cache keyed on font family + size so font queries only run when
-    /// terminal appearance settings change, not on every frame.
-    ///
-    /// Resize is debounced to ≤10/sec to prevent PTY feedback loops during
-    /// continuous window drag/resize.
-    fn sync_terminal_dimensions_and_resize(&mut self, window: &mut Window, cx: &mut Context<Self>) {
-        let font_family = &self.workspace.theme().terminal_font_family;
-        let font_size = self.workspace.theme().terminal_font_size;
-        let line_height = self.workspace.theme().terminal_line_height;
-        let (real_w, real_h) = match &self.cache.cached_cell_dims {
-            Some(cached)
-                if cached.font_family == *font_family
-                    && (cached.font_size - font_size).abs() < 0.01
-                    && (cached.line_height - line_height).abs() < 0.001 =>
-            {
-                (cached.cell_width, cached.cell_height)
-            }
-            _ => {
-                let (w, h) = crate::terminal_view::compute_cell_dimensions(
-                    window.text_system(),
-                    font_family,
-                    font_size,
-                    line_height,
-                );
-                self.cache.cached_cell_dims = Some(super::types::CachedCellDims {
-                    font_family: font_family.clone(),
-                    font_size,
-                    line_height,
-                    cell_width: w,
-                    cell_height: h,
-                });
-                (w, h)
-            }
-        };
-        for tv in self.terminals.values_mut() {
-            if !tv.dimensions_initialized() {
-                tv.set_cell_dimensions(real_w, real_h);
-            }
-        }
-
-        let Some(resize_signature) = self.current_resize_signature(real_w, real_h) else {
-            return;
-        };
-        if self.cache.last_resize_signature == Some(resize_signature) {
-            return;
-        }
-
-        let now = Instant::now();
-        if now.duration_since(self.polling.last_resize_time) > Duration::from_millis(100) {
-            self.resize_terminals_to_grid();
-            self.cache.last_resize_signature = Some(resize_signature);
-            self.cache.pending_resize_signature = None;
-            self.polling.last_resize_time = now;
-            self.polling.pending_resize = false;
-        } else {
-            self.cache.pending_resize_signature = Some(resize_signature);
-            if self.polling.pending_resize {
-                return;
-            }
-            self.polling.pending_resize = true;
-            cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
-                cx.background_executor()
-                    .timer(Duration::from_millis(100))
-                    .await;
-                let _ = this.update(cx, |this, cx| {
-                    let Some(signature) = this.cache.pending_resize_signature.take() else {
-                        this.polling.pending_resize = false;
-                        return;
-                    };
-                    let resized = this.resize_terminals_to_grid();
-                    this.cache.last_resize_signature = Some(signature);
-                    this.polling.last_resize_time = Instant::now();
-                    this.polling.pending_resize = false;
-                    if resized {
-                        cx.notify();
-                    }
-                });
-            })
-            .detach();
-        }
-    }
-}
-
 /// Create a complete workspace view with all components wired up.
 ///
 /// # Arguments
@@ -2292,209 +1656,4 @@ pub fn create_workspace_view<C: AppContext>(
 }
 
 #[cfg(test)]
-mod tests {
-    //! GPUI View Testing Strategy
-    //!
-    //! # Why Limited Tests
-    //!
-    //! `WorkspaceView` is a GPUI view component that requires the GPUI runtime
-    //! for rendering and interaction. Testing GPUI views requires:
-    //! - GPUI test harness (`gpui::TestAppContext`)
-    //! - Window creation for rendering tests
-    //! - Focus simulation for interaction tests
-    //!
-    //! # Test Coverage Strategy
-    //!
-    //! 1. **Core Business Logic** - Fully tested in `workspace/tests.rs` (29 tests)
-    //!    - Layout management, session handling, focus navigation
-    //!    - Bounds calculation, cell info generation
-    //!    - All non-GPUI logic has 100% test coverage
-    //!
-    //! 2. **GPUI Integration** - Deferred to integration tests
-    //!    - Rendering correctness requires visual inspection or snapshot tests
-    //!    - Action handlers require GPUI action dispatch simulation
-    //!
-    //! # Future: GPUI Test Infrastructure
-    //!
-    //! When GPUI test helpers are available, add tests for:
-    //! - [ ] WorkspaceView renders without panic
-    //! - [ ] Action handlers (NewSession, CloseSession, etc.) work correctly
-    //! - [ ] Focus delegation to child components
-    //! - [ ] Layout changes trigger re-render
-
-    use std::collections::HashMap;
-
-    #[test]
-    fn test_core_workspace_is_tested_separately() {
-        // Reminder: Core workspace logic has dedicated tests in workspace/tests.rs
-        // Run `cargo test workspace::tests` to see all 29 tests pass
-        use crate::workspace::Workspace;
-
-        // Quick sanity check that we can create a workspace
-        let ws = Workspace::new();
-        assert!(ws.sessions().is_empty());
-    }
-
-    #[test]
-    fn test_skip_collapsed_resize_when_current_is_usable() {
-        assert!(super::WorkspaceView::should_skip_collapsed_resize(
-            40, 120, 40, 1
-        ));
-        assert!(super::WorkspaceView::should_skip_collapsed_resize(
-            40, 120, 1, 120
-        ));
-        assert!(super::WorkspaceView::should_skip_collapsed_resize(
-            40, 120, 1, 1
-        ));
-    }
-
-    #[test]
-    fn test_do_not_skip_collapsed_resize_if_already_collapsed() {
-        assert!(!super::WorkspaceView::should_skip_collapsed_resize(
-            1, 1, 1, 1
-        ));
-        assert!(!super::WorkspaceView::should_skip_collapsed_resize(
-            1, 80, 1, 1
-        ));
-    }
-
-    #[test]
-    fn test_do_not_skip_non_collapsed_resize() {
-        assert!(!super::WorkspaceView::should_skip_collapsed_resize(
-            40, 120, 30, 100
-        ));
-    }
-
-    #[test]
-    fn test_render_focus_signature_tracks_focus_in_single_layout() {
-        assert_eq!(
-            super::WorkspaceView::render_focus_signature_for_layout(
-                crate::layout::LayoutProfile::Single,
-                Some(codirigent_core::SessionId(2)),
-            ),
-            Some(codirigent_core::SessionId(2))
-        );
-    }
-
-    #[test]
-    fn test_render_focus_signature_ignores_focus_outside_single_layout() {
-        assert_eq!(
-            super::WorkspaceView::render_focus_signature_for_layout(
-                crate::layout::LayoutProfile::Grid2x2,
-                Some(codirigent_core::SessionId(2)),
-            ),
-            None
-        );
-    }
-
-    #[test]
-    fn test_normalize_codex_execution_mode_detects_bypass_alias() {
-        assert_eq!(
-            super::WorkspaceView::normalize_codex_execution_mode("codex --yolo"),
-            Some(codirigent_core::CodexExecutionMode::Bypass)
-        );
-    }
-
-    #[test]
-    fn test_normalize_codex_execution_mode_detects_full_auto() {
-        assert_eq!(
-            super::WorkspaceView::normalize_codex_execution_mode("codex resume abc --full-auto"),
-            Some(codirigent_core::CodexExecutionMode::FullAuto)
-        );
-    }
-
-    #[test]
-    fn test_normalize_codex_execution_mode_detects_explicit_never_and_danger() {
-        assert_eq!(
-            super::WorkspaceView::normalize_codex_execution_mode(
-                "codex -a never -s danger-full-access"
-            ),
-            Some(codirigent_core::CodexExecutionMode::Bypass)
-        );
-    }
-
-    #[test]
-    fn test_session_project_name_prefers_git_repo_root_name() {
-        let mut session = codirigent_core::Session::new(
-            codirigent_core::SessionId(1),
-            "Session 1".to_string(),
-            std::path::PathBuf::from("/workspace/subdir"),
-        );
-        session.git_info = Some(codirigent_core::GitRepoInfo {
-            repo_root: std::path::PathBuf::from("/workspace/project-root"),
-            branch: "main".to_string(),
-            dirty_count: 0,
-            has_staged: false,
-            head_sha: None,
-            unstaged_files: Vec::new(),
-            staged_files: Vec::new(),
-        });
-
-        assert_eq!(
-            super::session_project_name(&session),
-            Some("project-root".to_string())
-        );
-    }
-
-    #[test]
-    fn test_session_project_name_falls_back_to_working_directory_name() {
-        let session = codirigent_core::Session::new(
-            codirigent_core::SessionId(1),
-            "Session 1".to_string(),
-            std::path::PathBuf::from("/workspace/focused-pane"),
-        );
-
-        assert_eq!(
-            super::session_project_name(&session),
-            Some("focused-pane".to_string())
-        );
-    }
-
-    #[test]
-    fn test_resolved_task_title_prefers_cached_title_and_falls_back_to_id() {
-        let task_id = codirigent_core::TaskId::from("task-123");
-        let mut titles = HashMap::new();
-        titles.insert(task_id.clone(), "Review parser".to_string());
-
-        assert_eq!(
-            super::resolved_task_title(&task_id, Some(&titles)),
-            "Review parser".to_string()
-        );
-        assert_eq!(
-            super::resolved_task_title(&codirigent_core::TaskId::from("task-456"), Some(&titles)),
-            "task-456".to_string()
-        );
-        assert_eq!(
-            super::resolved_task_title(&task_id, None),
-            "task-123".to_string()
-        );
-    }
-
-    #[test]
-    fn test_keystroke_is_text_input_for_plain_printable_without_key_char() {
-        let event = gpui::KeyDownEvent {
-            keystroke: gpui::Keystroke {
-                modifiers: gpui::Modifiers::default(),
-                key: "a".to_string(),
-                key_char: None,
-            },
-            is_held: false,
-        };
-
-        assert!(super::WorkspaceView::keystroke_is_text_input(&event));
-    }
-
-    #[test]
-    fn test_keystroke_is_not_text_input_for_named_terminal_key() {
-        let event = gpui::KeyDownEvent {
-            keystroke: gpui::Keystroke {
-                modifiers: gpui::Modifiers::default(),
-                key: "enter".to_string(),
-                key_char: None,
-            },
-            is_held: false,
-        };
-
-        assert!(!super::WorkspaceView::keystroke_is_text_input(&event));
-    }
-}
+mod tests;
