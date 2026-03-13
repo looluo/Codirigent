@@ -105,6 +105,9 @@ mod modal_render;
 mod grid_render;
 
 #[cfg(feature = "gpui-full")]
+mod split_render;
+
+#[cfg(feature = "gpui-full")]
 mod settings_panels;
 
 #[cfg(feature = "gpui-full")]

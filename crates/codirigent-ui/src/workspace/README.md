@@ -23,11 +23,17 @@ The workspace rendering is organized into specialized modules:
   - Module coordination
 
 ### Component Renderers
-- **`grid_render.rs`** (729 lines) - Grid and split layouts
+- **`grid_render.rs`** - Grid layout dispatcher and shared session cells
   - Traditional NxM grid layout
-  - Split tree (binary tree) layout
+  - Dispatch to split-tree rendering
   - Session cells with terminals
-  - Empty cell placeholders
+  - Empty grid cell placeholders
+
+- **`split_render.rs`** - Split-tree layout rendering
+  - Split tree (binary tree) layout
+  - Recursive split-node rendering
+  - Divider rendering and drag setup
+  - Empty split-slot placeholders
 
 - **`task_board_render.rs`** (1,334 lines) - Task management UI
   - Right sidebar task board
@@ -89,7 +95,7 @@ The workspace supports three layout modes:
 2. **Split Tree Layout**
    - Binary tree of horizontal/vertical splits
    - Recursive pane subdivision
-   - Rendered by `grid_render.rs`
+   - Rendered by `split_render.rs`
 
 3. **Single Layout**
    - Focused single session view
@@ -178,7 +184,8 @@ workspace/
 │   ├── Uses: grid_render, icon_rail_render, task_board_render
 │   ├── Uses: top_bar_render, modal_render
 │   └── Uses: icon_utils
-├── grid_render.rs       # Grid/split layouts
+├── grid_render.rs       # Grid layout + shared session cells
+├── split_render.rs      # Split-tree layout rendering
 │   └── Uses: icon_utils
 ├── task_board_render.rs # Task board UI
 │   └── Uses: icon_utils
