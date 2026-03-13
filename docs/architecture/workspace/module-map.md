@@ -21,6 +21,7 @@ Canonical workspace model:
 
 - session placement and removal
 - grid/split-tree layout state
+- pane tab groups and pane stacks
 - focus movement
 - cell bounds and visible session calculation
 
@@ -34,6 +35,7 @@ Primary UI root:
 - owns constructor wiring and grouped UI state
 - keeps GPUI trait impls easy to find
 - coordinates render-time orchestration
+- wires root pointer events into gesture reducers
 
 Helper clusters that extend the root now live under `workspace/gpui/`.
 
@@ -67,6 +69,7 @@ Mutation-driven UI reducers:
 
 - task board snapshot/count refresh
 - terminal header synchronization
+- shell badge and warning synchronization
 - empty-cell synchronization
 - explicit derived-state refresh entry points
 
@@ -197,9 +200,6 @@ These mostly build UI elements rather than owning long-lived behavior:
   - split-vs-grid render dispatch
   - shared session-cell rendering
 
-- `drawer_render.rs`
-  - drawer panels and left-side content
-
 - `split_render.rs`
   - split-tree recursion
   - divider rendering and drag hit areas
@@ -209,6 +209,9 @@ These mostly build UI elements rather than owning long-lived behavior:
   - pane-header tabs
   - header badges and title rows
   - pane-local `+` session creation affordance
+
+- `drawer_render.rs`
+  - drawer panels and left-side content
 
 - `task_board_render.rs`
   - task board UI and task cards
@@ -230,7 +233,7 @@ These mostly build UI elements rather than owning long-lived behavior:
 - `impl_pointer_interactions.rs`
   - split-resize drag reducers
   - session-drag move/finalize reducers
-  - workspace-global gesture completion/cancellation
+  - workspace-global gesture completion and cancellation
 
 ### State containers
 

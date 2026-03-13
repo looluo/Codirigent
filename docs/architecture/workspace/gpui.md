@@ -86,6 +86,7 @@ Converts canonical session/task state into cached UI state:
 
 - task board counts and snapshots
 - terminal header state
+- shell badge and restore-warning synchronization
 - empty-grid-cell state
 
 Key rule:
@@ -192,10 +193,11 @@ Important design choice:
 
 ## Mutation Path Rules
 
-When a workspace mutation changes visible state, the usual follow-up pattern is:
+When a workspace mutation changes visible state, the usual follow-up pattern
+is:
 
 1. mutate canonical workspace state
-2. call `mark_layout_cache_dirty()` if structure/bounds changed
+2. call `mark_layout_cache_dirty()` if structure or bounds changed
 3. call `sync_layout_derived_state()` or `sync_task_derived_state()`
 4. run any file-tree or session-selection follow-up
 5. `cx.notify()` if the UI should repaint
@@ -211,7 +213,7 @@ Examples that follow this pattern:
 
 If you need to change:
 
-- terminal header fields:
+- terminal header fields or shell labels:
   - `gpui/derived_state.rs`
 
 - task board counters or task snapshot contents:

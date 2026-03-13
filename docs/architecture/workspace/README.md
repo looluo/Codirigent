@@ -13,10 +13,10 @@ structure. The goal is to let a future developer or coding agent answer
 
 - [GPUI And Rendering](gpui.md)
   - `WorkspaceView`, render orchestration, pointer interactions, UI event
-    translation, layout sync.
+    translation, and layout sync.
 
 - [Output Polling And Status](output-polling.md)
-  - PTY output flow, status reconciliation, JSONL polling, hook signals.
+  - PTY output flow, status reconciliation, JSONL polling, and hook signals.
 
 ## Workspace In One Screen
 
@@ -42,10 +42,11 @@ Everything else in `workspace/` either:
 - renders a specific UI region
 - stores grouped sub-state used by the roots above
 
-The key render and interaction helpers added by the recent refactors are:
+Recent structural extractions to know first:
 
 - `grid_render.rs`
-  - Grid-layout composition and shared session-cell rendering.
+  - Grid-layout composition, split/grid dispatch, and shared session-cell
+    rendering.
 
 - `split_render.rs`
   - Recursive split-tree rendering, divider setup, and empty split slots.
@@ -60,7 +61,7 @@ The key render and interaction helpers added by the recent refactors are:
 
 If you need to change:
 
-- layout switching, focus movement, terminal resize:
+- layout switching, focus movement, or terminal resize:
   - [gpui.md](gpui.md)
   - `gpui/layout_sync.rs`
 
@@ -69,7 +70,7 @@ If you need to change:
   - `split_render.rs`
   - `impl_pointer_interactions.rs`
 
-- pane tabs, header badges, pane `+` behavior:
+- pane tabs, header badges, or pane `+` behavior:
   - [gpui.md](gpui.md)
   - `pane_header_render.rs`
 
@@ -77,19 +78,20 @@ If you need to change:
   - [gpui.md](gpui.md)
   - `grid_render.rs`
 
-- task board counts, header badges, empty cell sync:
+- task board counts, header badges, or empty-cell sync:
   - [gpui.md](gpui.md)
   - `gpui/derived_state.rs`
 
-- top bar, icon rail, empty-cell event translation:
+- top bar, icon rail, or empty-cell event translation:
   - [gpui.md](gpui.md)
   - `gpui/ui_events.rs`
 
-- PTY output draining, terminal runtime application, output scheduling:
+- PTY output draining, terminal runtime application, or output scheduling:
   - [output-polling.md](output-polling.md)
   - `impl_output_polling/output_runtime.rs`
 
-- session status decisions, stale cache clearing, auto-assign/compaction follow-up:
+- session status decisions, stale cache clearing, or auto-assign/compaction
+  follow-up:
   - [output-polling.md](output-polling.md)
   - `impl_output_polling/status_reconcile.rs`
 

@@ -69,6 +69,10 @@ Codirigent is an AI Coding Agent Orchestration IDE that manages multiple AI codi
 - `TaskBoardPanel` - Task visualization
 - `SettingsPage` - Configuration UI
 
+See also:
+- `docs/architecture/workspace/`
+  - module map and focused guides for the split workspace layer
+
 ### codirigent-filetree
 **Purpose:** File tree data structure for navigation
 
@@ -154,7 +158,10 @@ All data stored in `.codirigent/` directory:
 ## Next Steps
 
 - Read [Data Flow](data-flow.md) for detailed flow diagrams
-- Read [Workspace Architecture](workspace/README.md) for the current
-  `codirigent-ui::workspace` module map and UI/render ownership boundaries
+- Read [Workspace Architecture](workspace/README.md) for the `codirigent-ui`
+  workspace layout, render roots, pointer interactions, and polling/status
+  boundaries
 - Read [Crate Dependencies](crate-dependencies.md) for dependency graph
 - Read [Event Bus](event-bus.md) for event system details
+- Read [../hook-and-status-system.md](../hook-and-status-system.md) for the
+  hook-signal and session-status pipeline
