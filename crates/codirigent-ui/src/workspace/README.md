@@ -42,6 +42,11 @@ The workspace rendering is organized into specialized modules:
   - Active-tab drag affordance
   - Pane-local `+` session creation
 
+- **`impl_pointer_interactions.rs`** - Workspace pointer gesture reducers
+  - Session drag move/update/finish
+  - Split divider resize move/update/finish
+  - Gesture completion and cancellation handling
+
 - **`task_board_render.rs`** (1,334 lines) - Task management UI
   - Right sidebar task board
   - Task creation and editing modals
@@ -150,6 +155,7 @@ The workspace processes events through dedicated handlers:
 - **Icon Rail Events** - Navigation, drawer toggle
 - **Keyboard Shortcuts** - Session switching, layout changes
 - **Terminal Events** - Mouse/keyboard input, scrolling
+- **Pointer Interactions** - Workspace-global pane drag and split resize coordination
 
 ## Testing
 
@@ -187,11 +193,14 @@ This keeps methods accessible via `self` without changing the public API.
 workspace/
 ├── core.rs              # Core logic (no GPUI dependencies)
 ├── gpui.rs              # GPUI view (depends on core)
+│   ├── Wires: impl_pointer_interactions
+│   └── Wires: render modules + lifecycle helpers
 ├── render.rs            # Main coordinator
 │   ├── Uses: grid_render, icon_rail_render, task_board_render
 │   ├── Uses: top_bar_render, modal_render
 │   └── Uses: icon_utils
 ├── grid_render.rs       # Grid layout + shared session cells
+├── impl_pointer_interactions.rs # Mouse drag/resize reducers
 ├── pane_header_render.rs # Pane header + tab-strip rendering
 ├── split_render.rs      # Split-tree layout rendering
 │   └── Uses: icon_utils

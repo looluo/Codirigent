@@ -737,40 +737,6 @@ impl WorkspaceView {
         self.cache.pending_resize_signature = None;
     }
 
-    pub(super) fn update_split_resize(&mut self, position: crate::layout::Point) -> bool {
-        let Some(resize) = self.selection.split_resize.as_ref().copied() else {
-            return false;
-        };
-
-        let total = match resize.direction {
-            codirigent_core::SplitDirection::Horizontal => resize.bounds.size.width - resize.gap,
-            codirigent_core::SplitDirection::Vertical => resize.bounds.size.height - resize.gap,
-        };
-        if total <= 0.0 {
-            return false;
-        }
-
-        let offset = match resize.direction {
-            codirigent_core::SplitDirection::Horizontal => {
-                position.x - resize.bounds.origin.x - resize.grab_offset
-            }
-            codirigent_core::SplitDirection::Vertical => {
-                position.y - resize.bounds.origin.y - resize.grab_offset
-            }
-        };
-        let ratio = offset / total;
-        let changed =
-            self.workspace
-                .resize_split_divider(resize.first_slot, resize.second_slot, ratio);
-        if changed {
-            if let Some(active_resize) = self.selection.split_resize.as_mut() {
-                active_resize.changed = true;
-            }
-            self.mark_layout_cache_dirty();
-        }
-        changed
-    }
-
     fn current_resize_signature(
         &self,
         cell_width: f32,
@@ -2215,70 +2181,13 @@ impl Render for WorkspaceView {
                 this.handle_key_down(event, window, cx);
             }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
-                let pos =
-                    crate::layout::Point::new(event.position.x.into(), event.position.y.into());
-                if this.selection.split_resize.is_some() {
-                    if !event.dragging() {
-                        if let Some(resize) = this.selection.split_resize.take() {
-                            if resize.changed {
-                                this.save_state_to_disk(cx);
-                            }
-                        }
-                        cx.notify();
-                        return;
-                    }
-                    if this.update_split_resize(pos) {
-                        cx.notify();
-                    }
-                    return;
-                }
-                let Some(drag) = &mut this.selection.drag else {
-                    return;
-                };
-
-                drag.update_pointer(pos, &this.cache.render_cell_info);
-                cx.notify();
+                this.handle_workspace_mouse_move(event, cx);
             }))
             // Global mouse-up: catch drag releases anywhere in workspace
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
-                    if let Some(resize) = this.selection.split_resize.take() {
-                        if resize.changed {
-                            this.save_state_to_disk(cx);
-                        }
-                        cx.notify();
-                        return;
-                    }
-                    if let Some(drag) = this.selection.drag.take() {
-                        if drag.active {
-                            if let Some(target) = drag.target {
-                                let changed = match target.kind {
-                                    super::types::DragTargetKind::PaneBody => this
-                                        .workspace
-                                        .swap_sessions(drag.source_index, target.index),
-                                    super::types::DragTargetKind::PaneHeader => this
-                                        .cache
-                                        .render_cell_info
-                                        .iter()
-                                        .find(|info| info.index == target.index)
-                                        .cloned()
-                                        .is_some_and(|info| {
-                                            this.workspace.group_session_into_pane(
-                                                drag.source_session_id,
-                                                info.pane_id,
-                                            )
-                                        }),
-                                };
-                                if changed {
-                                    this.mark_layout_cache_dirty();
-                                    this.sync_layout_derived_state();
-                                    this.save_state_to_disk(cx);
-                                }
-                            }
-                        }
-                        cx.notify();
-                    }
+                cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                    this.handle_workspace_mouse_up_left(event, cx);
                 }),
             )
             .bg(bg)

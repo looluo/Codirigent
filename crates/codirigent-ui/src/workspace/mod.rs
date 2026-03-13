@@ -78,6 +78,9 @@ mod impl_settings;
 mod impl_ui_operations;
 
 #[cfg(feature = "gpui-full")]
+mod impl_pointer_interactions;
+
+#[cfg(feature = "gpui-full")]
 pub(crate) mod render;
 
 #[cfg(feature = "gpui-full")]
