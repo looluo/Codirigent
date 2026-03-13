@@ -711,8 +711,12 @@ fn test_workspace_resize_split_divider_updates_nested_layout_ratio() {
     ws.set_split_tree(tree);
 
     assert!(ws.resize_split_divider(SlotId(0), SlotId(2), 0.75));
+    let split_tree = match ws.layout_state().as_split_tree() {
+        Some(split) => split,
+        None => panic!("expected split-tree layout"),
+    };
     assert_eq!(
-        ws.layout_state().as_split_tree().unwrap().tree(),
+        split_tree.tree(),
         &LayoutNode::Split {
             direction: SplitDirection::Horizontal,
             ratio: 0.75,
@@ -938,7 +942,10 @@ fn test_workspace_swap_sessions_split_tree_with_empty_slot() {
     // Swap S1 from slot 0 to empty slot 2
     assert!(ws.swap_sessions(0, 2));
 
-    let split = ws.layout_state().as_split_tree().unwrap();
+    let split = match ws.layout_state().as_split_tree() {
+        Some(split) => split,
+        None => panic!("expected split-tree layout"),
+    };
     assert_eq!(split.assignments()[0].1, None);
     assert_eq!(split.assignments()[2].1, Some(SessionId(1)));
 }
