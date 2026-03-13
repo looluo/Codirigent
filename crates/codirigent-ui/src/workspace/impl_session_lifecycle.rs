@@ -8,7 +8,7 @@
 
 use super::cli_helpers::is_safe_cli_session_id;
 use super::gpui::WorkspaceView;
-use super::types::SESSION_NAME_PREFIX;
+use super::types::{RestoreShellFallback, SESSION_NAME_PREFIX, SESSION_SHELL_AUTO_LABEL};
 use crate::terminal::Terminal;
 use crate::terminal_header::TerminalHeader;
 use crate::terminal_view::TerminalView;
@@ -33,6 +33,7 @@ struct RestoreSessionPlan {
     original_session_id: SessionId,
     session_name: String,
     working_dir: PathBuf,
+    shell: Option<String>,
     group: Option<String>,
     color: Option<String>,
     claude_resume: Option<String>,
@@ -53,7 +54,9 @@ struct RestorePlan {
 struct SessionBootstrapRequest {
     session_name: String,
     working_dir: PathBuf,
-    shell: Option<String>,
+    requested_shell: Option<String>,
+    launch_shell: Option<String>,
+    shell_warning: Option<String>,
 }
 
 #[derive(Debug)]
@@ -166,18 +169,19 @@ fn bootstrap_session(
         .create_session(
             request.session_name.clone(),
             request.working_dir.clone(),
-            request.shell.clone(),
+            request.launch_shell.clone(),
         )
         .map_err(|error| error.to_string())?;
 
     let child_pid = manager.get_child_pid(session_id);
-    let session = manager.get_session(session_id).unwrap_or_else(|| {
+    let mut session = manager.get_session(session_id).unwrap_or_else(|| {
         Session::new(
             session_id,
             request.session_name.clone(),
             request.working_dir.clone(),
         )
     });
+    session.shell = request.requested_shell.clone();
 
     Ok(SessionBootstrapResult {
         request,
@@ -185,6 +189,37 @@ fn bootstrap_session(
         session,
         child_pid,
     })
+}
+
+fn resolve_restore_shell_choice(
+    requested_shell: Option<&str>,
+    available_shells: &[String],
+    configured_shell: Option<&str>,
+) -> (Option<String>, Option<String>) {
+    let requested_shell = requested_shell
+        .map(str::trim)
+        .filter(|shell| !shell.is_empty())
+        .map(str::to_string);
+    let configured_shell = configured_shell
+        .map(str::trim)
+        .filter(|shell| !shell.is_empty())
+        .map(str::to_string);
+
+    match requested_shell {
+        Some(shell) if available_shells.iter().any(|candidate| candidate == &shell) => {
+            (Some(shell), None)
+        }
+        Some(shell) => (configured_shell, Some(shell)),
+        None => (configured_shell, None),
+    }
+}
+
+fn restore_shell_fallback_message(fallback: &RestoreShellFallback) -> String {
+    format!(
+        "Requested shell '{}' was unavailable, so this session was opened with {}.",
+        fallback.requested_shell,
+        WorkspaceView::shell_display_label(fallback.effective_shell.as_deref())
+    )
 }
 
 fn layout_profile_for_restore(layout: &LayoutMode) -> Option<crate::layout::LayoutProfile> {
@@ -605,6 +640,7 @@ mod tests {
             original_session_id: SessionId(1),
             session_name: "Session 1".to_string(),
             working_dir: sample_working_dir(),
+            shell: None,
             group: None,
             color: None,
             claude_resume: Some("claude --resume abc\r".to_string()),
@@ -631,7 +667,9 @@ mod tests {
         let request = SessionBootstrapRequest {
             session_name: "Session 1".to_string(),
             working_dir: temp.path().to_path_buf(),
-            shell: None,
+            requested_shell: None,
+            launch_shell: None,
+            shell_warning: None,
         };
 
         let result = bootstrap_session(session_manager.clone(), request).unwrap();
@@ -651,13 +689,43 @@ mod tests {
     }
 
     #[test]
+    fn bootstrap_session_preserves_requested_shell() {
+        let session_manager = create_test_session_manager();
+        let temp = TempDir::new().unwrap();
+        let shell = codirigent_session::detect_available_shells()
+            .into_iter()
+            .find(|shell| !shell.is_empty())
+            .expect("at least one shell should be detected in test environments");
+        let request = SessionBootstrapRequest {
+            session_name: "Session 1".to_string(),
+            working_dir: temp.path().to_path_buf(),
+            requested_shell: Some(shell.clone()),
+            launch_shell: Some(shell.clone()),
+            shell_warning: None,
+        };
+
+        let result = bootstrap_session(session_manager.clone(), request).unwrap();
+
+        assert_eq!(result.session.shell, Some(shell.clone()));
+        let manager = session_manager.lock().unwrap_or_else(|p| p.into_inner());
+        assert_eq!(
+            manager
+                .get_session(result.session_id)
+                .and_then(|session| session.shell),
+            Some(shell)
+        );
+    }
+
+    #[test]
     fn bootstrap_session_invalid_working_directory_returns_error_without_creating_session() {
         let session_manager = create_test_session_manager();
         let temp = TempDir::new().unwrap();
         let request = SessionBootstrapRequest {
             session_name: "Session 1".to_string(),
             working_dir: temp.path().join("missing-session-bootstrap"),
-            shell: None,
+            requested_shell: None,
+            launch_shell: None,
+            shell_warning: None,
         };
 
         let result = bootstrap_session(session_manager.clone(), request);
@@ -725,12 +793,10 @@ mod tests {
     #[test]
     fn build_restore_plan_preserves_saved_custom_grid_layout() {
         let fallback_dir = sample_working_dir();
+        let mut session = Session::new(SessionId(1), "Session 1".to_string(), fallback_dir.clone());
+        session.shell = Some("bash".to_string());
         let state = AppState {
-            sessions: vec![Session::new(
-                SessionId(1),
-                "Session 1".to_string(),
-                fallback_dir.clone(),
-            )],
+            sessions: vec![session],
             layout: LayoutMode::Grid { rows: 1, cols: 4 },
             pane_tab_groups: Vec::new(),
             pane_stacks: Vec::new(),
@@ -740,6 +806,7 @@ mod tests {
 
         let plan = WorkspaceView::build_restore_plan(state, fallback_dir).unwrap();
         assert_eq!(plan.layout, LayoutMode::Grid { rows: 1, cols: 4 });
+        assert_eq!(plan.sessions[0].shell, Some("bash".to_string()));
     }
 
     #[test]
@@ -801,9 +868,175 @@ mod tests {
             Some(crate::layout::LayoutProfile::Custom { rows: 2, cols: 3 })
         );
     }
+
+    #[test]
+    fn resolve_restore_shell_choice_uses_requested_shell_when_available() {
+        let available_shells = vec!["".to_string(), "bash".to_string(), "zsh".to_string()];
+        assert_eq!(
+            resolve_restore_shell_choice(Some("zsh"), &available_shells, Some("bash")),
+            (Some("zsh".to_string()), None)
+        );
+    }
+
+    #[test]
+    fn resolve_restore_shell_choice_falls_back_to_auto_when_requested_shell_missing() {
+        let available_shells = vec!["".to_string(), "bash".to_string(), "zsh".to_string()];
+        assert_eq!(
+            resolve_restore_shell_choice(Some("pwsh"), &available_shells, Some("bash")),
+            (Some("bash".to_string()), Some("pwsh".to_string()))
+        );
+    }
+
+    #[test]
+    fn resolve_restore_shell_choice_preserves_auto_behavior_for_configured_default_shell() {
+        let available_shells = vec!["".to_string(), "bash".to_string()];
+        assert_eq!(
+            resolve_restore_shell_choice(Some("pwsh"), &available_shells, Some("missing")),
+            (Some("missing".to_string()), Some("pwsh".to_string()))
+        );
+        assert_eq!(
+            resolve_restore_shell_choice(None, &available_shells, Some("missing")),
+            (Some("missing".to_string()), None)
+        );
+    }
+
+    #[test]
+    fn restore_shell_fallback_message_uses_effective_shell_label() {
+        let fallback = RestoreShellFallback {
+            requested_shell: "pwsh".to_string(),
+            effective_shell: Some("bash".to_string()),
+        };
+
+        assert_eq!(
+            restore_shell_fallback_message(&fallback),
+            "Requested shell 'pwsh' was unavailable, so this session was opened with bash."
+        );
+    }
+
+    #[test]
+    fn restore_shell_fallback_message_uses_auto_label_without_effective_shell() {
+        let fallback = RestoreShellFallback {
+            requested_shell: "pwsh".to_string(),
+            effective_shell: None,
+        };
+
+        assert_eq!(
+            restore_shell_fallback_message(&fallback),
+            "Requested shell 'pwsh' was unavailable, so this session was opened with Auto."
+        );
+    }
 }
 
 impl WorkspaceView {
+    pub(super) fn detected_shell_options(&self) -> Vec<String> {
+        let mut shells = self
+            .cache
+            .detected_shells
+            .clone()
+            .unwrap_or_else(codirigent_session::detect_available_shells);
+        shells.retain(|shell| !shell.trim().is_empty());
+        shells.sort();
+        shells.dedup();
+        shells.insert(0, String::new());
+        shells
+    }
+
+    fn configured_shell(&self) -> Option<String> {
+        let shell = self
+            .effective_user_settings()
+            .general
+            .default_shell
+            .trim()
+            .to_string();
+        (!shell.is_empty()).then_some(shell)
+    }
+
+    fn auto_launch_shell(&self) -> Option<String> {
+        self.configured_shell()
+    }
+
+    fn launch_shell_for_requested_shell(&self, requested_shell: Option<&str>) -> Option<String> {
+        requested_shell
+            .filter(|shell| !shell.is_empty())
+            .map(str::to_string)
+            .or_else(|| self.auto_launch_shell())
+    }
+
+    fn restore_launch_shell(
+        &self,
+        requested_shell: Option<&str>,
+    ) -> (Option<String>, Option<String>) {
+        resolve_restore_shell_choice(
+            requested_shell,
+            &self.detected_shell_options(),
+            self.configured_shell().as_deref(),
+        )
+    }
+
+    pub(super) fn shell_display_label(shell: Option<&str>) -> String {
+        shell
+            .filter(|value| !value.is_empty())
+            .unwrap_or(SESSION_SHELL_AUTO_LABEL)
+            .to_string()
+    }
+
+    pub(super) fn session_shell_warning_message(&self, session_id: SessionId) -> Option<String> {
+        self.cache
+            .restore_shell_fallbacks
+            .get(&session_id)
+            .map(restore_shell_fallback_message)
+    }
+
+    pub(super) fn session_shell_display(
+        &self,
+        session_id: SessionId,
+        requested_shell: Option<&str>,
+    ) -> (String, Option<String>) {
+        if let Some(fallback) = self.cache.restore_shell_fallbacks.get(&session_id) {
+            (
+                Self::shell_display_label(fallback.effective_shell.as_deref()),
+                Some(restore_shell_fallback_message(fallback)),
+            )
+        } else {
+            (
+                Self::shell_display_label(requested_shell),
+                self.session_shell_warning_message(session_id),
+            )
+        }
+    }
+
+    fn sync_manager_session_shell(
+        &mut self,
+        session_id: SessionId,
+        requested_shell: Option<String>,
+    ) {
+        if let Ok(manager) = self.session_manager.lock() {
+            let requested_shell = requested_shell.clone();
+            manager.with_session_state_mut(session_id, move |state| {
+                state.session.shell = requested_shell.clone();
+            });
+        }
+    }
+
+    fn record_restored_shell_warning(
+        &mut self,
+        session_id: SessionId,
+        shell_warning: Option<String>,
+        effective_shell: Option<String>,
+    ) {
+        if let Some(requested_shell) = shell_warning {
+            self.cache.restore_shell_fallbacks.insert(
+                session_id,
+                RestoreShellFallback {
+                    requested_shell,
+                    effective_shell,
+                },
+            );
+        } else {
+            self.cache.restore_shell_fallbacks.remove(&session_id);
+        }
+    }
+
     fn release_session_create_reservation(
         &mut self,
         reserved_number: u64,
@@ -837,6 +1070,9 @@ impl WorkspaceView {
             .and_then(|name| name.to_str())
             .unwrap_or("unknown");
         header = header.with_project_name(dir_name);
+        let (shell_label, shell_warning) =
+            self.session_shell_display(session.id, session.shell.as_deref());
+        header = header.with_shell(shell_label, shell_warning);
 
         if let Some(group) = group {
             header.group_name = Some(group.clone());
@@ -861,6 +1097,7 @@ impl WorkspaceView {
         self.terminals.remove(&session_id);
         self.pty_write_receivers.remove(&session_id);
         self.terminal_headers.remove(&session_id);
+        self.cache.restore_shell_fallbacks.remove(&session_id);
         self.output_dispatcher.remove_session(session_id);
         self.polling.output_prepare_in_flight.remove(&session_id);
         self.with_detector(|detector| detector.stop_monitoring(session_id));
@@ -947,9 +1184,21 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) {
         self.start_bootstrapped_session_monitoring(bootstrapped.session_id, bootstrapped.child_pid);
+        self.sync_manager_session_shell(
+            bootstrapped.session_id,
+            bootstrapped.request.requested_shell.clone(),
+        );
+        self.record_restored_shell_warning(
+            bootstrapped.session_id,
+            bootstrapped.request.shell_warning.clone(),
+            bootstrapped.request.launch_shell.clone(),
+        );
+
+        let mut session = bootstrapped.session.clone();
+        session.shell = bootstrapped.request.requested_shell.clone();
 
         if !self.attach_bootstrapped_session(
-            bootstrapped.session.clone(),
+            session,
             &bootstrapped.request.session_name,
             target_pane.clone(),
             None,
@@ -984,6 +1233,15 @@ impl WorkspaceView {
         plan: RestoreSessionPlan,
     ) {
         self.start_bootstrapped_session_monitoring(bootstrapped.session_id, bootstrapped.child_pid);
+        self.sync_manager_session_shell(
+            bootstrapped.session_id,
+            bootstrapped.request.requested_shell.clone(),
+        );
+        self.record_restored_shell_warning(
+            bootstrapped.session_id,
+            bootstrapped.request.shell_warning.clone(),
+            bootstrapped.request.launch_shell.clone(),
+        );
 
         if plan.codex_execution_mode.is_some() || plan.codex_started_at.is_some() {
             let codex_execution_mode = plan.codex_execution_mode;
@@ -997,6 +1255,7 @@ impl WorkspaceView {
         }
 
         let mut session = bootstrapped.session;
+        session.shell = bootstrapped.request.requested_shell.clone();
         session.group = plan.group.clone();
         session.color = plan.color.clone();
         session.codex_execution_mode = plan.codex_execution_mode;
@@ -1056,6 +1315,7 @@ impl WorkspaceView {
                 this.release_session_create_reservation(reserved_number, target_pane.clone());
                 match result {
                     Ok(bootstrapped) => {
+                        this.close_session_creation_modal();
                         this.finalize_created_session_bootstrap(
                             bootstrapped,
                             target_pane.clone(),
@@ -1063,11 +1323,16 @@ impl WorkspaceView {
                         );
                     }
                     Err(error) => {
+                        if let Some(modal) = this.modals.session_creation.as_mut() {
+                            modal.pending = false;
+                            modal.error = Some(format!("Failed to create session: {}", error));
+                        }
                         warn!(
                             name = %session_name,
                             %error,
                             "Failed to create session via background bootstrap"
                         );
+                        cx.notify();
                     }
                 }
             });
@@ -1173,6 +1438,7 @@ impl WorkspaceView {
                 original_session_id: saved.id,
                 session_name,
                 working_dir,
+                shell: saved.shell,
                 group: saved.group,
                 color: saved.color,
                 claude_resume,
@@ -1190,12 +1456,7 @@ impl WorkspaceView {
         })
     }
 
-    fn apply_restore_plan(
-        &mut self,
-        plan: RestorePlan,
-        shell: Option<String>,
-        cx: &mut Context<Self>,
-    ) {
+    fn apply_restore_plan(&mut self, plan: RestorePlan, cx: &mut Context<Self>) {
         if plan.sessions.is_empty() {
             self.polling.restore_in_flight = false;
             return;
@@ -1208,17 +1469,41 @@ impl WorkspaceView {
         let desired_pane_stacks = plan.pane_stacks.clone();
         let staging_layout = staging_layout_for_restore(&desired_layout, session_count);
         let reapply_saved_layout = staging_layout != desired_layout;
+        let restore_batches = {
+            let mut remaining = plan.sessions.into_iter();
+            let mut batches = Vec::new();
+            loop {
+                let batch = remaining
+                    .by_ref()
+                    .take(2)
+                    .map(|plan| {
+                        let (launch_shell, shell_warning) =
+                            self.restore_launch_shell(plan.shell.as_deref());
+                        let request = SessionBootstrapRequest {
+                            session_name: plan.session_name.clone(),
+                            working_dir: plan.working_dir.clone(),
+                            requested_shell: plan.shell.clone(),
+                            launch_shell,
+                            shell_warning,
+                        };
+                        (plan, request)
+                    })
+                    .collect::<Vec<_>>();
+                if batch.is_empty() {
+                    break;
+                }
+                batches.push(batch);
+            }
+            batches
+        };
         self.apply_restored_layout_mode(&staging_layout);
         self.polling.restore_in_flight = true;
-        let restore_sessions = plan.sessions;
         let session_manager = self.session_manager.clone();
         cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
             let mut restored_session_ids = std::collections::HashMap::new();
-            let mut remaining = restore_sessions.into_iter().peekable();
-            while remaining.peek().is_some() {
-                let batch = remaining.by_ref().take(2).collect::<Vec<_>>();
-                let is_last_batch = remaining.peek().is_none();
-                let shell = shell.clone();
+            let total_batches = restore_batches.len();
+            for (batch_index, batch) in restore_batches.into_iter().enumerate() {
+                let is_last_batch = batch_index + 1 == total_batches;
                 let desired_layout = desired_layout.clone();
                 let session_manager = session_manager.clone();
 
@@ -1227,16 +1512,9 @@ impl WorkspaceView {
                     .spawn(async move {
                         batch
                             .into_iter()
-                            .map(|plan| {
-                                let request = SessionBootstrapRequest {
-                                    session_name: plan.session_name.clone(),
-                                    working_dir: plan.working_dir.clone(),
-                                    shell: shell.clone(),
-                                };
-                                CompletedRestoreBootstrap {
-                                    plan,
-                                    result: bootstrap_session(session_manager.clone(), request),
-                                }
+                            .map(|(plan, request)| CompletedRestoreBootstrap {
+                                plan,
+                                result: bootstrap_session(session_manager.clone(), request),
                             })
                             .collect::<Vec<_>>()
                     })
@@ -1325,23 +1603,28 @@ impl WorkspaceView {
 
     /// Create a new terminal session in the focused pane.
     pub fn create_session(&mut self, cx: &mut Context<Self>) {
-        self.create_session_inner(None, cx);
+        self.open_session_creation_modal(None);
+        cx.notify();
     }
 
     /// Create a new session in a specific visible pane.
     pub fn create_session_in_pane(&mut self, pane_id: PaneId, cx: &mut Context<Self>) {
-        self.create_session_inner(Some(pane_id), cx);
+        self.open_session_creation_modal(Some(pane_id));
+        cx.notify();
     }
 
     /// Create a new session in a specific split tree slot.
     pub fn create_session_in_slot(&mut self, slot: SlotId, cx: &mut Context<Self>) {
-        self.create_session_inner(Some(PaneId::SplitSlot { slot }), cx);
+        self.open_session_creation_modal(Some(PaneId::SplitSlot { slot }));
+        cx.notify();
     }
 
-    /// Shared implementation for session creation.
-    /// When `target_pane` is `None`, adds to the next available pane;
-    /// when `Some(pane)`, adds to that specific pane.
-    fn create_session_inner(&mut self, target_pane: Option<PaneId>, cx: &mut Context<Self>) {
+    pub(super) fn create_session_with_shell(
+        &mut self,
+        target_pane: Option<PaneId>,
+        requested_shell: Option<String>,
+        cx: &mut Context<Self>,
+    ) {
         // Find the lowest available session number (reuse gaps from closed sessions)
         if let Some(PaneId::SplitSlot { slot }) = target_pane {
             if self.polling.pending_session_bootstrap_slots.contains(&slot) {
@@ -1369,11 +1652,12 @@ impl WorkspaceView {
             .or_else(|| std::env::current_dir().ok())
             .unwrap_or_else(std::env::temp_dir);
 
-        let shell = self.configured_shell();
         let request = SessionBootstrapRequest {
             session_name: name,
             working_dir,
-            shell,
+            launch_shell: self.launch_shell_for_requested_shell(requested_shell.as_deref()),
+            requested_shell,
+            shell_warning: None,
         };
         self.spawn_create_session_bootstrap(request, num, target_pane, cx);
     }
@@ -1386,7 +1670,6 @@ impl WorkspaceView {
 
         self.polling.restore_in_flight = true;
         let storage = self.persistence.storage.clone();
-        let shell = self.configured_shell();
         let fallback_dir = self
             .project
             .project_root
@@ -1411,23 +1694,13 @@ impl WorkspaceView {
 
             let _ = this.update(cx, |this, cx| {
                 if let Some(plan) = restore_plan {
-                    this.apply_restore_plan(plan, shell.clone(), cx);
+                    this.apply_restore_plan(plan, cx);
                 } else {
                     this.polling.restore_in_flight = false;
                 }
             });
         })
         .detach();
-    }
-
-    /// Return the configured shell, or `None` to use the system default.
-    fn configured_shell(&self) -> Option<String> {
-        let shell = self.effective_user_settings().general.default_shell.clone();
-        if shell.is_empty() {
-            None
-        } else {
-            Some(shell)
-        }
     }
 
     /// Close the focused session.
@@ -1464,6 +1737,7 @@ impl WorkspaceView {
             readers.cached_status.remove(&id);
         }
         self.polling.shell_input_buffers.remove(&id);
+        self.cache.restore_shell_fallbacks.remove(&id);
 
         // Remove from output dispatcher tracking (ready/in-flight sets)
         self.output_dispatcher.remove_session(id);

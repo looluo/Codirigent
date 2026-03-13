@@ -919,4 +919,290 @@ impl WorkspaceView {
                 ),
         )
     }
+
+    /// Render the session creation modal with per-session shell selection.
+    pub(super) fn render_session_creation_modal(
+        &mut self,
+        cx: &mut Context<Self>,
+    ) -> Option<impl IntoElement> {
+        let modal = self.modals.session_creation.clone()?;
+
+        let theme = self.workspace().theme();
+        let panel_bg: gpui::Hsla = theme.panel_background.into();
+        let border_color: gpui::Hsla = theme.border.into();
+        let fg: gpui::Hsla = theme.foreground.into();
+        let muted: gpui::Hsla = theme.muted.into();
+        let primary: gpui::Hsla = theme.primary.into();
+        let warning: gpui::Hsla = theme.orange.into();
+        let row_hover: gpui::Hsla = theme.hover.into();
+        let error_color: gpui::Hsla = gpui::Hsla::red();
+        let modal_pending = modal.pending;
+
+        Some(
+            div()
+                .id("session-create-overlay")
+                .absolute()
+                .inset_0()
+                .flex()
+                .items_center()
+                .justify_center()
+                .bg(gpui::Hsla::black().opacity(0.5))
+                .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
+                    if !modal_pending {
+                        this.close_session_creation_modal();
+                        cx.notify();
+                    }
+                }))
+                .child(
+                    div()
+                        .id("session-create-modal")
+                        .w(px(460.0))
+                        .bg(panel_bg)
+                        .border_1()
+                        .border_color(border_color)
+                        .rounded_lg()
+                        .flex()
+                        .flex_col()
+                        .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
+                            cx.stop_propagation();
+                        }))
+                        .child(
+                            div()
+                                .h(px(48.0))
+                                .px_4()
+                                .border_b_1()
+                                .border_color(border_color)
+                                .flex()
+                                .items_center()
+                                .child(self.aligned_icon_label_row_with_offset(
+                                    icons::terminal(),
+                                    fg,
+                                    16.0,
+                                    "Create Session",
+                                    fg,
+                                    16.0,
+                                    FontWeight::SEMIBOLD,
+                                    20.0,
+                                    8.0,
+                                    3.0,
+                                )),
+                        )
+                        .child(
+                            div()
+                                .p_4()
+                                .flex()
+                                .flex_col()
+                                .gap_3()
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .text_color(muted)
+                                        .child("Choose which shell to use for this session."),
+                                )
+                                .child(
+                                    div()
+                                        .text_sm()
+                                        .font_weight(FontWeight::MEDIUM)
+                                        .text_color(fg)
+                                        .child("Shell"),
+                                )
+                                .child({
+                                    let mut list = div().flex().flex_col().gap_2().max_h(px(220.0));
+
+                                    for (index, option) in modal.shell_options.iter().enumerate() {
+                                        let is_selected = index == modal.selected_shell_index;
+                                        let option_label =
+                                            WorkspaceView::shell_display_label(Some(option));
+                                        let option_hint = if option.is_empty() {
+                                            "Use the default shell setting or the platform default."
+                                        } else {
+                                            "Open the session in this shell."
+                                        };
+                                        let option_border =
+                                            if is_selected { primary } else { border_color };
+                                        let option_bg = if is_selected {
+                                            primary.opacity(0.12)
+                                        } else {
+                                            gpui::Hsla::transparent_black()
+                                        };
+
+                                        list = list.child(
+                                            div()
+                                                .id(SharedString::from(format!(
+                                                    "session-shell-option-{}",
+                                                    index
+                                                )))
+                                                .w_full()
+                                                .p_3()
+                                                .border_1()
+                                                .border_color(option_border)
+                                                .rounded_md()
+                                                .bg(option_bg)
+                                                .cursor_pointer()
+                                                .hover(|style| style.bg(row_hover))
+                                                .on_click(cx.listener({
+                                                    move |this, _: &ClickEvent, _window, cx| {
+                                                        if modal_pending {
+                                                            return;
+                                                        }
+                                                        if let Some(active) =
+                                                            this.modals.session_creation.as_mut()
+                                                        {
+                                                            active.selected_shell_index = index;
+                                                            active.error = None;
+                                                        }
+                                                        cx.notify();
+                                                    }
+                                                }))
+                                                .child(
+                                                    div()
+                                                        .flex()
+                                                        .items_start()
+                                                        .gap_3()
+                                                        .child(
+                                                            div()
+                                                                .mt_px()
+                                                                .w(px(14.0))
+                                                                .h(px(14.0))
+                                                                .rounded_full()
+                                                                .border_1()
+                                                                .border_color(if is_selected {
+                                                                    primary
+                                                                } else {
+                                                                    muted
+                                                                })
+                                                                .bg(if is_selected {
+                                                                    primary
+                                                                } else {
+                                                                    gpui::Hsla::transparent_black()
+                                                                }),
+                                                        )
+                                                        .child(
+                                                            div()
+                                                                .flex_1()
+                                                                .flex()
+                                                                .flex_col()
+                                                                .gap_1()
+                                                                .child(
+                                                                    div()
+                                                                        .text_sm()
+                                                                        .font_weight(
+                                                                            FontWeight::MEDIUM,
+                                                                        )
+                                                                        .text_color(fg)
+                                                                        .child(option_label),
+                                                                )
+                                                                .child(
+                                                                    div()
+                                                                        .text_xs()
+                                                                        .text_color(
+                                                                            if option.is_empty() {
+                                                                                warning.opacity(0.9)
+                                                                            } else {
+                                                                                muted
+                                                                            },
+                                                                        )
+                                                                        .child(option_hint),
+                                                                ),
+                                                        ),
+                                                ),
+                                        );
+                                    }
+
+                                    list
+                                })
+                                .when_some(modal.error.clone(), |this, error| {
+                                    this.child(div().text_sm().text_color(error_color).child(error))
+                                }),
+                        )
+                        .child(
+                            div()
+                                .h(px(60.0))
+                                .px_4()
+                                .border_t_1()
+                                .border_color(border_color)
+                                .flex()
+                                .items_center()
+                                .justify_end()
+                                .gap_2()
+                                .child(
+                                    div()
+                                        .id("session-create-cancel")
+                                        .px_4()
+                                        .py_2()
+                                        .border_1()
+                                        .border_color(border_color)
+                                        .rounded_md()
+                                        .text_sm()
+                                        .text_color(fg)
+                                        .when(!modal_pending, |this| this.cursor_pointer())
+                                        .when(!modal_pending, |this| {
+                                            this.hover(|style| style.bg(border_color.opacity(0.1)))
+                                        })
+                                        .on_click(cx.listener(
+                                            move |this, _: &ClickEvent, _window, cx| {
+                                                if !modal_pending {
+                                                    this.close_session_creation_modal();
+                                                    cx.notify();
+                                                }
+                                            },
+                                        ))
+                                        .child(self.aligned_icon_label_row_with_offset(
+                                            icons::x(),
+                                            fg,
+                                            12.0,
+                                            "Cancel",
+                                            fg,
+                                            14.0,
+                                            FontWeight::MEDIUM,
+                                            16.0,
+                                            4.0,
+                                            3.0,
+                                        )),
+                                )
+                                .child(
+                                    div()
+                                        .id("session-create-apply")
+                                        .px_4()
+                                        .py_2()
+                                        .bg(if modal_pending {
+                                            primary.opacity(0.6)
+                                        } else {
+                                            primary
+                                        })
+                                        .rounded_md()
+                                        .text_sm()
+                                        .text_color(gpui::Hsla::white())
+                                        .when(!modal_pending, |this| this.cursor_pointer())
+                                        .when(!modal_pending, |this| {
+                                            this.hover(|style| style.bg(primary.opacity(0.8)))
+                                        })
+                                        .on_click(cx.listener(
+                                            move |this, _: &ClickEvent, _window, cx| {
+                                                if !modal_pending {
+                                                    this.apply_session_creation_modal(cx);
+                                                }
+                                            },
+                                        ))
+                                        .child(self.aligned_icon_label_row_with_offset(
+                                            icons::plus(),
+                                            gpui::Hsla::white(),
+                                            12.0,
+                                            if modal_pending {
+                                                "Creating..."
+                                            } else {
+                                                "Create"
+                                            },
+                                            gpui::Hsla::white(),
+                                            14.0,
+                                            FontWeight::MEDIUM,
+                                            16.0,
+                                            4.0,
+                                            3.0,
+                                        )),
+                                ),
+                        ),
+                ),
+        )
+    }
 }

@@ -1061,10 +1061,13 @@ impl WorkspaceView {
             gpui::Hsla::transparent_black()
         };
         let hover_bg: gpui::Hsla = theme.active.into();
+        let orange: gpui::Hsla = theme.orange.into();
 
         let session_id = session.id;
         let session_name = session.name.clone();
         let context_pct = session.context_usage;
+        let (shell_label, shell_warning) =
+            self.session_shell_display(session_id, session.shell.as_deref());
 
         div()
             .id(SharedString::from(format!("session-row-{}", session_id.0)))
@@ -1112,6 +1115,28 @@ impl WorkspaceView {
                         .child("Hidden"),
                 )
             })
+            .child(
+                div()
+                    .flex_shrink_0()
+                    .px(px(4.0))
+                    .py_px()
+                    .rounded_sm()
+                    .bg(if shell_warning.is_some() {
+                        orange.opacity(0.12)
+                    } else {
+                        muted.opacity(0.12)
+                    })
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(if shell_warning.is_some() {
+                                orange
+                            } else {
+                                muted.opacity(0.75)
+                            })
+                            .child(shell_label),
+                    ),
+            )
             // Git branch (compact) - between name and context%
             .when_some(session.git_info.as_ref(), |el, gi| {
                 let mut branch = gi.branch.clone();

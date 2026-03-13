@@ -994,6 +994,8 @@ impl WorkspaceView {
                 .map(crate::sidebar::Color::from_hex)
                 .unwrap_or_else(|| crate::sidebar::Color::from_hex("#6366f1"));
             let task = self.task_title_for_session(session, task_titles);
+            let (shell_label, shell_warning) =
+                self.session_shell_display(session.id, session.shell.as_deref());
             if let Some(header) = self.terminal_headers.get_mut(&session.id) {
                 if header.session_name != session.name {
                     header.session_name = session.name.clone();
@@ -1018,6 +1020,12 @@ impl WorkspaceView {
                 }
                 if header.task != task {
                     header.task = task;
+                }
+                if header.shell_label.as_deref() != Some(shell_label.as_str()) {
+                    header.shell_label = Some(shell_label.clone());
+                }
+                if header.shell_warning != shell_warning {
+                    header.shell_warning = shell_warning.clone();
                 }
             }
         }
@@ -1084,6 +1092,8 @@ impl WorkspaceView {
             .map(crate::sidebar::Color::from_hex)
             .unwrap_or_else(|| crate::sidebar::Color::from_hex("#6366f1"));
         let task = self.task_title_for_session(session, None);
+        let (shell_label, shell_warning) =
+            self.session_shell_display(session.id, session.shell.as_deref());
 
         if let Some(header) = self.terminal_headers.get_mut(&session_id) {
             header.status = session.status;
@@ -1112,6 +1122,12 @@ impl WorkspaceView {
             }
             if header.task != task {
                 header.task = task;
+            }
+            if header.shell_label.as_deref() != Some(shell_label.as_str()) {
+                header.shell_label = Some(shell_label);
+            }
+            if header.shell_warning != shell_warning {
+                header.shell_warning = shell_warning;
             }
         }
     }
@@ -1693,6 +1709,9 @@ impl WorkspaceView {
         if let Some(modal) = self.render_session_action_modal(cx) {
             container = container.child(modal);
         }
+        if let Some(modal) = self.render_session_creation_modal(cx) {
+            container = container.child(modal);
+        }
         if let Some(modal) = self.render_task_creation_modal(cx) {
             container = container.child(modal);
         }
@@ -1861,6 +1880,9 @@ impl WorkspaceView {
         if self.handle_session_action_key_down(event, cx) {
             return true;
         }
+        if self.handle_session_creation_key_down(event, cx) {
+            return true;
+        }
         if self.handle_task_creation_key_down(event, cx) {
             return true;
         }
@@ -1874,6 +1896,7 @@ impl WorkspaceView {
     pub(super) fn has_blocking_modal(&self) -> bool {
         self.custom_picker.is_open
             || self.modals.session_action.is_some()
+            || self.modals.session_creation.is_some()
             || self.modals.task_creation.is_some()
             || self.modals.pending_profile_deletion.is_some()
     }

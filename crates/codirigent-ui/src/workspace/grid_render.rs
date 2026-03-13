@@ -592,6 +592,44 @@ impl WorkspaceView {
             header = header.child(git_badge);
         }
 
+        if let Some(shell_label) = &hints.shell_label {
+            let shell_warning = hints.shell_warning.is_some();
+            let shell_fg = if shell_warning {
+                orange
+            } else {
+                muted.opacity(0.8)
+            };
+            let shell_bg = if shell_warning {
+                orange.opacity(0.12)
+            } else {
+                border_color.opacity(0.25)
+            };
+            header = header.child(
+                div()
+                    .px(px(4.0))
+                    .py_px()
+                    .rounded_sm()
+                    .bg(shell_bg)
+                    .flex()
+                    .flex_shrink_0()
+                    .items_center()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(shell_fg)
+                            .font_family(icons::LUCIDE_FONT_FAMILY)
+                            .child(icons::terminal()),
+                    )
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(shell_fg)
+                            .child(shell_label.clone()),
+                    ),
+            );
+        }
+
         header = header.child(div().flex_1());
 
         // Task badge (if any)

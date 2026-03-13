@@ -812,6 +812,7 @@ impl Workspace {
             if let Some(dst) = self.session_mut(src.id) {
                 dst.name = src.name.clone();
                 dst.working_directory = src.working_directory.clone();
+                dst.shell = src.shell.clone();
                 dst.current_task = src.current_task.clone();
                 dst.context_usage = src.context_usage;
                 dst.group = src.group.clone();

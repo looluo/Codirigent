@@ -538,6 +538,7 @@ impl SessionManager for DefaultSessionManager {
 
         // Create session metadata
         let mut session = Session::new(id, name, working_dir.clone());
+        session.shell = shell.filter(|value| !value.is_empty());
 
         // Detect git info for the working directory
         session.git_info = self
