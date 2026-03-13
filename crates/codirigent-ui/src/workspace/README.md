@@ -2,6 +2,9 @@
 
 The workspace module manages the main application window with grid layout, session panes, and UI controls.
 
+For the longer-form architecture reference, see
+[`docs/architecture/workspace/`](../../../../docs/architecture/workspace/).
+
 ## Architecture
 
 The workspace is split into two main components:

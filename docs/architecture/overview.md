@@ -154,5 +154,7 @@ All data stored in `.codirigent/` directory:
 ## Next Steps
 
 - Read [Data Flow](data-flow.md) for detailed flow diagrams
+- Read [Workspace Architecture](workspace/README.md) for the current
+  `codirigent-ui::workspace` module map and UI/render ownership boundaries
 - Read [Crate Dependencies](crate-dependencies.md) for dependency graph
 - Read [Event Bus](event-bus.md) for event system details

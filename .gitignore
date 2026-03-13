@@ -134,3 +134,5 @@ coverage/
 # Git worktrees
 .worktrees/
 worktrees/
+vibehq-hub/
+.docx
