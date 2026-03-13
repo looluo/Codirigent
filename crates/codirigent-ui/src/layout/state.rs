@@ -106,6 +106,18 @@ impl LayoutState {
         }
     }
 
+    /// Append a hidden session after the visible grid assignments.
+    ///
+    /// Hidden sessions stay in assignment order so they can be swapped back
+    /// into a visible cell later without losing workspace ordering.
+    pub fn append_hidden_session(&mut self, session_id: SessionId) -> bool {
+        if self.assignments.contains(&session_id) {
+            return false;
+        }
+        self.assignments.push(session_id);
+        true
+    }
+
     /// Remove a session from the layout.
     ///
     /// # Returns
@@ -397,6 +409,27 @@ impl SplitLayoutState {
             }
         }
         false
+    }
+
+    /// Replace the session assigned to a slot.
+    ///
+    /// Returns the previous session in the slot, if any.
+    pub fn replace_session_in_slot(
+        &mut self,
+        slot: SlotId,
+        session_id: SessionId,
+    ) -> Option<Option<SessionId>> {
+        if self.assignments.iter().any(|(_, s)| *s == Some(session_id)) {
+            return None;
+        }
+
+        let entry = self
+            .assignments
+            .iter_mut()
+            .find(|(current, _)| *current == slot)?;
+        let previous = entry.1.replace(session_id);
+        self.focused_slot = Some(slot);
+        Some(previous)
     }
 
     /// Remove a session from its slot.

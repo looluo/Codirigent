@@ -124,6 +124,8 @@ impl WorkspaceView {
 
         let sessions: Vec<Session> = self.workspace().sessions().to_vec();
         let focused_id = self.workspace().focused_session_id();
+        let visible_session_ids: std::collections::HashSet<SessionId> =
+            self.workspace().visible_session_ids().into_iter().collect();
         let session_count = sessions.len();
 
         // Separate ungrouped and grouped sessions
@@ -143,7 +145,13 @@ impl WorkspaceView {
 
         // Render ungrouped sessions first
         for session in &ungrouped {
-            content = content.child(self.render_session_row(session, focused_id, &theme, cx));
+            content = content.child(self.render_session_row(
+                session,
+                focused_id,
+                visible_session_ids.contains(&session.id),
+                &theme,
+                cx,
+            ));
         }
 
         // Render grouped sessions with headers
@@ -163,8 +171,13 @@ impl WorkspaceView {
 
             if expanded {
                 for session in group_sessions {
-                    content =
-                        content.child(self.render_session_row(session, focused_id, &theme, cx));
+                    content = content.child(self.render_session_row(
+                        session,
+                        focused_id,
+                        visible_session_ids.contains(&session.id),
+                        &theme,
+                        cx,
+                    ));
                 }
             }
         }
@@ -1033,6 +1046,7 @@ impl WorkspaceView {
         &mut self,
         session: &Session,
         focused_id: Option<SessionId>,
+        is_visible: bool,
         theme: &CodirigentTheme,
         cx: &mut Context<Self>,
     ) -> impl IntoElement {
@@ -1040,6 +1054,7 @@ impl WorkspaceView {
         let fg: gpui::Hsla = theme.foreground.into();
         let status_color: gpui::Hsla = theme.status_color(session.status).into();
         let is_focused = focused_id == Some(session.id);
+        let is_hidden = !is_visible;
         let row_bg = if is_focused {
             theme.active.into()
         } else {
@@ -1088,6 +1103,15 @@ impl WorkspaceView {
                     .text_color(if is_focused { fg } else { muted })
                     .child(session_name),
             )
+            .when(is_hidden, |el| {
+                el.child(
+                    div()
+                        .text_xs()
+                        .text_color(muted.opacity(0.75))
+                        .flex_shrink_0()
+                        .child("Hidden"),
+                )
+            })
             // Git branch (compact) - between name and context%
             .when_some(session.git_info.as_ref(), |el, gi| {
                 let mut branch = gi.branch.clone();

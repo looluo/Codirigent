@@ -201,6 +201,17 @@ impl Workspace {
             }
         }
 
+        if profile != LayoutProfile::Single {
+            let visible_len = grid_state.assignments().len().min(profile.max_sessions());
+            if grid_state
+                .focused_index()
+                .is_some_and(|index| index >= visible_len)
+                && visible_len > 0
+            {
+                grid_state.focus_index(0);
+            }
+        }
+
         grid_state
     }
 
@@ -299,8 +310,18 @@ impl Workspace {
             return false;
         }
 
-        // Try to add to layout
-        if !self.layout_state.add_session(id) {
+        let added_to_visible_layout = match &mut self.layout_state {
+            WorkspaceLayoutState::Grid(s) => {
+                if s.add_session(id) {
+                    true
+                } else {
+                    s.append_hidden_session(id)
+                }
+            }
+            WorkspaceLayoutState::SplitTree(s) => s.add_session(id),
+        };
+
+        if !added_to_visible_layout && self.layout_state.is_grid() {
             return false;
         }
 
@@ -389,11 +410,33 @@ impl Workspace {
 
     /// Get the visible sessions (those assigned to cells/slots).
     pub fn visible_sessions(&self) -> Vec<&Session> {
-        self.layout_state
-            .assigned_sessions()
-            .iter()
-            .filter_map(|id| self.session(*id))
+        self.visible_session_ids()
+            .into_iter()
+            .filter_map(|id| self.session(id))
             .collect()
+    }
+
+    /// Get the IDs of sessions currently visible in rendered panes.
+    pub fn visible_session_ids(&self) -> Vec<SessionId> {
+        match &self.layout_state {
+            WorkspaceLayoutState::Grid(s) => {
+                if s.profile() == LayoutProfile::Single {
+                    s.focused_session().into_iter().collect()
+                } else {
+                    s.assignments()
+                        .iter()
+                        .take(s.profile().max_sessions())
+                        .copied()
+                        .collect()
+                }
+            }
+            WorkspaceLayoutState::SplitTree(s) => s.assigned_sessions(),
+        }
+    }
+
+    /// Returns whether a session is currently visible in the active layout.
+    pub fn is_session_visible(&self, session_id: SessionId) -> bool {
+        self.visible_session_ids().contains(&session_id)
     }
 
     /// Get the number of sessions that can still be added.
@@ -402,7 +445,7 @@ impl Workspace {
             WorkspaceLayoutState::Grid(s) => s
                 .profile()
                 .max_sessions()
-                .saturating_sub(s.assignments().len()),
+                .saturating_sub(s.assignments().len().min(s.profile().max_sessions())),
             WorkspaceLayoutState::SplitTree(s) => s.available_slots(),
         }
     }
@@ -425,7 +468,64 @@ impl Workspace {
     ///
     /// `true` if the session was found and focused.
     pub fn focus_session(&mut self, id: SessionId) -> bool {
-        self.layout_state.focus_session(id)
+        if self.session(id).is_none() {
+            return false;
+        }
+
+        match &mut self.layout_state {
+            WorkspaceLayoutState::Grid(s) => {
+                let Some(target_index) = s.assignments().iter().position(|&sid| sid == id) else {
+                    return false;
+                };
+
+                if s.profile() == LayoutProfile::Single {
+                    s.focus_index(target_index);
+                    return true;
+                }
+
+                let visible_len = s.assignments().len().min(s.profile().max_sessions());
+                if target_index < visible_len {
+                    s.focus_index(target_index);
+                    return true;
+                }
+
+                let replacement_index = s
+                    .focused_index()
+                    .filter(|&index| index < visible_len)
+                    .or_else(|| visible_len.checked_sub(1).map(|_| 0));
+
+                let Some(replacement_index) = replacement_index else {
+                    return false;
+                };
+
+                if !s.swap_assignments(target_index, replacement_index) {
+                    return false;
+                }
+
+                s.focus_index(replacement_index);
+                true
+            }
+            WorkspaceLayoutState::SplitTree(s) => {
+                if s.focus_session(id) {
+                    return true;
+                }
+
+                let target_slot = s
+                    .focused_slot()
+                    .and_then(|slot| (s.session_at_slot(slot).is_some()).then_some(slot))
+                    .or_else(|| {
+                        s.assignments()
+                            .iter()
+                            .find_map(|(slot, session)| session.map(|_| *slot))
+                    });
+
+                let Some(target_slot) = target_slot else {
+                    return false;
+                };
+
+                s.replace_session_in_slot(target_slot, id).is_some()
+            }
+        }
     }
 
     /// Focus a session by grid index (1-based, for keyboard shortcuts).
@@ -436,7 +536,13 @@ impl Workspace {
     pub fn focus_session_number(&mut self, number: usize) -> bool {
         match &mut self.layout_state {
             WorkspaceLayoutState::Grid(s) => {
-                if number == 0 || number > s.assignments().len() {
+                let visible_len = if s.profile() == LayoutProfile::Single {
+                    s.assignments().len()
+                } else {
+                    s.assignments().len().min(s.profile().max_sessions())
+                };
+
+                if number == 0 || number > visible_len {
                     return false;
                 }
                 s.focus_index(number - 1);
@@ -454,12 +560,39 @@ impl Workspace {
 
     /// Focus the next session.
     pub fn focus_next(&mut self) {
-        self.layout_state.focus_next();
+        match &mut self.layout_state {
+            WorkspaceLayoutState::Grid(s) if s.profile() != LayoutProfile::Single => {
+                let visible_len = s.assignments().len().min(s.profile().max_sessions());
+                if visible_len == 0 {
+                    return;
+                }
+                let next = match s.focused_index().filter(|&index| index < visible_len) {
+                    Some(index) => (index + 1) % visible_len,
+                    None => 0,
+                };
+                s.focus_index(next);
+            }
+            _ => self.layout_state.focus_next(),
+        }
     }
 
     /// Focus the previous session.
     pub fn focus_previous(&mut self) {
-        self.layout_state.focus_previous();
+        match &mut self.layout_state {
+            WorkspaceLayoutState::Grid(s) if s.profile() != LayoutProfile::Single => {
+                let visible_len = s.assignments().len().min(s.profile().max_sessions());
+                if visible_len == 0 {
+                    return;
+                }
+                let prev = match s.focused_index().filter(|&index| index < visible_len) {
+                    Some(index) if index > 0 => index - 1,
+                    Some(_) => visible_len - 1,
+                    None => 0,
+                };
+                s.focus_index(prev);
+            }
+            _ => self.layout_state.focus_previous(),
+        }
     }
 
     /// Focus in a direction (for arrow key navigation).

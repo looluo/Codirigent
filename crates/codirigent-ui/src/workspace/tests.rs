@@ -69,9 +69,11 @@ fn test_workspace_add_session_full() {
         assert!(ws.add_session(make_session(i, &format!("Session {}", i))));
     }
 
-    // 5th should fail
-    assert!(!ws.add_session(make_session(5, "Session 5")));
-    assert_eq!(ws.sessions().len(), 4);
+    // 5th should be retained as a hidden session
+    assert!(ws.add_session(make_session(5, "Session 5")));
+    assert_eq!(ws.sessions().len(), 5);
+    assert_eq!(ws.visible_sessions().len(), 4);
+    assert!(!ws.is_session_visible(SessionId(5)));
 }
 
 #[test]
@@ -156,6 +158,17 @@ fn test_workspace_focus_session_number() {
     // Invalid numbers
     assert!(!ws.focus_session_number(0));
     assert!(!ws.focus_session_number(10));
+}
+
+#[test]
+fn test_workspace_focus_session_number_ignores_hidden_multi_pane_grid_sessions() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    for i in 1..=5 {
+        assert!(ws.add_session(make_session(i, &format!("Session {}", i))));
+    }
+
+    assert!(!ws.focus_session_number(5));
+    assert_eq!(ws.focused_session_id(), Some(SessionId(1)));
 }
 
 #[test]
@@ -456,6 +469,64 @@ fn test_workspace_single_layout_preserves_order_on_exit() {
 }
 
 #[test]
+fn test_workspace_focus_hidden_grid_session_swaps_into_focused_pane() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    ws.set_bounds(Bounds::from_size(1000.0, 800.0));
+
+    for i in 1..=5 {
+        assert!(ws.add_session(make_session(i, &format!("S{}", i))));
+    }
+
+    assert_eq!(
+        ws.cell_info()
+            .iter()
+            .map(|cell| cell.session_id)
+            .collect::<Vec<_>>(),
+        vec![SessionId(1), SessionId(2), SessionId(3), SessionId(4)]
+    );
+    assert!(!ws.is_session_visible(SessionId(5)));
+
+    assert!(ws.focus_session(SessionId(2)));
+    assert!(ws.focus_session(SessionId(5)));
+
+    let cells = ws.cell_info();
+    assert_eq!(
+        cells.iter().map(|cell| cell.session_id).collect::<Vec<_>>(),
+        vec![SessionId(1), SessionId(5), SessionId(3), SessionId(4)]
+    );
+    assert_eq!(ws.focused_session_id(), Some(SessionId(5)));
+    assert!(!ws.is_session_visible(SessionId(2)));
+    assert!(ws.is_session_visible(SessionId(5)));
+}
+
+#[test]
+fn test_workspace_focus_hidden_grid_session_uses_first_visible_pane_when_focus_is_hidden() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    ws.set_bounds(Bounds::from_size(1000.0, 800.0));
+
+    for i in 1..=5 {
+        assert!(ws.add_session(make_session(i, &format!("S{}", i))));
+    }
+
+    ws.set_layout(LayoutProfile::Single);
+    assert!(ws.focus_session(SessionId(5)));
+    assert_eq!(ws.focused_session_id(), Some(SessionId(5)));
+
+    ws.set_layout(LayoutProfile::Grid2x2);
+    assert_eq!(ws.focused_session_id(), Some(SessionId(1)));
+
+    assert!(ws.focus_session(SessionId(2)));
+    assert!(ws.focus_session(SessionId(5)));
+    assert_eq!(
+        ws.cell_info()
+            .iter()
+            .map(|cell| cell.session_id)
+            .collect::<Vec<_>>(),
+        vec![SessionId(1), SessionId(5), SessionId(3), SessionId(4)]
+    );
+}
+
+#[test]
 fn test_workspace_restores_hidden_sessions_after_returning_from_smaller_split_layout() {
     let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
     ws.set_bounds(Bounds::from_size(1000.0, 800.0));
@@ -566,6 +637,37 @@ fn test_workspace_split_pane_promotes_next_hidden_session() {
         cells.iter().map(|cell| cell.session_id).collect::<Vec<_>>(),
         vec![SessionId(1), SessionId(3), SessionId(2)]
     );
+}
+
+#[test]
+fn test_workspace_focus_hidden_split_session_replaces_focused_visible_session() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    for i in 1..=4 {
+        assert!(ws.add_session(make_session(i, &format!("S{}", i))));
+    }
+
+    ws.set_split_tree(LayoutNode::from_grid(1, 2));
+    assert!(ws.is_split_tree_mode());
+    assert_eq!(
+        ws.cell_info()
+            .iter()
+            .map(|cell| cell.session_id)
+            .collect::<Vec<_>>(),
+        vec![SessionId(1), SessionId(2)]
+    );
+
+    assert!(ws.focus_session(SessionId(2)));
+    assert!(ws.focus_session(SessionId(4)));
+
+    assert_eq!(
+        ws.cell_info()
+            .iter()
+            .map(|cell| cell.session_id)
+            .collect::<Vec<_>>(),
+        vec![SessionId(1), SessionId(4)]
+    );
+    assert_eq!(ws.focused_session_id(), Some(SessionId(4)));
+    assert!(!ws.is_session_visible(SessionId(2)));
 }
 
 #[test]
