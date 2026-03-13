@@ -31,8 +31,17 @@ use crate::layout::{
     SplitLayoutState, WorkspaceLayoutState, TOP_BAR_HEIGHT,
 };
 use crate::theme::CodirigentTheme;
-use codirigent_core::{LayoutNode, Session, SessionId, SessionStatus, SlotId, SplitDirection};
-use std::collections::HashSet;
+use codirigent_core::{
+    LayoutNode, PaneId, PaneStackState, PaneTabGroup, Session, SessionId, SessionStatus, SlotId,
+    SplitDirection,
+};
+use std::collections::{HashMap, HashSet};
+
+#[derive(Debug, Clone)]
+struct PaneStack {
+    session_ids: Vec<SessionId>,
+    active_session_id: SessionId,
+}
 
 /// Main workspace containing the grid of sessions.
 ///
@@ -45,6 +54,10 @@ use std::collections::HashSet;
 pub struct Workspace {
     /// Unified layout state supporting both grid and split tree modes.
     layout_state: WorkspaceLayoutState,
+    /// Pane-local tab stacks keyed by visible pane identifier.
+    pane_tab_groups: HashMap<PaneId, PaneTabGroup>,
+    /// Ordered tab stacks that no longer fit in the current visible layout.
+    hidden_pane_stacks: Vec<PaneStack>,
     /// Sessions in the workspace.
     sessions: Vec<Session>,
     /// Theme configuration.
@@ -70,6 +83,8 @@ impl Workspace {
     pub fn new() -> Self {
         Self {
             layout_state: WorkspaceLayoutState::default(),
+            pane_tab_groups: HashMap::new(),
+            hidden_pane_stacks: Vec::new(),
             sessions: Vec::new(),
             theme: CodirigentTheme::default(),
             show_sidebar: true,
@@ -83,6 +98,8 @@ impl Workspace {
     pub fn with_profile(profile: LayoutProfile) -> Self {
         Self {
             layout_state: WorkspaceLayoutState::with_profile(profile),
+            pane_tab_groups: HashMap::new(),
+            hidden_pane_stacks: Vec::new(),
             sessions: Vec::new(),
             theme: CodirigentTheme::default(),
             show_sidebar: true,
@@ -110,7 +127,9 @@ impl Workspace {
     /// When switching from split tree to grid, sessions are re-assigned
     /// in their current order to the new grid.
     pub fn set_layout(&mut self, profile: LayoutProfile) {
-        self.layout_state = WorkspaceLayoutState::Grid(self.rebuild_grid_state(profile));
+        let stacks = self.current_pane_stacks_in_order();
+        self.layout_state = WorkspaceLayoutState::Grid(self.rebuild_grid_state(profile, &stacks));
+        self.apply_pane_stacks_to_current_layout(stacks);
     }
 
     /// Cycle to the next layout profile.
@@ -168,47 +187,419 @@ impl Workspace {
         &self.layout_state
     }
 
-    /// Return all workspace sessions in the current pane order, with any
-    /// temporarily hidden sessions appended in workspace order.
-    fn ordered_session_ids(&self) -> Vec<SessionId> {
-        let mut ordered = self.layout_state.assigned_sessions();
-        if ordered.len() == self.sessions.len() {
-            return ordered;
+    /// Get persisted pane tab groups for the current layout.
+    pub fn pane_tab_groups(&self) -> Vec<PaneTabGroup> {
+        let mut groups = self.pane_tab_groups.values().cloned().collect::<Vec<_>>();
+        groups.sort_by_key(|group| match group.pane {
+            PaneId::GridCell { index } => (0u8, index),
+            PaneId::SplitSlot { slot } => (1u8, slot.0 as usize),
+        });
+        groups
+    }
+
+    /// Get persisted pane stacks for the entire workspace, including hidden stacks.
+    pub fn pane_stacks(&self) -> Vec<PaneStackState> {
+        self.current_pane_stacks_in_order()
+            .into_iter()
+            .map(|stack| PaneStackState {
+                session_ids: stack.session_ids,
+                active_session_id: stack.active_session_id,
+            })
+            .collect()
+    }
+
+    fn visible_pane_ids(&self) -> Vec<PaneId> {
+        Self::visible_pane_ids_for_state(&self.layout_state)
+    }
+
+    fn visible_pane_ids_for_state(layout_state: &WorkspaceLayoutState) -> Vec<PaneId> {
+        match layout_state {
+            WorkspaceLayoutState::Grid(state) => (0..state.assignments().len())
+                .map(|index| PaneId::GridCell { index })
+                .collect(),
+            WorkspaceLayoutState::SplitTree(state) => state
+                .assignments()
+                .iter()
+                .map(|(slot, _)| PaneId::SplitSlot { slot: *slot })
+                .collect(),
+        }
+    }
+
+    fn active_session_for_pane(&self, pane_id: PaneId) -> Option<SessionId> {
+        if let Some(group) = self.pane_tab_groups.get(&pane_id) {
+            return Some(group.active_session_id);
         }
 
-        let assigned: HashSet<SessionId> = ordered.iter().copied().collect();
-        ordered.extend(
+        match pane_id {
+            PaneId::GridCell { index } => self
+                .layout_state
+                .as_grid()
+                .and_then(|state| state.session_at(index)),
+            PaneId::SplitSlot { slot } => self
+                .layout_state
+                .as_split_tree()
+                .and_then(|state| state.session_at_slot(slot)),
+        }
+    }
+
+    fn pane_id_for_session(&self, session_id: SessionId) -> Option<PaneId> {
+        if let Some((pane_id, _)) = self
+            .pane_tab_groups
+            .iter()
+            .find(|(_, group)| group.session_ids.contains(&session_id))
+        {
+            return Some(pane_id.clone());
+        }
+
+        match &self.layout_state {
+            WorkspaceLayoutState::Grid(state) => state
+                .assignments()
+                .iter()
+                .enumerate()
+                .find(|(_, assigned)| **assigned == Some(session_id))
+                .map(|(index, _)| PaneId::GridCell { index }),
+            WorkspaceLayoutState::SplitTree(state) => state
+                .slot_for_session(session_id)
+                .map(|slot| PaneId::SplitSlot { slot }),
+        }
+    }
+
+    fn pane_sessions(&self, pane_id: PaneId) -> Vec<SessionId> {
+        if let Some(group) = self.pane_tab_groups.get(&pane_id) {
+            return group.session_ids.clone();
+        }
+
+        self.active_session_for_pane(pane_id).into_iter().collect()
+    }
+
+    fn current_pane_stacks_in_order(&self) -> Vec<PaneStack> {
+        if self
+            .layout_state
+            .as_grid()
+            .is_some_and(|state| state.profile() == LayoutProfile::Single)
+            && self.pane_tab_groups.is_empty()
+            && self
+                .hidden_pane_stacks
+                .iter()
+                .all(|stack| stack.session_ids.len() == 1)
+        {
+            return self
+                .sessions
+                .iter()
+                .map(|session| PaneStack {
+                    session_ids: vec![session.id],
+                    active_session_id: session.id,
+                })
+                .collect();
+        }
+
+        let mut stacks = self
+            .visible_pane_ids()
+            .into_iter()
+            .filter_map(|pane_id| {
+                let session_ids = self.pane_sessions(pane_id.clone());
+                let active_session_id = self.active_session_for_pane(pane_id)?;
+                (!session_ids.is_empty()).then_some(PaneStack {
+                    session_ids,
+                    active_session_id,
+                })
+            })
+            .collect::<Vec<_>>();
+
+        let mut assigned: HashSet<SessionId> = stacks
+            .iter()
+            .flat_map(|stack| stack.session_ids.iter().copied())
+            .collect();
+        stacks.extend(self.hidden_pane_stacks.iter().filter_map(|stack| {
+            let session_ids = stack
+                .session_ids
+                .iter()
+                .copied()
+                .filter(|session_id| {
+                    self.session(*session_id).is_some() && !assigned.contains(session_id)
+                })
+                .collect::<Vec<_>>();
+            if session_ids.is_empty() {
+                return None;
+            }
+
+            assigned.extend(session_ids.iter().copied());
+            Some(PaneStack {
+                active_session_id: if session_ids.contains(&stack.active_session_id) {
+                    stack.active_session_id
+                } else {
+                    session_ids[0]
+                },
+                session_ids,
+            })
+        }));
+        stacks.extend(
             self.sessions
                 .iter()
                 .map(|session| session.id)
-                .filter(|session_id| !assigned.contains(session_id)),
+                .filter(|session_id| !assigned.contains(session_id))
+                .map(|session_id| PaneStack {
+                    session_ids: vec![session_id],
+                    active_session_id: session_id,
+                }),
+        );
+
+        stacks
+    }
+
+    fn apply_pane_stacks_to_current_layout(&mut self, stacks: Vec<PaneStack>) {
+        let pane_ids = self.visible_pane_ids();
+        self.pane_tab_groups.clear();
+        self.hidden_pane_stacks.clear();
+
+        for (index, stack) in stacks.into_iter().enumerate() {
+            if let Some(pane_id) = pane_ids.get(index).cloned() {
+                if stack.session_ids.len() > 1 {
+                    self.pane_tab_groups.insert(
+                        pane_id.clone(),
+                        PaneTabGroup {
+                            pane: pane_id,
+                            session_ids: stack.session_ids,
+                            active_session_id: stack.active_session_id,
+                        },
+                    );
+                }
+            } else if !stack.session_ids.is_empty() {
+                self.hidden_pane_stacks.push(stack);
+            }
+        }
+
+        self.cleanup_pane_tab_groups();
+    }
+
+    fn stack_session_order(stack: &PaneStack) -> Vec<SessionId> {
+        let mut ordered = vec![stack.active_session_id];
+        ordered.extend(
+            stack
+                .session_ids
+                .iter()
+                .copied()
+                .filter(|session_id| *session_id != stack.active_session_id),
         );
         ordered
     }
 
-    fn rebuild_grid_state(&self, profile: LayoutProfile) -> LayoutState {
+    fn layout_session_order(stacks: &[PaneStack], visible_panes: usize) -> Vec<SessionId> {
+        let mut ordered = Vec::new();
+        let visible_len = visible_panes.min(stacks.len());
+
+        ordered.extend(
+            stacks
+                .iter()
+                .take(visible_len)
+                .map(|stack| stack.active_session_id),
+        );
+        for stack in stacks.iter().take(visible_len) {
+            ordered.extend(
+                stack
+                    .session_ids
+                    .iter()
+                    .copied()
+                    .filter(|session_id| *session_id != stack.active_session_id),
+            );
+        }
+        for stack in stacks.iter().skip(visible_len) {
+            ordered.extend(Self::stack_session_order(stack));
+        }
+
+        ordered
+    }
+
+    fn pane_exists(&self, pane_id: &PaneId) -> bool {
+        match pane_id {
+            PaneId::GridCell { index } => self
+                .layout_state
+                .as_grid()
+                .is_some_and(|state| *index < state.assignments().len()),
+            PaneId::SplitSlot { slot } => self
+                .layout_state
+                .as_split_tree()
+                .is_some_and(|state| state.tree().contains_slot(*slot)),
+        }
+    }
+
+    fn cleanup_pane_tab_groups(&mut self) {
+        let valid_sessions: HashSet<SessionId> =
+            self.sessions.iter().map(|session| session.id).collect();
+        let valid_panes: HashSet<PaneId> = self.visible_pane_ids().into_iter().collect();
+        self.pane_tab_groups.retain(|pane_id, group| {
+            if !valid_panes.contains(pane_id) {
+                return false;
+            }
+
+            group
+                .session_ids
+                .retain(|session_id| valid_sessions.contains(session_id));
+            if !group.session_ids.contains(&group.active_session_id) {
+                if let Some(session_id) = group.session_ids.first().copied() {
+                    group.active_session_id = session_id;
+                }
+            }
+
+            group.session_ids.len() > 1
+        });
+
+        let mut claimed_sessions: HashSet<SessionId> = self
+            .visible_pane_ids()
+            .into_iter()
+            .flat_map(|pane_id| self.pane_sessions(pane_id).into_iter())
+            .collect();
+        self.hidden_pane_stacks.retain_mut(|stack| {
+            stack.session_ids.retain(|session_id| {
+                valid_sessions.contains(session_id) && !claimed_sessions.contains(session_id)
+            });
+            if stack.session_ids.is_empty() {
+                return false;
+            }
+            if !stack.session_ids.contains(&stack.active_session_id) {
+                stack.active_session_id = stack.session_ids[0];
+            }
+            claimed_sessions.extend(stack.session_ids.iter().copied());
+            true
+        });
+    }
+
+    fn set_pane_active_session(&mut self, pane_id: PaneId, session_id: SessionId) -> bool {
+        match pane_id {
+            PaneId::GridCell { index } => self
+                .layout_state
+                .as_grid_mut()
+                .and_then(|state| state.replace_session_in_index(index, session_id))
+                .is_some(),
+            PaneId::SplitSlot { slot } => self
+                .layout_state
+                .as_split_tree_mut()
+                .and_then(|state| state.replace_session_in_slot(slot, session_id))
+                .is_some(),
+        }
+    }
+
+    fn remove_session_from_pane_group(&mut self, pane_id: PaneId, session_id: SessionId) {
+        let Some(mut group) = self.pane_tab_groups.remove(&pane_id) else {
+            return;
+        };
+
+        let was_active = group.active_session_id == session_id;
+        group.session_ids.retain(|current| *current != session_id);
+
+        if group.session_ids.len() < 2 {
+            if was_active {
+                if let Some(next_active) = group.session_ids.first().copied() {
+                    let _ = self.set_pane_active_session(pane_id.clone(), next_active);
+                }
+            }
+            return;
+        }
+
+        if was_active {
+            if let Some(next_active) = group.session_ids.first().copied() {
+                if self.set_pane_active_session(pane_id.clone(), next_active) {
+                    group.active_session_id = next_active;
+                }
+            }
+        }
+
+        if group.session_ids.len() > 1 {
+            self.pane_tab_groups.insert(pane_id, group);
+        }
+    }
+
+    fn insert_session_into_pane_group(
+        &mut self,
+        pane_id: PaneId,
+        session_id: SessionId,
+        make_active: bool,
+    ) -> bool {
+        let mut group = self
+            .pane_tab_groups
+            .remove(&pane_id)
+            .unwrap_or(PaneTabGroup {
+                pane: pane_id.clone(),
+                session_ids: self.pane_sessions(pane_id.clone()),
+                active_session_id: self
+                    .active_session_for_pane(pane_id.clone())
+                    .unwrap_or(session_id),
+            });
+
+        if group.session_ids.is_empty() {
+            group.session_ids.push(session_id);
+            group.active_session_id = session_id;
+        } else if !group.session_ids.contains(&session_id) {
+            group.session_ids.push(session_id);
+        }
+
+        if make_active {
+            if !self.set_pane_active_session(pane_id.clone(), session_id) {
+                self.pane_tab_groups.insert(pane_id, group);
+                return false;
+            }
+            group.active_session_id = session_id;
+        }
+
+        if group.session_ids.len() > 1 {
+            self.pane_tab_groups.insert(pane_id, group);
+        }
+        true
+    }
+
+    fn swap_pane_groups(&mut self, pane_a: PaneId, pane_b: PaneId) {
+        let group_a = self.pane_tab_groups.remove(&pane_a);
+        let group_b = self.pane_tab_groups.remove(&pane_b);
+
+        if let Some(mut group) = group_a {
+            group.pane = pane_b.clone();
+            self.pane_tab_groups.insert(pane_b, group);
+        }
+
+        if let Some(mut group) = group_b {
+            group.pane = pane_a.clone();
+            self.pane_tab_groups.insert(pane_a, group);
+        }
+    }
+
+    fn rebuild_grid_state(&self, profile: LayoutProfile, stacks: &[PaneStack]) -> LayoutState {
         let focused = self.layout_state.focused_session();
         let mut grid_state = LayoutState::with_profile(profile);
-        grid_state.set_assignments(self.ordered_session_ids());
+        grid_state.set_assignments(Self::layout_session_order(stacks, profile.max_sessions()));
 
         if let Some(session_id) = focused {
-            grid_state.focus_session(session_id);
+            if !grid_state.focus_session(session_id) && profile == LayoutProfile::Single {
+                let _ = grid_state.swap_hidden_into_index(session_id, 0);
+            }
         }
 
         if grid_state.focused_session().is_none() {
-            if let Some(session_id) = grid_state.assignments().first().copied() {
+            if let Some(session_id) = grid_state.assignments().iter().flatten().copied().next() {
                 grid_state.focus_session(session_id);
+            }
+        }
+
+        if profile != LayoutProfile::Single {
+            let visible_len = grid_state.occupied_indices().len();
+            if grid_state
+                .focused_index()
+                .is_some_and(|index| index >= profile.max_sessions())
+                && visible_len > 0
+            {
+                if let Some(index) = grid_state.occupied_indices().into_iter().next() {
+                    grid_state.focus_index(index);
+                }
             }
         }
 
         grid_state
     }
 
-    fn rebuild_split_state(&self, tree: LayoutNode) -> SplitLayoutState {
+    fn rebuild_split_state(&self, tree: LayoutNode, stacks: &[PaneStack]) -> SplitLayoutState {
         let focused = self.layout_state.focused_session();
         let mut split_state = SplitLayoutState::new(tree);
 
-        for session_id in self.ordered_session_ids() {
+        for session_id in Self::layout_session_order(stacks, split_state.slot_count()) {
             if !split_state.add_session(session_id) {
                 break;
             }
@@ -299,10 +690,10 @@ impl Workspace {
             return false;
         }
 
-        // Try to add to layout
-        if !self.layout_state.add_session(id) {
-            return false;
-        }
+        match &mut self.layout_state {
+            WorkspaceLayoutState::Grid(s) => s.add_session(id),
+            WorkspaceLayoutState::SplitTree(s) => s.add_session(id),
+        };
 
         self.sessions.push(session);
 
@@ -330,18 +721,68 @@ impl Workspace {
         true
     }
 
+    /// Add a session to a specific visible pane as a new active tab.
+    pub fn add_session_to_pane(&mut self, session: Session, pane_id: PaneId) -> bool {
+        let id = session.id;
+        if self.sessions.iter().any(|existing| existing.id == id) {
+            return false;
+        }
+
+        self.sessions.push(session);
+
+        if self.active_session_for_pane(pane_id.clone()).is_none() {
+            match pane_id {
+                PaneId::GridCell { index } => {
+                    let Some(state) = self.layout_state.as_grid_mut() else {
+                        self.sessions.retain(|session| session.id != id);
+                        return false;
+                    };
+                    if !state.assign_session_to_index(id, index) {
+                        self.sessions.retain(|session| session.id != id);
+                        return false;
+                    }
+                    state.focus_index(index);
+                }
+                PaneId::SplitSlot { slot } => {
+                    let Some(state) = self.layout_state.as_split_tree_mut() else {
+                        self.sessions.retain(|session| session.id != id);
+                        return false;
+                    };
+                    if !state.assign_session_to_slot(id, slot) {
+                        self.sessions.retain(|session| session.id != id);
+                        return false;
+                    }
+                    state.focus_slot(slot);
+                }
+            }
+            return true;
+        }
+
+        if !self.insert_session_into_pane_group(pane_id, id, true) {
+            self.sessions.retain(|session| session.id != id);
+            return false;
+        }
+
+        true
+    }
+
     /// Remove a session from the workspace.
     ///
     /// # Returns
     ///
     /// The removed session, if found.
     pub fn remove_session(&mut self, id: SessionId) -> Option<Session> {
+        if let Some(pane_id) = self.pane_id_for_session(id) {
+            self.remove_session_from_pane_group(pane_id, id);
+        }
+
         // Remove from layout
         self.layout_state.remove_session(id);
 
         // Remove from sessions list
         if let Some(pos) = self.sessions.iter().position(|s| s.id == id) {
             let removed = self.sessions.remove(pos);
+            self.cleanup_pane_tab_groups();
             self.promote_hidden_sessions_into_split_slots();
             Some(removed)
         } else {
@@ -371,6 +812,7 @@ impl Workspace {
             if let Some(dst) = self.session_mut(src.id) {
                 dst.name = src.name.clone();
                 dst.working_directory = src.working_directory.clone();
+                dst.shell = src.shell.clone();
                 dst.current_task = src.current_task.clone();
                 dst.context_usage = src.context_usage;
                 dst.group = src.group.clone();
@@ -389,20 +831,31 @@ impl Workspace {
 
     /// Get the visible sessions (those assigned to cells/slots).
     pub fn visible_sessions(&self) -> Vec<&Session> {
-        self.layout_state
-            .assigned_sessions()
-            .iter()
-            .filter_map(|id| self.session(*id))
+        self.visible_session_ids()
+            .into_iter()
+            .filter_map(|id| self.session(id))
             .collect()
+    }
+
+    /// Get the IDs of sessions currently visible in rendered panes.
+    pub fn visible_session_ids(&self) -> Vec<SessionId> {
+        self.visible_pane_ids()
+            .into_iter()
+            .filter_map(|pane_id| self.active_session_for_pane(pane_id))
+            .collect()
+    }
+
+    /// Returns whether a session is currently visible in the active layout.
+    pub fn is_session_visible(&self, session_id: SessionId) -> bool {
+        self.pane_id_for_session(session_id).is_some()
     }
 
     /// Get the number of sessions that can still be added.
     pub fn available_slots(&self) -> usize {
         match &self.layout_state {
-            WorkspaceLayoutState::Grid(s) => s
-                .profile()
-                .max_sessions()
-                .saturating_sub(s.assignments().len()),
+            WorkspaceLayoutState::Grid(s) => {
+                s.assignments().iter().filter(|cell| cell.is_none()).count()
+            }
             WorkspaceLayoutState::SplitTree(s) => s.available_slots(),
         }
     }
@@ -419,13 +872,123 @@ impl Workspace {
         self.focused_session_id().and_then(|id| self.session(id))
     }
 
+    /// Get the currently focused visible pane.
+    pub fn focused_pane_id(&self) -> Option<PaneId> {
+        match &self.layout_state {
+            WorkspaceLayoutState::Grid(state) => state
+                .focused_index()
+                .map(|index| PaneId::GridCell { index }),
+            WorkspaceLayoutState::SplitTree(state) => {
+                state.focused_slot().map(|slot| PaneId::SplitSlot { slot })
+            }
+        }
+    }
+
+    /// Get all sessions currently attached to the focused visible pane.
+    pub fn focused_pane_session_ids(&self) -> Vec<SessionId> {
+        self.focused_pane_id()
+            .map(|pane_id| self.pane_sessions(pane_id))
+            .unwrap_or_default()
+    }
+
     /// Focus a session by ID.
     ///
     /// # Returns
     ///
     /// `true` if the session was found and focused.
     pub fn focus_session(&mut self, id: SessionId) -> bool {
-        self.layout_state.focus_session(id)
+        if self.session(id).is_none() {
+            return false;
+        }
+
+        if let Some(pane_id) = self.pane_id_for_session(id) {
+            let should_activate = self
+                .pane_tab_groups
+                .get(&pane_id)
+                .is_some_and(|group| group.session_ids.contains(&id))
+                && self.active_session_for_pane(pane_id.clone()) != Some(id);
+
+            if should_activate {
+                if !self.set_pane_active_session(pane_id.clone(), id) {
+                    return false;
+                }
+                if let Some(group) = self.pane_tab_groups.get_mut(&pane_id) {
+                    group.active_session_id = id;
+                }
+            }
+        }
+
+        let focused = match &mut self.layout_state {
+            WorkspaceLayoutState::Grid(s) => {
+                if s.profile() == LayoutProfile::Single {
+                    if let Some(visible_index) =
+                        s.assignments().iter().position(|cell| *cell == Some(id))
+                    {
+                        s.focus_index(visible_index);
+                        true
+                    } else {
+                        let replacement_index = s.focused_index().or(Some(0));
+                        let Some(replacement_index) = replacement_index else {
+                            return false;
+                        };
+                        s.swap_hidden_into_index(id, replacement_index).is_some()
+                    }
+                } else if let Some(target_index) =
+                    s.assignments().iter().position(|cell| *cell == Some(id))
+                {
+                    s.focus_index(target_index);
+                    true
+                } else {
+                    let replacement_index = s
+                        .focused_index()
+                        .or_else(|| s.occupied_indices().into_iter().next())
+                        .or_else(|| s.first_empty_index());
+
+                    let Some(replacement_index) = replacement_index else {
+                        return false;
+                    };
+
+                    s.swap_hidden_into_index(id, replacement_index).is_some()
+                }
+            }
+            WorkspaceLayoutState::SplitTree(s) => {
+                if s.focus_session(id) {
+                    true
+                } else {
+                    let target_slot = s
+                        .focused_slot()
+                        .or_else(|| {
+                            s.assignments().iter().find_map(|(slot, session)| {
+                                if session.is_some()
+                                    || self
+                                        .pane_tab_groups
+                                        .contains_key(&PaneId::SplitSlot { slot: *slot })
+                                {
+                                    Some(*slot)
+                                } else {
+                                    None
+                                }
+                            })
+                        })
+                        .or_else(|| {
+                            s.assignments()
+                                .iter()
+                                .find_map(|(slot, session)| session.is_none().then_some(*slot))
+                        });
+
+                    let Some(target_slot) = target_slot else {
+                        return false;
+                    };
+
+                    s.replace_session_in_slot(target_slot, id).is_some()
+                }
+            }
+        };
+
+        if focused {
+            self.cleanup_pane_tab_groups();
+        }
+        focused
     }
 
     /// Focus a session by grid index (1-based, for keyboard shortcuts).
@@ -436,10 +999,11 @@ impl Workspace {
     pub fn focus_session_number(&mut self, number: usize) -> bool {
         match &mut self.layout_state {
             WorkspaceLayoutState::Grid(s) => {
-                if number == 0 || number > s.assignments().len() {
+                let visible_indices = s.occupied_indices();
+                if number == 0 || number > visible_indices.len() {
                     return false;
                 }
-                s.focus_index(number - 1);
+                s.focus_index(visible_indices[number - 1]);
                 true
             }
             WorkspaceLayoutState::SplitTree(s) => {
@@ -454,12 +1018,45 @@ impl Workspace {
 
     /// Focus the next session.
     pub fn focus_next(&mut self) {
-        self.layout_state.focus_next();
+        match &mut self.layout_state {
+            WorkspaceLayoutState::Grid(s) if s.profile() != LayoutProfile::Single => {
+                let occupied = s.occupied_indices();
+                if occupied.is_empty() {
+                    return;
+                }
+                let next = match s
+                    .focused_index()
+                    .and_then(|index| occupied.iter().position(|&current| current == index))
+                {
+                    Some(index) => (index + 1) % occupied.len(),
+                    None => 0,
+                };
+                s.focus_index(occupied[next]);
+            }
+            _ => self.layout_state.focus_next(),
+        }
     }
 
     /// Focus the previous session.
     pub fn focus_previous(&mut self) {
-        self.layout_state.focus_previous();
+        match &mut self.layout_state {
+            WorkspaceLayoutState::Grid(s) if s.profile() != LayoutProfile::Single => {
+                let occupied = s.occupied_indices();
+                if occupied.is_empty() {
+                    return;
+                }
+                let prev = match s
+                    .focused_index()
+                    .and_then(|index| occupied.iter().position(|&current| current == index))
+                {
+                    Some(index) if index > 0 => index - 1,
+                    Some(_) => occupied.len() - 1,
+                    None => 0,
+                };
+                s.focus_index(occupied[prev]);
+            }
+            _ => self.layout_state.focus_previous(),
+        }
     }
 
     /// Focus in a direction (for arrow key navigation).
@@ -480,7 +1077,10 @@ impl Workspace {
     ///
     /// Transfers current sessions and focus to the new tree.
     pub fn set_split_tree(&mut self, tree: LayoutNode) {
-        self.layout_state = WorkspaceLayoutState::SplitTree(self.rebuild_split_state(tree));
+        let stacks = self.current_pane_stacks_in_order();
+        self.layout_state =
+            WorkspaceLayoutState::SplitTree(self.rebuild_split_state(tree, &stacks));
+        self.apply_pane_stacks_to_current_layout(stacks);
     }
 
     // --- Split Pane Operations ---
@@ -516,6 +1116,8 @@ impl Workspace {
         let (result, should_switch_to_single) =
             if let WorkspaceLayoutState::SplitTree(s) = &mut self.layout_state {
                 if let Some(target) = s.focused_slot() {
+                    self.pane_tab_groups
+                        .remove(&PaneId::SplitSlot { slot: target });
                     let result = s.close_slot(target);
                     let should_switch = result && s.slot_count() == 1;
                     (result, should_switch)
@@ -527,8 +1129,10 @@ impl Workspace {
             };
 
         if should_switch_to_single {
+            let stacks = self.current_pane_stacks_in_order();
             self.layout_state =
-                WorkspaceLayoutState::Grid(self.rebuild_grid_state(LayoutProfile::Single));
+                WorkspaceLayoutState::Grid(self.rebuild_grid_state(LayoutProfile::Single, &stacks));
+            self.apply_pane_stacks_to_current_layout(stacks);
         }
 
         result
@@ -544,8 +1148,23 @@ impl Workspace {
         false
     }
 
+    /// Resize a specific split divider identified by representative slots on
+    /// either side of the split.
+    pub fn resize_split_divider(
+        &mut self,
+        first_slot: SlotId,
+        second_slot: SlotId,
+        new_ratio: f32,
+    ) -> bool {
+        if let WorkspaceLayoutState::SplitTree(s) = &mut self.layout_state {
+            return s.resize_divider(first_slot, second_slot, new_ratio);
+        }
+        false
+    }
+
     /// Convert the current grid layout to an equivalent split tree.
     fn convert_to_split_tree(&mut self) {
+        let stacks = self.current_pane_stacks_in_order();
         let tree = if let WorkspaceLayoutState::Grid(grid_state) = &self.layout_state {
             let (rows, cols) = grid_state.profile().dimensions();
             Some(LayoutNode::from_grid(rows, cols))
@@ -554,7 +1173,9 @@ impl Workspace {
         };
 
         if let Some(tree) = tree {
-            self.layout_state = WorkspaceLayoutState::SplitTree(self.rebuild_split_state(tree));
+            self.layout_state =
+                WorkspaceLayoutState::SplitTree(self.rebuild_split_state(tree, &stacks));
+            self.apply_pane_stacks_to_current_layout(stacks);
         }
     }
 
@@ -680,19 +1301,15 @@ impl Workspace {
 
     /// Get the bounds for a session's cell.
     pub fn session_cell_bounds(&self, id: SessionId) -> Option<Bounds> {
-        match &self.layout_state {
-            WorkspaceLayoutState::Grid(s) => {
-                let index = s.assignments().iter().position(|&sid| sid == id)?;
-                self.grid_layout().cell_bounds_for_index(index)
-            }
-            WorkspaceLayoutState::SplitTree(s) => {
-                let slot = s.slot_for_session(id)?;
+        match self.pane_id_for_session(id)? {
+            PaneId::GridCell { index } => self.grid_layout().cell_bounds_for_index(index),
+            PaneId::SplitSlot { slot } => {
                 let layout = self.split_layout()?;
                 layout
                     .leaf_bounds()
                     .into_iter()
-                    .find(|(sid, _)| *sid == slot)
-                    .map(|(_, b)| b)
+                    .find(|(current, _)| *current == slot)
+                    .map(|(_, bounds)| bounds)
             }
         }
     }
@@ -736,8 +1353,37 @@ impl Workspace {
     /// Returns `true` if the swap was performed.
     pub fn swap_sessions(&mut self, index_a: usize, index_b: usize) -> bool {
         match &mut self.layout_state {
-            WorkspaceLayoutState::Grid(s) => s.swap_assignments(index_a, index_b),
-            WorkspaceLayoutState::SplitTree(s) => s.swap_assignments(index_a, index_b),
+            WorkspaceLayoutState::Grid(s) => {
+                let swapped = s.swap_assignments(index_a, index_b);
+                if swapped {
+                    self.swap_pane_groups(
+                        PaneId::GridCell { index: index_a },
+                        PaneId::GridCell { index: index_b },
+                    );
+                }
+                swapped
+            }
+            WorkspaceLayoutState::SplitTree(s) => {
+                let Some(pane_a) = s
+                    .assignments()
+                    .get(index_a)
+                    .map(|(slot, _)| PaneId::SplitSlot { slot: *slot })
+                else {
+                    return false;
+                };
+                let Some(pane_b) = s
+                    .assignments()
+                    .get(index_b)
+                    .map(|(slot, _)| PaneId::SplitSlot { slot: *slot })
+                else {
+                    return false;
+                };
+                let swapped = s.swap_assignments(index_a, index_b);
+                if swapped {
+                    self.swap_pane_groups(pane_a, pane_b);
+                }
+                swapped
+            }
         }
     }
 
@@ -764,6 +1410,7 @@ impl Workspace {
                 if self.session(focused_session_id).is_some() {
                     if let Some(bounds) = layout.cell_bounds_for_index(0) {
                         return vec![CellInfo {
+                            pane_id: PaneId::GridCell { index: 0 },
                             session_id: focused_session_id,
                             index: 0,
                             bounds,
@@ -780,10 +1427,12 @@ impl Workspace {
             .assignments()
             .iter()
             .enumerate()
-            .filter_map(|(index, &session_id)| {
+            .filter_map(|(index, session_id)| {
+                let session_id = (*session_id)?;
                 let bounds = layout.cell_bounds_for_index(index)?;
                 self.session(session_id)?;
                 Some(CellInfo {
+                    pane_id: PaneId::GridCell { index },
                     session_id,
                     index,
                     bounds,
@@ -805,6 +1454,7 @@ impl Workspace {
                 let session_id = state.session_at_slot(slot)?;
                 self.session(session_id)?;
                 Some(CellInfo {
+                    pane_id: PaneId::SplitSlot { slot },
                     session_id,
                     index,
                     bounds,
@@ -812,11 +1462,202 @@ impl Workspace {
             })
             .collect()
     }
+
+    /// Get all tab sessions for a pane in display order.
+    pub fn pane_tab_session_ids(&self, pane_id: PaneId) -> Vec<SessionId> {
+        self.pane_sessions(pane_id)
+    }
+
+    /// Get the active session rendered in a pane.
+    pub fn pane_active_session_id(&self, pane_id: PaneId) -> Option<SessionId> {
+        self.active_session_for_pane(pane_id)
+    }
+
+    /// Activate a tab within a visible pane.
+    pub fn activate_pane_tab(&mut self, pane_id: PaneId, session_id: SessionId) -> bool {
+        let Some(group) = self.pane_tab_groups.get(&pane_id) else {
+            return false;
+        };
+        if !group.session_ids.contains(&session_id) {
+            return false;
+        }
+        if !self.set_pane_active_session(pane_id.clone(), session_id) {
+            return false;
+        }
+        if let Some(group) = self.pane_tab_groups.get_mut(&pane_id) {
+            group.active_session_id = session_id;
+        }
+        self.focus_session(session_id)
+    }
+
+    /// Group a session into the target pane as an active tab.
+    pub fn group_session_into_pane(&mut self, session_id: SessionId, target_pane: PaneId) -> bool {
+        let Some(source_pane) = self.pane_id_for_session(session_id) else {
+            return false;
+        };
+        if source_pane == target_pane {
+            return false;
+        }
+
+        if !self.pane_exists(&target_pane) {
+            return false;
+        }
+
+        let removed_from_source = match source_pane.clone() {
+            PaneId::GridCell { index } => {
+                if self.pane_tab_groups.contains_key(&source_pane) {
+                    self.remove_session_from_pane_group(source_pane.clone(), session_id);
+                    true
+                } else {
+                    self.layout_state
+                        .as_grid_mut()
+                        .and_then(|state| state.clear_index(index))
+                        == Some(session_id)
+                }
+            }
+            PaneId::SplitSlot { .. } => {
+                if self.pane_tab_groups.contains_key(&source_pane) {
+                    self.remove_session_from_pane_group(source_pane.clone(), session_id);
+                    true
+                } else {
+                    self.layout_state.remove_session(session_id)
+                }
+            }
+        };
+
+        if !removed_from_source {
+            return false;
+        }
+
+        if self.active_session_for_pane(target_pane.clone()).is_none() {
+            let assigned = match target_pane.clone() {
+                PaneId::GridCell { index } => self
+                    .layout_state
+                    .as_grid_mut()
+                    .is_some_and(|state| state.assign_session_to_index(session_id, index)),
+                PaneId::SplitSlot { slot } => self
+                    .layout_state
+                    .as_split_tree_mut()
+                    .is_some_and(|state| state.assign_session_to_slot(session_id, slot)),
+            };
+            if assigned {
+                self.cleanup_pane_tab_groups();
+                return self.focus_session(session_id);
+            }
+            return false;
+        }
+
+        let grouped = self.insert_session_into_pane_group(target_pane, session_id, true);
+        self.cleanup_pane_tab_groups();
+        grouped && self.focus_session(session_id)
+    }
+
+    /// Restore persisted pane stacks after sessions have been recreated.
+    pub fn restore_pane_stacks(
+        &mut self,
+        saved_stacks: &[PaneStackState],
+        restored_session_ids: &HashMap<SessionId, SessionId>,
+    ) {
+        let stacks = saved_stacks
+            .iter()
+            .filter_map(|saved_stack| {
+                let session_ids = saved_stack
+                    .session_ids
+                    .iter()
+                    .filter_map(|saved_id| restored_session_ids.get(saved_id).copied())
+                    .collect::<Vec<_>>();
+                if session_ids.is_empty() {
+                    return None;
+                }
+
+                Some(PaneStack {
+                    active_session_id: restored_session_ids
+                        .get(&saved_stack.active_session_id)
+                        .copied()
+                        .filter(|session_id| session_ids.contains(session_id))
+                        .unwrap_or(session_ids[0]),
+                    session_ids,
+                })
+            })
+            .collect::<Vec<_>>();
+        self.restore_runtime_pane_stacks(stacks);
+    }
+
+    fn restore_runtime_pane_stacks(&mut self, mut stacks: Vec<PaneStack>) {
+        let assigned: HashSet<SessionId> = stacks
+            .iter()
+            .flat_map(|stack| stack.session_ids.iter().copied())
+            .collect();
+        stacks.extend(
+            self.sessions
+                .iter()
+                .map(|session| session.id)
+                .filter(|session_id| !assigned.contains(session_id))
+                .map(|session_id| PaneStack {
+                    session_ids: vec![session_id],
+                    active_session_id: session_id,
+                }),
+        );
+
+        let rebuilt_layout = match &self.layout_state {
+            WorkspaceLayoutState::Grid(state) => {
+                WorkspaceLayoutState::Grid(self.rebuild_grid_state(state.profile(), &stacks))
+            }
+            WorkspaceLayoutState::SplitTree(state) => WorkspaceLayoutState::SplitTree(
+                self.rebuild_split_state(state.tree().clone(), &stacks),
+            ),
+        };
+        self.layout_state = rebuilt_layout;
+        self.apply_pane_stacks_to_current_layout(stacks);
+    }
+
+    /// Restore legacy persisted pane tab groups after sessions have been recreated.
+    pub fn restore_pane_tab_groups(
+        &mut self,
+        saved_groups: &[PaneTabGroup],
+        restored_session_ids: &HashMap<SessionId, SessionId>,
+    ) {
+        for group in saved_groups {
+            if !self.pane_exists(&group.pane) {
+                continue;
+            }
+            let session_ids = group
+                .session_ids
+                .iter()
+                .filter_map(|saved_id| restored_session_ids.get(saved_id).copied())
+                .collect::<Vec<_>>();
+            if session_ids.is_empty() {
+                continue;
+            }
+
+            let active_session_id = restored_session_ids
+                .get(&group.active_session_id)
+                .copied()
+                .filter(|session_id| session_ids.contains(session_id))
+                .unwrap_or(session_ids[0]);
+
+            for session_id in &session_ids {
+                if self.pane_id_for_session(*session_id) != Some(group.pane.clone()) {
+                    let _ = self.group_session_into_pane(*session_id, group.pane.clone());
+                }
+            }
+
+            if let Some(restored_group) = self.pane_tab_groups.get_mut(&group.pane) {
+                restored_group.session_ids = session_ids.clone();
+                restored_group.active_session_id = active_session_id;
+            }
+            let _ = self.activate_pane_tab(group.pane.clone(), active_session_id);
+        }
+
+        self.cleanup_pane_tab_groups();
+    }
 }
 
 /// Information about a grid cell for rendering.
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct CellInfo {
+    /// Visible pane identifier.
+    pub pane_id: PaneId,
     /// Session ID.
     pub session_id: SessionId,
     /// Grid index (0-based).

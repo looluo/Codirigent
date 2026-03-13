@@ -2,23 +2,20 @@
 //!
 //! This module handles rendering of the workspace grid layout, including:
 //! - Traditional NxM grid layout
-//! - Split tree (binary tree) layout
+//! - Dispatch to split-tree rendering
 //! - Session cells with terminals
-//! - Empty cells and placeholders
+//! - Empty grid cells and placeholders
 
-use crate::icons;
 use crate::terminal_header::TerminalHeaderRenderHints;
 use crate::theme::CodirigentTheme;
 use crate::workspace::gpui::WorkspaceView;
 use crate::workspace::types::HEADER_HEIGHT;
-use codirigent_core::{LayoutNode, SessionId, SlotId, SplitDirection};
+use codirigent_core::SessionId;
 use gpui::{
-    div, px, relative, ClickEvent, Context, Focusable, FontWeight, InteractiveElement, IntoElement,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, ScrollWheelEvent,
-    SharedString, StatefulInteractiveElement, Styled, Window,
+    div, px, Context, Focusable, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ParentElement, ScrollWheelEvent, SharedString, Styled, Window,
 };
 use std::rc::Rc;
-use tracing::info;
 
 /// Visual state of a cell during drag-and-drop.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -37,7 +34,7 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) -> gpui::AnyElement {
         if self.workspace().is_split_tree_mode() {
-            self.render_split_tree_layout(window, cx).into_any_element()
+            self.render_split_tree_layout(window, cx)
         } else {
             self.render_grid_layout(window, cx).into_any_element()
         }
@@ -76,7 +73,13 @@ impl WorkspaceView {
                 let index = (row * cols + col) as usize;
                 let position = codirigent_core::GridPosition { row, col };
 
-                let cell_div = if let Some(info) = self.cache.render_cell_info.get(index).copied() {
+                let cell_div = if let Some(info) = self
+                    .cache
+                    .render_cell_info
+                    .iter()
+                    .find(|info| info.index == index)
+                    .cloned()
+                {
                     // Get or create terminal header hints
                     let header_hints =
                         if let Some(header) = self.get_terminal_header(info.session_id) {
@@ -106,6 +109,7 @@ impl WorkspaceView {
 
                     // Render session cell with actual terminal content
                     self.render_session_cell_with_terminal(
+                        info.pane_id.clone(),
                         info.session_id,
                         &header_hints,
                         &theme,
@@ -136,204 +140,11 @@ impl WorkspaceView {
         grid
     }
 
-    /// Render the split tree layout using recursive binary tree traversal.
-    fn render_split_tree_layout(
-        &mut self,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
-        let theme = self.workspace().theme().clone();
-        let grid_gap = theme.grid_gap;
-
-        // Collect split tree state needed for rendering
-        let tree = match self.workspace().layout_state() {
-            crate::layout::WorkspaceLayoutState::SplitTree(s) => s.tree().clone(),
-            _ => return div().flex_1().into_any_element(),
-        };
-
-        // Pre-compute colors once to avoid redundant conversions on every recursive call
-        let panel_bg: gpui::Hsla = theme.panel_background.into();
-        let border_color: gpui::Hsla = theme.border.into();
-        let muted: gpui::Hsla = theme.muted.into();
-
-        self.render_split_node(
-            &tree,
-            &theme,
-            grid_gap,
-            panel_bg,
-            border_color,
-            muted,
-            window,
-            cx,
-        )
-    }
-
-    /// Recursively render a layout node in the split tree.
-    #[allow(clippy::too_many_arguments)]
-    fn render_split_node(
-        &mut self,
-        node: &LayoutNode,
-        theme: &CodirigentTheme,
-        gap: f32,
-        panel_bg: gpui::Hsla,
-        border_color: gpui::Hsla,
-        muted: gpui::Hsla,
-        window: &mut Window,
-        cx: &mut Context<Self>,
-    ) -> gpui::AnyElement {
-        match node {
-            LayoutNode::Leaf { slot } => {
-                let focused_session = self.workspace().focused_session_id();
-                let session_data = self
-                    .workspace()
-                    .layout_state()
-                    .as_split_tree()
-                    .and_then(|state| state.session_at_slot(*slot))
-                    .and_then(|session_id| {
-                        self.workspace().session(session_id).map(|session| {
-                            (
-                                session_id,
-                                focused_session == Some(session_id),
-                                session.name.clone(),
-                                session.status,
-                            )
-                        })
-                    });
-
-                if let Some((session_id, is_focused, name, status)) = session_data {
-                    let header_hints = if let Some(header) = self.get_terminal_header(session_id) {
-                        header.render_hints()
-                    } else {
-                        crate::terminal_header::TerminalHeader::new(name, status)
-                            .with_focused(is_focused)
-                            .render_hints()
-                    };
-
-                    self.render_session_cell_with_terminal(
-                        session_id,
-                        &header_hints,
-                        theme,
-                        None,
-                        window,
-                        cx,
-                    )
-                    .into_any_element()
-                } else {
-                    // Empty slot
-                    self.render_split_empty_slot(*slot, panel_bg, border_color, muted, cx)
-                        .into_any_element()
-                }
-            }
-            LayoutNode::Split {
-                direction,
-                ratio,
-                first,
-                second,
-            } => {
-                // Render children recursively (pass pre-computed colors to avoid per-call conversion)
-                let first_elem = self.render_split_node(
-                    first,
-                    theme,
-                    gap,
-                    panel_bg,
-                    border_color,
-                    muted,
-                    window,
-                    cx,
-                );
-                let second_elem = self.render_split_node(
-                    second,
-                    theme,
-                    gap,
-                    panel_bg,
-                    border_color,
-                    muted,
-                    window,
-                    cx,
-                );
-
-                // Use flex ratio to distribute space: first gets `ratio`, second gets `1 - ratio`
-                // Multiply by 1000 for precision in flex-grow values
-                let first_flex = *ratio * 1000.0;
-                let second_flex = (1.0 - *ratio) * 1000.0;
-
-                // Horizontal: children are flex-col, container is flex-row
-                // Vertical: children are flex-row, container is flex-col
-                let is_horizontal = *direction == SplitDirection::Horizontal;
-
-                let make_child_div = |elem: gpui::AnyElement, flex: f32| -> gpui::Div {
-                    let mut d = div().flex().size_full();
-                    d = if is_horizontal {
-                        d.flex_col()
-                    } else {
-                        d.flex_row()
-                    };
-                    d.style().flex_grow = Some(flex);
-                    d.style().flex_shrink = Some(1.0);
-                    d.style().flex_basis = Some(relative(0.).into());
-                    d.child(elem)
-                };
-
-                let mut container = div().flex_1().flex().gap(px(gap));
-                container = if is_horizontal {
-                    container.flex_row()
-                } else {
-                    container.flex_col()
-                };
-                let container = container
-                    .child(make_child_div(first_elem, first_flex))
-                    .child(make_child_div(second_elem, second_flex));
-
-                container.into_any_element()
-            }
-        }
-    }
-
-    /// Render an empty slot in split tree mode.
-    fn render_split_empty_slot(
-        &mut self,
-        slot: SlotId,
-        panel_bg: gpui::Hsla,
-        border_color: gpui::Hsla,
-        muted: gpui::Hsla,
-        cx: &mut Context<Self>,
-    ) -> gpui::Stateful<gpui::Div> {
-        div()
-            .id(SharedString::from(format!("empty-slot-{}", slot.0)))
-            .size_full()
-            .bg(panel_bg)
-            .border_1()
-            .border_color(border_color)
-            .rounded_lg()
-            .border_dashed()
-            .flex()
-            .flex_col()
-            .items_center()
-            .justify_center()
-            .gap_2()
-            .cursor_pointer()
-            .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
-                info!(?slot, "Empty split slot clicked — creating session");
-                this.create_session_in_slot(slot, cx);
-            }))
-            .child(
-                div()
-                    .text_xl()
-                    .text_color(muted)
-                    .font_family(icons::LUCIDE_FONT_FAMILY)
-                    .child(icons::circle_plus()),
-            )
-            .child(
-                div()
-                    .text_xs()
-                    .text_color(muted)
-                    .child(super::types::EMPTY_CELL_MESSAGE),
-            )
-    }
-
     /// Render a session cell with terminal header and actual terminal content.
-    fn render_session_cell_with_terminal(
+    #[allow(clippy::too_many_arguments)]
+    pub(super) fn render_session_cell_with_terminal(
         &mut self,
+        pane_id: codirigent_core::PaneId,
         session_id: SessionId,
         hints: &TerminalHeaderRenderHints,
         theme: &CodirigentTheme,
@@ -370,7 +181,7 @@ impl WorkspaceView {
             }
             if drag.source_index == drag_logical_index.unwrap_or(usize::MAX) {
                 Some(DragVisual::Source)
-            } else if drag.target_index == drag_logical_index {
+            } else if drag.target.map(|target| target.index) == drag_logical_index {
                 Some(DragVisual::Target)
             } else {
                 None
@@ -386,182 +197,23 @@ impl WorkspaceView {
             _ => cell_border,
         };
 
-        let header_border = cell_border;
+        let header = self.render_pane_header(
+            pane_id.clone(),
+            session_id,
+            hints,
+            theme,
+            panel_bg,
+            border_color,
+            cell_border,
+            fg,
+            muted,
+            orange,
+            drag_logical_index,
+            matches!(drag_visual, Some(DragVisual::Source)),
+            cx,
+        );
 
-        // Color indicator bar
-        let color_indicator: gpui::Hsla = hints.color_indicator.into();
-        let status_color: gpui::Hsla = hints.status.color.into();
-
-        let mut header = div()
-            .id(SharedString::from(format!(
-                "terminal-header-{}",
-                session_id.0
-            )))
-            .h(px(hints.height))
-            .w_full()
-            .bg(panel_bg)
-            .border_b_1()
-            .border_color(header_border)
-            .flex()
-            .items_center()
-            .px_2()
-            .gap_2()
-            .child(
-                div()
-                    .w(px(3.0))
-                    .h(px(16.0))
-                    .rounded_sm()
-                    .bg(color_indicator),
-            )
-            .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(status_color))
-            .child(
-                div()
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(fg)
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .child(hints.name.clone()),
-            );
-
-        // Project/directory name (after session name)
-        if let Some(project) = &hints.project_name {
-            header = header.child(
-                div()
-                    .text_xs()
-                    .text_color(muted.opacity(0.7))
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .child(project.clone()),
-            );
-        }
-
-        // Git branch badge (after session name)
-        if let Some(branch) = &hints.git_branch {
-            let git_fg = muted.opacity(0.8);
-            let git_badge_bg = border_color.opacity(0.25);
-            let branch_label = if branch.chars().count() > 16 {
-                let truncated: String = branch.chars().take(13).collect();
-                format!("{}...", truncated)
-            } else {
-                branch.clone()
-            };
-            let mut git_badge = div()
-                .px(px(4.0))
-                .py_px()
-                .rounded_sm()
-                .bg(git_badge_bg)
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .gap_1()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(git_fg)
-                        .font_family(icons::LUCIDE_FONT_FAMILY)
-                        .child(icons::git_branch()),
-                )
-                .child(div().text_xs().text_color(git_fg).child(branch_label));
-
-            if let Some(count) = hints.git_dirty_count {
-                if count > 0 {
-                    git_badge = git_badge.child(
-                        div()
-                            .text_xs()
-                            .text_color(orange)
-                            .child(format!("+{}", count)),
-                    );
-                }
-            }
-
-            header = header.child(git_badge);
-        }
-
-        header = header.child(div().flex_1());
-
-        // Task badge (if any)
-        if let Some(task) = &hints.task {
-            let task_bg: gpui::Hsla = task.bg_color.into();
-            let task_color: gpui::Hsla = task.text_color.into();
-            header = header.child(
-                div()
-                    .px_2()
-                    .py_px()
-                    .rounded_sm()
-                    .bg(task_bg)
-                    .text_xs()
-                    .text_color(task_color)
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .child(task.display_text.clone()),
-            );
-        }
-
-        // Context usage (if any)
-        if let Some(context) = &hints.context {
-            let context_color: gpui::Hsla = context.color.into();
-            header = header.child(
-                div()
-                    .text_xs()
-                    .text_color(context_color)
-                    .child(context.text().to_string()),
-            );
-        }
-
-        // Set cursor for draggable header
-        header = if matches!(drag_visual, Some(DragVisual::Source)) {
-            header.cursor_grabbing()
-        } else if drag_logical_index.is_some() && self.cache.render_cell_info.len() > 1 {
-            header.cursor_grab()
-        } else {
-            header
-        };
-
-        // --- Drag-and-drop handlers on header ---
-        // Use logical index (CellInfo.index) for swap operations, not Vec position.
-        if let Some(logical_index) = drag_logical_index {
-            // Don't allow drag in single-pane layout
-            if self.cache.render_cell_info.len() > 1 {
-                header = header
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
-                            let pos = crate::layout::Point::new(
-                                event.position.x.into(),
-                                event.position.y.into(),
-                            );
-                            this.selection.drag = Some(super::types::DragState {
-                                source_session_id: session_id,
-                                source_index: logical_index,
-                                start_position: pos,
-                                current_position: pos,
-                                active: false,
-                                target_index: None,
-                            });
-                            cx.notify();
-                        }),
-                    )
-                    .on_mouse_move(cx.listener(
-                        move |this, event: &MouseMoveEvent, _window, cx| {
-                            let Some(drag) = &mut this.selection.drag else {
-                                return;
-                            };
-                            if drag.source_session_id != session_id {
-                                return;
-                            }
-                            let pos = crate::layout::Point::new(
-                                event.position.x.into(),
-                                event.position.y.into(),
-                            );
-                            drag.update_pointer(pos, &this.cache.render_cell_info);
-                            cx.notify();
-                        },
-                    ));
-                // Note: mouse-up swap is handled by the global handler on
-                // workspace-container (gpui.rs) to catch releases anywhere.
-            }
-        }
+        // Mouse-up handling for active-tab drags lives on the workspace root.
 
         // Render terminal content before building the div tree so the
         // mutable borrow on `self` is released before `cx.listener()`.

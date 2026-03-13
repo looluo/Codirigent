@@ -159,6 +159,9 @@ All data stored in `.codirigent/` directory:
 
 - Read [Data Flow](data-flow.md) for detailed flow diagrams
 - Read [Workspace Architecture](workspace/README.md) for the `codirigent-ui`
-  workspace layout, render roots, and polling/status boundaries
+  workspace layout, render roots, pointer interactions, and polling/status
+  boundaries
+- Read [Crate Dependencies](crate-dependencies.md) for dependency graph
+- Read [Event Bus](event-bus.md) for event system details
 - Read [../hook-and-status-system.md](../hook-and-status-system.md) for the
   hook-signal and session-status pipeline

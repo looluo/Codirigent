@@ -45,6 +45,9 @@ pub struct PersistentSession {
     pub status: SessionStatus,
     /// Working directory.
     pub working_directory: PathBuf,
+    /// Requested shell for this session. `None` means Auto.
+    #[serde(default)]
+    pub shell: Option<String>,
     /// Current task if any.
     pub current_task: Option<TaskId>,
     /// Git worktree path if using worktrees.
@@ -108,6 +111,7 @@ impl PersistentSession {
             name: session.name.clone(),
             status: session.status,
             working_directory: session.working_directory.clone(),
+            shell: session.shell.clone(),
             current_task: session.current_task.clone(),
             worktree_path: None,
             context_usage: session.context_usage,
@@ -183,6 +187,7 @@ impl PersistentSession {
             name: self.name.clone(),
             status: SessionStatus::Idle, // Reset status on restore
             working_directory: self.working_directory.clone(),
+            shell: self.shell.clone(),
             current_task: self.current_task.clone(),
             context_usage: None, // Reset on restore
             created_at: self.started_at,
@@ -569,6 +574,7 @@ mod tests {
     #[test]
     fn test_persistent_session_roundtrip() {
         let mut session = Session::new(SessionId(1), "Test".to_string(), PathBuf::from("/tmp"));
+        session.shell = Some("bash".to_string());
         session.group = Some("backend".to_string());
         session.color = Some("#FF0000".to_string());
 
@@ -578,6 +584,7 @@ mod tests {
         assert_eq!(restored.id, session.id);
         assert_eq!(restored.name, session.name);
         assert_eq!(restored.working_directory, session.working_directory);
+        assert_eq!(restored.shell, Some("bash".to_string()));
         assert_eq!(restored.group, session.group);
         assert_eq!(restored.color, session.color);
         // Status should be reset to Idle

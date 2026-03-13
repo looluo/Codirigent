@@ -34,6 +34,9 @@ pub struct Session {
     pub status: SessionStatus,
     /// Working directory for this session.
     pub working_directory: PathBuf,
+    /// Requested shell for this session. `None` means Auto.
+    #[serde(default)]
+    pub shell: Option<String>,
     /// Currently assigned task, if any.
     pub current_task: Option<TaskId>,
     /// Context window usage (0.0 - 1.0), if available.
@@ -73,6 +76,7 @@ impl Session {
             name,
             status: SessionStatus::default(),
             working_directory,
+            shell: None,
             current_task: None,
             context_usage: None,
             created_at: chrono::Utc::now(),

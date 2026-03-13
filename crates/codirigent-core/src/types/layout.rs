@@ -280,6 +280,56 @@ impl LayoutNode {
         }
     }
 
+    /// Adjust the split ratio for the divider between two child subtrees.
+    ///
+    /// Finds the split node whose first subtree contains `first_slot` and whose
+    /// second subtree contains `second_slot`, then updates that split's ratio.
+    /// Returns `None` if no such split exists.
+    pub fn set_ratio_for_divider(
+        &self,
+        first_slot: SlotId,
+        second_slot: SlotId,
+        new_ratio: f32,
+    ) -> Option<LayoutNode> {
+        let clamped = new_ratio.clamp(0.1, 0.9);
+        match self {
+            LayoutNode::Leaf { .. } => None,
+            LayoutNode::Split {
+                direction,
+                ratio,
+                first,
+                second,
+            } => {
+                if first.contains_slot(first_slot) && second.contains_slot(second_slot) {
+                    Some(LayoutNode::Split {
+                        direction: *direction,
+                        ratio: clamped,
+                        first: first.clone(),
+                        second: second.clone(),
+                    })
+                } else if let Some(new_first) =
+                    first.set_ratio_for_divider(first_slot, second_slot, new_ratio)
+                {
+                    Some(LayoutNode::Split {
+                        direction: *direction,
+                        ratio: *ratio,
+                        first: Box::new(new_first),
+                        second: second.clone(),
+                    })
+                } else {
+                    second
+                        .set_ratio_for_divider(first_slot, second_slot, new_ratio)
+                        .map(|new_second| LayoutNode::Split {
+                            direction: *direction,
+                            ratio: *ratio,
+                            first: first.clone(),
+                            second: Box::new(new_second),
+                        })
+                }
+            }
+        }
+    }
+
     fn direct_child_has_slot(&self, child: &LayoutNode, target: SlotId) -> bool {
         matches!(child, LayoutNode::Leaf { slot } if *slot == target)
     }

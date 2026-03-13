@@ -139,6 +139,8 @@ impl WorkspaceView {
                 .map(crate::sidebar::Color::from_hex)
                 .unwrap_or_else(|| crate::sidebar::Color::from_hex("#6366f1"));
             let task = self.task_title_for_session(session, task_titles);
+            let (shell_label, shell_warning) =
+                self.session_shell_display(session.id, session.shell.as_deref());
             if let Some(header) = self.terminal_headers.get_mut(&session.id) {
                 if header.session_name != session.name {
                     header.session_name = session.name.clone();
@@ -164,6 +166,12 @@ impl WorkspaceView {
                 if header.task != task {
                     header.task = task;
                 }
+                if header.shell_label.as_deref() != Some(shell_label.as_str()) {
+                    header.shell_label = Some(shell_label.clone());
+                }
+                if header.shell_warning != shell_warning {
+                    header.shell_warning = shell_warning.clone();
+                }
             }
         }
     }
@@ -172,15 +180,22 @@ impl WorkspaceView {
         let (rows, cols) = self.workspace.layout_profile().dimensions();
         let occupied: Vec<codirigent_core::GridPosition> = self
             .workspace
-            .sessions()
-            .iter()
-            .enumerate()
-            .map(|(i, _)| {
-                let row = i as u32 / cols;
-                let col = i as u32 % cols;
-                codirigent_core::GridPosition { row, col }
+            .layout_state()
+            .as_grid()
+            .map(|state| {
+                state
+                    .assignments()
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, session_id)| {
+                        session_id.map(|_| codirigent_core::GridPosition {
+                            row: index as u32 / cols,
+                            col: index as u32 % cols,
+                        })
+                    })
+                    .collect()
             })
-            .collect();
+            .unwrap_or_default();
         self.empty_cells.setup_for_grid(rows, cols, &occupied);
     }
 
@@ -222,6 +237,8 @@ impl WorkspaceView {
             .map(crate::sidebar::Color::from_hex)
             .unwrap_or_else(|| crate::sidebar::Color::from_hex("#6366f1"));
         let task = self.task_title_for_session(session, None);
+        let (shell_label, shell_warning) =
+            self.session_shell_display(session.id, session.shell.as_deref());
 
         if let Some(header) = self.terminal_headers.get_mut(&session_id) {
             header.status = session.status;
@@ -250,6 +267,12 @@ impl WorkspaceView {
             }
             if header.task != task {
                 header.task = task;
+            }
+            if header.shell_label.as_deref() != Some(shell_label.as_str()) {
+                header.shell_label = Some(shell_label);
+            }
+            if header.shell_warning != shell_warning {
+                header.shell_warning = shell_warning;
             }
         }
     }

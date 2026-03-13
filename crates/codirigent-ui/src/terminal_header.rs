@@ -27,6 +27,10 @@ pub struct TerminalHeader {
     pub project_name: Option<String>,
     /// CLI engine name (e.g., "Claude", "Gemini 2.0").
     pub cli_name: Option<String>,
+    /// Effective shell label shown in the header (e.g. "Auto", "bash").
+    pub shell_label: Option<String>,
+    /// Warning shown when the requested shell could not be honored on restore.
+    pub shell_warning: Option<String>,
     /// Whether the session needs user attention.
     pub needs_attention: bool,
     /// AI-generated summary of current activity.
@@ -50,6 +54,8 @@ impl Default for TerminalHeader {
             is_focused: false,
             project_name: None,
             cli_name: None,
+            shell_label: None,
+            shell_warning: None,
             needs_attention: false,
             ai_summary: None,
             git_branch: None,
@@ -102,6 +108,13 @@ impl TerminalHeader {
     /// Set the CLI engine name.
     pub fn with_cli_name(mut self, name: impl Into<String>) -> Self {
         self.cli_name = Some(name.into());
+        self
+    }
+
+    /// Set the shell label and optional warning.
+    pub fn with_shell(mut self, label: impl Into<String>, warning: Option<String>) -> Self {
+        self.shell_label = Some(label.into());
+        self.shell_warning = warning;
         self
     }
 
@@ -327,6 +340,10 @@ pub struct TerminalHeaderRenderHints {
     pub project_name: Option<String>,
     /// CLI engine name.
     pub cli_name: Option<String>,
+    /// Effective shell label shown in the header.
+    pub shell_label: Option<String>,
+    /// Warning shown when the requested shell could not be honored on restore.
+    pub shell_warning: Option<String>,
     /// Whether the session needs user attention.
     pub needs_attention: bool,
     /// AI-generated summary.
@@ -355,6 +372,8 @@ impl TerminalHeader {
             height: Self::DEFAULT_HEIGHT,
             project_name: self.project_name.clone(),
             cli_name: self.cli_name.clone(),
+            shell_label: self.shell_label.clone(),
+            shell_warning: self.shell_warning.clone(),
             needs_attention: self.needs_attention,
             ai_summary: self.ai_summary.clone(),
             git_branch: self.git_branch.clone(),
@@ -575,6 +594,23 @@ mod tests {
     fn test_terminal_header_cli_name() {
         let header = TerminalHeader::new("S1", SessionStatus::Working).with_cli_name("Gemini 2.0");
         assert_eq!(header.cli_name, Some("Gemini 2.0".to_string()));
+    }
+
+    #[test]
+    fn test_terminal_header_shell_label() {
+        let header = TerminalHeader::new("S1", SessionStatus::Working)
+            .with_shell("bash", Some("Requested shell unavailable".to_string()));
+        assert_eq!(header.shell_label, Some("bash".to_string()));
+        assert_eq!(
+            header.shell_warning,
+            Some("Requested shell unavailable".to_string())
+        );
+        let hints = header.render_hints();
+        assert_eq!(hints.shell_label, Some("bash".to_string()));
+        assert_eq!(
+            hints.shell_warning,
+            Some("Requested shell unavailable".to_string())
+        );
     }
 
     #[test]

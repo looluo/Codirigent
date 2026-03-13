@@ -12,6 +12,7 @@ the split. It owns:
 - grouped UI state fields
 - GPUI trait impls (`Render`, focus, IME/input handling)
 - high-level render orchestration
+- root event wiring for workspace-global pointer gestures
 - keyboard and IME behavior that still benefits from staying close to the root
 
 The split was about moving lower-coupling helper clusters out of the root, not
@@ -85,6 +86,7 @@ Converts canonical session/task state into cached UI state:
 
 - task board counts and snapshots
 - terminal header state
+- shell badge and restore-warning synchronization
 - empty-grid-cell state
 
 Key rule:
@@ -117,6 +119,57 @@ Owns the follow-up work after layout or selection changes:
 
 This is the main place where UI layout changes meet terminal runtime behavior.
 
+## Render-Facing Helper Modules
+
+The GPUI root now delegates most visual composition into smaller render
+modules:
+
+### `grid_render.rs`
+
+Owns:
+
+- grid-layout composition
+- split-vs-grid dispatch
+- shared session-cell rendering used by both grid and split layouts
+
+### `split_render.rs`
+
+Owns:
+
+- recursive split-tree rendering
+- divider visuals and drag-start wiring
+- empty split-slot rendering
+
+### `pane_header_render.rs`
+
+Owns:
+
+- pane-local tab strips
+- header badges and title metadata
+- active-tab drag affordances
+- pane-local `+` session creation affordance
+
+These modules keep `gpui.rs` as the UI root without forcing it to inline every
+render detail.
+
+## Pointer Interaction Flow
+
+Workspace-global pointer gestures are now split between:
+
+- `gpui.rs`
+  - root GPUI event hooks (`on_mouse_move`, `on_mouse_up`)
+  - wiring from GPUI events into workspace reducers
+
+- `impl_pointer_interactions.rs`
+  - split-resize move/update/finalize
+  - session-drag move/finalize
+  - cancellation when a drag ends outside the normal path
+
+Design rule:
+
+- `gpui.rs` should stay as the place where root GPUI hooks are discoverable
+- gesture-specific mutation logic should live in focused helper modules
+
 ## Render Path
 
 The high-level render flow is:
@@ -128,6 +181,8 @@ The high-level render flow is:
 5. delegate UI composition into render-focused modules such as:
    - `render.rs`
    - `grid_render.rs`
+   - `split_render.rs`
+   - `pane_header_render.rs`
    - `drawer_render.rs`
    - `task_board_render.rs`
 
@@ -138,10 +193,11 @@ Important design choice:
 
 ## Mutation Path Rules
 
-When a workspace mutation changes visible state, the usual follow-up pattern is:
+When a workspace mutation changes visible state, the usual follow-up pattern
+is:
 
 1. mutate canonical workspace state
-2. call `mark_layout_cache_dirty()` if structure/bounds changed
+2. call `mark_layout_cache_dirty()` if structure or bounds changed
 3. call `sync_layout_derived_state()` or `sync_task_derived_state()`
 4. run any file-tree or session-selection follow-up
 5. `cx.notify()` if the UI should repaint
@@ -157,7 +213,7 @@ Examples that follow this pattern:
 
 If you need to change:
 
-- terminal header fields:
+- terminal header fields or shell labels:
   - `gpui/derived_state.rs`
 
 - task board counters or task snapshot contents:
@@ -179,6 +235,14 @@ If you need to change:
 
 - resize throttling or collapsed-resize guards:
   - `gpui/layout_sync.rs`
+  - `impl_pointer_interactions.rs`
+
+- split divider drag behavior:
+  - `split_render.rs`
+  - `impl_pointer_interactions.rs`
+
+- pane tabs, badges, or pane `+` behavior:
+  - `pane_header_render.rs`
 
 - key handling or IME behavior:
   - `gpui.rs`

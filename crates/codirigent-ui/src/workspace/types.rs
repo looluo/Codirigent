@@ -4,7 +4,7 @@
 //! implementation, including modal states and UI component data.
 
 use super::CellInfo;
-use codirigent_core::{SessionId, SessionStatus, SlotId, TaskId};
+use codirigent_core::{PaneId, SessionId, SessionStatus, SlotId, TaskId};
 use codirigent_session::codex_session_reader::CodexSessionReader;
 use codirigent_session::gemini_session_reader::GeminiSessionReader;
 use gpui::Hsla;
@@ -36,6 +36,9 @@ pub(super) const DRAWER_HEADER_HEIGHT: f32 = 40.0;
 /// Used both for name generation (`format!("{}{}", SESSION_NAME_PREFIX, n)`)
 /// and for reverse-parsing the session number (`strip_prefix(SESSION_NAME_PREFIX)`).
 pub(super) const SESSION_NAME_PREFIX: &str = "Session ";
+
+/// Label shown when a session uses the default shell resolution path.
+pub(super) const SESSION_SHELL_AUTO_LABEL: &str = "Auto";
 
 /// Height of session and group rows in the Sessions drawer panel.
 pub(super) const SESSION_ROW_HEIGHT: f32 = 28.0;
@@ -226,6 +229,33 @@ pub(super) struct TaskCreationModal {
     pub(super) editing_task_id: Option<TaskId>,
 }
 
+/// Session creation modal state.
+///
+/// This modal is used for every session creation entry point so shell selection
+/// stays consistent whether the user clicks an empty pane, a pane-local `+`,
+/// or the generic create action.
+#[derive(Debug, Clone)]
+pub(super) struct SessionCreationModal {
+    /// Pane that should receive the created session, if any.
+    pub(super) target_pane: Option<PaneId>,
+    /// Stored shell values; empty string means Auto.
+    pub(super) shell_options: Vec<String>,
+    /// Currently selected option index.
+    pub(super) selected_shell_index: usize,
+    /// Whether a background create request is currently in flight.
+    pub(super) pending: bool,
+    /// Optional validation or creation error.
+    pub(super) error: Option<String>,
+}
+
+#[derive(Debug, Clone)]
+pub(super) struct RestoreShellFallback {
+    /// Shell originally requested by the saved session.
+    pub(super) requested_shell: String,
+    /// Shell actually launched for the restored session. `None` means Auto.
+    pub(super) effective_shell: Option<String>,
+}
+
 /// Context menu state for file tree right-click.
 ///
 /// Captures the position and target of a file tree context menu invocation.
@@ -244,6 +274,8 @@ pub(super) struct FileTreeContextMenu {
 pub(super) struct ModalState {
     /// Session action modal state (rename/group).
     pub session_action: Option<SessionActionModal>,
+    /// Session creation modal state.
+    pub session_creation: Option<SessionCreationModal>,
     /// Task creation modal state.
     pub task_creation: Option<TaskCreationModal>,
     /// Pending layout profile deletion: (tab_index, profile_name) awaiting confirmation.
@@ -256,6 +288,7 @@ impl ModalState {
     pub fn new() -> Self {
         Self {
             session_action: None,
+            session_creation: None,
             task_creation: None,
             pending_profile_deletion: None,
             cursor_blink_on: true,
@@ -281,12 +314,29 @@ pub(super) struct SelectionState {
     pub last_click_position: Option<(codirigent_core::GridPosition, Instant)>,
     /// Active drag-and-drop state for session reordering (None when not dragging).
     pub drag: Option<DragState>,
+    /// Active split-divider resize gesture (None when not resizing).
+    pub split_resize: Option<SplitResizeState>,
 }
 
 /// State for drag-and-drop session reordering.
 ///
 /// Tracks an in-progress drag operation where the user is moving a session
 /// from one pane to another by dragging its header bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DragTargetKind {
+    PaneBody,
+    PaneHeader,
+}
+
+/// Current drop target under the pointer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct DragTarget {
+    /// Grid or split logical cell index.
+    pub index: usize,
+    /// Whether the pointer is over the header or body region.
+    pub kind: DragTargetKind,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(super) struct DragState {
     /// Session being dragged.
@@ -299,8 +349,26 @@ pub(super) struct DragState {
     pub current_position: crate::layout::Point,
     /// Whether the drag threshold (5px) has been exceeded.
     pub active: bool,
-    /// Index of the cell currently under the cursor (drop target), if any.
-    pub target_index: Option<usize>,
+    /// Cell currently under the cursor (drop target), if any.
+    pub target: Option<DragTarget>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SplitResizeState {
+    /// Representative slot from the first subtree of the resized split.
+    pub first_slot: SlotId,
+    /// Representative slot from the second subtree of the resized split.
+    pub second_slot: SlotId,
+    /// Direction of the split being resized.
+    pub direction: codirigent_core::SplitDirection,
+    /// Global bounds of the split container.
+    pub bounds: crate::layout::Bounds,
+    /// Gap thickness used for the divider.
+    pub gap: f32,
+    /// Pointer offset within the divider handle at drag start.
+    pub grab_offset: f32,
+    /// Whether the drag produced at least one ratio change.
+    pub changed: bool,
 }
 
 const DRAG_ACTIVATION_DISTANCE_SQUARED: f32 = 25.0;
@@ -318,17 +386,29 @@ impl DragState {
             let dx = position.x - self.start_position.x;
             let dy = position.y - self.start_position.y;
             if (dx * dx + dy * dy) <= DRAG_ACTIVATION_DISTANCE_SQUARED {
-                self.target_index = None;
+                self.target = None;
                 return;
             }
             self.active = true;
         }
 
-        self.target_index = cells
+        self.target = cells
             .iter()
             .find(|cell| cell.bounds.contains(position))
-            .map(|cell| cell.index)
-            .filter(|&target| target != self.source_index);
+            .and_then(|cell| {
+                (cell.index != self.source_index).then(|| {
+                    let header_bottom = cell.bounds.origin.y + HEADER_HEIGHT;
+                    let kind = if position.y <= header_bottom {
+                        DragTargetKind::PaneHeader
+                    } else {
+                        DragTargetKind::PaneBody
+                    };
+                    DragTarget {
+                        index: cell.index,
+                        kind,
+                    }
+                })
+            });
     }
 }
 
@@ -342,6 +422,7 @@ impl SelectionState {
             file_tree_context_menu: None,
             last_click_position: None,
             drag: None,
+            split_resize: None,
         }
     }
 }
@@ -501,6 +582,8 @@ pub(super) struct CacheState {
     pub detected_editors: Option<Vec<String>>,
     /// Cached available shells detected from the system (populated in background on init).
     pub detected_shells: Option<Vec<String>>,
+    /// Sessions restored with a fallback shell because their requested shell was unavailable.
+    pub restore_shell_fallbacks: HashMap<SessionId, RestoreShellFallback>,
     /// Last PTY-resized dimensions per session, used to skip redundant resize calls.
     pub pty_sizes: HashMap<SessionId, (u16, u16)>,
     /// Sessions that have received at least one manual task assignment.
@@ -534,6 +617,7 @@ impl CacheState {
             monospace_fonts: None,
             detected_editors: None,
             detected_shells: None,
+            restore_shell_fallbacks: HashMap::new(),
             pty_sizes: HashMap::new(),
             manually_assigned_sessions: HashSet::new(),
             compaction_start_times: HashMap::new(),

@@ -21,6 +21,7 @@ Canonical workspace model:
 
 - session placement and removal
 - grid/split-tree layout state
+- pane tab groups and pane stacks
 - focus movement
 - cell bounds and visible session calculation
 
@@ -34,6 +35,7 @@ Primary UI root:
 - owns constructor wiring and grouped UI state
 - keeps GPUI trait impls easy to find
 - coordinates render-time orchestration
+- wires root pointer events into gesture reducers
 
 Helper clusters that extend the root now live under `workspace/gpui/`.
 
@@ -67,6 +69,7 @@ Mutation-driven UI reducers:
 
 - task board snapshot/count refresh
 - terminal header synchronization
+- shell badge and warning synchronization
 - empty-cell synchronization
 - explicit derived-state refresh entry points
 
@@ -193,7 +196,19 @@ These mostly build UI elements rather than owning long-lived behavior:
   - top-level composition for the workspace body
 
 - `grid_render.rs`
-  - grid and split-tree cells
+  - grid-layout composition
+  - split-vs-grid render dispatch
+  - shared session-cell rendering
+
+- `split_render.rs`
+  - split-tree recursion
+  - divider rendering and drag hit areas
+  - empty split-slot rendering
+
+- `pane_header_render.rs`
+  - pane-header tabs
+  - header badges and title rows
+  - pane-local `+` session creation affordance
 
 - `drawer_render.rs`
   - drawer panels and left-side content
@@ -212,6 +227,13 @@ These mostly build UI elements rather than owning long-lived behavior:
 
 - `terminal_render.rs`
   - terminal-specific render helpers
+
+### Pointer interaction helpers
+
+- `impl_pointer_interactions.rs`
+  - split-resize drag reducers
+  - session-drag move/finalize reducers
+  - workspace-global gesture completion and cancellation
 
 ### State containers
 
@@ -247,6 +269,16 @@ For common tasks:
 - "Why did a layout or selection change affect terminal sizing?"
   - `gpui/layout_sync.rs`
   - `grid_render.rs`
+  - `split_render.rs`
+
+- "Why did a header drag or divider drag behave strangely?"
+  - `impl_pointer_interactions.rs`
+  - `pane_header_render.rs`
+  - `split_render.rs`
+
+- "Where do pane tabs or pane-header badges come from?"
+  - `pane_header_render.rs`
+  - `gpui/derived_state.rs`
 
 - "Why is a session badge wrong?"
   - `impl_output_polling/status_reconcile.rs`

@@ -710,6 +710,8 @@ impl WorkspaceView {
                         this.persistence.storage.clone(),
                         this.session_manager.clone(),
                         this.persisted_layout_mode(),
+                        this.workspace.pane_tab_groups(),
+                        this.workspace.pane_stacks(),
                         this.cache.last_window_state.clone(),
                     ))
                 }) {
@@ -717,7 +719,8 @@ impl WorkspaceView {
                     Ok(None) | Err(_) => return,
                 };
 
-                let (storage, session_manager, layout, window_state) = save_inputs;
+                let (storage, session_manager, layout, pane_tab_groups, pane_stacks, window_state) =
+                    save_inputs;
                 let result = cx
                     .background_executor()
                     .spawn(async move {
@@ -728,6 +731,8 @@ impl WorkspaceView {
                         let state = codirigent_core::AppState {
                             sessions,
                             layout,
+                            pane_tab_groups,
+                            pane_stacks,
                             updated_at: Some(chrono::Utc::now()),
                             window_bounds: window_state,
                         };
@@ -1129,6 +1134,9 @@ impl WorkspaceView {
         if let Some(modal) = self.render_session_action_modal(cx) {
             container = container.child(modal);
         }
+        if let Some(modal) = self.render_session_creation_modal(cx) {
+            container = container.child(modal);
+        }
         if let Some(modal) = self.render_task_creation_modal(cx) {
             container = container.child(modal);
         }
@@ -1295,6 +1303,9 @@ impl WorkspaceView {
 
     fn handle_modal_key_down(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
         if self.handle_session_action_key_down(event, cx) {
+            return true;
+        }
+        if self.handle_session_creation_key_down(event, cx) {
             return true;
         }
         if self.handle_task_creation_key_down(event, cx) {
@@ -1594,30 +1605,13 @@ impl Render for WorkspaceView {
                 this.handle_key_down(event, window, cx);
             }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
-                let Some(drag) = &mut this.selection.drag else {
-                    return;
-                };
-
-                let pos =
-                    crate::layout::Point::new(event.position.x.into(), event.position.y.into());
-                drag.update_pointer(pos, &this.cache.render_cell_info);
-                cx.notify();
+                this.handle_workspace_mouse_move(event, cx);
             }))
             // Global mouse-up: catch drag releases anywhere in workspace
             .on_mouse_up(
                 MouseButton::Left,
-                cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
-                    if let Some(drag) = this.selection.drag.take() {
-                        if drag.active {
-                            if let Some(target) = drag.target_index {
-                                this.workspace.swap_sessions(drag.source_index, target);
-                                this.mark_layout_cache_dirty();
-                                this.sync_layout_derived_state();
-                                this.save_state_to_disk(cx);
-                            }
-                        }
-                        cx.notify();
-                    }
+                cx.listener(|this, event: &MouseUpEvent, _window, cx| {
+                    this.handle_workspace_mouse_up_left(event, cx);
                 }),
             )
             .bg(bg)

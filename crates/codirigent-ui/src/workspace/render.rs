@@ -19,8 +19,9 @@ use super::gpui::WorkspaceView;
 use crate::icons;
 use crate::title_bar::TitleBar;
 use gpui::{
-    div, px, ClickEvent, Context, FontWeight, InteractiveElement, IntoElement, ParentElement,
-    SharedString, StatefulInteractiveElement, Styled, Window, WindowControlArea,
+    div, prelude::FluentBuilder, px, ClickEvent, Context, FontWeight, InteractiveElement,
+    IntoElement, ParentElement, SharedString, StatefulInteractiveElement, Styled, Window,
+    WindowControlArea,
 };
 use tracing::info;
 
@@ -260,13 +261,16 @@ impl WorkspaceView {
         let muted: gpui::Hsla = theme.muted.into();
         let hover_bg: gpui::Hsla = theme.active.into();
         let destructive = super::types::DESTRUCTIVE_ITEM_COLOR;
+        let orange: gpui::Hsla = theme.orange.into();
 
         // Check if this session has a group
-        let session_group = self
-            .workspace()
-            .session(session_id)
-            .and_then(|s| s.group.clone());
+        let (session_group, session_shell) = {
+            let session = self.workspace().session(session_id)?;
+            (session.group.clone(), session.shell.clone())
+        };
         let has_group = session_group.is_some();
+        let (shell_label, shell_warning) =
+            self.session_shell_display(session_id, session_shell.as_deref());
 
         // Collect existing group names (deduplicated, sorted)
         let existing_groups: Vec<String> = {
@@ -315,6 +319,28 @@ impl WorkspaceView {
             .flex()
             .flex_col()
             .py_1();
+
+        dropdown = dropdown
+            .child(
+                div()
+                    .px_3()
+                    .pt_2()
+                    .pb_1()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted.opacity(0.6))
+                            .child("SHELL"),
+                    )
+                    .child(div().text_sm().text_color(fg).child(shell_label))
+                    .when_some(shell_warning, |el, warning| {
+                        el.child(div().text_xs().text_color(orange).child(warning))
+                    }),
+            )
+            .child(div().h(px(1.0)).mx_2().my_1().bg(border_color));
 
         // Rename
         dropdown = dropdown.child(self.render_menu_item(

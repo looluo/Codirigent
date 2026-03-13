@@ -3,9 +3,44 @@
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 
-use super::ids::TaskId;
-use super::layout::LayoutMode;
+use super::ids::{SessionId, TaskId};
+use super::layout::{LayoutMode, SlotId};
 use super::session::Session;
+
+/// Persistent identifier for a visible pane.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Hash)]
+pub enum PaneId {
+    /// Grid-layout pane by stable cell index.
+    GridCell {
+        /// Zero-based grid cell index in row-major order.
+        index: usize,
+    },
+    /// Split-tree pane by slot identifier.
+    SplitSlot {
+        /// Stable split-tree slot identifier.
+        slot: SlotId,
+    },
+}
+
+/// Persistent tab state for a visible pane.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PaneTabGroup {
+    /// Pane that owns the tab stack.
+    pub pane: PaneId,
+    /// Ordered session IDs in the tab strip.
+    pub session_ids: Vec<SessionId>,
+    /// Active session currently rendered in the pane.
+    pub active_session_id: SessionId,
+}
+
+/// Persisted ordered pane stack state, including hidden stacks.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct PaneStackState {
+    /// Ordered session IDs in the stack.
+    pub session_ids: Vec<SessionId>,
+    /// Active session currently rendered when the stack is visible.
+    pub active_session_id: SessionId,
+}
 
 /// Persisted window position and size.
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -29,6 +64,12 @@ pub struct AppState {
     pub sessions: Vec<Session>,
     /// Current layout mode.
     pub layout: LayoutMode,
+    /// Persisted per-pane tab stacks.
+    #[serde(default)]
+    pub pane_tab_groups: Vec<PaneTabGroup>,
+    /// Persisted pane stacks in workspace order, including hidden stacks.
+    #[serde(default)]
+    pub pane_stacks: Vec<PaneStackState>,
     /// Last updated timestamp.
     pub updated_at: Option<chrono::DateTime<chrono::Utc>>,
     /// Saved window position and size.

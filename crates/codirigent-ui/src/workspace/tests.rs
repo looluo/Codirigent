@@ -3,7 +3,10 @@
 use super::core::*;
 use crate::layout::{Bounds, FocusDirection, LayoutProfile, Point};
 use crate::theme::CodirigentTheme;
-use codirigent_core::{LayoutNode, Session, SessionId, SessionStatus, SlotId, SplitDirection};
+use codirigent_core::{
+    LayoutNode, PaneId, PaneStackState, PaneTabGroup, Session, SessionId, SessionStatus, SlotId,
+    SplitDirection,
+};
 use std::path::PathBuf;
 
 fn make_session(id: u64, name: &str) -> Session {
@@ -69,9 +72,11 @@ fn test_workspace_add_session_full() {
         assert!(ws.add_session(make_session(i, &format!("Session {}", i))));
     }
 
-    // 5th should fail
-    assert!(!ws.add_session(make_session(5, "Session 5")));
-    assert_eq!(ws.sessions().len(), 4);
+    // 5th should be retained as a hidden session
+    assert!(ws.add_session(make_session(5, "Session 5")));
+    assert_eq!(ws.sessions().len(), 5);
+    assert_eq!(ws.visible_sessions().len(), 4);
+    assert!(!ws.is_session_visible(SessionId(5)));
 }
 
 #[test]
@@ -156,6 +161,17 @@ fn test_workspace_focus_session_number() {
     // Invalid numbers
     assert!(!ws.focus_session_number(0));
     assert!(!ws.focus_session_number(10));
+}
+
+#[test]
+fn test_workspace_focus_session_number_ignores_hidden_multi_pane_grid_sessions() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    for i in 1..=5 {
+        assert!(ws.add_session(make_session(i, &format!("Session {}", i))));
+    }
+
+    assert!(!ws.focus_session_number(5));
+    assert_eq!(ws.focused_session_id(), Some(SessionId(1)));
 }
 
 #[test]
@@ -347,11 +363,13 @@ fn test_workspace_cell_info() {
 #[test]
 fn test_cell_info_fields() {
     let info = CellInfo {
+        pane_id: PaneId::GridCell { index: 0 },
         session_id: SessionId(1),
         index: 0,
         bounds: Bounds::from_size(100.0, 100.0),
     };
 
+    assert_eq!(info.pane_id, PaneId::GridCell { index: 0 });
     assert_eq!(info.session_id, SessionId(1));
     assert_eq!(info.index, 0);
     assert_eq!(info.bounds.size.width, 100.0);
@@ -453,6 +471,64 @@ fn test_workspace_single_layout_preserves_order_on_exit() {
 
     // Session 3 should still be focused
     assert_eq!(ws.focused_session_id(), Some(SessionId(3)));
+}
+
+#[test]
+fn test_workspace_focus_hidden_grid_session_swaps_into_focused_pane() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    ws.set_bounds(Bounds::from_size(1000.0, 800.0));
+
+    for i in 1..=5 {
+        assert!(ws.add_session(make_session(i, &format!("S{}", i))));
+    }
+
+    assert_eq!(
+        ws.cell_info()
+            .iter()
+            .map(|cell| cell.session_id)
+            .collect::<Vec<_>>(),
+        vec![SessionId(1), SessionId(2), SessionId(3), SessionId(4)]
+    );
+    assert!(!ws.is_session_visible(SessionId(5)));
+
+    assert!(ws.focus_session(SessionId(2)));
+    assert!(ws.focus_session(SessionId(5)));
+
+    let cells = ws.cell_info();
+    assert_eq!(
+        cells.iter().map(|cell| cell.session_id).collect::<Vec<_>>(),
+        vec![SessionId(1), SessionId(5), SessionId(3), SessionId(4)]
+    );
+    assert_eq!(ws.focused_session_id(), Some(SessionId(5)));
+    assert!(!ws.is_session_visible(SessionId(2)));
+    assert!(ws.is_session_visible(SessionId(5)));
+}
+
+#[test]
+fn test_workspace_focus_hidden_grid_session_uses_first_visible_pane_when_focus_is_hidden() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    ws.set_bounds(Bounds::from_size(1000.0, 800.0));
+
+    for i in 1..=5 {
+        assert!(ws.add_session(make_session(i, &format!("S{}", i))));
+    }
+
+    ws.set_layout(LayoutProfile::Single);
+    assert!(ws.focus_session(SessionId(5)));
+    assert_eq!(ws.focused_session_id(), Some(SessionId(5)));
+
+    ws.set_layout(LayoutProfile::Grid2x2);
+    assert_eq!(ws.focused_session_id(), Some(SessionId(1)));
+
+    assert!(ws.focus_session(SessionId(2)));
+    assert!(ws.focus_session(SessionId(5)));
+    assert_eq!(
+        ws.cell_info()
+            .iter()
+            .map(|cell| cell.session_id)
+            .collect::<Vec<_>>(),
+        vec![SessionId(1), SessionId(5), SessionId(3), SessionId(4)]
+    );
 }
 
 #[test]
@@ -569,6 +645,37 @@ fn test_workspace_split_pane_promotes_next_hidden_session() {
 }
 
 #[test]
+fn test_workspace_focus_hidden_split_session_replaces_focused_visible_session() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    for i in 1..=4 {
+        assert!(ws.add_session(make_session(i, &format!("S{}", i))));
+    }
+
+    ws.set_split_tree(LayoutNode::from_grid(1, 2));
+    assert!(ws.is_split_tree_mode());
+    assert_eq!(
+        ws.cell_info()
+            .iter()
+            .map(|cell| cell.session_id)
+            .collect::<Vec<_>>(),
+        vec![SessionId(1), SessionId(2)]
+    );
+
+    assert!(ws.focus_session(SessionId(2)));
+    assert!(ws.focus_session(SessionId(4)));
+
+    assert_eq!(
+        ws.cell_info()
+            .iter()
+            .map(|cell| cell.session_id)
+            .collect::<Vec<_>>(),
+        vec![SessionId(1), SessionId(4)]
+    );
+    assert_eq!(ws.focused_session_id(), Some(SessionId(4)));
+    assert!(!ws.is_session_visible(SessionId(2)));
+}
+
+#[test]
 fn test_workspace_remove_session_promotes_hidden_split_session() {
     let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
     for i in 1..=4 {
@@ -584,6 +691,43 @@ fn test_workspace_remove_session_promotes_hidden_split_session() {
     assert_eq!(
         cells.iter().map(|cell| cell.session_id).collect::<Vec<_>>(),
         vec![SessionId(3), SessionId(2)]
+    );
+}
+
+#[test]
+fn test_workspace_resize_split_divider_updates_nested_layout_ratio() {
+    let mut ws = Workspace::new();
+    let tree = LayoutNode::Split {
+        direction: SplitDirection::Horizontal,
+        ratio: 0.5,
+        first: Box::new(LayoutNode::Split {
+            direction: SplitDirection::Vertical,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf { slot: SlotId(0) }),
+            second: Box::new(LayoutNode::Leaf { slot: SlotId(1) }),
+        }),
+        second: Box::new(LayoutNode::Leaf { slot: SlotId(2) }),
+    };
+    ws.set_split_tree(tree);
+
+    assert!(ws.resize_split_divider(SlotId(0), SlotId(2), 0.75));
+    let split_tree = match ws.layout_state().as_split_tree() {
+        Some(split) => split,
+        None => panic!("expected split-tree layout"),
+    };
+    assert_eq!(
+        split_tree.tree(),
+        &LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.75,
+            first: Box::new(LayoutNode::Split {
+                direction: SplitDirection::Vertical,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf { slot: SlotId(0) }),
+                second: Box::new(LayoutNode::Leaf { slot: SlotId(1) }),
+            }),
+            second: Box::new(LayoutNode::Leaf { slot: SlotId(2) }),
+        }
     );
 }
 
@@ -684,6 +828,29 @@ fn test_close_pane_removes_session_from_workspace() {
 }
 
 #[test]
+fn test_close_tabbed_split_pane_requires_closing_all_pane_sessions() {
+    let mut ws = Workspace::new();
+    let tree = LayoutNode::from_grid(1, 2);
+    ws.set_split_tree(tree);
+
+    ws.add_session(make_session(1, "S1"));
+    ws.add_session(make_session(2, "S2"));
+    assert!(ws.group_session_into_pane(SessionId(1), PaneId::SplitSlot { slot: SlotId(1) }));
+    assert!(ws.focus_session(SessionId(1)));
+
+    let pane_session_ids = ws.focused_pane_session_ids();
+    assert_eq!(pane_session_ids, vec![SessionId(2), SessionId(1)]);
+
+    assert!(ws.close_pane());
+    for id in pane_session_ids {
+        ws.remove_session(id);
+    }
+
+    assert!(ws.sessions().is_empty());
+    assert!(ws.pane_tab_groups().is_empty());
+}
+
+#[test]
 fn test_string_truncation_no_allocation_when_short() {
     use std::borrow::Cow;
 
@@ -775,7 +942,10 @@ fn test_workspace_swap_sessions_split_tree_with_empty_slot() {
     // Swap S1 from slot 0 to empty slot 2
     assert!(ws.swap_sessions(0, 2));
 
-    let split = ws.layout_state().as_split_tree().unwrap();
+    let split = match ws.layout_state().as_split_tree() {
+        Some(split) => split,
+        None => panic!("expected split-tree layout"),
+    };
     assert_eq!(split.assignments()[0].1, None);
     assert_eq!(split.assignments()[2].1, Some(SessionId(1)));
 }
@@ -828,16 +998,235 @@ fn test_workspace_swap_sessions_split_tree_after_split_respects_visual_order() {
     );
 }
 
+#[test]
+fn test_workspace_group_session_into_grid_pane_creates_tabs_without_reflow() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    for i in 1..=4 {
+        assert!(ws.add_session(make_session(i, &format!("S{}", i))));
+    }
+
+    assert!(ws.group_session_into_pane(SessionId(1), PaneId::GridCell { index: 1 }));
+
+    let cells = ws.cell_info();
+    assert_eq!(cells.len(), 3);
+    assert!(cells.iter().all(|cell| cell.index != 0));
+    assert_eq!(
+        ws.pane_tab_session_ids(PaneId::GridCell { index: 1 }),
+        vec![SessionId(2), SessionId(1)]
+    );
+    assert_eq!(
+        ws.pane_active_session_id(PaneId::GridCell { index: 1 }),
+        Some(SessionId(1))
+    );
+    assert!(ws.is_session_visible(SessionId(2)));
+}
+
+#[test]
+fn test_workspace_activate_pane_tab_switches_active_session() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    for i in 1..=3 {
+        assert!(ws.add_session(make_session(i, &format!("S{}", i))));
+    }
+
+    assert!(ws.group_session_into_pane(SessionId(1), PaneId::GridCell { index: 1 }));
+    assert!(ws.activate_pane_tab(PaneId::GridCell { index: 1 }, SessionId(2)));
+
+    assert_eq!(ws.focused_session_id(), Some(SessionId(2)));
+    assert_eq!(
+        ws.pane_active_session_id(PaneId::GridCell { index: 1 }),
+        Some(SessionId(2))
+    );
+}
+
+#[test]
+fn test_workspace_add_session_to_existing_pane_creates_active_tab() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    assert!(ws.add_session(make_session(1, "S1")));
+    assert!(ws.add_session(make_session(2, "S2")));
+
+    assert!(ws.add_session_to_pane(make_session(3, "S3"), PaneId::GridCell { index: 0 }));
+
+    assert_eq!(
+        ws.pane_tab_session_ids(PaneId::GridCell { index: 0 }),
+        vec![SessionId(1), SessionId(3)]
+    );
+    assert_eq!(
+        ws.pane_active_session_id(PaneId::GridCell { index: 0 }),
+        Some(SessionId(3))
+    );
+    assert_eq!(ws.focused_session_id(), Some(SessionId(3)));
+}
+
+#[test]
+fn test_workspace_remove_active_tab_promotes_next_tab() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    for i in 1..=3 {
+        assert!(ws.add_session(make_session(i, &format!("S{}", i))));
+    }
+
+    assert!(ws.group_session_into_pane(SessionId(1), PaneId::GridCell { index: 1 }));
+    assert_eq!(
+        ws.pane_active_session_id(PaneId::GridCell { index: 1 }),
+        Some(SessionId(1))
+    );
+
+    let removed = ws.remove_session(SessionId(1));
+    assert!(removed.is_some());
+    assert_eq!(
+        ws.pane_active_session_id(PaneId::GridCell { index: 1 }),
+        Some(SessionId(2))
+    );
+    assert_eq!(
+        ws.pane_tab_session_ids(PaneId::GridCell { index: 1 }),
+        vec![SessionId(2)]
+    );
+}
+
+#[test]
+fn test_workspace_restore_pane_tab_groups_rehydrates_active_tabs() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    assert!(ws.add_session(make_session(11, "S11")));
+    assert!(ws.add_session(make_session(12, "S12")));
+    assert!(ws.add_session(make_session(13, "S13")));
+
+    let saved_groups = vec![PaneTabGroup {
+        pane: PaneId::GridCell { index: 1 },
+        session_ids: vec![SessionId(2), SessionId(1)],
+        active_session_id: SessionId(1),
+    }];
+    let restored_ids = std::collections::HashMap::from([
+        (SessionId(1), SessionId(11)),
+        (SessionId(2), SessionId(12)),
+    ]);
+
+    ws.restore_pane_tab_groups(&saved_groups, &restored_ids);
+
+    assert_eq!(
+        ws.pane_tab_session_ids(PaneId::GridCell { index: 1 }),
+        vec![SessionId(12), SessionId(11)]
+    );
+    assert_eq!(
+        ws.pane_active_session_id(PaneId::GridCell { index: 1 }),
+        Some(SessionId(11))
+    );
+}
+
+#[test]
+fn test_layout_changes_preserve_hidden_pane_stacks_and_active_tabs() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    assert!(ws.add_session(make_session(1, "S1")));
+    assert!(ws.add_session(make_session(2, "S2")));
+    assert!(ws.add_session(make_session(3, "S3")));
+    assert!(ws.add_session(make_session(4, "S4")));
+    assert!(ws.group_session_into_pane(SessionId(2), PaneId::GridCell { index: 0 }));
+    assert!(ws.group_session_into_pane(SessionId(4), PaneId::GridCell { index: 2 }));
+
+    ws.set_layout(LayoutProfile::Single);
+
+    assert_eq!(
+        ws.pane_tab_session_ids(PaneId::GridCell { index: 0 }),
+        vec![SessionId(1), SessionId(2)]
+    );
+    assert_eq!(
+        ws.pane_active_session_id(PaneId::GridCell { index: 0 }),
+        Some(SessionId(2))
+    );
+    assert_eq!(
+        ws.pane_stacks(),
+        vec![
+            PaneStackState {
+                session_ids: vec![SessionId(1), SessionId(2)],
+                active_session_id: SessionId(2),
+            },
+            PaneStackState {
+                session_ids: vec![SessionId(3), SessionId(4)],
+                active_session_id: SessionId(4),
+            },
+        ]
+    );
+
+    ws.set_layout(LayoutProfile::Grid2x2);
+
+    assert_eq!(
+        ws.pane_tab_session_ids(PaneId::GridCell { index: 0 }),
+        vec![SessionId(1), SessionId(2)]
+    );
+    assert_eq!(
+        ws.pane_active_session_id(PaneId::GridCell { index: 0 }),
+        Some(SessionId(2))
+    );
+    assert_eq!(
+        ws.pane_tab_session_ids(PaneId::GridCell { index: 1 }),
+        vec![SessionId(3), SessionId(4)]
+    );
+    assert_eq!(
+        ws.pane_active_session_id(PaneId::GridCell { index: 1 }),
+        Some(SessionId(4))
+    );
+}
+
+#[test]
+fn test_workspace_restore_pane_stacks_preserves_hidden_stack_order() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Single);
+    assert!(ws.add_session(make_session(11, "S11")));
+    assert!(ws.add_session(make_session(12, "S12")));
+    assert!(ws.add_session(make_session(13, "S13")));
+    assert!(ws.add_session(make_session(14, "S14")));
+
+    let saved_stacks = vec![
+        PaneStackState {
+            session_ids: vec![SessionId(2), SessionId(1)],
+            active_session_id: SessionId(1),
+        },
+        PaneStackState {
+            session_ids: vec![SessionId(4), SessionId(3)],
+            active_session_id: SessionId(4),
+        },
+    ];
+    let restored_ids = std::collections::HashMap::from([
+        (SessionId(1), SessionId(11)),
+        (SessionId(2), SessionId(12)),
+        (SessionId(3), SessionId(13)),
+        (SessionId(4), SessionId(14)),
+    ]);
+
+    ws.restore_pane_stacks(&saved_stacks, &restored_ids);
+
+    assert_eq!(
+        ws.pane_tab_session_ids(PaneId::GridCell { index: 0 }),
+        vec![SessionId(12), SessionId(11)]
+    );
+    assert_eq!(
+        ws.pane_active_session_id(PaneId::GridCell { index: 0 }),
+        Some(SessionId(11))
+    );
+    assert_eq!(
+        ws.pane_stacks(),
+        vec![
+            PaneStackState {
+                session_ids: vec![SessionId(12), SessionId(11)],
+                active_session_id: SessionId(11),
+            },
+            PaneStackState {
+                session_ids: vec![SessionId(14), SessionId(13)],
+                active_session_id: SessionId(14),
+            },
+        ]
+    );
+}
+
 #[cfg(feature = "gpui-full")]
 #[test]
 fn test_drag_state_updates_target_after_leaving_source_header() {
     let cells = vec![
         CellInfo {
+            pane_id: PaneId::GridCell { index: 0 },
             session_id: SessionId(1),
             index: 0,
             bounds: Bounds::new(0.0, 0.0, 100.0, 100.0),
         },
         CellInfo {
+            pane_id: PaneId::GridCell { index: 1 },
             session_id: SessionId(2),
             index: 1,
             bounds: Bounds::new(120.0, 0.0, 100.0, 100.0),
@@ -849,21 +1238,28 @@ fn test_drag_state_updates_target_after_leaving_source_header() {
         start_position: Point::new(10.0, 10.0),
         current_position: Point::new(10.0, 10.0),
         active: false,
-        target_index: None,
+        target: None,
     };
 
     drag.update_pointer(Point::new(20.0, 20.0), &cells);
     assert!(drag.active);
-    assert_eq!(drag.target_index, None);
+    assert_eq!(drag.target, None);
 
     drag.update_pointer(Point::new(140.0, 20.0), &cells);
-    assert_eq!(drag.target_index, Some(1));
+    assert_eq!(
+        drag.target,
+        Some(super::types::DragTarget {
+            index: 1,
+            kind: super::types::DragTargetKind::PaneHeader,
+        })
+    );
 }
 
 #[cfg(feature = "gpui-full")]
 #[test]
 fn test_drag_state_does_not_target_source_or_activate_too_early() {
     let cells = vec![CellInfo {
+        pane_id: PaneId::GridCell { index: 0 },
         session_id: SessionId(1),
         index: 0,
         bounds: Bounds::new(0.0, 0.0, 100.0, 100.0),
@@ -874,14 +1270,17 @@ fn test_drag_state_does_not_target_source_or_activate_too_early() {
         start_position: Point::new(10.0, 10.0),
         current_position: Point::new(10.0, 10.0),
         active: false,
-        target_index: Some(0),
+        target: Some(super::types::DragTarget {
+            index: 0,
+            kind: super::types::DragTargetKind::PaneHeader,
+        }),
     };
 
     drag.update_pointer(Point::new(12.0, 12.0), &cells);
     assert!(!drag.active);
-    assert_eq!(drag.target_index, None);
+    assert_eq!(drag.target, None);
 
     drag.update_pointer(Point::new(20.0, 20.0), &cells);
     assert!(drag.active);
-    assert_eq!(drag.target_index, None);
+    assert_eq!(drag.target, None);
 }

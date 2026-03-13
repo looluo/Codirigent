@@ -24,7 +24,7 @@ pub use git::{GitChangeKind, GitChangedFile, GitRepoInfo};
 pub use ids::{SessionId, TaskId};
 pub use layout::{GridPosition, LayoutMode, LayoutNode, SlotId, SplitDirection};
 pub use session::{CodexExecutionMode, Session};
-pub use state::{AppState, QueueState, WindowState};
+pub use state::{AppState, PaneId, PaneStackState, PaneTabGroup, QueueState, WindowState};
 pub use status::{ContextThresholdState, SessionStatus, ShellState, TaskPriority, TaskStatus};
 pub use task::{RetryConfig, Task, VerificationConfig};
 pub use verification::{TestFailure, TestResults, VerificationResult};

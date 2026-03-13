@@ -123,7 +123,9 @@ impl WorkspaceView {
             EmptySessionEvent::CreateSessionClicked { position } => {
                 info!(?position, "Create session at position");
                 if self.should_create_session_at(position) {
-                    self.create_session(cx);
+                    let cols = self.workspace.layout_profile().dimensions().1;
+                    let index = (position.row * cols + position.col) as usize;
+                    self.create_session_in_pane(codirigent_core::PaneId::GridCell { index }, cx);
                 }
             }
         }

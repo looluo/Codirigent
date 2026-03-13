@@ -29,8 +29,10 @@ pub enum FocusDirection {
 pub struct LayoutState {
     /// Current layout profile.
     profile: LayoutProfile,
-    /// Session assignments to grid positions.
-    assignments: Vec<SessionId>,
+    /// Session assignments to visible grid positions.
+    assignments: Vec<Option<SessionId>>,
+    /// Sessions that exist but are not currently visible in a grid cell.
+    overflow: Vec<SessionId>,
     /// Currently focused session index.
     focused_index: Option<usize>,
 }
@@ -46,7 +48,8 @@ impl LayoutState {
     pub fn new() -> Self {
         Self {
             profile: LayoutProfile::default(),
-            assignments: Vec::new(),
+            assignments: vec![None; LayoutProfile::default().max_sessions()],
+            overflow: Vec::new(),
             focused_index: None,
         }
     }
@@ -55,7 +58,8 @@ impl LayoutState {
     pub fn with_profile(profile: LayoutProfile) -> Self {
         Self {
             profile,
-            assignments: Vec::new(),
+            assignments: vec![None; profile.max_sessions()],
+            overflow: Vec::new(),
             focused_index: None,
         }
     }
@@ -67,7 +71,15 @@ impl LayoutState {
 
     /// Set the layout profile.
     pub fn set_profile(&mut self, profile: LayoutProfile) {
+        if self.profile == profile {
+            return;
+        }
+
+        let ordered = self.ordered_sessions();
         self.profile = profile;
+        self.assignments = vec![None; profile.max_sessions()];
+        self.overflow.clear();
+        self.set_assignments(ordered);
     }
 
     /// Cycle to the next layout profile.
@@ -81,13 +93,44 @@ impl LayoutState {
     }
 
     /// Get the session assignments.
-    pub fn assignments(&self) -> &[SessionId] {
+    pub fn assignments(&self) -> &[Option<SessionId>] {
         &self.assignments
+    }
+
+    /// Get the overflow sessions.
+    pub fn overflow(&self) -> &[SessionId] {
+        &self.overflow
+    }
+
+    /// Return all sessions in workspace order: visible cells first, then overflow.
+    pub fn ordered_sessions(&self) -> Vec<SessionId> {
+        self.assignments
+            .iter()
+            .flatten()
+            .copied()
+            .chain(self.overflow.iter().copied())
+            .collect()
     }
 
     /// Set the session assignments.
     pub fn set_assignments(&mut self, assignments: Vec<SessionId>) {
-        self.assignments = assignments;
+        self.assignments.fill(None);
+        self.overflow.clear();
+
+        for session_id in assignments {
+            if let Some(cell) = self.assignments.iter_mut().find(|cell| cell.is_none()) {
+                *cell = Some(session_id);
+            } else {
+                self.overflow.push(session_id);
+            }
+        }
+
+        if self
+            .focused_index
+            .is_some_and(|index| self.session_at(index).is_none())
+        {
+            self.focused_index = self.first_occupied_index();
+        }
     }
 
     /// Add a session to the layout.
@@ -98,12 +141,41 @@ impl LayoutState {
     ///
     /// `true` if the session was added, `false` if the layout is full.
     pub fn add_session(&mut self, session_id: SessionId) -> bool {
-        if self.assignments.len() < self.profile.max_sessions() {
-            self.assignments.push(session_id);
+        if self
+            .assignments
+            .iter()
+            .flatten()
+            .any(|&id| id == session_id)
+            || self.overflow.contains(&session_id)
+        {
+            return false;
+        }
+
+        if let Some(cell) = self.assignments.iter_mut().find(|cell| cell.is_none()) {
+            *cell = Some(session_id);
             true
         } else {
-            false
+            self.overflow.push(session_id);
+            true
         }
+    }
+
+    /// Append a hidden session after the visible grid assignments.
+    ///
+    /// Hidden sessions stay in assignment order so they can be swapped back
+    /// into a visible cell later without losing workspace ordering.
+    pub fn append_hidden_session(&mut self, session_id: SessionId) -> bool {
+        if self
+            .assignments
+            .iter()
+            .flatten()
+            .any(|&id| id == session_id)
+            || self.overflow.contains(&session_id)
+        {
+            return false;
+        }
+        self.overflow.push(session_id);
+        true
     }
 
     /// Remove a session from the layout.
@@ -112,16 +184,20 @@ impl LayoutState {
     ///
     /// `true` if the session was removed, `false` if not found.
     pub fn remove_session(&mut self, session_id: SessionId) -> bool {
-        if let Some(pos) = self.assignments.iter().position(|&id| id == session_id) {
-            self.assignments.remove(pos);
-            // Adjust focused index if needed
+        if let Some(pos) = self
+            .assignments
+            .iter()
+            .position(|cell| *cell == Some(session_id))
+        {
+            self.assignments[pos] = None;
             if let Some(focused) = self.focused_index {
                 if focused == pos {
-                    self.focused_index = self.assignments.first().map(|_| 0);
-                } else if focused > pos {
-                    self.focused_index = Some(focused - 1);
+                    self.focused_index = self.first_occupied_index();
                 }
             }
+            true
+        } else if let Some(pos) = self.overflow.iter().position(|&id| id == session_id) {
+            self.overflow.remove(pos);
             true
         } else {
             false
@@ -130,7 +206,7 @@ impl LayoutState {
 
     /// Get the session at a given index.
     pub fn session_at(&self, index: usize) -> Option<SessionId> {
-        self.assignments.get(index).copied()
+        self.assignments.get(index).and_then(|session| *session)
     }
 
     /// Get the session at a given grid position.
@@ -155,7 +231,7 @@ impl LayoutState {
 
     /// Set the focused session by index.
     pub fn focus_index(&mut self, index: usize) {
-        if index < self.assignments.len() {
+        if self.session_at(index).is_some() {
             self.focused_index = Some(index);
         }
     }
@@ -166,7 +242,11 @@ impl LayoutState {
     ///
     /// `true` if the session was found and focused.
     pub fn focus_session(&mut self, session_id: SessionId) -> bool {
-        if let Some(index) = self.assignments.iter().position(|&id| id == session_id) {
+        if let Some(index) = self
+            .assignments
+            .iter()
+            .position(|cell| *cell == Some(session_id))
+        {
             self.focused_index = Some(index);
             true
         } else {
@@ -176,27 +256,35 @@ impl LayoutState {
 
     /// Focus the next session in the layout.
     pub fn focus_next(&mut self) {
-        if self.assignments.is_empty() {
+        let occupied = self.occupied_indices();
+        if occupied.is_empty() {
             return;
         }
-        let next = match self.focused_index {
-            Some(i) => (i + 1) % self.assignments.len(),
+        let next = match self
+            .focused_index
+            .and_then(|index| occupied.iter().position(|&current| current == index))
+        {
+            Some(i) => (i + 1) % occupied.len(),
             None => 0,
         };
-        self.focused_index = Some(next);
+        self.focused_index = Some(occupied[next]);
     }
 
     /// Focus the previous session in the layout.
     pub fn focus_previous(&mut self) {
-        if self.assignments.is_empty() {
+        let occupied = self.occupied_indices();
+        if occupied.is_empty() {
             return;
         }
-        let prev = match self.focused_index {
+        let prev = match self
+            .focused_index
+            .and_then(|index| occupied.iter().position(|&current| current == index))
+        {
             Some(i) if i > 0 => i - 1,
-            Some(_) => self.assignments.len() - 1,
+            Some(_) => occupied.len() - 1,
             None => 0,
         };
-        self.focused_index = Some(prev);
+        self.focused_index = Some(occupied[prev]);
     }
 
     /// Focus the session in the given direction from current focus.
@@ -206,8 +294,8 @@ impl LayoutState {
     /// * `direction` - Direction to move focus (Up, Down, Left, Right)
     pub fn focus_direction(&mut self, direction: FocusDirection) {
         let Some(current_index) = self.focused_index else {
-            if !self.assignments.is_empty() {
-                self.focused_index = Some(0);
+            if let Some(index) = self.first_occupied_index() {
+                self.focused_index = Some(index);
             }
             return;
         };
@@ -248,7 +336,7 @@ impl LayoutState {
         };
 
         let new_index = (new_row * cols + new_col) as usize;
-        if new_index < self.assignments.len() {
+        if self.session_at(new_index).is_some() {
             self.focused_index = Some(new_index);
         }
     }
@@ -260,7 +348,12 @@ impl LayoutState {
     ///
     /// Returns `true` if both indices are valid and different.
     pub fn swap_assignments(&mut self, a: usize, b: usize) -> bool {
-        if a == b || a >= self.assignments.len() || b >= self.assignments.len() {
+        if a == b
+            || a >= self.assignments.len()
+            || b >= self.assignments.len()
+            || self.assignments[a].is_none()
+            || self.assignments[b].is_none()
+        {
             return false;
         }
         self.assignments.swap(a, b);
@@ -273,6 +366,114 @@ impl LayoutState {
             }
         }
         true
+    }
+
+    /// Get the index of a hidden session in overflow order.
+    pub fn overflow_index_of(&self, session_id: SessionId) -> Option<usize> {
+        self.overflow.iter().position(|&id| id == session_id)
+    }
+
+    /// Replace the session in a visible cell with a hidden overflow session.
+    ///
+    /// Returns the previous visible session when the swap succeeds.
+    pub fn swap_hidden_into_index(
+        &mut self,
+        hidden_session_id: SessionId,
+        index: usize,
+    ) -> Option<SessionId> {
+        let hidden_index = self.overflow_index_of(hidden_session_id)?;
+        let previous = self
+            .assignments
+            .get_mut(index)?
+            .replace(hidden_session_id)?;
+        self.overflow[hidden_index] = previous;
+        self.focused_index = Some(index);
+        Some(previous)
+    }
+
+    /// Place a session into a specific grid cell.
+    pub fn assign_session_to_index(&mut self, session_id: SessionId, index: usize) -> bool {
+        if index >= self.assignments.len() {
+            return false;
+        }
+
+        if self
+            .assignments
+            .iter()
+            .flatten()
+            .any(|&id| id == session_id)
+        {
+            return false;
+        }
+
+        if let Some(hidden_index) = self.overflow_index_of(session_id) {
+            self.overflow.remove(hidden_index);
+        }
+
+        if let Some(previous) = self.assignments[index].replace(session_id) {
+            self.overflow.insert(0, previous);
+        }
+
+        true
+    }
+
+    /// Replace the session in a visible cell without moving the previous one
+    /// into overflow. Used for pane-local tab activation where both sessions
+    /// remain members of the same pane stack.
+    pub fn replace_session_in_index(
+        &mut self,
+        index: usize,
+        session_id: SessionId,
+    ) -> Option<Option<SessionId>> {
+        if index >= self.assignments.len() {
+            return None;
+        }
+
+        if self
+            .assignments
+            .iter()
+            .enumerate()
+            .any(|(current_index, cell)| current_index != index && *cell == Some(session_id))
+        {
+            return None;
+        }
+
+        if let Some(hidden_index) = self.overflow_index_of(session_id) {
+            self.overflow.remove(hidden_index);
+        }
+
+        Some(self.assignments[index].replace(session_id))
+    }
+
+    /// Remove a session from a visible cell without promoting overflow.
+    pub fn clear_index(&mut self, index: usize) -> Option<SessionId> {
+        if index >= self.assignments.len() {
+            return None;
+        }
+
+        let removed = self.assignments[index].take();
+        if self.focused_index == Some(index) && removed.is_some() {
+            self.focused_index = self.first_occupied_index();
+        }
+        removed
+    }
+
+    /// Get the first visible empty cell.
+    pub fn first_empty_index(&self) -> Option<usize> {
+        self.assignments.iter().position(|cell| cell.is_none())
+    }
+
+    /// Return all occupied cell indices in order.
+    pub fn occupied_indices(&self) -> Vec<usize> {
+        self.assignments
+            .iter()
+            .enumerate()
+            .filter_map(|(index, session)| session.map(|_| index))
+            .collect()
+    }
+
+    fn first_occupied_index(&self) -> Option<usize> {
+        self.occupied_indices().into_iter().next()
     }
 }
 
@@ -397,6 +598,27 @@ impl SplitLayoutState {
             }
         }
         false
+    }
+
+    /// Replace the session assigned to a slot.
+    ///
+    /// Returns the previous session in the slot, if any.
+    pub fn replace_session_in_slot(
+        &mut self,
+        slot: SlotId,
+        session_id: SessionId,
+    ) -> Option<Option<SessionId>> {
+        if self.assignments.iter().any(|(_, s)| *s == Some(session_id)) {
+            return None;
+        }
+
+        let entry = self
+            .assignments
+            .iter_mut()
+            .find(|(current, _)| *current == slot)?;
+        let previous = entry.1.replace(session_id);
+        self.focused_slot = Some(slot);
+        Some(previous)
     }
 
     /// Remove a session from its slot.
@@ -593,6 +815,24 @@ impl SplitLayoutState {
         }
     }
 
+    /// Resize the split identified by a visible divider between two subtrees.
+    pub fn resize_divider(
+        &mut self,
+        first_slot: SlotId,
+        second_slot: SlotId,
+        new_ratio: f32,
+    ) -> bool {
+        if let Some(new_tree) = self
+            .tree
+            .set_ratio_for_divider(first_slot, second_slot, new_ratio)
+        {
+            self.tree = new_tree;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Get the number of leaf slots.
     pub fn slot_count(&self) -> usize {
         self.tree.leaf_count()
@@ -754,7 +994,7 @@ impl WorkspaceLayoutState {
     /// Get all assigned session IDs in order.
     pub fn assigned_sessions(&self) -> Vec<SessionId> {
         match self {
-            WorkspaceLayoutState::Grid(s) => s.assignments().to_vec(),
+            WorkspaceLayoutState::Grid(s) => s.ordered_sessions(),
             WorkspaceLayoutState::SplitTree(s) => s.assigned_sessions(),
         }
     }
@@ -770,7 +1010,7 @@ mod tests {
     fn test_layout_state_new() {
         let state = LayoutState::new();
         assert_eq!(state.profile(), LayoutProfile::Grid2x2);
-        assert!(state.assignments().is_empty());
+        assert_eq!(state.assignments(), &[None, None, None, None]);
         assert!(state.focused_index().is_none());
     }
 
@@ -803,9 +1043,10 @@ mod tests {
         assert!(state.add_session(SessionId(2)));
         assert!(state.add_session(SessionId(3)));
         assert!(state.add_session(SessionId(4)));
-        assert!(!state.add_session(SessionId(5))); // Full
+        assert!(state.add_session(SessionId(5))); // Overflow hidden session
 
         assert_eq!(state.assignments().len(), 4);
+        assert_eq!(state.overflow(), &[SessionId(5)]);
     }
 
     #[test]
@@ -816,8 +1057,10 @@ mod tests {
         state.focus_index(1);
 
         assert!(state.remove_session(SessionId(1)));
-        assert_eq!(state.assignments().len(), 1);
-        assert_eq!(state.focused_index(), Some(0)); // Adjusted
+        assert_eq!(state.assignments().len(), 4);
+        assert_eq!(state.session_at(0), None);
+        assert_eq!(state.session_at(1), Some(SessionId(2)));
+        assert_eq!(state.focused_index(), Some(1)); // Stable grid index
 
         assert!(!state.remove_session(SessionId(99))); // Not found
     }
@@ -1134,6 +1377,60 @@ mod tests {
     fn test_split_layout_state_resize() {
         let mut state = SplitLayoutState::from_grid(1, 2);
         assert!(state.resize_split(SlotId(0), 0.3));
+    }
+
+    #[test]
+    fn test_split_layout_state_resize_divider_updates_nested_parent_split() {
+        let tree = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Split {
+                direction: SplitDirection::Vertical,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf { slot: SlotId(0) }),
+                second: Box::new(LayoutNode::Leaf { slot: SlotId(1) }),
+            }),
+            second: Box::new(LayoutNode::Leaf { slot: SlotId(2) }),
+        };
+        let mut state = SplitLayoutState::new(tree);
+
+        assert!(state.resize_divider(SlotId(0), SlotId(2), 0.75));
+        assert_eq!(
+            state.tree(),
+            &LayoutNode::Split {
+                direction: SplitDirection::Horizontal,
+                ratio: 0.75,
+                first: Box::new(LayoutNode::Split {
+                    direction: SplitDirection::Vertical,
+                    ratio: 0.5,
+                    first: Box::new(LayoutNode::Leaf { slot: SlotId(0) }),
+                    second: Box::new(LayoutNode::Leaf { slot: SlotId(1) }),
+                }),
+                second: Box::new(LayoutNode::Leaf { slot: SlotId(2) }),
+            }
+        );
+    }
+
+    #[test]
+    fn test_split_layout_state_resize_divider_clamps_ratio() {
+        let tree = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf { slot: SlotId(0) }),
+            second: Box::new(LayoutNode::Leaf { slot: SlotId(1) }),
+        };
+        let mut state = SplitLayoutState::new(tree);
+
+        assert!(state.resize_divider(SlotId(0), SlotId(1), 0.01));
+        assert_eq!(
+            state.tree(),
+            &LayoutNode::Split {
+                direction: SplitDirection::Horizontal,
+                ratio: 0.1,
+                first: Box::new(LayoutNode::Leaf { slot: SlotId(0) }),
+                second: Box::new(LayoutNode::Leaf { slot: SlotId(1) }),
+            }
+        );
     }
 
     #[test]

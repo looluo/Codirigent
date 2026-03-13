@@ -6,8 +6,11 @@
 //! - Modal keyboard input handling
 
 use super::gpui::WorkspaceView;
-use super::types::{SessionActionKind, SessionActionModal, TaskCreationModal, GROUP_COLOR_PALETTE};
-use codirigent_core::{SessionId, SessionManager, Task, TaskId};
+use super::types::{
+    SessionActionKind, SessionActionModal, SessionCreationModal, TaskCreationModal,
+    GROUP_COLOR_PALETTE,
+};
+use codirigent_core::{PaneId, SessionId, SessionManager, Task, TaskId};
 use gpui::{Context, KeyDownEvent};
 use std::path::Path;
 use tracing::{info, warn};
@@ -41,6 +44,20 @@ impl WorkspaceView {
 
     pub(super) fn close_session_action_modal(&mut self) {
         self.modals.session_action = None;
+    }
+
+    pub(super) fn open_session_creation_modal(&mut self, target_pane: Option<PaneId>) {
+        self.modals.session_creation = Some(SessionCreationModal {
+            target_pane,
+            shell_options: self.detected_shell_options(),
+            selected_shell_index: 0,
+            pending: false,
+            error: None,
+        });
+    }
+
+    pub(super) fn close_session_creation_modal(&mut self) {
+        self.modals.session_creation = None;
     }
 
     /// Pick the next unused group color from the palette.
@@ -278,6 +295,29 @@ impl WorkspaceView {
         cx.notify();
     }
 
+    pub(super) fn apply_session_creation_modal(&mut self, cx: &mut Context<Self>) {
+        let Some(modal) = self.modals.session_creation.clone() else {
+            return;
+        };
+        if modal.pending {
+            return;
+        }
+
+        let requested_shell = modal
+            .shell_options
+            .get(modal.selected_shell_index)
+            .cloned()
+            .filter(|shell| !shell.is_empty());
+        let target_pane = modal.target_pane.clone();
+
+        if let Some(active) = self.modals.session_creation.as_mut() {
+            active.pending = true;
+            active.error = None;
+        }
+        self.create_session_with_shell(target_pane, requested_shell, cx);
+        cx.notify();
+    }
+
     pub(super) fn handle_session_action_key_down(
         &mut self,
         event: &KeyDownEvent,
@@ -334,6 +374,76 @@ impl WorkspaceView {
                     cx.notify();
                 }
             }
+        }
+
+        true
+    }
+
+    pub(super) fn handle_session_creation_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some(modal) = self.modals.session_creation.as_mut() else {
+            return false;
+        };
+
+        let key = event.keystroke.key.to_lowercase();
+        match key.as_str() {
+            "escape" => {
+                if modal.pending {
+                    cx.notify();
+                    return true;
+                }
+                self.close_session_creation_modal();
+                cx.notify();
+                return true;
+            }
+            "enter" => {
+                self.apply_session_creation_modal(cx);
+                return true;
+            }
+            "up" | "left" | "k" => {
+                if modal.pending {
+                    return true;
+                }
+                if !modal.shell_options.is_empty() {
+                    modal.selected_shell_index = modal
+                        .selected_shell_index
+                        .checked_sub(1)
+                        .unwrap_or(modal.shell_options.len().saturating_sub(1));
+                    cx.notify();
+                }
+                return true;
+            }
+            "down" | "right" | "j" => {
+                if modal.pending {
+                    return true;
+                }
+                if !modal.shell_options.is_empty() {
+                    modal.selected_shell_index =
+                        (modal.selected_shell_index + 1) % modal.shell_options.len();
+                    cx.notify();
+                }
+                return true;
+            }
+            "tab" => {
+                if modal.pending {
+                    return true;
+                }
+                if !modal.shell_options.is_empty() {
+                    let len = modal.shell_options.len();
+                    let step = if event.keystroke.modifiers.shift {
+                        len.saturating_sub(1)
+                    } else {
+                        1
+                    };
+                    modal.selected_shell_index = (modal.selected_shell_index + step) % len;
+                    cx.notify();
+                }
+                return true;
+            }
+            _ => {}
         }
 
         true

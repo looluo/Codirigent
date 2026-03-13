@@ -130,7 +130,7 @@ impl WorkspaceView {
         // Layout constants from types.rs: HEADER_HEIGHT, TERMINAL_CONTENT_PADDING, CELL_BORDER_WIDTH
         let mut resized_any = false;
 
-        for &info in &self.cache.render_cell_info {
+        for info in &self.cache.render_cell_info {
             if let Some(terminal_view) = self.terminals.get_mut(&info.session_id) {
                 // Subtract all chrome between the grid cell bounds and the
                 // actual terminal canvas drawing area:
