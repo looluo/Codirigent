@@ -695,6 +695,39 @@ fn test_workspace_remove_session_promotes_hidden_split_session() {
 }
 
 #[test]
+fn test_workspace_resize_split_divider_updates_nested_layout_ratio() {
+    let mut ws = Workspace::new();
+    let tree = LayoutNode::Split {
+        direction: SplitDirection::Horizontal,
+        ratio: 0.5,
+        first: Box::new(LayoutNode::Split {
+            direction: SplitDirection::Vertical,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf { slot: SlotId(0) }),
+            second: Box::new(LayoutNode::Leaf { slot: SlotId(1) }),
+        }),
+        second: Box::new(LayoutNode::Leaf { slot: SlotId(2) }),
+    };
+    ws.set_split_tree(tree);
+
+    assert!(ws.resize_split_divider(SlotId(0), SlotId(2), 0.75));
+    assert_eq!(
+        ws.layout_state().as_split_tree().unwrap().tree(),
+        &LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.75,
+            first: Box::new(LayoutNode::Split {
+                direction: SplitDirection::Vertical,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf { slot: SlotId(0) }),
+                second: Box::new(LayoutNode::Leaf { slot: SlotId(1) }),
+            }),
+            second: Box::new(LayoutNode::Leaf { slot: SlotId(2) }),
+        }
+    );
+}
+
+#[test]
 fn test_set_split_tree_from_existing_split() {
     let mut ws = Workspace::new();
     ws.add_session(make_session(1, "S1"));

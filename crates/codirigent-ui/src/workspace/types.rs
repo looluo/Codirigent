@@ -314,6 +314,8 @@ pub(super) struct SelectionState {
     pub last_click_position: Option<(codirigent_core::GridPosition, Instant)>,
     /// Active drag-and-drop state for session reordering (None when not dragging).
     pub drag: Option<DragState>,
+    /// Active split-divider resize gesture (None when not resizing).
+    pub split_resize: Option<SplitResizeState>,
 }
 
 /// State for drag-and-drop session reordering.
@@ -349,6 +351,24 @@ pub(super) struct DragState {
     pub active: bool,
     /// Cell currently under the cursor (drop target), if any.
     pub target: Option<DragTarget>,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub(super) struct SplitResizeState {
+    /// Representative slot from the first subtree of the resized split.
+    pub first_slot: SlotId,
+    /// Representative slot from the second subtree of the resized split.
+    pub second_slot: SlotId,
+    /// Direction of the split being resized.
+    pub direction: codirigent_core::SplitDirection,
+    /// Global bounds of the split container.
+    pub bounds: crate::layout::Bounds,
+    /// Gap thickness used for the divider.
+    pub gap: f32,
+    /// Pointer offset within the divider handle at drag start.
+    pub grab_offset: f32,
+    /// Whether the drag produced at least one ratio change.
+    pub changed: bool,
 }
 
 const DRAG_ACTIVATION_DISTANCE_SQUARED: f32 = 25.0;
@@ -402,6 +422,7 @@ impl SelectionState {
             file_tree_context_menu: None,
             last_click_position: None,
             drag: None,
+            split_resize: None,
         }
     }
 }

@@ -436,6 +436,29 @@ mod tests {
     }
 
     #[test]
+    fn test_split_layout_divider_at_point_finds_nested_parent_divider() {
+        let root = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Split {
+                direction: SplitDirection::Vertical,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf { slot: SlotId(0) }),
+                second: Box::new(LayoutNode::Leaf { slot: SlotId(1) }),
+            }),
+            second: Box::new(LayoutNode::Leaf { slot: SlotId(2) }),
+        };
+        let layout = SplitLayout::new(root, Bounds::from_size(1000.0, 800.0), 4.0);
+
+        let divider = layout
+            .divider_at_point(Point::new(499.0, 400.0))
+            .expect("expected nested parent divider");
+        assert_eq!(divider.first_slot, SlotId(0));
+        assert_eq!(divider.second_slot, SlotId(2));
+        assert_eq!(divider.direction, SplitDirection::Horizontal);
+    }
+
+    #[test]
     fn test_split_layout_asymmetric() {
         // 2 stacked on left + 1 full-height on right
         // H(0.5, V(0.5, slot0, slot1), slot2)

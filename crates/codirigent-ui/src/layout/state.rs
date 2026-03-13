@@ -815,6 +815,24 @@ impl SplitLayoutState {
         }
     }
 
+    /// Resize the split identified by a visible divider between two subtrees.
+    pub fn resize_divider(
+        &mut self,
+        first_slot: SlotId,
+        second_slot: SlotId,
+        new_ratio: f32,
+    ) -> bool {
+        if let Some(new_tree) = self
+            .tree
+            .set_ratio_for_divider(first_slot, second_slot, new_ratio)
+        {
+            self.tree = new_tree;
+            true
+        } else {
+            false
+        }
+    }
+
     /// Get the number of leaf slots.
     pub fn slot_count(&self) -> usize {
         self.tree.leaf_count()
@@ -1359,6 +1377,60 @@ mod tests {
     fn test_split_layout_state_resize() {
         let mut state = SplitLayoutState::from_grid(1, 2);
         assert!(state.resize_split(SlotId(0), 0.3));
+    }
+
+    #[test]
+    fn test_split_layout_state_resize_divider_updates_nested_parent_split() {
+        let tree = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Split {
+                direction: SplitDirection::Vertical,
+                ratio: 0.5,
+                first: Box::new(LayoutNode::Leaf { slot: SlotId(0) }),
+                second: Box::new(LayoutNode::Leaf { slot: SlotId(1) }),
+            }),
+            second: Box::new(LayoutNode::Leaf { slot: SlotId(2) }),
+        };
+        let mut state = SplitLayoutState::new(tree);
+
+        assert!(state.resize_divider(SlotId(0), SlotId(2), 0.75));
+        assert_eq!(
+            state.tree(),
+            &LayoutNode::Split {
+                direction: SplitDirection::Horizontal,
+                ratio: 0.75,
+                first: Box::new(LayoutNode::Split {
+                    direction: SplitDirection::Vertical,
+                    ratio: 0.5,
+                    first: Box::new(LayoutNode::Leaf { slot: SlotId(0) }),
+                    second: Box::new(LayoutNode::Leaf { slot: SlotId(1) }),
+                }),
+                second: Box::new(LayoutNode::Leaf { slot: SlotId(2) }),
+            }
+        );
+    }
+
+    #[test]
+    fn test_split_layout_state_resize_divider_clamps_ratio() {
+        let tree = LayoutNode::Split {
+            direction: SplitDirection::Horizontal,
+            ratio: 0.5,
+            first: Box::new(LayoutNode::Leaf { slot: SlotId(0) }),
+            second: Box::new(LayoutNode::Leaf { slot: SlotId(1) }),
+        };
+        let mut state = SplitLayoutState::new(tree);
+
+        assert!(state.resize_divider(SlotId(0), SlotId(1), 0.01));
+        assert_eq!(
+            state.tree(),
+            &LayoutNode::Split {
+                direction: SplitDirection::Horizontal,
+                ratio: 0.1,
+                first: Box::new(LayoutNode::Leaf { slot: SlotId(0) }),
+                second: Box::new(LayoutNode::Leaf { slot: SlotId(1) }),
+            }
+        );
     }
 
     #[test]

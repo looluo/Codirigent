@@ -737,6 +737,40 @@ impl WorkspaceView {
         self.cache.pending_resize_signature = None;
     }
 
+    pub(super) fn update_split_resize(&mut self, position: crate::layout::Point) -> bool {
+        let Some(resize) = self.selection.split_resize.as_ref().copied() else {
+            return false;
+        };
+
+        let total = match resize.direction {
+            codirigent_core::SplitDirection::Horizontal => resize.bounds.size.width - resize.gap,
+            codirigent_core::SplitDirection::Vertical => resize.bounds.size.height - resize.gap,
+        };
+        if total <= 0.0 {
+            return false;
+        }
+
+        let offset = match resize.direction {
+            codirigent_core::SplitDirection::Horizontal => {
+                position.x - resize.bounds.origin.x - resize.grab_offset
+            }
+            codirigent_core::SplitDirection::Vertical => {
+                position.y - resize.bounds.origin.y - resize.grab_offset
+            }
+        };
+        let ratio = offset / total;
+        let changed =
+            self.workspace
+                .resize_split_divider(resize.first_slot, resize.second_slot, ratio);
+        if changed {
+            if let Some(active_resize) = self.selection.split_resize.as_mut() {
+                active_resize.changed = true;
+            }
+            self.mark_layout_cache_dirty();
+        }
+        changed
+    }
+
     fn current_resize_signature(
         &self,
         cell_width: f32,
@@ -2181,12 +2215,27 @@ impl Render for WorkspaceView {
                 this.handle_key_down(event, window, cx);
             }))
             .on_mouse_move(cx.listener(|this, event: &MouseMoveEvent, _window, cx| {
+                let pos =
+                    crate::layout::Point::new(event.position.x.into(), event.position.y.into());
+                if this.selection.split_resize.is_some() {
+                    if !event.dragging() {
+                        if let Some(resize) = this.selection.split_resize.take() {
+                            if resize.changed {
+                                this.save_state_to_disk(cx);
+                            }
+                        }
+                        cx.notify();
+                        return;
+                    }
+                    if this.update_split_resize(pos) {
+                        cx.notify();
+                    }
+                    return;
+                }
                 let Some(drag) = &mut this.selection.drag else {
                     return;
                 };
 
-                let pos =
-                    crate::layout::Point::new(event.position.x.into(), event.position.y.into());
                 drag.update_pointer(pos, &this.cache.render_cell_info);
                 cx.notify();
             }))
@@ -2194,6 +2243,13 @@ impl Render for WorkspaceView {
             .on_mouse_up(
                 MouseButton::Left,
                 cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
+                    if let Some(resize) = this.selection.split_resize.take() {
+                        if resize.changed {
+                            this.save_state_to_disk(cx);
+                        }
+                        cx.notify();
+                        return;
+                    }
                     if let Some(drag) = this.selection.drag.take() {
                         if drag.active {
                             if let Some(target) = drag.target {

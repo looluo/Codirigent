@@ -1148,6 +1148,20 @@ impl Workspace {
         false
     }
 
+    /// Resize a specific split divider identified by representative slots on
+    /// either side of the split.
+    pub fn resize_split_divider(
+        &mut self,
+        first_slot: SlotId,
+        second_slot: SlotId,
+        new_ratio: f32,
+    ) -> bool {
+        if let WorkspaceLayoutState::SplitTree(s) = &mut self.layout_state {
+            return s.resize_divider(first_slot, second_slot, new_ratio);
+        }
+        false
+    }
+
     /// Convert the current grid layout to an equivalent split tree.
     fn convert_to_split_tree(&mut self) {
         let stacks = self.current_pane_stacks_in_order();

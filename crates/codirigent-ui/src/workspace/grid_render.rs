@@ -13,9 +13,9 @@ use crate::workspace::gpui::WorkspaceView;
 use crate::workspace::types::HEADER_HEIGHT;
 use codirigent_core::{LayoutNode, SessionId, SlotId, SplitDirection};
 use gpui::{
-    div, px, relative, ClickEvent, Context, Focusable, FontWeight, InteractiveElement, IntoElement,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, ScrollWheelEvent,
-    SharedString, StatefulInteractiveElement, Styled, Window,
+    div, prelude::FluentBuilder, px, relative, ClickEvent, Context, Focusable, FontWeight,
+    InteractiveElement, IntoElement, MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent,
+    ParentElement, ScrollWheelEvent, SharedString, StatefulInteractiveElement, Styled, Window,
 };
 use std::rc::Rc;
 use tracing::info;
@@ -151,6 +151,7 @@ impl WorkspaceView {
     ) -> impl IntoElement {
         let theme = self.workspace().theme().clone();
         let grid_gap = theme.grid_gap;
+        let grid_bounds = self.workspace().grid_bounds();
 
         // Collect split tree state needed for rendering
         let tree = match self.workspace().layout_state() {
@@ -165,6 +166,7 @@ impl WorkspaceView {
 
         self.render_split_node(
             &tree,
+            grid_bounds,
             &theme,
             grid_gap,
             panel_bg,
@@ -180,6 +182,7 @@ impl WorkspaceView {
     fn render_split_node(
         &mut self,
         node: &LayoutNode,
+        available: crate::layout::Bounds,
         theme: &CodirigentTheme,
         gap: f32,
         panel_bg: gpui::Hsla,
@@ -238,9 +241,21 @@ impl WorkspaceView {
                 first,
                 second,
             } => {
-                // Render children recursively (pass pre-computed colors to avoid per-call conversion)
+                let (first_bounds, second_bounds, divider_bounds) =
+                    split_child_bounds(*direction, *ratio, available, gap);
+                let first_slot = first.slots_in_order().first().copied().unwrap_or(SlotId(0));
+                let second_slot = second
+                    .slots_in_order()
+                    .first()
+                    .copied()
+                    .unwrap_or(SlotId(0));
+                let is_resizing = self.selection.split_resize.as_ref().is_some_and(|resize| {
+                    resize.first_slot == first_slot && resize.second_slot == second_slot
+                });
+
                 let first_elem = self.render_split_node(
                     first,
+                    first_bounds,
                     theme,
                     gap,
                     panel_bg,
@@ -251,6 +266,7 @@ impl WorkspaceView {
                 );
                 let second_elem = self.render_split_node(
                     second,
+                    second_bounds,
                     theme,
                     gap,
                     panel_bg,
@@ -261,7 +277,7 @@ impl WorkspaceView {
                 );
 
                 // Use flex ratio to distribute space: first gets `ratio`, second gets `1 - ratio`
-                // Multiply by 1000 for precision in flex-grow values
+                // Multiply by 1000 for precision in flex-grow values.
                 let first_flex = *ratio * 1000.0;
                 let second_flex = (1.0 - *ratio) * 1000.0;
 
@@ -282,7 +298,77 @@ impl WorkspaceView {
                     d.child(elem)
                 };
 
-                let mut container = div().flex_1().flex().gap(px(gap));
+                let primary: gpui::Hsla = theme.primary.into();
+                let divider_bg = if is_resizing {
+                    primary.opacity(0.35)
+                } else {
+                    border_color.opacity(0.45)
+                };
+                let divider_hover = if is_resizing {
+                    primary.opacity(0.45)
+                } else {
+                    primary.opacity(0.22)
+                };
+
+                let divider = {
+                    let direction = *direction;
+                    let resize_bounds = available;
+                    let divider_origin = match direction {
+                        SplitDirection::Horizontal => divider_bounds.origin.x,
+                        SplitDirection::Vertical => divider_bounds.origin.y,
+                    };
+                    div()
+                        .id(SharedString::from(format!(
+                            "split-divider-{}-{}",
+                            first_slot.0, second_slot.0
+                        )))
+                        .flex_shrink_0()
+                        .bg(divider_bg)
+                        .when(direction == SplitDirection::Horizontal, |this| {
+                            this.w(px(divider_bounds.size.width))
+                                .h_full()
+                                .cursor_col_resize()
+                        })
+                        .when(direction == SplitDirection::Vertical, |this| {
+                            this.h(px(divider_bounds.size.height))
+                                .w_full()
+                                .cursor_row_resize()
+                        })
+                        .hover(|style| style.bg(divider_hover))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
+                                cx.stop_propagation();
+                                let pos = crate::layout::Point::new(
+                                    event.position.x.into(),
+                                    event.position.y.into(),
+                                );
+                                this.selection.drag = None;
+                                this.selection.split_resize =
+                                    Some(super::types::SplitResizeState {
+                                        first_slot,
+                                        second_slot,
+                                        direction,
+                                        bounds: resize_bounds,
+                                        gap,
+                                        grab_offset: match direction {
+                                            SplitDirection::Horizontal => {
+                                                (pos.x - divider_origin).max(0.0)
+                                            }
+                                            SplitDirection::Vertical => {
+                                                (pos.y - divider_origin).max(0.0)
+                                            }
+                                        },
+                                        changed: false,
+                                    });
+                                this.selection.is_selecting = false;
+                                this.selection.selecting_session_id = None;
+                                cx.notify();
+                            }),
+                        )
+                };
+
+                let mut container = div().flex_1().flex();
                 container = if is_horizontal {
                     container.flex_row()
                 } else {
@@ -290,6 +376,7 @@ impl WorkspaceView {
                 };
                 let container = container
                     .child(make_child_div(first_elem, first_flex))
+                    .child(divider)
                     .child(make_child_div(second_elem, second_flex));
 
                 container.into_any_element()
@@ -871,5 +958,71 @@ impl WorkspaceView {
                 )
                 .child(terminal_content),
         )
+    }
+}
+
+fn split_child_bounds(
+    direction: SplitDirection,
+    ratio: f32,
+    available: crate::layout::Bounds,
+    gap: f32,
+) -> (
+    crate::layout::Bounds,
+    crate::layout::Bounds,
+    crate::layout::Bounds,
+) {
+    match direction {
+        SplitDirection::Horizontal => {
+            let total_w = (available.size.width - gap).max(0.0);
+            let first_w = (total_w * ratio).max(0.0);
+            let second_w = (total_w - first_w).max(0.0);
+            let divider_x = available.origin.x + first_w;
+            (
+                crate::layout::Bounds::new(
+                    available.origin.x,
+                    available.origin.y,
+                    first_w,
+                    available.size.height,
+                ),
+                crate::layout::Bounds::new(
+                    divider_x + gap,
+                    available.origin.y,
+                    second_w,
+                    available.size.height,
+                ),
+                crate::layout::Bounds::new(
+                    divider_x,
+                    available.origin.y,
+                    gap,
+                    available.size.height,
+                ),
+            )
+        }
+        SplitDirection::Vertical => {
+            let total_h = (available.size.height - gap).max(0.0);
+            let first_h = (total_h * ratio).max(0.0);
+            let second_h = (total_h - first_h).max(0.0);
+            let divider_y = available.origin.y + first_h;
+            (
+                crate::layout::Bounds::new(
+                    available.origin.x,
+                    available.origin.y,
+                    available.size.width,
+                    first_h,
+                ),
+                crate::layout::Bounds::new(
+                    available.origin.x,
+                    divider_y + gap,
+                    available.size.width,
+                    second_h,
+                ),
+                crate::layout::Bounds::new(
+                    available.origin.x,
+                    divider_y,
+                    available.size.width,
+                    gap,
+                ),
+            )
+        }
     }
 }
