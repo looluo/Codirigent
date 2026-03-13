@@ -6,16 +6,14 @@
 //! - Session cells with terminals
 //! - Empty grid cells and placeholders
 
-use crate::icons;
 use crate::terminal_header::TerminalHeaderRenderHints;
 use crate::theme::CodirigentTheme;
 use crate::workspace::gpui::WorkspaceView;
 use crate::workspace::types::HEADER_HEIGHT;
 use codirigent_core::SessionId;
 use gpui::{
-    div, px, ClickEvent, Context, Focusable, FontWeight, InteractiveElement, IntoElement,
-    MouseButton, MouseDownEvent, MouseMoveEvent, MouseUpEvent, ParentElement, ScrollWheelEvent,
-    SharedString, StatefulInteractiveElement, Styled, Window,
+    div, px, Context, Focusable, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ParentElement, ScrollWheelEvent, SharedString, Styled, Window,
 };
 use std::rc::Rc;
 
@@ -199,306 +197,21 @@ impl WorkspaceView {
             _ => cell_border,
         };
 
-        let header_border = cell_border;
-
-        // Color indicator bar
-        let color_indicator: gpui::Hsla = hints.color_indicator.into();
-        let status_color: gpui::Hsla = hints.status.color.into();
-        let pane_tab_ids = self.workspace().pane_tab_session_ids(pane_id.clone());
-        let show_plus_button = self
-            .workspace()
-            .pane_active_session_id(pane_id.clone())
-            .is_some();
-
-        let mut header = div()
-            .id(SharedString::from(format!(
-                "terminal-header-{}",
-                session_id.0
-            )))
-            .h(px(hints.height))
-            .w_full()
-            .bg(panel_bg)
-            .border_b_1()
-            .border_color(header_border)
-            .flex()
-            .items_center()
-            .px_2()
-            .gap_2()
-            .child(
-                div()
-                    .w(px(3.0))
-                    .h(px(16.0))
-                    .rounded_sm()
-                    .bg(color_indicator),
-            )
-            .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(status_color))
-            .child({
-                let mut tab_strip = div().flex().items_center().gap_1().overflow_hidden();
-
-                for tab_session_id in pane_tab_ids {
-                    let tab_is_active = tab_session_id == session_id;
-                    let tab_name = self
-                        .workspace()
-                        .session(tab_session_id)
-                        .map(|session| session.name.clone())
-                        .unwrap_or_else(|| hints.name.clone());
-                    let tab_bg = if tab_is_active {
-                        theme.active.into()
-                    } else {
-                        border_color.opacity(0.35)
-                    };
-                    let tab_fg = if tab_is_active {
-                        fg
-                    } else {
-                        muted.opacity(0.9)
-                    };
-
-                    let mut tab = div()
-                        .id(SharedString::from(format!(
-                            "terminal-tab-{}-{}",
-                            session_id.0, tab_session_id.0
-                        )))
-                        .px_2()
-                        .h(px(22.0))
-                        .rounded_md()
-                        .bg(tab_bg)
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .overflow_hidden()
-                        .cursor_pointer()
-                        .on_click(cx.listener({
-                            let pane_id = pane_id.clone();
-                            move |this, _: &ClickEvent, _window, cx| {
-                                if this
-                                    .workspace
-                                    .activate_pane_tab(pane_id.clone(), tab_session_id)
-                                {
-                                    this.select_session_with_cx(tab_session_id, cx);
-                                    this.mark_layout_cache_dirty();
-                                    this.sync_layout_derived_state();
-                                    this.save_state_to_disk(cx);
-                                    cx.notify();
-                                }
-                            }
-                        }))
-                        .child(
-                            div()
-                                .text_xs()
-                                .font_weight(if tab_is_active {
-                                    FontWeight::SEMIBOLD
-                                } else {
-                                    FontWeight::MEDIUM
-                                })
-                                .text_color(tab_fg)
-                                .overflow_hidden()
-                                .text_ellipsis()
-                                .child(tab_name),
-                        );
-
-                    if tab_is_active {
-                        tab = tab
-                            .cursor_grab()
-                            .on_mouse_down(
-                                MouseButton::Left,
-                                cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
-                                    let pos = crate::layout::Point::new(
-                                        event.position.x.into(),
-                                        event.position.y.into(),
-                                    );
-                                    this.selection.drag = Some(super::types::DragState {
-                                        source_session_id: tab_session_id,
-                                        source_index: drag_logical_index.unwrap_or(0),
-                                        start_position: pos,
-                                        current_position: pos,
-                                        active: false,
-                                        target: None,
-                                    });
-                                    cx.notify();
-                                }),
-                            )
-                            .on_mouse_move(cx.listener(
-                                move |this, event: &MouseMoveEvent, _window, cx| {
-                                    let Some(drag) = &mut this.selection.drag else {
-                                        return;
-                                    };
-                                    if drag.source_session_id != tab_session_id {
-                                        return;
-                                    }
-                                    let pos = crate::layout::Point::new(
-                                        event.position.x.into(),
-                                        event.position.y.into(),
-                                    );
-                                    drag.update_pointer(pos, &this.cache.render_cell_info);
-                                    cx.notify();
-                                },
-                            ));
-                    }
-
-                    tab_strip = tab_strip.child(tab);
-                }
-
-                tab_strip
-            });
-
-        // Project/directory name (after session name)
-        if let Some(project) = &hints.project_name {
-            header = header.child(
-                div()
-                    .text_xs()
-                    .text_color(muted.opacity(0.7))
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .child(project.clone()),
-            );
-        }
-
-        // Git branch badge (after session name)
-        if let Some(branch) = &hints.git_branch {
-            let git_fg = muted.opacity(0.8);
-            let git_badge_bg = border_color.opacity(0.25);
-            let branch_label = if branch.chars().count() > 16 {
-                let truncated: String = branch.chars().take(13).collect();
-                format!("{}...", truncated)
-            } else {
-                branch.clone()
-            };
-            let mut git_badge = div()
-                .px(px(4.0))
-                .py_px()
-                .rounded_sm()
-                .bg(git_badge_bg)
-                .flex()
-                .flex_shrink_0()
-                .items_center()
-                .gap_1()
-                .child(
-                    div()
-                        .text_xs()
-                        .text_color(git_fg)
-                        .font_family(icons::LUCIDE_FONT_FAMILY)
-                        .child(icons::git_branch()),
-                )
-                .child(div().text_xs().text_color(git_fg).child(branch_label));
-
-            if let Some(count) = hints.git_dirty_count {
-                if count > 0 {
-                    git_badge = git_badge.child(
-                        div()
-                            .text_xs()
-                            .text_color(orange)
-                            .child(format!("+{}", count)),
-                    );
-                }
-            }
-
-            header = header.child(git_badge);
-        }
-
-        if let Some(shell_label) = &hints.shell_label {
-            let shell_warning = hints.shell_warning.is_some();
-            let shell_fg = if shell_warning {
-                orange
-            } else {
-                muted.opacity(0.8)
-            };
-            let shell_bg = if shell_warning {
-                orange.opacity(0.12)
-            } else {
-                border_color.opacity(0.25)
-            };
-            header = header.child(
-                div()
-                    .px(px(4.0))
-                    .py_px()
-                    .rounded_sm()
-                    .bg(shell_bg)
-                    .flex()
-                    .flex_shrink_0()
-                    .items_center()
-                    .gap_1()
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(shell_fg)
-                            .font_family(icons::LUCIDE_FONT_FAMILY)
-                            .child(icons::terminal()),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(shell_fg)
-                            .child(shell_label.clone()),
-                    ),
-            );
-        }
-
-        header = header.child(div().flex_1());
-
-        // Task badge (if any)
-        if let Some(task) = &hints.task {
-            let task_bg: gpui::Hsla = task.bg_color.into();
-            let task_color: gpui::Hsla = task.text_color.into();
-            header = header.child(
-                div()
-                    .px_2()
-                    .py_px()
-                    .rounded_sm()
-                    .bg(task_bg)
-                    .text_xs()
-                    .text_color(task_color)
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .child(task.display_text.clone()),
-            );
-        }
-
-        // Context usage (if any)
-        if let Some(context) = &hints.context {
-            let context_color: gpui::Hsla = context.color.into();
-            header = header.child(
-                div()
-                    .text_xs()
-                    .text_color(context_color)
-                    .child(context.text().to_string()),
-            );
-        }
-
-        if show_plus_button {
-            header = header.child(
-                div()
-                    .id(SharedString::from(format!("pane-add-tab-{}", session_id.0)))
-                    .w(px(20.0))
-                    .h(px(20.0))
-                    .rounded_md()
-                    .bg(border_color.opacity(0.25))
-                    .flex()
-                    .items_center()
-                    .justify_center()
-                    .cursor_pointer()
-                    .hover(|style| style.bg(border_color.opacity(0.45)))
-                    .on_click(cx.listener({
-                        let pane_id = pane_id.clone();
-                        move |this, _: &ClickEvent, _window, cx| {
-                            this.create_session_in_pane(pane_id.clone(), cx);
-                        }
-                    }))
-                    .child(
-                        div()
-                            .text_xs()
-                            .font_family(icons::LUCIDE_FONT_FAMILY)
-                            .text_color(fg)
-                            .child(icons::plus()),
-                    ),
-            );
-        }
-
-        // Set cursor for draggable header
-        header = if matches!(drag_visual, Some(DragVisual::Source)) {
-            header.cursor_grabbing()
-        } else {
-            header
-        };
+        let header = self.render_pane_header(
+            pane_id.clone(),
+            session_id,
+            hints,
+            theme,
+            panel_bg,
+            border_color,
+            cell_border,
+            fg,
+            muted,
+            orange,
+            drag_logical_index,
+            matches!(drag_visual, Some(DragVisual::Source)),
+            cx,
+        );
 
         // Mouse-up handling for active-tab drags lives on the workspace root.
 

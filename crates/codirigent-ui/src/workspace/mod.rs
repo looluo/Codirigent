@@ -108,6 +108,9 @@ mod grid_render;
 mod split_render;
 
 #[cfg(feature = "gpui-full")]
+mod pane_header_render;
+
+#[cfg(feature = "gpui-full")]
 mod settings_panels;
 
 #[cfg(feature = "gpui-full")]

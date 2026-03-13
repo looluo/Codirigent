@@ -27,6 +27,7 @@ The workspace rendering is organized into specialized modules:
   - Traditional NxM grid layout
   - Dispatch to split-tree rendering
   - Session cells with terminals
+  - Delegation to pane-header rendering
   - Empty grid cell placeholders
 
 - **`split_render.rs`** - Split-tree layout rendering
@@ -34,6 +35,12 @@ The workspace rendering is organized into specialized modules:
   - Recursive split-node rendering
   - Divider rendering and drag setup
   - Empty split-slot placeholders
+
+- **`pane_header_render.rs`** - Pane header and tab-strip rendering
+  - Pane-local tabs
+  - Header badges (project, git, shell, task, context)
+  - Active-tab drag affordance
+  - Pane-local `+` session creation
 
 - **`task_board_render.rs`** (1,334 lines) - Task management UI
   - Right sidebar task board
@@ -185,6 +192,7 @@ workspace/
 │   ├── Uses: top_bar_render, modal_render
 │   └── Uses: icon_utils
 ├── grid_render.rs       # Grid layout + shared session cells
+├── pane_header_render.rs # Pane header + tab-strip rendering
 ├── split_render.rs      # Split-tree layout rendering
 │   └── Uses: icon_utils
 ├── task_board_render.rs # Task board UI
