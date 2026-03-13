@@ -72,17 +72,19 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) {
         info!("ClosePane action triggered");
-        // Get the session in the focused slot BEFORE closing the pane
-        let session_to_close = self.workspace.focused_session_id();
+        // Capture every tab in the focused pane before the layout removes it.
+        let sessions_to_close = self.workspace.focused_pane_session_ids();
 
         if self.workspace.close_pane() {
             info!("Closed focused pane");
-            // If the closed pane had a session, clean it up fully
-            if let Some(id) = session_to_close {
-                self.close_session(id, cx);
-            } else {
+            // Close every session that belonged to the removed pane.
+            if sessions_to_close.is_empty() {
                 self.mark_layout_cache_dirty();
                 cx.notify();
+            } else {
+                for id in sessions_to_close {
+                    self.close_session(id, cx);
+                }
             }
         }
     }

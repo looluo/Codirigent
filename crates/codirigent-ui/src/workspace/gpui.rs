@@ -791,6 +791,8 @@ impl WorkspaceView {
                         this.persistence.storage.clone(),
                         this.session_manager.clone(),
                         this.persisted_layout_mode(),
+                        this.workspace.pane_tab_groups(),
+                        this.workspace.pane_stacks(),
                         this.cache.last_window_state.clone(),
                     ))
                 }) {
@@ -798,7 +800,8 @@ impl WorkspaceView {
                     Ok(None) | Err(_) => return,
                 };
 
-                let (storage, session_manager, layout, window_state) = save_inputs;
+                let (storage, session_manager, layout, pane_tab_groups, pane_stacks, window_state) =
+                    save_inputs;
                 let result = cx
                     .background_executor()
                     .spawn(async move {
@@ -809,6 +812,8 @@ impl WorkspaceView {
                         let state = codirigent_core::AppState {
                             sessions,
                             layout,
+                            pane_tab_groups,
+                            pane_stacks,
                             updated_at: Some(chrono::Utc::now()),
                             window_bounds: window_state,
                         };
@@ -1022,15 +1027,22 @@ impl WorkspaceView {
         let (rows, cols) = self.workspace.layout_profile().dimensions();
         let occupied: Vec<GridPosition> = self
             .workspace
-            .sessions()
-            .iter()
-            .enumerate()
-            .map(|(i, _)| {
-                let row = i as u32 / cols;
-                let col = i as u32 % cols;
-                GridPosition { row, col }
+            .layout_state()
+            .as_grid()
+            .map(|state| {
+                state
+                    .assignments()
+                    .iter()
+                    .enumerate()
+                    .filter_map(|(index, session_id)| {
+                        session_id.map(|_| GridPosition {
+                            row: index as u32 / cols,
+                            col: index as u32 % cols,
+                        })
+                    })
+                    .collect()
             })
-            .collect();
+            .unwrap_or_default();
         self.empty_cells.setup_for_grid(rows, cols, &occupied);
     }
 
@@ -1225,7 +1237,9 @@ impl WorkspaceView {
             EmptySessionEvent::CreateSessionClicked { position } => {
                 info!(?position, "Create session at position");
                 if self.should_create_session_at(position) {
-                    self.create_session(cx);
+                    let cols = self.workspace.layout_profile().dimensions().1;
+                    let index = (position.row * cols + position.col) as usize;
+                    self.create_session_in_pane(codirigent_core::PaneId::GridCell { index }, cx);
                 }
             }
         }
@@ -1372,7 +1386,7 @@ impl WorkspaceView {
         // Layout constants from types.rs: HEADER_HEIGHT, TERMINAL_CONTENT_PADDING, CELL_BORDER_WIDTH
         let mut resized_any = false;
 
-        for &info in &self.cache.render_cell_info {
+        for info in &self.cache.render_cell_info {
             if let Some(terminal_view) = self.terminals.get_mut(&info.session_id) {
                 // Subtract all chrome between the grid cell bounds and the
                 // actual terminal canvas drawing area:
@@ -2159,11 +2173,29 @@ impl Render for WorkspaceView {
                 cx.listener(|this, _event: &MouseUpEvent, _window, cx| {
                     if let Some(drag) = this.selection.drag.take() {
                         if drag.active {
-                            if let Some(target) = drag.target_index {
-                                this.workspace.swap_sessions(drag.source_index, target);
-                                this.mark_layout_cache_dirty();
-                                this.sync_layout_derived_state();
-                                this.save_state_to_disk(cx);
+                            if let Some(target) = drag.target {
+                                let changed = match target.kind {
+                                    super::types::DragTargetKind::PaneBody => this
+                                        .workspace
+                                        .swap_sessions(drag.source_index, target.index),
+                                    super::types::DragTargetKind::PaneHeader => this
+                                        .cache
+                                        .render_cell_info
+                                        .iter()
+                                        .find(|info| info.index == target.index)
+                                        .cloned()
+                                        .is_some_and(|info| {
+                                            this.workspace.group_session_into_pane(
+                                                drag.source_session_id,
+                                                info.pane_id,
+                                            )
+                                        }),
+                                };
+                                if changed {
+                                    this.mark_layout_cache_dirty();
+                                    this.sync_layout_derived_state();
+                                    this.save_state_to_disk(cx);
+                                }
                             }
                         }
                         cx.notify();

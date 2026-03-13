@@ -76,7 +76,13 @@ impl WorkspaceView {
                 let index = (row * cols + col) as usize;
                 let position = codirigent_core::GridPosition { row, col };
 
-                let cell_div = if let Some(info) = self.cache.render_cell_info.get(index).copied() {
+                let cell_div = if let Some(info) = self
+                    .cache
+                    .render_cell_info
+                    .iter()
+                    .find(|info| info.index == index)
+                    .cloned()
+                {
                     // Get or create terminal header hints
                     let header_hints =
                         if let Some(header) = self.get_terminal_header(info.session_id) {
@@ -106,6 +112,7 @@ impl WorkspaceView {
 
                     // Render session cell with actual terminal content
                     self.render_session_cell_with_terminal(
+                        info.pane_id.clone(),
                         info.session_id,
                         &header_hints,
                         &theme,
@@ -210,6 +217,7 @@ impl WorkspaceView {
                     };
 
                     self.render_session_cell_with_terminal(
+                        codirigent_core::PaneId::SplitSlot { slot: *slot },
                         session_id,
                         &header_hints,
                         theme,
@@ -332,8 +340,10 @@ impl WorkspaceView {
     }
 
     /// Render a session cell with terminal header and actual terminal content.
+    #[allow(clippy::too_many_arguments)]
     fn render_session_cell_with_terminal(
         &mut self,
+        pane_id: codirigent_core::PaneId,
         session_id: SessionId,
         hints: &TerminalHeaderRenderHints,
         theme: &CodirigentTheme,
@@ -370,7 +380,7 @@ impl WorkspaceView {
             }
             if drag.source_index == drag_logical_index.unwrap_or(usize::MAX) {
                 Some(DragVisual::Source)
-            } else if drag.target_index == drag_logical_index {
+            } else if drag.target.map(|target| target.index) == drag_logical_index {
                 Some(DragVisual::Target)
             } else {
                 None
@@ -391,6 +401,11 @@ impl WorkspaceView {
         // Color indicator bar
         let color_indicator: gpui::Hsla = hints.color_indicator.into();
         let status_color: gpui::Hsla = hints.status.color.into();
+        let pane_tab_ids = self.workspace().pane_tab_session_ids(pane_id.clone());
+        let show_plus_button = self
+            .workspace()
+            .pane_active_session_id(pane_id.clone())
+            .is_some();
 
         let mut header = div()
             .id(SharedString::from(format!(
@@ -414,15 +429,114 @@ impl WorkspaceView {
                     .bg(color_indicator),
             )
             .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(status_color))
-            .child(
-                div()
-                    .text_xs()
-                    .font_weight(FontWeight::MEDIUM)
-                    .text_color(fg)
-                    .overflow_hidden()
-                    .text_ellipsis()
-                    .child(hints.name.clone()),
-            );
+            .child({
+                let mut tab_strip = div().flex().items_center().gap_1().overflow_hidden();
+
+                for tab_session_id in pane_tab_ids {
+                    let tab_is_active = tab_session_id == session_id;
+                    let tab_name = self
+                        .workspace()
+                        .session(tab_session_id)
+                        .map(|session| session.name.clone())
+                        .unwrap_or_else(|| hints.name.clone());
+                    let tab_bg = if tab_is_active {
+                        theme.active.into()
+                    } else {
+                        border_color.opacity(0.35)
+                    };
+                    let tab_fg = if tab_is_active {
+                        fg
+                    } else {
+                        muted.opacity(0.9)
+                    };
+
+                    let mut tab = div()
+                        .id(SharedString::from(format!(
+                            "terminal-tab-{}-{}",
+                            session_id.0, tab_session_id.0
+                        )))
+                        .px_2()
+                        .h(px(22.0))
+                        .rounded_md()
+                        .bg(tab_bg)
+                        .flex()
+                        .items_center()
+                        .gap_1()
+                        .overflow_hidden()
+                        .cursor_pointer()
+                        .on_click(cx.listener({
+                            let pane_id = pane_id.clone();
+                            move |this, _: &ClickEvent, _window, cx| {
+                                if this
+                                    .workspace
+                                    .activate_pane_tab(pane_id.clone(), tab_session_id)
+                                {
+                                    this.select_session_with_cx(tab_session_id, cx);
+                                    this.mark_layout_cache_dirty();
+                                    this.sync_layout_derived_state();
+                                    this.save_state_to_disk(cx);
+                                    cx.notify();
+                                }
+                            }
+                        }))
+                        .child(
+                            div()
+                                .text_xs()
+                                .font_weight(if tab_is_active {
+                                    FontWeight::SEMIBOLD
+                                } else {
+                                    FontWeight::MEDIUM
+                                })
+                                .text_color(tab_fg)
+                                .overflow_hidden()
+                                .text_ellipsis()
+                                .child(tab_name),
+                        );
+
+                    if tab_is_active {
+                        tab = tab
+                            .cursor_grab()
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
+                                    let pos = crate::layout::Point::new(
+                                        event.position.x.into(),
+                                        event.position.y.into(),
+                                    );
+                                    this.selection.drag = Some(super::types::DragState {
+                                        source_session_id: tab_session_id,
+                                        source_index: drag_logical_index.unwrap_or(0),
+                                        start_position: pos,
+                                        current_position: pos,
+                                        active: false,
+                                        target: None,
+                                    });
+                                    cx.notify();
+                                }),
+                            )
+                            .on_mouse_move(cx.listener(
+                                move |this, event: &MouseMoveEvent, _window, cx| {
+                                    let Some(drag) = &mut this.selection.drag else {
+                                        return;
+                                    };
+                                    if drag.source_session_id != tab_session_id {
+                                        return;
+                                    }
+                                    let pos = crate::layout::Point::new(
+                                        event.position.x.into(),
+                                        event.position.y.into(),
+                                    );
+                                    drag.update_pointer(pos, &this.cache.render_cell_info);
+                                    cx.notify();
+                                },
+                            ));
+                    }
+
+                    tab_strip = tab_strip.child(tab);
+                }
+
+                tab_strip
+            });
 
         // Project/directory name (after session name)
         if let Some(project) = &hints.project_name {
@@ -509,59 +623,43 @@ impl WorkspaceView {
             );
         }
 
+        if show_plus_button {
+            header = header.child(
+                div()
+                    .id(SharedString::from(format!("pane-add-tab-{}", session_id.0)))
+                    .w(px(20.0))
+                    .h(px(20.0))
+                    .rounded_md()
+                    .bg(border_color.opacity(0.25))
+                    .flex()
+                    .items_center()
+                    .justify_center()
+                    .cursor_pointer()
+                    .hover(|style| style.bg(border_color.opacity(0.45)))
+                    .on_click(cx.listener({
+                        let pane_id = pane_id.clone();
+                        move |this, _: &ClickEvent, _window, cx| {
+                            this.create_session_in_pane(pane_id.clone(), cx);
+                        }
+                    }))
+                    .child(
+                        div()
+                            .text_xs()
+                            .font_family(icons::LUCIDE_FONT_FAMILY)
+                            .text_color(fg)
+                            .child(icons::plus()),
+                    ),
+            );
+        }
+
         // Set cursor for draggable header
         header = if matches!(drag_visual, Some(DragVisual::Source)) {
             header.cursor_grabbing()
-        } else if drag_logical_index.is_some() && self.cache.render_cell_info.len() > 1 {
-            header.cursor_grab()
         } else {
             header
         };
 
-        // --- Drag-and-drop handlers on header ---
-        // Use logical index (CellInfo.index) for swap operations, not Vec position.
-        if let Some(logical_index) = drag_logical_index {
-            // Don't allow drag in single-pane layout
-            if self.cache.render_cell_info.len() > 1 {
-                header = header
-                    .on_mouse_down(
-                        MouseButton::Left,
-                        cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
-                            let pos = crate::layout::Point::new(
-                                event.position.x.into(),
-                                event.position.y.into(),
-                            );
-                            this.selection.drag = Some(super::types::DragState {
-                                source_session_id: session_id,
-                                source_index: logical_index,
-                                start_position: pos,
-                                current_position: pos,
-                                active: false,
-                                target_index: None,
-                            });
-                            cx.notify();
-                        }),
-                    )
-                    .on_mouse_move(cx.listener(
-                        move |this, event: &MouseMoveEvent, _window, cx| {
-                            let Some(drag) = &mut this.selection.drag else {
-                                return;
-                            };
-                            if drag.source_session_id != session_id {
-                                return;
-                            }
-                            let pos = crate::layout::Point::new(
-                                event.position.x.into(),
-                                event.position.y.into(),
-                            );
-                            drag.update_pointer(pos, &this.cache.render_cell_info);
-                            cx.notify();
-                        },
-                    ));
-                // Note: mouse-up swap is handled by the global handler on
-                // workspace-container (gpui.rs) to catch releases anywhere.
-            }
-        }
+        // Mouse-up handling for active-tab drags lives on the workspace root.
 
         // Render terminal content before building the div tree so the
         // mutable borrow on `self` is released before `cx.listener()`.

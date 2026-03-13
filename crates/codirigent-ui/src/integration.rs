@@ -355,6 +355,8 @@ impl CodirigentIntegration {
             let state = AppState {
                 sessions,
                 layout: codirigent_core::LayoutMode::default(),
+                pane_tab_groups: Vec::new(),
+                pane_stacks: Vec::new(),
                 updated_at: Some(chrono::Utc::now()),
                 window_bounds: None,
             };
@@ -562,6 +564,8 @@ impl CodirigentIntegration {
         let state = AppState {
             sessions,
             layout: codirigent_core::LayoutMode::default(),
+            pane_tab_groups: Vec::new(),
+            pane_stacks: Vec::new(),
             updated_at: Some(chrono::Utc::now()),
             window_bounds: None,
         };

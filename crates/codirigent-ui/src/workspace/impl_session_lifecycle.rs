@@ -13,8 +13,9 @@ use crate::terminal::Terminal;
 use crate::terminal_header::TerminalHeader;
 use crate::terminal_view::TerminalView;
 use codirigent_core::{
-    CodexExecutionMode, CodirigentEvent, EventBus, GridPosition, LayoutMode, ProcessMonitor,
-    Session, SessionId, SessionManager, SessionStatus, SlotId,
+    CodexExecutionMode, CodirigentEvent, EventBus, GridPosition, LayoutMode, PaneId,
+    PaneStackState, PaneTabGroup, ProcessMonitor, Session, SessionId, SessionManager,
+    SessionStatus, SlotId,
 };
 use codirigent_session::DefaultSessionManager;
 use gpui::Context;
@@ -27,8 +28,9 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, SystemTime};
 use tracing::{info, warn};
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct RestoreSessionPlan {
+    original_session_id: SessionId,
     session_name: String,
     working_dir: PathBuf,
     group: Option<String>,
@@ -40,9 +42,10 @@ struct RestoreSessionPlan {
     gemini_resume: Option<String>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 struct RestorePlan {
     layout: LayoutMode,
+    pane_stacks: Vec<PaneStackState>,
     sessions: Vec<RestoreSessionPlan>,
 }
 
@@ -65,6 +68,58 @@ struct SessionBootstrapResult {
 struct CompletedRestoreBootstrap {
     plan: RestoreSessionPlan,
     result: Result<SessionBootstrapResult, String>,
+}
+
+fn legacy_pane_stacks_from_groups(
+    saved_sessions: &[Session],
+    pane_tab_groups: &[PaneTabGroup],
+) -> Vec<PaneStackState> {
+    let mut groups = pane_tab_groups.to_vec();
+    groups.sort_by_key(|group| match group.pane {
+        PaneId::GridCell { index } => (0u8, index),
+        PaneId::SplitSlot { slot } => (1u8, slot.0 as usize),
+    });
+
+    let valid_sessions: HashSet<SessionId> =
+        saved_sessions.iter().map(|session| session.id).collect();
+    let mut assigned = HashSet::new();
+    let mut stacks = Vec::new();
+
+    for group in groups {
+        let session_ids = group
+            .session_ids
+            .into_iter()
+            .filter(|session_id| {
+                valid_sessions.contains(session_id) && assigned.insert(*session_id)
+            })
+            .collect::<Vec<_>>();
+        if session_ids.is_empty() {
+            continue;
+        }
+
+        let active_session_id = if session_ids.contains(&group.active_session_id) {
+            group.active_session_id
+        } else {
+            session_ids[0]
+        };
+        stacks.push(PaneStackState {
+            session_ids,
+            active_session_id,
+        });
+    }
+
+    stacks.extend(
+        saved_sessions
+            .iter()
+            .map(|session| session.id)
+            .filter(|session_id| !assigned.contains(session_id))
+            .map(|session_id| PaneStackState {
+                session_ids: vec![session_id],
+                active_session_id: session_id,
+            }),
+    );
+
+    stacks
 }
 
 fn next_available_session_number(
@@ -547,6 +602,7 @@ mod tests {
     #[test]
     fn restore_resume_commands_preserve_cli_order() {
         let plan = RestoreSessionPlan {
+            original_session_id: SessionId(1),
             session_name: "Session 1".to_string(),
             working_dir: sample_working_dir(),
             group: None,
@@ -676,6 +732,8 @@ mod tests {
                 fallback_dir.clone(),
             )],
             layout: LayoutMode::Grid { rows: 1, cols: 4 },
+            pane_tab_groups: Vec::new(),
+            pane_stacks: Vec::new(),
             updated_at: None,
             window_bounds: None,
         };
@@ -702,6 +760,8 @@ mod tests {
             layout: LayoutMode::SplitTree {
                 root: split_tree.clone(),
             },
+            pane_tab_groups: Vec::new(),
+            pane_stacks: Vec::new(),
             updated_at: None,
             window_bounds: None,
         };
@@ -747,12 +807,12 @@ impl WorkspaceView {
     fn release_session_create_reservation(
         &mut self,
         reserved_number: u64,
-        target_slot: Option<SlotId>,
+        target_pane: Option<PaneId>,
     ) {
         self.polling
             .pending_session_bootstrap_numbers
             .remove(&reserved_number);
-        if let Some(slot) = target_slot {
+        if let Some(PaneId::SplitSlot { slot }) = target_pane {
             self.polling.pending_session_bootstrap_slots.remove(&slot);
         }
     }
@@ -819,22 +879,25 @@ impl WorkspaceView {
         &mut self,
         session: Session,
         session_name: &str,
-        target_slot: Option<SlotId>,
+        target_pane: Option<PaneId>,
         group: Option<&String>,
         color: Option<&String>,
     ) -> bool {
         let session_id = session.id;
         self.create_terminal_view_for_session(session_id);
 
-        let added = match target_slot {
-            Some(slot) => {
-                if self.workspace.add_session_to_slot(session.clone(), slot) {
+        let added = match target_pane.clone() {
+            Some(pane_id) => {
+                if self
+                    .workspace
+                    .add_session_to_pane(session.clone(), pane_id.clone())
+                {
                     true
                 } else {
                     warn!(
                         ?session_id,
-                        ?slot,
-                        "Reserved slot unavailable when session bootstrap completed; falling back"
+                        ?pane_id,
+                        "Reserved pane unavailable when session bootstrap completed; falling back"
                     );
                     self.workspace.add_session(session.clone())
                 }
@@ -880,7 +943,7 @@ impl WorkspaceView {
     fn finalize_created_session_bootstrap(
         &mut self,
         bootstrapped: SessionBootstrapResult,
-        target_slot: Option<SlotId>,
+        target_pane: Option<PaneId>,
         cx: &mut Context<Self>,
     ) {
         self.start_bootstrapped_session_monitoring(bootstrapped.session_id, bootstrapped.child_pid);
@@ -888,7 +951,7 @@ impl WorkspaceView {
         if !self.attach_bootstrapped_session(
             bootstrapped.session.clone(),
             &bootstrapped.request.session_name,
-            target_slot,
+            target_pane.clone(),
             None,
             None,
         ) {
@@ -897,11 +960,11 @@ impl WorkspaceView {
 
         self.select_session_with_cx(bootstrapped.session_id, cx);
 
-        if let Some(slot) = target_slot {
+        if let Some(pane_id) = target_pane {
             info!(
                 name = %bootstrapped.request.session_name,
-                ?slot,
-                "Created new session in slot via background bootstrap"
+                ?pane_id,
+                "Created new session in pane via background bootstrap"
             );
         } else {
             info!(
@@ -977,7 +1040,7 @@ impl WorkspaceView {
         &mut self,
         request: SessionBootstrapRequest,
         reserved_number: u64,
-        target_slot: Option<SlotId>,
+        target_pane: Option<PaneId>,
         cx: &mut Context<Self>,
     ) {
         let session_manager = self.session_manager.clone();
@@ -990,10 +1053,14 @@ impl WorkspaceView {
                 .await;
 
             let _ = this.update(cx, |this, cx| {
-                this.release_session_create_reservation(reserved_number, target_slot);
+                this.release_session_create_reservation(reserved_number, target_pane.clone());
                 match result {
                     Ok(bootstrapped) => {
-                        this.finalize_created_session_bootstrap(bootstrapped, target_slot, cx);
+                        this.finalize_created_session_bootstrap(
+                            bootstrapped,
+                            target_pane.clone(),
+                            cx,
+                        );
                     }
                     Err(error) => {
                         warn!(
@@ -1015,12 +1082,20 @@ impl WorkspaceView {
         let codirigent_core::AppState {
             sessions: saved_sessions,
             layout,
+            pane_stacks,
+            pane_tab_groups,
             ..
         } = state;
 
         if saved_sessions.is_empty() {
             return None;
         }
+
+        let pane_stacks = if pane_stacks.is_empty() {
+            legacy_pane_stacks_from_groups(&saved_sessions, &pane_tab_groups)
+        } else {
+            pane_stacks
+        };
 
         let mut used_names = std::collections::HashSet::new();
         let mut used_claude_ids: std::collections::HashSet<String> =
@@ -1095,6 +1170,7 @@ impl WorkspaceView {
                 .and_then(|gemini_id| build_resume_command("gemini", gemini_id, &[]));
 
             sessions.push(RestoreSessionPlan {
+                original_session_id: saved.id,
                 session_name,
                 working_dir,
                 group: saved.group,
@@ -1107,7 +1183,11 @@ impl WorkspaceView {
             });
         }
 
-        Some(RestorePlan { layout, sessions })
+        Some(RestorePlan {
+            layout,
+            pane_stacks,
+            sessions,
+        })
     }
 
     fn apply_restore_plan(
@@ -1125,6 +1205,7 @@ impl WorkspaceView {
 
         let session_count = plan.sessions.len();
         let desired_layout = plan.layout.clone();
+        let desired_pane_stacks = plan.pane_stacks.clone();
         let staging_layout = staging_layout_for_restore(&desired_layout, session_count);
         let reapply_saved_layout = staging_layout != desired_layout;
         self.apply_restored_layout_mode(&staging_layout);
@@ -1132,6 +1213,7 @@ impl WorkspaceView {
         let restore_sessions = plan.sessions;
         let session_manager = self.session_manager.clone();
         cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+            let mut restored_session_ids = std::collections::HashMap::new();
             let mut remaining = restore_sessions.into_iter().peekable();
             while remaining.peek().is_some() {
                 let batch = remaining.by_ref().take(2).collect::<Vec<_>>();
@@ -1164,10 +1246,14 @@ impl WorkspaceView {
                     for completion in completions {
                         match completion.result {
                             Ok(bootstrapped) => {
+                                let restored_session_id = bootstrapped.session_id;
+                                let original_session_id = completion.plan.original_session_id;
                                 this.finalize_restored_session_bootstrap(
                                     bootstrapped,
                                     completion.plan,
                                 );
+                                restored_session_ids
+                                    .insert(original_session_id, restored_session_id);
                             }
                             Err(error) => {
                                 warn!(
@@ -1183,8 +1269,13 @@ impl WorkspaceView {
                         if reapply_saved_layout {
                             this.apply_restored_layout_mode(&desired_layout);
                         }
-                        if let Some(first_id) = this.workspace.sessions().first().map(|s| s.id) {
-                            this.select_session_with_cx(first_id, cx);
+                        this.workspace
+                            .restore_pane_stacks(&desired_pane_stacks, &restored_session_ids);
+                        if let Some(focused_id) = this.workspace.focused_session_id() {
+                            this.selection.selected_session_id = Some(focused_id);
+                            this.drawer.set_selected_session(Some(focused_id));
+                            this.sync_layout_derived_state();
+                            this.sync_file_tree_to_focused_session(cx);
                         }
                         this.polling.restore_in_flight = false;
                         info!("Session restoration complete");
@@ -1237,17 +1328,22 @@ impl WorkspaceView {
         self.create_session_inner(None, cx);
     }
 
+    /// Create a new session in a specific visible pane.
+    pub fn create_session_in_pane(&mut self, pane_id: PaneId, cx: &mut Context<Self>) {
+        self.create_session_inner(Some(pane_id), cx);
+    }
+
     /// Create a new session in a specific split tree slot.
     pub fn create_session_in_slot(&mut self, slot: SlotId, cx: &mut Context<Self>) {
-        self.create_session_inner(Some(slot), cx);
+        self.create_session_inner(Some(PaneId::SplitSlot { slot }), cx);
     }
 
     /// Shared implementation for session creation.
-    /// When `target_slot` is `None`, adds to the first available slot;
-    /// when `Some(slot)`, adds to that specific slot.
-    fn create_session_inner(&mut self, target_slot: Option<SlotId>, cx: &mut Context<Self>) {
+    /// When `target_pane` is `None`, adds to the next available pane;
+    /// when `Some(pane)`, adds to that specific pane.
+    fn create_session_inner(&mut self, target_pane: Option<PaneId>, cx: &mut Context<Self>) {
         // Find the lowest available session number (reuse gaps from closed sessions)
-        if let Some(slot) = target_slot {
+        if let Some(PaneId::SplitSlot { slot }) = target_pane {
             if self.polling.pending_session_bootstrap_slots.contains(&slot) {
                 warn!(?slot, "Session creation already pending for slot");
                 return;
@@ -1279,7 +1375,7 @@ impl WorkspaceView {
             working_dir,
             shell,
         };
-        self.spawn_create_session_bootstrap(request, num, target_slot, cx);
+        self.spawn_create_session_bootstrap(request, num, target_pane, cx);
     }
 
     /// Restore sessions from disk on startup without blocking the UI thread.

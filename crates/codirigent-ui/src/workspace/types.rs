@@ -287,6 +287,21 @@ pub(super) struct SelectionState {
 ///
 /// Tracks an in-progress drag operation where the user is moving a session
 /// from one pane to another by dragging its header bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum DragTargetKind {
+    PaneBody,
+    PaneHeader,
+}
+
+/// Current drop target under the pointer.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct DragTarget {
+    /// Grid or split logical cell index.
+    pub index: usize,
+    /// Whether the pointer is over the header or body region.
+    pub kind: DragTargetKind,
+}
+
 #[derive(Debug, Clone, Copy)]
 pub(super) struct DragState {
     /// Session being dragged.
@@ -299,8 +314,8 @@ pub(super) struct DragState {
     pub current_position: crate::layout::Point,
     /// Whether the drag threshold (5px) has been exceeded.
     pub active: bool,
-    /// Index of the cell currently under the cursor (drop target), if any.
-    pub target_index: Option<usize>,
+    /// Cell currently under the cursor (drop target), if any.
+    pub target: Option<DragTarget>,
 }
 
 const DRAG_ACTIVATION_DISTANCE_SQUARED: f32 = 25.0;
@@ -318,17 +333,29 @@ impl DragState {
             let dx = position.x - self.start_position.x;
             let dy = position.y - self.start_position.y;
             if (dx * dx + dy * dy) <= DRAG_ACTIVATION_DISTANCE_SQUARED {
-                self.target_index = None;
+                self.target = None;
                 return;
             }
             self.active = true;
         }
 
-        self.target_index = cells
+        self.target = cells
             .iter()
             .find(|cell| cell.bounds.contains(position))
-            .map(|cell| cell.index)
-            .filter(|&target| target != self.source_index);
+            .and_then(|cell| {
+                (cell.index != self.source_index).then(|| {
+                    let header_bottom = cell.bounds.origin.y + HEADER_HEIGHT;
+                    let kind = if position.y <= header_bottom {
+                        DragTargetKind::PaneHeader
+                    } else {
+                        DragTargetKind::PaneBody
+                    };
+                    DragTarget {
+                        index: cell.index,
+                        kind,
+                    }
+                })
+            });
     }
 }
 
