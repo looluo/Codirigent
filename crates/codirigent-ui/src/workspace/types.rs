@@ -40,6 +40,9 @@ pub(super) const SESSION_NAME_PREFIX: &str = "Session ";
 /// Label shown when a session uses the default shell resolution path.
 pub(super) const SESSION_SHELL_AUTO_LABEL: &str = "Auto";
 
+/// Label shown in shell pickers when the app should resolve the default shell automatically.
+pub(super) const SHELL_PICKER_AUTO_DETECT_LABEL: &str = "(Auto-detect)";
+
 /// Height of session and group rows in the Sessions drawer panel.
 pub(super) const SESSION_ROW_HEIGHT: f32 = 28.0;
 
@@ -246,6 +249,19 @@ pub(super) struct SessionCreationModal {
     pub(super) pending: bool,
     /// Optional validation or creation error.
     pub(super) error: Option<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ShellPickerOption {
+    pub(super) source_index: usize,
+    pub(super) raw_value: String,
+    pub(super) label: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(super) struct ShellPickerSection {
+    pub(super) title: Option<&'static str>,
+    pub(super) options: Vec<ShellPickerOption>,
 }
 
 #[derive(Debug, Clone)]
