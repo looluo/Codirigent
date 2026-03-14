@@ -1168,22 +1168,22 @@ fn test_layout_changes_preserve_hidden_pane_stacks_and_active_tabs() {
 
     assert_eq!(
         ws.pane_tab_session_ids(PaneId::GridCell { index: 0 }),
-        vec![SessionId(1), SessionId(2)]
+        vec![SessionId(3), SessionId(4)]
     );
     assert_eq!(
         ws.pane_active_session_id(PaneId::GridCell { index: 0 }),
-        Some(SessionId(2))
+        Some(SessionId(4))
     );
     assert_eq!(
         ws.pane_stacks(),
         vec![
             PaneStackState {
-                session_ids: vec![SessionId(1), SessionId(2)],
-                active_session_id: SessionId(2),
-            },
-            PaneStackState {
                 session_ids: vec![SessionId(3), SessionId(4)],
                 active_session_id: SessionId(4),
+            },
+            PaneStackState {
+                session_ids: vec![SessionId(1), SessionId(2)],
+                active_session_id: SessionId(2),
             },
         ]
     );
@@ -1241,6 +1241,44 @@ fn test_split_layout_to_grid_preserves_tab_stacks_without_duplicate_visible_sess
         .map(|info| info.session_id)
         .collect::<Vec<_>>();
     assert_eq!(visible_ids, vec![SessionId(2), SessionId(4)]);
+}
+
+#[test]
+fn test_switch_to_single_reorders_pane_stack_to_match_focused_session() {
+    let mut ws = Workspace::new();
+    assert!(ws.add_session(make_session(1, "Session 1")));
+    assert!(ws.add_session(make_session(2, "Session 2")));
+    assert!(ws.add_session(make_session(3, "Session 3")));
+    assert!(ws.group_session_into_pane(SessionId(2), PaneId::GridCell { index: 0 }));
+    assert!(ws.focus_session(SessionId(3)));
+
+    ws.set_layout(LayoutProfile::Single);
+
+    assert_eq!(ws.layout_state().focused_session(), Some(SessionId(3)));
+    assert_eq!(
+        ws.visible_sessions()
+            .into_iter()
+            .map(|session| session.id)
+            .collect::<Vec<_>>(),
+        vec![SessionId(3)]
+    );
+    assert_eq!(
+        ws.pane_tab_session_ids(PaneId::GridCell { index: 0 }),
+        vec![SessionId(3)]
+    );
+    assert_eq!(
+        ws.pane_stacks(),
+        vec![
+            PaneStackState {
+                session_ids: vec![SessionId(3)],
+                active_session_id: SessionId(3),
+            },
+            PaneStackState {
+                session_ids: vec![SessionId(1), SessionId(2)],
+                active_session_id: SessionId(2),
+            },
+        ]
+    );
 }
 
 #[test]
@@ -1406,5 +1444,125 @@ fn test_drag_state_targets_empty_grid_pane_body() {
             active_session_id: None,
             kind: super::types::DragTargetKind::PaneBody,
         })
+    );
+}
+
+#[cfg(feature = "gpui-full")]
+#[test]
+fn test_apply_session_drag_drop_swaps_when_dropped_on_pane_body() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    assert!(ws.add_session(make_session(1, "Session 1")));
+    assert!(ws.add_session(make_session(2, "Session 2")));
+
+    let changed = super::impl_pointer_interactions::apply_session_drag_drop(
+        &mut ws,
+        &super::types::DragState {
+            source_session_id: SessionId(1),
+            source_pane_id: PaneId::GridCell { index: 0 },
+            source_index: 0,
+            start_position: Point::new(0.0, 0.0),
+            current_position: Point::new(20.0, 20.0),
+            active: true,
+            target: None,
+        },
+        &super::types::DragTarget {
+            pane_id: PaneId::GridCell { index: 1 },
+            index: 1,
+            active_session_id: Some(SessionId(2)),
+            kind: super::types::DragTargetKind::PaneBody,
+        },
+    );
+
+    assert!(changed);
+    assert_eq!(
+        ws.visible_sessions()
+            .into_iter()
+            .map(|session| session.id)
+            .collect::<Vec<_>>(),
+        vec![SessionId(2), SessionId(1)]
+    );
+}
+
+#[cfg(feature = "gpui-full")]
+#[test]
+fn test_apply_session_drag_drop_groups_when_dropped_on_header() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    assert!(ws.add_session(make_session(1, "Session 1")));
+    assert!(ws.add_session(make_session(2, "Session 2")));
+
+    let changed = super::impl_pointer_interactions::apply_session_drag_drop(
+        &mut ws,
+        &super::types::DragState {
+            source_session_id: SessionId(1),
+            source_pane_id: PaneId::GridCell { index: 0 },
+            source_index: 0,
+            start_position: Point::new(0.0, 0.0),
+            current_position: Point::new(20.0, 20.0),
+            active: true,
+            target: None,
+        },
+        &super::types::DragTarget {
+            pane_id: PaneId::GridCell { index: 1 },
+            index: 1,
+            active_session_id: Some(SessionId(2)),
+            kind: super::types::DragTargetKind::PaneHeader,
+        },
+    );
+
+    assert!(changed);
+    assert_eq!(
+        ws.pane_tab_session_ids(PaneId::GridCell { index: 1 }),
+        vec![SessionId(2), SessionId(1)]
+    );
+    assert_eq!(
+        ws.pane_stacks(),
+        vec![PaneStackState {
+            session_ids: vec![SessionId(2), SessionId(1)],
+            active_session_id: SessionId(1),
+        }]
+    );
+}
+
+#[cfg(feature = "gpui-full")]
+#[test]
+fn test_apply_session_drag_drop_moves_into_empty_pane_body() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    assert!(ws.add_session(make_session(1, "Session 1")));
+    assert!(ws.add_session(make_session(2, "Session 2")));
+
+    let changed = super::impl_pointer_interactions::apply_session_drag_drop(
+        &mut ws,
+        &super::types::DragState {
+            source_session_id: SessionId(1),
+            source_pane_id: PaneId::GridCell { index: 0 },
+            source_index: 0,
+            start_position: Point::new(0.0, 0.0),
+            current_position: Point::new(20.0, 20.0),
+            active: true,
+            target: None,
+        },
+        &super::types::DragTarget {
+            pane_id: PaneId::GridCell { index: 2 },
+            index: 2,
+            active_session_id: None,
+            kind: super::types::DragTargetKind::PaneBody,
+        },
+    );
+
+    assert!(changed);
+    assert_eq!(
+        ws.pane_active_session_id(PaneId::GridCell { index: 2 }),
+        Some(SessionId(1))
+    );
+    assert_eq!(
+        ws.pane_active_session_id(PaneId::GridCell { index: 0 }),
+        None
+    );
+    assert_eq!(
+        ws.visible_sessions()
+            .into_iter()
+            .map(|session| session.id)
+            .collect::<Vec<_>>(),
+        vec![SessionId(2), SessionId(1)]
     );
 }

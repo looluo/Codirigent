@@ -7,6 +7,25 @@
 use crate::workspace::gpui::WorkspaceView;
 use gpui::{Context, MouseMoveEvent, MouseUpEvent};
 
+pub(super) fn apply_session_drag_drop(
+    workspace: &mut super::core::Workspace,
+    drag: &super::types::DragState,
+    target: &super::types::DragTarget,
+) -> bool {
+    match target.kind {
+        super::types::DragTargetKind::PaneBody => {
+            if target.active_session_id.is_none() {
+                workspace.group_session_into_pane(drag.source_session_id, target.pane_id.clone())
+            } else {
+                workspace.swap_sessions(drag.source_index, target.index)
+            }
+        }
+        super::types::DragTargetKind::PaneHeader => {
+            workspace.group_session_into_pane(drag.source_session_id, target.pane_id.clone())
+        }
+    }
+}
+
 impl WorkspaceView {
     pub(super) fn handle_workspace_mouse_move(
         &mut self,
@@ -96,25 +115,7 @@ impl WorkspaceView {
         if let Some(drag) = self.selection.drag.take() {
             if drag.active {
                 if let Some(target) = drag.target.clone() {
-                    let changed = match target.kind {
-                        super::types::DragTargetKind::PaneBody => {
-                            if target.active_session_id.is_none() {
-                                self.workspace.group_session_into_pane(
-                                    drag.source_session_id,
-                                    target.pane_id.clone(),
-                                )
-                            } else {
-                                self.workspace
-                                    .swap_sessions(drag.source_index, target.index)
-                            }
-                        }
-                        super::types::DragTargetKind::PaneHeader => {
-                            self.workspace.group_session_into_pane(
-                                drag.source_session_id,
-                                target.pane_id.clone(),
-                            )
-                        }
-                    };
+                    let changed = apply_session_drag_drop(&mut self.workspace, &drag, &target);
                     if changed {
                         self.mark_layout_cache_dirty();
                         self.sync_layout_derived_state();

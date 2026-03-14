@@ -127,9 +127,11 @@ impl Workspace {
     /// When switching from split tree to grid, sessions are re-assigned
     /// in their current order to the new grid.
     pub fn set_layout(&mut self, profile: LayoutProfile) {
-        let stacks = self.current_pane_stacks_in_order();
-        self.layout_state = WorkspaceLayoutState::Grid(self.rebuild_grid_state(profile, &stacks));
-        self.apply_pane_stacks_to_current_layout(stacks);
+        let stacks = self.layout_transition_stacks();
+        let rebuilt_layout = WorkspaceLayoutState::Grid(self.rebuild_grid_state(profile, &stacks));
+        let ordered_stacks = Self::stacks_ordered_for_layout_state(&rebuilt_layout, &stacks);
+        self.layout_state = rebuilt_layout;
+        self.apply_pane_stacks_to_current_layout(ordered_stacks);
     }
 
     /// Cycle to the next layout profile.
@@ -347,6 +349,28 @@ impl Workspace {
         stacks
     }
 
+    fn layout_transition_stacks(&self) -> Vec<PaneStack> {
+        let mut stacks = self.current_pane_stacks_in_order();
+        let session_positions = self
+            .sessions
+            .iter()
+            .enumerate()
+            .map(|(index, session)| (session.id, index))
+            .collect::<HashMap<_, _>>();
+
+        stacks.sort_by_key(|stack| {
+            stack
+                .session_ids
+                .iter()
+                .filter_map(|session_id| session_positions.get(session_id))
+                .copied()
+                .min()
+                .unwrap_or(usize::MAX)
+        });
+
+        stacks
+    }
+
     fn apply_pane_stacks_to_current_layout(&mut self, stacks: Vec<PaneStack>) {
         let pane_ids = self.visible_pane_ids();
         self.pane_tab_groups.clear();
@@ -370,6 +394,43 @@ impl Workspace {
         }
 
         self.cleanup_pane_tab_groups();
+    }
+
+    fn stacks_ordered_for_layout_state(
+        layout_state: &WorkspaceLayoutState,
+        stacks: &[PaneStack],
+    ) -> Vec<PaneStack> {
+        let visible_session_order = match layout_state {
+            WorkspaceLayoutState::Grid(state) => state
+                .assignments()
+                .iter()
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>(),
+            WorkspaceLayoutState::SplitTree(state) => state.assigned_sessions(),
+        };
+
+        let mut ordered = Vec::with_capacity(stacks.len());
+        let mut used_indices = HashSet::new();
+
+        for visible_session_id in visible_session_order {
+            if let Some((index, stack)) = stacks.iter().enumerate().find(|(index, stack)| {
+                !used_indices.contains(index) && stack.session_ids.contains(&visible_session_id)
+            }) {
+                used_indices.insert(index);
+                ordered.push(stack.clone());
+            }
+        }
+
+        ordered.extend(
+            stacks
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| !used_indices.contains(index))
+                .map(|(_, stack)| stack.clone()),
+        );
+
+        ordered
     }
 
     fn stack_session_order(stack: &PaneStack) -> Vec<SessionId> {
@@ -1067,10 +1128,12 @@ impl Workspace {
     ///
     /// Transfers current sessions and focus to the new tree.
     pub fn set_split_tree(&mut self, tree: LayoutNode) {
-        let stacks = self.current_pane_stacks_in_order();
-        self.layout_state =
+        let stacks = self.layout_transition_stacks();
+        let rebuilt_layout =
             WorkspaceLayoutState::SplitTree(self.rebuild_split_state(tree, &stacks));
-        self.apply_pane_stacks_to_current_layout(stacks);
+        let ordered_stacks = Self::stacks_ordered_for_layout_state(&rebuilt_layout, &stacks);
+        self.layout_state = rebuilt_layout;
+        self.apply_pane_stacks_to_current_layout(ordered_stacks);
     }
 
     // --- Split Pane Operations ---
@@ -1119,10 +1182,12 @@ impl Workspace {
             };
 
         if should_switch_to_single {
-            let stacks = self.current_pane_stacks_in_order();
-            self.layout_state =
+            let stacks = self.layout_transition_stacks();
+            let rebuilt_layout =
                 WorkspaceLayoutState::Grid(self.rebuild_grid_state(LayoutProfile::Single, &stacks));
-            self.apply_pane_stacks_to_current_layout(stacks);
+            let ordered_stacks = Self::stacks_ordered_for_layout_state(&rebuilt_layout, &stacks);
+            self.layout_state = rebuilt_layout;
+            self.apply_pane_stacks_to_current_layout(ordered_stacks);
         }
 
         result
@@ -1154,7 +1219,7 @@ impl Workspace {
 
     /// Convert the current grid layout to an equivalent split tree.
     fn convert_to_split_tree(&mut self) {
-        let stacks = self.current_pane_stacks_in_order();
+        let stacks = self.layout_transition_stacks();
         let tree = if let WorkspaceLayoutState::Grid(grid_state) = &self.layout_state {
             let (rows, cols) = grid_state.profile().dimensions();
             Some(LayoutNode::from_grid(rows, cols))
@@ -1163,9 +1228,11 @@ impl Workspace {
         };
 
         if let Some(tree) = tree {
-            self.layout_state =
+            let rebuilt_layout =
                 WorkspaceLayoutState::SplitTree(self.rebuild_split_state(tree, &stacks));
-            self.apply_pane_stacks_to_current_layout(stacks);
+            let ordered_stacks = Self::stacks_ordered_for_layout_state(&rebuilt_layout, &stacks);
+            self.layout_state = rebuilt_layout;
+            self.apply_pane_stacks_to_current_layout(ordered_stacks);
         }
     }
 
@@ -1641,8 +1708,9 @@ impl Workspace {
                 self.rebuild_split_state(state.tree().clone(), &stacks),
             ),
         };
+        let ordered_stacks = Self::stacks_ordered_for_layout_state(&rebuilt_layout, &stacks);
         self.layout_state = rebuilt_layout;
-        self.apply_pane_stacks_to_current_layout(stacks);
+        self.apply_pane_stacks_to_current_layout(ordered_stacks);
     }
 
     /// Restore legacy persisted pane tab groups after sessions have been recreated.
