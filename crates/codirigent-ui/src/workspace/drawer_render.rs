@@ -1090,11 +1090,6 @@ impl WorkspaceView {
                 branch
             }
         });
-        let metadata_line = branch_badge
-            .as_ref()
-            .map(|branch| format!("{} • {}", shell_label, branch))
-            .unwrap_or_else(|| shell_label.clone());
-
         div()
             .id(SharedString::from(format!("session-row-{}", session_id.0)))
             .h(px(SESSION_DRAWER_ROW_HEIGHT))
@@ -1132,7 +1127,7 @@ impl WorkspaceView {
                     .min_w_0()
                     .flex()
                     .flex_col()
-                    .gap(px(3.0))
+                    .gap(px(2.0))
                     .child(
                         div()
                             .w_full()
@@ -1150,13 +1145,6 @@ impl WorkspaceView {
                                     .text_ellipsis()
                                     .child(session_name),
                             )
-                            .when_some(cli_name, |el, cli_name| {
-                                el.child(Self::render_session_metadata_badge(
-                                    &cli_name,
-                                    primary,
-                                    primary.opacity(0.12),
-                                ))
-                            })
                             .when(is_hidden, |el| {
                                 el.child(Self::render_session_metadata_badge(
                                     "Hidden",
@@ -1176,40 +1164,60 @@ impl WorkspaceView {
                                         .flex_shrink_0()
                                         .child(format!("{}%", (pct * 100.0) as u32)),
                                 )
+                            })
+                            .child(
+                                div()
+                                    .text_xs()
+                                    .text_color(if shell_warning.is_some() {
+                                        orange
+                                    } else {
+                                        muted.opacity(0.8)
+                                    })
+                                    .flex_shrink_0()
+                                    .child(shell_label.clone()),
+                            )
+                            .when_some(cli_name, |el, cli_name| {
+                                el.child(Self::render_session_metadata_badge(
+                                    &cli_name,
+                                    primary,
+                                    primary.opacity(0.12),
+                                ))
                             }),
-                    )
-                    .child(
-                        div().w_full().flex().items_center().child(
-                            div()
-                                .flex_1()
-                                .min_w_0()
-                                .overflow_hidden()
-                                .text_sm()
-                                .font_weight(FontWeight::MEDIUM)
-                                .text_color(if is_focused {
-                                    fg.opacity(0.95)
-                                } else {
-                                    fg.opacity(0.85)
-                                })
-                                .text_ellipsis()
-                                .child(project_name.unwrap_or_else(|| {
-                                    session.working_directory.to_string_lossy().into_owned()
-                                })),
-                        ),
                     )
                     .child(
                         div()
                             .w_full()
-                            .min_w_0()
-                            .overflow_hidden()
-                            .text_xs()
-                            .text_color(if shell_warning.is_some() {
-                                orange
-                            } else {
-                                muted.opacity(0.8)
-                            })
-                            .text_ellipsis()
-                            .child(metadata_line),
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .text_xs()
+                                    .text_color(if is_focused {
+                                        muted.opacity(0.95)
+                                    } else {
+                                        muted.opacity(0.82)
+                                    })
+                                    .text_ellipsis()
+                                    .child(project_name.unwrap_or_else(|| {
+                                        session.working_directory.to_string_lossy().into_owned()
+                                    })),
+                            )
+                            .when_some(branch_badge, |el, branch| {
+                                el.child(
+                                    div()
+                                        .max_w(px(96.0))
+                                        .overflow_hidden()
+                                        .text_xs()
+                                        .text_color(muted.opacity(0.8))
+                                        .text_ellipsis()
+                                        .flex_shrink_0()
+                                        .child(branch),
+                                )
+                            }),
                     ),
             )
             // Menu button

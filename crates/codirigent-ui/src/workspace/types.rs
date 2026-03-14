@@ -47,7 +47,7 @@ pub(super) const SHELL_PICKER_AUTO_DETECT_LABEL: &str = "(Auto-detect)";
 pub(super) const SESSION_ROW_HEIGHT: f32 = 28.0;
 
 /// Height of rows in the Sessions drawer list.
-pub(super) const SESSION_DRAWER_ROW_HEIGHT: f32 = 64.0;
+pub(super) const SESSION_DRAWER_ROW_HEIGHT: f32 = 56.0;
 
 /// Height of input fields and modal rows (larger than session rows).
 pub(super) const MODAL_FIELD_HEIGHT: f32 = 36.0;
