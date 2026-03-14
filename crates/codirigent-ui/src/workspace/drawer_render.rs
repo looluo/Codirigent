@@ -1062,9 +1062,12 @@ impl WorkspaceView {
         };
         let hover_bg: gpui::Hsla = theme.active.into();
         let orange: gpui::Hsla = theme.orange.into();
+        let primary: gpui::Hsla = theme.primary.into();
 
         let session_id = session.id;
         let session_name = session.name.clone();
+        let project_name = super::gpui::session_project_name(session);
+        let cli_name = self.session_cli_display_name(session_id);
         let context_pct = session.context_usage;
         let (shell_label, shell_warning) =
             self.session_shell_display(session_id, session.shell.as_deref());
@@ -1102,9 +1105,25 @@ impl WorkspaceView {
                 div()
                     .flex_1()
                     .overflow_hidden()
-                    .text_xs()
-                    .text_color(if is_focused { fg } else { muted })
-                    .child(session_name),
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(
+                        div()
+                            .flex_1()
+                            .overflow_hidden()
+                            .text_xs()
+                            .text_color(if is_focused { fg } else { muted })
+                            .text_ellipsis()
+                            .child(session_name),
+                    )
+                    .when_some(project_name, |el, project| {
+                        el.child(Self::render_session_metadata_badge(
+                            &project,
+                            muted.opacity(0.85),
+                            muted.opacity(0.12),
+                        ))
+                    }),
             )
             .when(is_hidden, |el| {
                 el.child(
@@ -1115,6 +1134,19 @@ impl WorkspaceView {
                         .child("Hidden"),
                 )
             })
+            .child(Self::render_session_metadata_badge(
+                &cli_name,
+                if cli_name == "Shell" {
+                    muted.opacity(0.75)
+                } else {
+                    primary
+                },
+                if cli_name == "Shell" {
+                    muted.opacity(0.12)
+                } else {
+                    primary.opacity(0.12)
+                },
+            ))
             .child(
                 div()
                     .flex_shrink_0()
@@ -1201,6 +1233,28 @@ impl WorkspaceView {
                             .font_family(icons::LUCIDE_FONT_FAMILY)
                             .child(icons::more_horizontal()),
                     ),
+            )
+    }
+
+    fn render_session_metadata_badge(
+        text: &str,
+        text_color: gpui::Hsla,
+        background: gpui::Hsla,
+    ) -> gpui::Div {
+        div()
+            .flex_shrink_0()
+            .max_w(px(120.0))
+            .px(px(4.0))
+            .py_px()
+            .rounded_sm()
+            .bg(background)
+            .child(
+                div()
+                    .overflow_hidden()
+                    .text_xs()
+                    .text_ellipsis()
+                    .text_color(text_color)
+                    .child(text.to_owned()),
             )
     }
 

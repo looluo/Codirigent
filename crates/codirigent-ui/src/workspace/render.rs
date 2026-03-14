@@ -284,10 +284,16 @@ impl WorkspaceView {
         let destructive = super::types::DESTRUCTIVE_ITEM_COLOR;
         let orange: gpui::Hsla = theme.orange.into();
 
-        // Check if this session has a group
-        let (session_group, session_shell) = {
+        // Check if this session has a group and collect metadata shown in the dropdown.
+        let (session_group, session_shell, project_name, cli_name) = {
             let session = self.workspace().session(session_id)?;
-            (session.group.clone(), session.shell.clone())
+            (
+                session.group.clone(),
+                session.shell.clone(),
+                super::gpui::session_project_name(session)
+                    .unwrap_or_else(|| "Unknown project".to_string()),
+                self.session_cli_display_name(session_id),
+            )
         };
         let has_group = session_group.is_some();
         let (shell_label, shell_warning) =
@@ -330,7 +336,7 @@ impl WorkspaceView {
 
         // Build dropdown menu
         let mut dropdown = div()
-            .w(px(180.0))
+            .w(px(240.0))
             .bg(panel_bg)
             .border_1()
             .border_color(border_color)
@@ -350,6 +356,22 @@ impl WorkspaceView {
                     .flex()
                     .flex_col()
                     .gap_1()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted.opacity(0.6))
+                            .child("PROJECT"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(fg)
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(project_name),
+                    )
+                    .child(div().text_xs().text_color(muted.opacity(0.6)).child("CLI"))
+                    .child(div().text_sm().text_color(fg).child(cli_name))
                     .child(
                         div()
                             .text_xs()

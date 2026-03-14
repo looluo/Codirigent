@@ -30,6 +30,8 @@ mod layout_sync;
 mod session_metadata;
 mod ui_events;
 
+pub(super) use session_metadata::{cli_type_display_name, session_project_name};
+
 // The root still owns `WorkspaceView`, trait impls, and high-level
 // orchestration. Child modules hold lower-coupling helper clusters.
 
@@ -305,6 +307,8 @@ impl WorkspaceView {
         self.clipboard
             .clipboard_service
             .set_session_cli_type(session_id, codirigent_core::CliType::CodexCli);
+        self.sync_session_header(session_id);
+        cx.notify();
 
         if let Ok(mgr) = self.session_manager.lock() {
             changed |= mgr

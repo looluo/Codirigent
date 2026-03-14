@@ -83,6 +83,10 @@ impl WorkspaceView {
             );
         }
 
+        if let Some(cli_name) = &hints.cli_name {
+            header = header.child(Self::render_cli_badge(cli_name, border_color, muted, theme));
+        }
+
         if let Some(branch) = &hints.git_branch {
             header = header.child(self.render_git_branch_badge(
                 branch,
@@ -317,6 +321,32 @@ impl WorkspaceView {
         }
 
         git_badge
+    }
+
+    fn render_cli_badge(
+        cli_name: &str,
+        border_color: gpui::Hsla,
+        muted: gpui::Hsla,
+        theme: &CodirigentTheme,
+    ) -> gpui::Div {
+        let cli_fg: gpui::Hsla = theme.primary.into();
+
+        div()
+            .px(px(4.0))
+            .py_px()
+            .rounded_sm()
+            .bg(border_color.opacity(0.25))
+            .flex()
+            .flex_shrink_0()
+            .items_center()
+            .gap_1()
+            .child(div().text_xs().text_color(muted.opacity(0.6)).child("CLI"))
+            .child(
+                div()
+                    .text_xs()
+                    .text_color(cli_fg)
+                    .child(cli_name.to_owned()),
+            )
     }
 
     fn render_shell_badge(

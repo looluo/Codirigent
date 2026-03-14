@@ -252,8 +252,8 @@ pub(super) struct SessionCreationModal {
 pub(super) struct RestoreShellFallback {
     /// Shell originally requested by the saved session.
     pub(super) requested_shell: String,
-    /// Shell actually launched for the restored session. `None` means Auto.
-    pub(super) effective_shell: Option<String>,
+    /// User-facing label for the shell actually launched for the restored session.
+    pub(super) effective_shell_label: String,
 }
 
 /// Context menu state for file tree right-click.
@@ -594,6 +594,8 @@ pub(super) struct CacheState {
     pub detected_editors: Option<Vec<String>>,
     /// Cached available shells detected from the system (populated in background on init).
     pub detected_shells: Option<Vec<String>>,
+    /// Effective shell labels for running sessions, used so "Auto" resolves to the real shell.
+    pub effective_shell_labels: HashMap<SessionId, String>,
     /// Sessions restored with a fallback shell because their requested shell was unavailable.
     pub restore_shell_fallbacks: HashMap<SessionId, RestoreShellFallback>,
     /// Last PTY-resized dimensions per session, used to skip redundant resize calls.
@@ -631,6 +633,7 @@ impl CacheState {
             monospace_fonts: None,
             detected_editors: None,
             detected_shells: None,
+            effective_shell_labels: HashMap::new(),
             restore_shell_fallbacks: HashMap::new(),
             pty_sizes: HashMap::new(),
             manually_assigned_sessions: HashSet::new(),

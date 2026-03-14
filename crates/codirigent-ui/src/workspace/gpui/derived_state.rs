@@ -131,6 +131,7 @@ impl WorkspaceView {
         let focused_id = self.workspace.focused_session_id();
         for session in sessions {
             let project_name = session_project_name(session);
+            let cli_name = self.session_cli_display_name(session.id);
             let git_branch = session.git_info.as_ref().map(|gi| gi.branch.clone());
             let git_dirty_count = session.git_info.as_ref().map(|gi| gi.dirty_count);
             let session_color = session
@@ -153,6 +154,9 @@ impl WorkspaceView {
                 header.is_focused = focused_id == Some(session.id);
                 if header.project_name != project_name {
                     header.project_name = project_name;
+                }
+                if header.cli_name.as_deref() != Some(cli_name.as_str()) {
+                    header.cli_name = Some(cli_name.clone());
                 }
                 if header.git_branch != git_branch {
                     header.git_branch = git_branch;
@@ -229,6 +233,7 @@ impl WorkspaceView {
         };
         let focused_id = self.workspace.focused_session_id();
         let project_name = session_project_name(session);
+        let cli_name = self.session_cli_display_name(session.id);
         let git_branch = session.git_info.as_ref().map(|gi| gi.branch.clone());
         let git_dirty_count = session.git_info.as_ref().map(|gi| gi.dirty_count);
         let session_color = session
@@ -254,6 +259,9 @@ impl WorkspaceView {
 
             if header.project_name != project_name {
                 header.project_name = project_name;
+            }
+            if header.cli_name.as_deref() != Some(cli_name.as_str()) {
+                header.cli_name = Some(cli_name);
             }
 
             if header.git_branch != git_branch {

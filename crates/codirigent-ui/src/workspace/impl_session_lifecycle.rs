@@ -7,16 +7,17 @@
 //! - State persistence to disk
 
 use super::cli_helpers::is_safe_cli_session_id;
-use super::gpui::WorkspaceView;
+use super::gpui::{cli_type_display_name, session_project_name, WorkspaceView};
 use super::types::{RestoreShellFallback, SESSION_NAME_PREFIX, SESSION_SHELL_AUTO_LABEL};
 use crate::terminal::Terminal;
 use crate::terminal_header::TerminalHeader;
 use crate::terminal_view::TerminalView;
 use codirigent_core::{
-    CodexExecutionMode, CodirigentEvent, EventBus, GridPosition, LayoutMode, PaneId,
+    CliType, CodexExecutionMode, CodirigentEvent, EventBus, GridPosition, LayoutMode, PaneId,
     PaneStackState, PaneTabGroup, ProcessMonitor, Session, SessionId, SessionManager,
     SessionStatus, SlotId,
 };
+use codirigent_session::clipboard_service::ClipboardService;
 use codirigent_session::DefaultSessionManager;
 use gpui::Context;
 use serde::Deserialize;
@@ -157,6 +158,21 @@ fn restore_resume_commands(plan: &RestoreSessionPlan) -> Vec<&str> {
     .collect()
 }
 
+fn restore_plan_cli_type(plan: &RestoreSessionPlan) -> CliType {
+    if plan.codex_resume.is_some()
+        || plan.codex_execution_mode.is_some()
+        || plan.codex_started_at.is_some()
+    {
+        CliType::CodexCli
+    } else if plan.claude_resume.is_some() {
+        CliType::ClaudeCode
+    } else if plan.gemini_resume.is_some() {
+        CliType::GeminiCli
+    } else {
+        CliType::GenericShell
+    }
+}
+
 fn bootstrap_session(
     session_manager: Arc<Mutex<DefaultSessionManager>>,
     request: SessionBootstrapRequest,
@@ -217,8 +233,7 @@ fn resolve_restore_shell_choice(
 fn restore_shell_fallback_message(fallback: &RestoreShellFallback) -> String {
     format!(
         "Requested shell '{}' was unavailable, so this session was opened with {}.",
-        fallback.requested_shell,
-        WorkspaceView::shell_display_label(fallback.effective_shell.as_deref())
+        fallback.requested_shell, fallback.effective_shell_label
     )
 }
 
@@ -904,7 +919,7 @@ mod tests {
     fn restore_shell_fallback_message_uses_effective_shell_label() {
         let fallback = RestoreShellFallback {
             requested_shell: "pwsh".to_string(),
-            effective_shell: Some("bash".to_string()),
+            effective_shell_label: "bash".to_string(),
         };
 
         assert_eq!(
@@ -914,16 +929,63 @@ mod tests {
     }
 
     #[test]
-    fn restore_shell_fallback_message_uses_auto_label_without_effective_shell() {
+    fn restore_shell_fallback_message_uses_explicit_fallback_label() {
         let fallback = RestoreShellFallback {
             requested_shell: "pwsh".to_string(),
-            effective_shell: None,
+            effective_shell_label: "zsh".to_string(),
         };
 
         assert_eq!(
             restore_shell_fallback_message(&fallback),
-            "Requested shell 'pwsh' was unavailable, so this session was opened with Auto."
+            "Requested shell 'pwsh' was unavailable, so this session was opened with zsh."
         );
+    }
+
+    #[test]
+    fn shell_display_label_normalizes_shell_paths() {
+        assert_eq!(WorkspaceView::shell_display_label(Some("/bin/zsh")), "zsh");
+        assert_eq!(
+            WorkspaceView::shell_display_label(Some(r"C:\Windows\System32\cmd.exe")),
+            "cmd"
+        );
+        assert_eq!(
+            WorkspaceView::shell_display_label(Some(
+                r"C:\Windows\System32\WindowsPowerShell\v1.0\POWERSHELL.EXE"
+            )),
+            "POWERSHELL"
+        );
+        assert_eq!(WorkspaceView::shell_display_label(None), "Auto");
+    }
+
+    #[test]
+    fn restore_plan_cli_type_prefers_known_resume_metadata() {
+        let base = RestoreSessionPlan {
+            original_session_id: SessionId(1),
+            session_name: "Session 1".to_string(),
+            working_dir: PathBuf::from("/tmp"),
+            shell: None,
+            group: None,
+            color: None,
+            claude_resume: None,
+            codex_resume: None,
+            codex_execution_mode: None,
+            codex_started_at: None,
+            gemini_resume: None,
+        };
+
+        let mut claude = base.clone();
+        claude.claude_resume = Some("claude --resume".to_string());
+        assert_eq!(restore_plan_cli_type(&claude), CliType::ClaudeCode);
+
+        let mut gemini = base.clone();
+        gemini.gemini_resume = Some("gemini resume".to_string());
+        assert_eq!(restore_plan_cli_type(&gemini), CliType::GeminiCli);
+
+        let mut codex = base.clone();
+        codex.codex_execution_mode = Some(CodexExecutionMode::FullAuto);
+        assert_eq!(restore_plan_cli_type(&codex), CliType::CodexCli);
+
+        assert_eq!(restore_plan_cli_type(&base), CliType::GenericShell);
     }
 }
 
@@ -973,11 +1035,99 @@ impl WorkspaceView {
         )
     }
 
+    fn shell_name_fragment(shell: &str) -> &str {
+        let fragment = shell
+            .trim()
+            .rsplit(['/', '\\'])
+            .find(|fragment| !fragment.is_empty())
+            .unwrap_or(shell.trim());
+        if fragment.len() > 4 && fragment[fragment.len() - 4..].eq_ignore_ascii_case(".exe") {
+            &fragment[..fragment.len() - 4]
+        } else {
+            fragment
+        }
+    }
+
     pub(super) fn shell_display_label(shell: Option<&str>) -> String {
         shell
+            .map(str::trim)
             .filter(|value| !value.is_empty())
+            .map(Self::shell_name_fragment)
             .unwrap_or(SESSION_SHELL_AUTO_LABEL)
             .to_string()
+    }
+
+    fn detected_auto_shell_label(&self) -> String {
+        if let Ok(shell) = std::env::var("CODIRIGENT_SHELL") {
+            if !shell.trim().is_empty() {
+                return Self::shell_display_label(Some(&shell));
+            }
+        }
+
+        #[cfg(unix)]
+        {
+            std::env::var("SHELL")
+                .ok()
+                .filter(|shell| !shell.trim().is_empty())
+                .map(|shell| Self::shell_display_label(Some(&shell)))
+                .unwrap_or_else(|| "bash".to_string())
+        }
+
+        #[cfg(windows)]
+        {
+            if self
+                .detected_shell_options()
+                .iter()
+                .any(|shell| shell == "pwsh")
+            {
+                return "pwsh".to_string();
+            }
+            if self
+                .detected_shell_options()
+                .iter()
+                .any(|shell| shell == "powershell")
+            {
+                return "powershell".to_string();
+            }
+
+            std::env::var("COMSPEC")
+                .ok()
+                .filter(|shell| !shell.trim().is_empty())
+                .map(|shell| Self::shell_display_label(Some(&shell)))
+                .unwrap_or_else(|| "cmd".to_string())
+        }
+
+        #[cfg(not(any(unix, windows)))]
+        {
+            "sh".to_string()
+        }
+    }
+
+    fn effective_shell_label_for_launch_shell(&self, launch_shell: Option<&str>) -> String {
+        launch_shell
+            .map(str::trim)
+            .filter(|shell| !shell.is_empty())
+            .map(|shell| Self::shell_display_label(Some(shell)))
+            .unwrap_or_else(|| self.detected_auto_shell_label())
+    }
+
+    fn record_effective_session_shell(
+        &mut self,
+        session_id: SessionId,
+        launch_shell: Option<&str>,
+    ) {
+        let shell_label = self.effective_shell_label_for_launch_shell(launch_shell);
+        self.cache
+            .effective_shell_labels
+            .insert(session_id, shell_label);
+    }
+
+    pub(super) fn session_cli_display_name(&self, session_id: SessionId) -> String {
+        let cli_type = self
+            .clipboard
+            .clipboard_service
+            .get_session_cli_type(session_id);
+        cli_type_display_name(cli_type).to_string()
     }
 
     pub(super) fn session_shell_warning_message(&self, session_id: SessionId) -> Option<String> {
@@ -992,17 +1142,14 @@ impl WorkspaceView {
         session_id: SessionId,
         requested_shell: Option<&str>,
     ) -> (String, Option<String>) {
-        if let Some(fallback) = self.cache.restore_shell_fallbacks.get(&session_id) {
-            (
-                Self::shell_display_label(fallback.effective_shell.as_deref()),
-                Some(restore_shell_fallback_message(fallback)),
-            )
-        } else {
-            (
-                Self::shell_display_label(requested_shell),
-                self.session_shell_warning_message(session_id),
-            )
-        }
+        let shell_label = self
+            .cache
+            .effective_shell_labels
+            .get(&session_id)
+            .cloned()
+            .unwrap_or_else(|| Self::shell_display_label(requested_shell));
+
+        (shell_label, self.session_shell_warning_message(session_id))
     }
 
     fn sync_manager_session_shell(
@@ -1022,14 +1169,14 @@ impl WorkspaceView {
         &mut self,
         session_id: SessionId,
         shell_warning: Option<String>,
-        effective_shell: Option<String>,
+        effective_shell_label: String,
     ) {
         if let Some(requested_shell) = shell_warning {
             self.cache.restore_shell_fallbacks.insert(
                 session_id,
                 RestoreShellFallback {
                     requested_shell,
-                    effective_shell,
+                    effective_shell_label,
                 },
             );
         } else {
@@ -1062,14 +1209,10 @@ impl WorkspaceView {
             header = header.with_git_info(git_info.branch.clone(), git_info.dirty_count);
         }
 
-        let dir_name = session
-            .git_info
-            .as_ref()
-            .and_then(|git_info| git_info.repo_root.file_name())
-            .or_else(|| session.working_directory.file_name())
-            .and_then(|name| name.to_str())
-            .unwrap_or("unknown");
-        header = header.with_project_name(dir_name);
+        if let Some(project_name) = session_project_name(session) {
+            header = header.with_project_name(project_name);
+        }
+        header = header.with_cli_name(self.session_cli_display_name(session.id));
         let (shell_label, shell_warning) =
             self.session_shell_display(session.id, session.shell.as_deref());
         header = header.with_shell(shell_label, shell_warning);
@@ -1097,6 +1240,7 @@ impl WorkspaceView {
         self.terminals.remove(&session_id);
         self.pty_write_receivers.remove(&session_id);
         self.terminal_headers.remove(&session_id);
+        self.cache.effective_shell_labels.remove(&session_id);
         self.cache.restore_shell_fallbacks.remove(&session_id);
         self.output_dispatcher.remove_session(session_id);
         self.polling.output_prepare_in_flight.remove(&session_id);
@@ -1188,10 +1332,16 @@ impl WorkspaceView {
             bootstrapped.session_id,
             bootstrapped.request.requested_shell.clone(),
         );
+        self.record_effective_session_shell(
+            bootstrapped.session_id,
+            bootstrapped.request.launch_shell.as_deref(),
+        );
         self.record_restored_shell_warning(
             bootstrapped.session_id,
             bootstrapped.request.shell_warning.clone(),
-            bootstrapped.request.launch_shell.clone(),
+            self.effective_shell_label_for_launch_shell(
+                bootstrapped.request.launch_shell.as_deref(),
+            ),
         );
 
         let mut session = bootstrapped.session.clone();
@@ -1237,11 +1387,20 @@ impl WorkspaceView {
             bootstrapped.session_id,
             bootstrapped.request.requested_shell.clone(),
         );
+        self.record_effective_session_shell(
+            bootstrapped.session_id,
+            bootstrapped.request.launch_shell.as_deref(),
+        );
         self.record_restored_shell_warning(
             bootstrapped.session_id,
             bootstrapped.request.shell_warning.clone(),
-            bootstrapped.request.launch_shell.clone(),
+            self.effective_shell_label_for_launch_shell(
+                bootstrapped.request.launch_shell.as_deref(),
+            ),
         );
+        self.clipboard
+            .clipboard_service
+            .set_session_cli_type(bootstrapped.session_id, restore_plan_cli_type(&plan));
 
         if plan.codex_execution_mode.is_some() || plan.codex_started_at.is_some() {
             let codex_execution_mode = plan.codex_execution_mode;
@@ -1737,6 +1896,7 @@ impl WorkspaceView {
             readers.cached_status.remove(&id);
         }
         self.polling.shell_input_buffers.remove(&id);
+        self.cache.effective_shell_labels.remove(&id);
         self.cache.restore_shell_fallbacks.remove(&id);
 
         // Remove from output dispatcher tracking (ready/in-flight sets)

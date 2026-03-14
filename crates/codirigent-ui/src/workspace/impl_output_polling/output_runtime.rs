@@ -366,6 +366,7 @@ impl WorkspaceView {
                 self.clipboard
                     .clipboard_service
                     .set_session_cli_type(session_id, cli_type);
+                any_dirty = true;
                 info!(?session_id, ?cli_type, "Detected CLI type from output");
             }
         }

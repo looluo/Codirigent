@@ -317,11 +317,17 @@ impl WorkspaceView {
         );
 
         let mut id_changed = false;
+        let mut cli_type_changed = false;
         let cli_type_name = cli_type.as_deref().unwrap_or(CLI_TYPE_CLAUDE);
         if let Some(cli_type) = cli_type_from_hook_signal_name(cli_type_name) {
+            let current_cli_type = self
+                .clipboard
+                .clipboard_service
+                .get_session_cli_type(session_id);
             self.clipboard
                 .clipboard_service
                 .set_session_cli_type(session_id, cli_type);
+            cli_type_changed = current_cli_type != cli_type;
         }
         let resolved_cli_session_id =
             resolve_hook_cli_session_id(&signal_file_id, cli_session_id.as_deref(), session_id);
@@ -507,7 +513,8 @@ impl WorkspaceView {
             );
         }
 
-        if self.sync_session_status(session_id) {
+        if self.sync_session_status(session_id) || cli_type_changed {
+            self.sync_session_header(session_id);
             cx.notify();
         }
     }
