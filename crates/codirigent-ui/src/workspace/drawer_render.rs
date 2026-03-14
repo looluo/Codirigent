@@ -1126,10 +1126,9 @@ impl WorkspaceView {
                 div()
                     .flex_1()
                     .min_w_0()
-                    .overflow_hidden()
                     .flex()
                     .flex_col()
-                    .gap(px(4.0))
+                    .gap(px(3.0))
                     .child(
                         div()
                             .w_full()
@@ -1147,6 +1146,13 @@ impl WorkspaceView {
                                     .text_ellipsis()
                                     .child(session_name),
                             )
+                            .when_some(cli_name, |el, cli_name| {
+                                el.child(Self::render_session_metadata_badge(
+                                    &cli_name,
+                                    primary,
+                                    primary.opacity(0.12),
+                                ))
+                            })
                             .when(is_hidden, |el| {
                                 el.child(Self::render_session_metadata_badge(
                                     "Hidden",
@@ -1171,32 +1177,26 @@ impl WorkspaceView {
                     .child(
                         div()
                             .w_full()
+                            .min_w_0()
+                            .overflow_hidden()
+                            .text_xs()
+                            .font_weight(FontWeight::MEDIUM)
+                            .text_color(if is_focused {
+                                fg.opacity(0.95)
+                            } else {
+                                fg.opacity(0.85)
+                            })
+                            .text_ellipsis()
+                            .child(project_name.unwrap_or_else(|| {
+                                session.working_directory.to_string_lossy().into_owned()
+                            })),
+                    )
+                    .child(
+                        div()
+                            .w_full()
                             .flex()
                             .items_center()
                             .gap_2()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .overflow_hidden()
-                                    .text_xs()
-                                    .text_color(if is_focused {
-                                        muted.opacity(0.95)
-                                    } else {
-                                        muted.opacity(0.8)
-                                    })
-                                    .text_ellipsis()
-                                    .child(project_name.unwrap_or_else(|| {
-                                        session.working_directory.to_string_lossy().into_owned()
-                                    })),
-                            )
-                            .when_some(cli_name, |el, cli_name| {
-                                el.child(Self::render_session_metadata_badge(
-                                    &cli_name,
-                                    primary,
-                                    primary.opacity(0.12),
-                                ))
-                            })
                             .child(Self::render_session_metadata_badge(
                                 &shell_label,
                                 if shell_warning.is_some() {
@@ -1223,19 +1223,20 @@ impl WorkspaceView {
             .child(
                 div()
                     .id(SharedString::from(format!("session-menu-{}", session_id.0)))
-                    .w(px(24.0))
-                    .h(px(24.0))
+                    .w(px(28.0))
+                    .h_full()
+                    .flex_shrink_0()
                     .rounded_md()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .flex_shrink_0()
                     .cursor_pointer()
                     .hover(|style| style.bg(super::types::CANCEL_BUTTON_HOVER))
                     .on_mouse_down(
                         MouseButton::Left,
                         cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
                             this.open_session_menu(session_id, Some(event.position.y.into()), cx);
+                            cx.stop_propagation();
                         }),
                     )
                     .child(
