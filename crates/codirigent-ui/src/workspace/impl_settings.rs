@@ -6,7 +6,7 @@ use crate::app::OpenSettings;
 use crate::settings::SettingsPage;
 use codirigent_core::config_service::ConfigService;
 use gpui::{Context, Window};
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tracing::warn;
 
@@ -27,17 +27,47 @@ fn is_common_shell_option(shell: &str) -> bool {
     )
 }
 
+fn build_shell_picker_options(shell_options: &[String]) -> Vec<ShellPickerOption> {
+    let mut normalized_label_counts = HashMap::new();
+    for raw_value in shell_options {
+        *normalized_label_counts
+            .entry(shell_picker_display_label(raw_value))
+            .or_insert(0usize) += 1;
+    }
+
+    shell_options
+        .iter()
+        .enumerate()
+        .map(|(source_index, raw_value)| {
+            let base_label = shell_picker_display_label(raw_value);
+            let label = if normalized_label_counts
+                .get(&base_label)
+                .copied()
+                .unwrap_or_default()
+                > 1
+                && !raw_value.is_empty()
+                && raw_value != &base_label
+            {
+                format!("{base_label} ({raw_value})")
+            } else {
+                base_label
+            };
+
+            ShellPickerOption {
+                source_index,
+                raw_value: raw_value.clone(),
+                label,
+            }
+        })
+        .collect()
+}
+
 fn build_shell_picker_sections(shell_options: &[String]) -> Vec<ShellPickerSection> {
     let mut primary = Vec::new();
     let mut more = Vec::new();
 
-    for (source_index, raw_value) in shell_options.iter().enumerate() {
-        let option = ShellPickerOption {
-            source_index,
-            raw_value: raw_value.clone(),
-            label: shell_picker_display_label(raw_value),
-        };
-        if raw_value.is_empty() || is_common_shell_option(raw_value) {
+    for option in build_shell_picker_options(shell_options) {
+        if option.raw_value.is_empty() || is_common_shell_option(&option.raw_value) {
             primary.push(option);
         } else {
             more.push(option);
@@ -60,6 +90,18 @@ fn build_shell_picker_sections(shell_options: &[String]) -> Vec<ShellPickerSecti
     sections
 }
 
+fn shell_picker_option_order(shell_options: &[String]) -> Vec<usize> {
+    build_shell_picker_sections(shell_options)
+        .into_iter()
+        .flat_map(|section| {
+            section
+                .options
+                .into_iter()
+                .map(|option| option.source_index)
+        })
+        .collect()
+}
+
 impl WorkspaceView {
     pub(super) fn shell_picker_sections(
         &self,
@@ -70,6 +112,10 @@ impl WorkspaceView {
 
     pub(super) fn shell_picker_display_label(shell: &str) -> String {
         shell_picker_display_label(shell)
+    }
+
+    pub(super) fn shell_picker_option_order(&self, shell_options: &[String]) -> Vec<usize> {
+        shell_picker_option_order(shell_options)
     }
 
     pub(super) fn effective_user_settings(&self) -> &codirigent_core::config::UserSettings {
@@ -489,5 +535,42 @@ mod tests {
                 .collect::<Vec<_>>(),
             vec!["POWERSHELL", "zsh"]
         );
+    }
+
+    #[test]
+    fn shell_picker_sections_disambiguate_duplicate_normalized_labels() {
+        let sections = build_shell_picker_sections(&[
+            "zsh".to_string(),
+            "/bin/zsh".to_string(),
+            r"C:\Windows\System32\cmd.exe".to_string(),
+            "cmd".to_string(),
+        ]);
+
+        assert_eq!(sections.len(), 1);
+        assert_eq!(
+            sections[0]
+                .options
+                .iter()
+                .map(|option| option.label.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "zsh",
+                "zsh (/bin/zsh)",
+                r"cmd (C:\Windows\System32\cmd.exe)",
+                "cmd",
+            ]
+        );
+    }
+
+    #[test]
+    fn shell_picker_option_order_matches_visual_section_order() {
+        let order = shell_picker_option_order(&[
+            String::new(),
+            "nu".to_string(),
+            "zsh".to_string(),
+            "bash".to_string(),
+        ]);
+
+        assert_eq!(order, vec![0, 2, 3, 1]);
     }
 }

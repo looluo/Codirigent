@@ -384,14 +384,17 @@ impl WorkspaceView {
         event: &KeyDownEvent,
         cx: &mut Context<Self>,
     ) -> bool {
-        let Some(modal) = self.modals.session_creation.as_mut() else {
+        let Some(modal) = self.modals.session_creation.as_ref() else {
             return false;
         };
+        let modal_pending = modal.pending;
+        let selected_shell_index = modal.selected_shell_index;
+        let visible_shell_order = self.shell_picker_option_order(&modal.shell_options);
 
         let key = event.keystroke.key.to_lowercase();
         match key.as_str() {
             "escape" => {
-                if modal.pending {
+                if modal_pending {
                     cx.notify();
                     return true;
                 }
@@ -404,41 +407,60 @@ impl WorkspaceView {
                 return true;
             }
             "up" | "left" | "k" => {
-                if modal.pending {
+                if modal_pending {
                     return true;
                 }
-                if !modal.shell_options.is_empty() {
-                    modal.selected_shell_index = modal
-                        .selected_shell_index
+                if !visible_shell_order.is_empty() {
+                    let current_position = visible_shell_order
+                        .iter()
+                        .position(|&index| index == selected_shell_index)
+                        .unwrap_or(0);
+                    let previous_position = current_position
                         .checked_sub(1)
-                        .unwrap_or(modal.shell_options.len().saturating_sub(1));
+                        .unwrap_or(visible_shell_order.len().saturating_sub(1));
+                    if let Some(modal) = self.modals.session_creation.as_mut() {
+                        modal.selected_shell_index = visible_shell_order[previous_position];
+                    }
                     cx.notify();
                 }
                 return true;
             }
             "down" | "right" | "j" => {
-                if modal.pending {
+                if modal_pending {
                     return true;
                 }
-                if !modal.shell_options.is_empty() {
-                    modal.selected_shell_index =
-                        (modal.selected_shell_index + 1) % modal.shell_options.len();
+                if !visible_shell_order.is_empty() {
+                    let current_position = visible_shell_order
+                        .iter()
+                        .position(|&index| index == selected_shell_index)
+                        .unwrap_or(0);
+                    let next_position = (current_position + 1) % visible_shell_order.len();
+                    if let Some(modal) = self.modals.session_creation.as_mut() {
+                        modal.selected_shell_index = visible_shell_order[next_position];
+                    }
                     cx.notify();
                 }
                 return true;
             }
             "tab" => {
-                if modal.pending {
+                if modal_pending {
                     return true;
                 }
-                if !modal.shell_options.is_empty() {
-                    let len = modal.shell_options.len();
+                if !visible_shell_order.is_empty() {
+                    let current_position = visible_shell_order
+                        .iter()
+                        .position(|&index| index == selected_shell_index)
+                        .unwrap_or(0);
+                    let len = visible_shell_order.len();
                     let step = if event.keystroke.modifiers.shift {
                         len.saturating_sub(1)
                     } else {
                         1
                     };
-                    modal.selected_shell_index = (modal.selected_shell_index + step) % len;
+                    let next_position = (current_position + step) % len;
+                    if let Some(modal) = self.modals.session_creation.as_mut() {
+                        modal.selected_shell_index = visible_shell_order[next_position];
+                    }
                     cx.notify();
                 }
                 return true;
