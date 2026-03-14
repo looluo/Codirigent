@@ -7,7 +7,7 @@
 //! - State persistence to disk
 
 use super::cli_helpers::is_safe_cli_session_id;
-use super::gpui::{cli_type_display_name, session_project_name, WorkspaceView};
+use super::gpui::{cli_type_badge_name, session_project_name, WorkspaceView};
 use super::types::{RestoreShellFallback, SESSION_NAME_PREFIX, SESSION_SHELL_AUTO_LABEL};
 use crate::terminal::Terminal;
 use crate::terminal_header::TerminalHeader;
@@ -1122,12 +1122,12 @@ impl WorkspaceView {
             .insert(session_id, shell_label);
     }
 
-    pub(super) fn session_cli_display_name(&self, session_id: SessionId) -> String {
+    pub(super) fn session_cli_display_name(&self, session_id: SessionId) -> Option<String> {
         let cli_type = self
             .clipboard
             .clipboard_service
             .get_session_cli_type(session_id);
-        cli_type_display_name(cli_type).to_string()
+        cli_type_badge_name(cli_type).map(str::to_string)
     }
 
     pub(super) fn session_shell_warning_message(&self, session_id: SessionId) -> Option<String> {
@@ -1212,7 +1212,9 @@ impl WorkspaceView {
         if let Some(project_name) = session_project_name(session) {
             header = header.with_project_name(project_name);
         }
-        header = header.with_cli_name(self.session_cli_display_name(session.id));
+        if let Some(cli_name) = self.session_cli_display_name(session.id) {
+            header = header.with_cli_name(cli_name);
+        }
         let (shell_label, shell_warning) =
             self.session_shell_display(session.id, session.shell.as_deref());
         header = header.with_shell(shell_label, shell_warning);

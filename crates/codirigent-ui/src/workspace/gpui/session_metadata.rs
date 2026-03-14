@@ -33,12 +33,12 @@ pub(super) fn resolved_task_title(
         .unwrap_or_else(|| task_id.0.to_string())
 }
 
-pub(in crate::workspace) fn cli_type_display_name(cli_type: CliType) -> &'static str {
+pub(in crate::workspace) fn cli_type_badge_name(cli_type: CliType) -> Option<&'static str> {
     match cli_type {
-        CliType::ClaudeCode => "Claude Code",
-        CliType::GeminiCli => "Gemini",
-        CliType::CodexCli => "Codex",
-        CliType::GenericShell => "Shell",
+        CliType::ClaudeCode => Some("Claude Code"),
+        CliType::GeminiCli => Some("Gemini"),
+        CliType::CodexCli => Some("Codex"),
+        CliType::GenericShell => None,
     }
 }
 
@@ -112,22 +112,22 @@ mod tests {
     }
 
     #[test]
-    fn cli_type_display_name_matches_supported_labels() {
+    fn cli_type_badge_name_hides_generic_shell() {
         assert_eq!(
-            cli_type_display_name(codirigent_core::CliType::ClaudeCode),
-            "Claude Code"
+            cli_type_badge_name(codirigent_core::CliType::ClaudeCode),
+            Some("Claude Code")
         );
         assert_eq!(
-            cli_type_display_name(codirigent_core::CliType::GeminiCli),
-            "Gemini"
+            cli_type_badge_name(codirigent_core::CliType::GeminiCli),
+            Some("Gemini")
         );
         assert_eq!(
-            cli_type_display_name(codirigent_core::CliType::CodexCli),
-            "Codex"
+            cli_type_badge_name(codirigent_core::CliType::CodexCli),
+            Some("Codex")
         );
         assert_eq!(
-            cli_type_display_name(codirigent_core::CliType::GenericShell),
-            "Shell"
+            cli_type_badge_name(codirigent_core::CliType::GenericShell),
+            None
         );
     }
 }

@@ -4,7 +4,7 @@ use super::WorkspaceView;
 use crate::terminal_runtime::TerminalRenderSnapshot;
 use codirigent_core::{CliType, SessionId, SessionManager, SessionUpdate};
 use codirigent_session::clipboard_service::ClipboardService;
-use codirigent_session::detect_cli_from_output;
+use codirigent_session::{detect_cli_from_output, ShellState};
 use gpui::Context;
 use std::time::Instant;
 use tracing::{info, trace};
@@ -16,7 +16,17 @@ struct PreparedSessionOutput {
     has_more: bool,
     render_snapshot: Option<TerminalRenderSnapshot>,
     detected_cli_type: Option<CliType>,
+    revert_cli_to_shell: bool,
     cwd_session: Option<codirigent_core::Session>,
+}
+
+fn shell_prompt_event_reverts_cli(events: &[ShellState]) -> bool {
+    events.iter().any(|event| {
+        matches!(
+            event,
+            ShellState::PromptStart | ShellState::CommandInputStart
+        )
+    })
 }
 
 fn prioritize_and_partition_output_sessions<F>(
@@ -249,10 +259,13 @@ impl WorkspaceView {
                     let render_snapshot = runtime.apply_output(&data);
                     let detected_cli_type = detect_cli_from_output(&data);
 
+                    let shell_events = codirigent_session::extract_osc133_events(&data);
+                    let revert_cli_to_shell = shell_prompt_event_reverts_cli(&shell_events);
+
                     {
                         let mut detector = detector.lock().ok()?;
                         detector.process_output(session_id, &data);
-                        for event in codirigent_session::extract_osc133_events(&data) {
+                        for event in shell_events {
                             // DUAL-PATH: Emitted to channel for phase-2 event routing.
                             // Also applied directly below via set_shell_state() for correctness now.
                             if let Some(tx) = &update_tx {
@@ -299,6 +312,7 @@ impl WorkspaceView {
                         has_more: drained.has_more,
                         render_snapshot,
                         detected_cli_type,
+                        revert_cli_to_shell,
                         cwd_session,
                     })
                 })
@@ -341,6 +355,7 @@ impl WorkspaceView {
             has_more,
             render_snapshot,
             detected_cli_type,
+            revert_cli_to_shell,
             cwd_session,
         } = prepared;
         trace!(
@@ -368,6 +383,23 @@ impl WorkspaceView {
                     .set_session_cli_type(session_id, cli_type);
                 any_dirty = true;
                 info!(?session_id, ?cli_type, "Detected CLI type from output");
+            }
+        }
+
+        if revert_cli_to_shell {
+            let current = self
+                .clipboard
+                .clipboard_service
+                .get_session_cli_type(session_id);
+            if current != CliType::GenericShell {
+                self.clipboard
+                    .clipboard_service
+                    .set_session_cli_type(session_id, CliType::GenericShell);
+                any_dirty = true;
+                info!(
+                    ?session_id,
+                    "Reverted CLI badge to shell after prompt return"
+                );
             }
         }
 
@@ -441,5 +473,20 @@ mod tests {
 
         assert_eq!(ready, vec![SessionId(3)]);
         assert_eq!(deferred, vec![SessionId(2), SessionId(1)]);
+    }
+
+    #[test]
+    fn shell_prompt_events_revert_cli_to_shell() {
+        assert!(shell_prompt_event_reverts_cli(&[ShellState::PromptStart]));
+        assert!(shell_prompt_event_reverts_cli(&[
+            ShellState::CommandExecuted,
+            ShellState::CommandInputStart,
+        ]));
+        assert!(!shell_prompt_event_reverts_cli(&[
+            ShellState::CommandExecuted
+        ]));
+        assert!(!shell_prompt_event_reverts_cli(&[
+            ShellState::CommandFinished { exit_code: Some(0) }
+        ]));
     }
 }

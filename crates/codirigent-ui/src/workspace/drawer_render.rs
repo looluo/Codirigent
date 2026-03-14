@@ -1134,19 +1134,13 @@ impl WorkspaceView {
                         .child("Hidden"),
                 )
             })
-            .child(Self::render_session_metadata_badge(
-                &cli_name,
-                if cli_name == "Shell" {
-                    muted.opacity(0.75)
-                } else {
-                    primary
-                },
-                if cli_name == "Shell" {
-                    muted.opacity(0.12)
-                } else {
-                    primary.opacity(0.12)
-                },
-            ))
+            .when_some(cli_name, |el, cli_name| {
+                el.child(Self::render_session_metadata_badge(
+                    &cli_name,
+                    primary,
+                    primary.opacity(0.12),
+                ))
+            })
             .child(
                 div()
                     .flex_shrink_0()

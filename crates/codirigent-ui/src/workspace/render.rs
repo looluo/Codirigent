@@ -370,8 +370,10 @@ impl WorkspaceView {
                             .text_ellipsis()
                             .child(project_name),
                     )
-                    .child(div().text_xs().text_color(muted.opacity(0.6)).child("CLI"))
-                    .child(div().text_sm().text_color(fg).child(cli_name))
+                    .when_some(cli_name, |el, cli_name| {
+                        el.child(div().text_xs().text_color(muted.opacity(0.6)).child("CLI"))
+                            .child(div().text_sm().text_color(fg).child(cli_name))
+                    })
                     .child(
                         div()
                             .text_xs()

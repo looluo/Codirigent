@@ -155,8 +155,8 @@ impl WorkspaceView {
                 if header.project_name != project_name {
                     header.project_name = project_name;
                 }
-                if header.cli_name.as_deref() != Some(cli_name.as_str()) {
-                    header.cli_name = Some(cli_name.clone());
+                if header.cli_name != cli_name {
+                    header.cli_name = cli_name.clone();
                 }
                 if header.git_branch != git_branch {
                     header.git_branch = git_branch;
@@ -260,8 +260,8 @@ impl WorkspaceView {
             if header.project_name != project_name {
                 header.project_name = project_name;
             }
-            if header.cli_name.as_deref() != Some(cli_name.as_str()) {
-                header.cli_name = Some(cli_name);
+            if header.cli_name != cli_name {
+                header.cli_name = cli_name;
             }
 
             if header.git_branch != git_branch {
