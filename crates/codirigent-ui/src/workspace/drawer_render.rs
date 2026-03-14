@@ -1090,6 +1090,10 @@ impl WorkspaceView {
                 branch
             }
         });
+        let metadata_line = branch_badge
+            .as_ref()
+            .map(|branch| format!("{} • {}", shell_label, branch))
+            .unwrap_or_else(|| shell_label.clone());
 
         div()
             .id(SharedString::from(format!("session-row-{}", session_id.0)))
@@ -1175,56 +1179,45 @@ impl WorkspaceView {
                             }),
                     )
                     .child(
+                        div().w_full().flex().items_center().child(
+                            div()
+                                .flex_1()
+                                .min_w_0()
+                                .overflow_hidden()
+                                .text_sm()
+                                .font_weight(FontWeight::MEDIUM)
+                                .text_color(if is_focused {
+                                    fg.opacity(0.95)
+                                } else {
+                                    fg.opacity(0.85)
+                                })
+                                .text_ellipsis()
+                                .child(project_name.unwrap_or_else(|| {
+                                    session.working_directory.to_string_lossy().into_owned()
+                                })),
+                        ),
+                    )
+                    .child(
                         div()
                             .w_full()
                             .min_w_0()
                             .overflow_hidden()
                             .text_xs()
-                            .font_weight(FontWeight::MEDIUM)
-                            .text_color(if is_focused {
-                                fg.opacity(0.95)
+                            .text_color(if shell_warning.is_some() {
+                                orange
                             } else {
-                                fg.opacity(0.85)
+                                muted.opacity(0.8)
                             })
                             .text_ellipsis()
-                            .child(project_name.unwrap_or_else(|| {
-                                session.working_directory.to_string_lossy().into_owned()
-                            })),
-                    )
-                    .child(
-                        div()
-                            .w_full()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(Self::render_session_metadata_badge(
-                                &shell_label,
-                                if shell_warning.is_some() {
-                                    orange
-                                } else {
-                                    muted.opacity(0.85)
-                                },
-                                if shell_warning.is_some() {
-                                    orange.opacity(0.12)
-                                } else {
-                                    muted.opacity(0.12)
-                                },
-                            ))
-                            .when_some(branch_badge, |el, branch| {
-                                el.child(Self::render_session_metadata_badge(
-                                    &branch,
-                                    muted.opacity(0.85),
-                                    muted.opacity(0.12),
-                                ))
-                            }),
+                            .child(metadata_line),
                     ),
             )
             // Menu button
             .child(
                 div()
                     .id(SharedString::from(format!("session-menu-{}", session_id.0)))
-                    .w(px(28.0))
-                    .h_full()
+                    .w(px(24.0))
+                    .h(px(24.0))
                     .flex_shrink_0()
                     .rounded_md()
                     .flex()
