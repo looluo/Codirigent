@@ -1022,6 +1022,49 @@ fn test_workspace_group_session_into_grid_pane_creates_tabs_without_reflow() {
 }
 
 #[test]
+fn test_workspace_group_session_into_empty_grid_pane_moves_session() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    assert!(ws.add_session(make_session(1, "S1")));
+    assert!(ws.add_session(make_session(2, "S2")));
+
+    assert!(ws.group_session_into_pane(SessionId(1), PaneId::GridCell { index: 3 }));
+
+    let cells = ws.cell_info();
+    assert_eq!(
+        cells
+            .iter()
+            .map(|cell| (cell.session_id, cell.index))
+            .collect::<Vec<_>>(),
+        vec![(SessionId(2), 1), (SessionId(1), 3)]
+    );
+    assert_eq!(
+        ws.pane_active_session_id(PaneId::GridCell { index: 3 }),
+        Some(SessionId(1))
+    );
+}
+
+#[test]
+fn test_workspace_group_session_into_empty_split_slot_moves_session() {
+    let mut ws = Workspace::new();
+    ws.set_split_tree(LayoutNode::from_grid(1, 2));
+    assert!(ws.add_session(make_session(1, "S1")));
+
+    assert!(ws.group_session_into_pane(SessionId(1), PaneId::SplitSlot { slot: SlotId(1) }));
+
+    assert_eq!(
+        ws.cell_info()
+            .into_iter()
+            .map(|cell| cell.session_id)
+            .collect::<Vec<_>>(),
+        vec![SessionId(1)]
+    );
+    assert_eq!(
+        ws.pane_active_session_id(PaneId::SplitSlot { slot: SlotId(1) }),
+        Some(SessionId(1))
+    );
+}
+
+#[test]
 fn test_workspace_activate_pane_tab_switches_active_session() {
     let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
     for i in 1..=3 {
@@ -1166,6 +1209,41 @@ fn test_layout_changes_preserve_hidden_pane_stacks_and_active_tabs() {
 }
 
 #[test]
+fn test_split_layout_to_grid_preserves_tab_stacks_without_duplicate_visible_sessions() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Single);
+    assert!(ws.add_session(make_session(1, "S1")));
+    assert!(ws.add_session_to_pane(make_session(2, "S2"), PaneId::GridCell { index: 0 }));
+
+    ws.set_split_tree(codirigent_core::LayoutNode::from_grid(1, 2));
+    let slot = ws
+        .layout_state()
+        .as_split_tree()
+        .expect("workspace should be in split mode")
+        .assignments()[1]
+        .0;
+    assert!(ws.add_session_to_slot(make_session(3, "S3"), slot));
+    assert!(ws.add_session_to_pane(make_session(4, "S4"), PaneId::SplitSlot { slot }));
+
+    ws.set_layout(LayoutProfile::Grid2x2);
+
+    assert_eq!(
+        ws.pane_tab_session_ids(PaneId::GridCell { index: 0 }),
+        vec![SessionId(1), SessionId(2)]
+    );
+    assert_eq!(
+        ws.pane_tab_session_ids(PaneId::GridCell { index: 1 }),
+        vec![SessionId(3), SessionId(4)]
+    );
+
+    let visible_ids = ws
+        .cell_info()
+        .into_iter()
+        .map(|info| info.session_id)
+        .collect::<Vec<_>>();
+    assert_eq!(visible_ids, vec![SessionId(2), SessionId(4)]);
+}
+
+#[test]
 fn test_workspace_restore_pane_stacks_preserves_hidden_stack_order() {
     let mut ws = Workspace::with_profile(LayoutProfile::Single);
     assert!(ws.add_session(make_session(11, "S11")));
@@ -1218,22 +1296,23 @@ fn test_workspace_restore_pane_stacks_preserves_hidden_stack_order() {
 #[cfg(feature = "gpui-full")]
 #[test]
 fn test_drag_state_updates_target_after_leaving_source_header() {
-    let cells = vec![
-        CellInfo {
+    let panes = vec![
+        PaneDropTargetInfo {
             pane_id: PaneId::GridCell { index: 0 },
-            session_id: SessionId(1),
+            active_session_id: Some(SessionId(1)),
             index: 0,
             bounds: Bounds::new(0.0, 0.0, 100.0, 100.0),
         },
-        CellInfo {
+        PaneDropTargetInfo {
             pane_id: PaneId::GridCell { index: 1 },
-            session_id: SessionId(2),
+            active_session_id: Some(SessionId(2)),
             index: 1,
             bounds: Bounds::new(120.0, 0.0, 100.0, 100.0),
         },
     ];
     let mut drag = super::types::DragState {
         source_session_id: SessionId(1),
+        source_pane_id: PaneId::GridCell { index: 0 },
         source_index: 0,
         start_position: Point::new(10.0, 10.0),
         current_position: Point::new(10.0, 10.0),
@@ -1241,15 +1320,17 @@ fn test_drag_state_updates_target_after_leaving_source_header() {
         target: None,
     };
 
-    drag.update_pointer(Point::new(20.0, 20.0), &cells);
+    drag.update_pointer(Point::new(20.0, 20.0), &panes);
     assert!(drag.active);
     assert_eq!(drag.target, None);
 
-    drag.update_pointer(Point::new(140.0, 20.0), &cells);
+    drag.update_pointer(Point::new(140.0, 20.0), &panes);
     assert_eq!(
         drag.target,
         Some(super::types::DragTarget {
+            pane_id: PaneId::GridCell { index: 1 },
             index: 1,
+            active_session_id: Some(SessionId(2)),
             kind: super::types::DragTargetKind::PaneHeader,
         })
     );
@@ -1258,29 +1339,72 @@ fn test_drag_state_updates_target_after_leaving_source_header() {
 #[cfg(feature = "gpui-full")]
 #[test]
 fn test_drag_state_does_not_target_source_or_activate_too_early() {
-    let cells = vec![CellInfo {
+    let panes = vec![PaneDropTargetInfo {
         pane_id: PaneId::GridCell { index: 0 },
-        session_id: SessionId(1),
+        active_session_id: Some(SessionId(1)),
         index: 0,
         bounds: Bounds::new(0.0, 0.0, 100.0, 100.0),
     }];
     let mut drag = super::types::DragState {
         source_session_id: SessionId(1),
+        source_pane_id: PaneId::GridCell { index: 0 },
         source_index: 0,
         start_position: Point::new(10.0, 10.0),
         current_position: Point::new(10.0, 10.0),
         active: false,
         target: Some(super::types::DragTarget {
+            pane_id: PaneId::GridCell { index: 0 },
             index: 0,
+            active_session_id: Some(SessionId(1)),
             kind: super::types::DragTargetKind::PaneHeader,
         }),
     };
 
-    drag.update_pointer(Point::new(12.0, 12.0), &cells);
+    drag.update_pointer(Point::new(12.0, 12.0), &panes);
     assert!(!drag.active);
     assert_eq!(drag.target, None);
 
-    drag.update_pointer(Point::new(20.0, 20.0), &cells);
+    drag.update_pointer(Point::new(20.0, 20.0), &panes);
     assert!(drag.active);
     assert_eq!(drag.target, None);
+}
+
+#[cfg(feature = "gpui-full")]
+#[test]
+fn test_drag_state_targets_empty_grid_pane_body() {
+    let panes = vec![
+        PaneDropTargetInfo {
+            pane_id: PaneId::GridCell { index: 0 },
+            active_session_id: Some(SessionId(1)),
+            index: 0,
+            bounds: Bounds::new(0.0, 0.0, 100.0, 100.0),
+        },
+        PaneDropTargetInfo {
+            pane_id: PaneId::GridCell { index: 1 },
+            active_session_id: None,
+            index: 1,
+            bounds: Bounds::new(120.0, 0.0, 100.0, 100.0),
+        },
+    ];
+    let mut drag = super::types::DragState {
+        source_session_id: SessionId(1),
+        source_pane_id: PaneId::GridCell { index: 0 },
+        source_index: 0,
+        start_position: Point::new(10.0, 10.0),
+        current_position: Point::new(10.0, 10.0),
+        active: false,
+        target: None,
+    };
+
+    drag.update_pointer(Point::new(160.0, 60.0), &panes);
+
+    assert_eq!(
+        drag.target,
+        Some(super::types::DragTarget {
+            pane_id: PaneId::GridCell { index: 1 },
+            index: 1,
+            active_session_id: None,
+            kind: super::types::DragTargetKind::PaneBody,
+        })
+    );
 }

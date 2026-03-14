@@ -227,6 +227,7 @@ impl WorkspaceView {
                 );
 
             if tab_is_active {
+                let drag_source_pane_id = pane_id.clone();
                 tab = tab
                     .cursor_grab()
                     .on_mouse_down(
@@ -238,6 +239,7 @@ impl WorkspaceView {
                             );
                             this.selection.drag = Some(super::types::DragState {
                                 source_session_id: tab_session_id,
+                                source_pane_id: drag_source_pane_id.clone(),
                                 source_index: drag_logical_index.unwrap_or(0),
                                 start_position: pos,
                                 current_position: pos,
@@ -259,7 +261,7 @@ impl WorkspaceView {
                                 event.position.x.into(),
                                 event.position.y.into(),
                             );
-                            drag.update_pointer(pos, &this.cache.render_cell_info);
+                            drag.update_pointer(pos, &this.cache.render_pane_drop_targets);
                             cx.notify();
                         },
                     ));

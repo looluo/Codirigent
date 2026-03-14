@@ -1562,6 +1562,7 @@ impl Render for WorkspaceView {
             || self.cache.render_layout_signature != Some(layout_signature)
         {
             self.cache.render_cell_info = self.workspace.cell_info();
+            self.cache.render_pane_drop_targets = self.workspace.pane_drop_target_info();
             self.cache.render_cell_info_dirty = false;
             self.cache.render_layout_signature = Some(layout_signature);
         }

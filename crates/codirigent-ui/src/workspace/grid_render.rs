@@ -119,7 +119,10 @@ impl WorkspaceView {
                     )
                 } else {
                     // Empty cell - render inline
+                    let pane_id = codirigent_core::PaneId::GridCell { index };
                     self.render_empty_cell_inline_with_colors(
+                        pane_id,
+                        index,
                         position,
                         panel_bg,
                         border_color,
@@ -181,7 +184,7 @@ impl WorkspaceView {
             }
             if drag.source_index == drag_logical_index.unwrap_or(usize::MAX) {
                 Some(DragVisual::Source)
-            } else if drag.target.map(|target| target.index) == drag_logical_index {
+            } else if drag.target.as_ref().map(|target| target.index) == drag_logical_index {
                 Some(DragVisual::Target)
             } else {
                 None

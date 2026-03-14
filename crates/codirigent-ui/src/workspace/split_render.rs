@@ -273,12 +273,25 @@ impl WorkspaceView {
         muted: gpui::Hsla,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        div()
+        let pane_id = codirigent_core::PaneId::SplitSlot { slot };
+        let is_drop_target = self
+            .selection
+            .drag
+            .as_ref()
+            .and_then(|drag| drag.target.as_ref())
+            .is_some_and(|target| target.pane_id == pane_id);
+        let current_border = if is_drop_target {
+            let primary: gpui::Hsla = self.workspace().theme().primary.into();
+            primary
+        } else {
+            border_color
+        };
+
+        let empty = div()
             .id(SharedString::from(format!("empty-slot-{}", slot.0)))
             .size_full()
             .bg(panel_bg)
-            .border_1()
-            .border_color(border_color)
+            .border_color(current_border)
             .rounded_lg()
             .border_dashed()
             .flex()
@@ -303,7 +316,13 @@ impl WorkspaceView {
                     .text_xs()
                     .text_color(muted)
                     .child(super::types::EMPTY_CELL_MESSAGE),
-            )
+            );
+
+        if is_drop_target {
+            empty.border_2()
+        } else {
+            empty.border_1()
+        }
     }
 }
 

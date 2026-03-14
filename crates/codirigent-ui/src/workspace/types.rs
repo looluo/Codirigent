@@ -3,7 +3,7 @@
 //! This module contains struct and enum definitions used throughout the workspace
 //! implementation, including modal states and UI component data.
 
-use super::CellInfo;
+use crate::workspace::core::PaneDropTargetInfo;
 use codirigent_core::{PaneId, SessionId, SessionStatus, SlotId, TaskId};
 use codirigent_session::codex_session_reader::CodexSessionReader;
 use codirigent_session::gemini_session_reader::GeminiSessionReader;
@@ -329,18 +329,24 @@ pub(super) enum DragTargetKind {
 }
 
 /// Current drop target under the pointer.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq)]
 pub(super) struct DragTarget {
+    /// Visible pane identifier under the pointer.
+    pub pane_id: PaneId,
     /// Grid or split logical cell index.
     pub index: usize,
+    /// Whether the pane currently has an active session.
+    pub active_session_id: Option<SessionId>,
     /// Whether the pointer is over the header or body region.
     pub kind: DragTargetKind,
 }
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub(super) struct DragState {
     /// Session being dragged.
     pub source_session_id: SessionId,
+    /// Visible pane the session originated from.
+    pub source_pane_id: PaneId,
     /// Grid index (or slot index) of the source cell.
     pub source_index: usize,
     /// Mouse position when drag started (screen pixels).
@@ -379,7 +385,11 @@ impl DragState {
     /// This is shared between header-local and workspace-global mouse move
     /// handlers so reordering keeps working after the cursor leaves the
     /// source header.
-    pub(super) fn update_pointer(&mut self, position: crate::layout::Point, cells: &[CellInfo]) {
+    pub(super) fn update_pointer(
+        &mut self,
+        position: crate::layout::Point,
+        panes: &[PaneDropTargetInfo],
+    ) {
         self.current_position = position;
 
         if !self.active {
@@ -392,19 +402,21 @@ impl DragState {
             self.active = true;
         }
 
-        self.target = cells
+        self.target = panes
             .iter()
-            .find(|cell| cell.bounds.contains(position))
-            .and_then(|cell| {
-                (cell.index != self.source_index).then(|| {
-                    let header_bottom = cell.bounds.origin.y + HEADER_HEIGHT;
+            .find(|pane| pane.bounds.contains(position))
+            .and_then(|pane| {
+                (pane.pane_id != self.source_pane_id).then(|| {
+                    let header_bottom = pane.bounds.origin.y + HEADER_HEIGHT;
                     let kind = if position.y <= header_bottom {
                         DragTargetKind::PaneHeader
                     } else {
                         DragTargetKind::PaneBody
                     };
                     DragTarget {
-                        index: cell.index,
+                        pane_id: pane.pane_id.clone(),
+                        index: pane.index,
+                        active_session_id: pane.active_session_id,
                         kind,
                     }
                 })
@@ -597,6 +609,8 @@ pub(super) struct CacheState {
     pub cached_cell_dims: Option<CachedCellDims>,
     /// Cached cell layout info reused by resize and paint passes.
     pub render_cell_info: Vec<super::core::CellInfo>,
+    /// Cached pane bounds reused by drag/drop hit testing.
+    pub render_pane_drop_targets: Vec<PaneDropTargetInfo>,
     /// Whether `render_cell_info` must be recomputed before use.
     pub render_cell_info_dirty: bool,
     /// Last geometry signature used to build `render_cell_info`.
@@ -624,6 +638,7 @@ impl CacheState {
             drawer_group_expanded: HashMap::new(),
             cached_cell_dims: None,
             render_cell_info: Vec::new(),
+            render_pane_drop_targets: Vec::new(),
             render_cell_info_dirty: true,
             render_layout_signature: None,
             layout_generation: 0,

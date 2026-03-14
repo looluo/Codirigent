@@ -32,7 +32,7 @@ impl WorkspaceView {
             return;
         };
 
-        drag.update_pointer(pos, &self.cache.render_cell_info);
+        drag.update_pointer(pos, &self.cache.render_pane_drop_targets);
         cx.notify();
     }
 
@@ -95,21 +95,25 @@ impl WorkspaceView {
     fn finish_session_drag(&mut self, cx: &mut Context<Self>) {
         if let Some(drag) = self.selection.drag.take() {
             if drag.active {
-                if let Some(target) = drag.target {
+                if let Some(target) = drag.target.clone() {
                     let changed = match target.kind {
-                        super::types::DragTargetKind::PaneBody => self
-                            .workspace
-                            .swap_sessions(drag.source_index, target.index),
-                        super::types::DragTargetKind::PaneHeader => self
-                            .cache
-                            .render_cell_info
-                            .iter()
-                            .find(|info| info.index == target.index)
-                            .cloned()
-                            .is_some_and(|info| {
+                        super::types::DragTargetKind::PaneBody => {
+                            if target.active_session_id.is_none() {
+                                self.workspace.group_session_into_pane(
+                                    drag.source_session_id,
+                                    target.pane_id.clone(),
+                                )
+                            } else {
                                 self.workspace
-                                    .group_session_into_pane(drag.source_session_id, info.pane_id)
-                            }),
+                                    .swap_sessions(drag.source_index, target.index)
+                            }
+                        }
+                        super::types::DragTargetKind::PaneHeader => {
+                            self.workspace.group_session_into_pane(
+                                drag.source_session_id,
+                                target.pane_id.clone(),
+                            )
+                        }
                     };
                     if changed {
                         self.mark_layout_cache_dirty();
