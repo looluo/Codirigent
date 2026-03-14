@@ -9,7 +9,7 @@
 
 use super::gpui::WorkspaceView;
 use super::types::{
-    git_colors, DRAWER_HEADER_HEIGHT, HEADER_HEIGHT, MODAL_FIELD_HEIGHT, SESSION_ROW_HEIGHT,
+    git_colors, DRAWER_HEADER_HEIGHT, HEADER_HEIGHT, SESSION_DRAWER_ROW_HEIGHT, SESSION_ROW_HEIGHT,
 };
 use crate::icons;
 use crate::theme::CodirigentTheme;
@@ -141,7 +141,12 @@ impl WorkspaceView {
             }
         }
 
-        let mut content = div().flex_1().overflow_hidden().flex().flex_col();
+        let mut content = div()
+            .id("sessions-scroll")
+            .flex_1()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col();
 
         // Render ungrouped sessions first
         for session in &ungrouped {
@@ -187,7 +192,6 @@ impl WorkspaceView {
             .flex()
             .flex_col()
             .overflow_hidden()
-            // Scrollable session list
             .child(content)
             // Footer
             .child(
@@ -1060,7 +1064,11 @@ impl WorkspaceView {
         } else {
             gpui::Hsla::transparent_black()
         };
-        let hover_bg: gpui::Hsla = theme.active.into();
+        let hover_bg: gpui::Hsla = if is_focused {
+            row_bg
+        } else {
+            theme.active.into()
+        };
         let orange: gpui::Hsla = theme.orange.into();
         let primary: gpui::Hsla = theme.primary.into();
 
@@ -1071,16 +1079,30 @@ impl WorkspaceView {
         let context_pct = session.context_usage;
         let (shell_label, shell_warning) =
             self.session_shell_display(session_id, session.shell.as_deref());
+        let branch_badge = session.git_info.as_ref().map(|git_info| {
+            let mut branch = git_info.branch.clone();
+            if branch.chars().count() > 16 {
+                branch = branch.chars().take(13).collect::<String>() + "...";
+            }
+            if git_info.dirty_count > 0 {
+                format!("{} +{}", branch, git_info.dirty_count)
+            } else {
+                branch
+            }
+        });
 
         div()
             .id(SharedString::from(format!("session-row-{}", session_id.0)))
-            .h(px(MODAL_FIELD_HEIGHT))
+            .h(px(SESSION_DRAWER_ROW_HEIGHT))
             .w_full()
             .px_3()
+            .py(px(6.0))
             .flex()
-            .items_center()
+            .items_start()
             .gap_2()
             .bg(row_bg)
+            .border_l_2()
+            .border_color(if is_focused { primary } else { row_bg })
             .cursor_pointer()
             .hover(move |style| style.bg(hover_bg))
             .on_mouse_down(
@@ -1100,107 +1122,103 @@ impl WorkspaceView {
                     .bg(status_color)
                     .flex_shrink_0(),
             )
-            // Session name (truncated)
             .child(
                 div()
                     .flex_1()
+                    .min_w_0()
                     .overflow_hidden()
                     .flex()
-                    .items_center()
-                    .gap_2()
+                    .flex_col()
+                    .gap(px(4.0))
                     .child(
                         div()
-                            .flex_1()
-                            .overflow_hidden()
-                            .text_xs()
-                            .text_color(if is_focused { fg } else { muted })
-                            .text_ellipsis()
-                            .child(session_name),
-                    )
-                    .when_some(project_name, |el, project| {
-                        el.child(Self::render_session_metadata_badge(
-                            &project,
-                            muted.opacity(0.85),
-                            muted.opacity(0.12),
-                        ))
-                    }),
-            )
-            .when(is_hidden, |el| {
-                el.child(
-                    div()
-                        .text_xs()
-                        .text_color(muted.opacity(0.75))
-                        .flex_shrink_0()
-                        .child("Hidden"),
-                )
-            })
-            .when_some(cli_name, |el, cli_name| {
-                el.child(Self::render_session_metadata_badge(
-                    &cli_name,
-                    primary,
-                    primary.opacity(0.12),
-                ))
-            })
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .px(px(4.0))
-                    .py_px()
-                    .rounded_sm()
-                    .bg(if shell_warning.is_some() {
-                        orange.opacity(0.12)
-                    } else {
-                        muted.opacity(0.12)
-                    })
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(if shell_warning.is_some() {
-                                orange
-                            } else {
-                                muted.opacity(0.75)
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(fg)
+                                    .text_ellipsis()
+                                    .child(session_name),
+                            )
+                            .when(is_hidden, |el| {
+                                el.child(Self::render_session_metadata_badge(
+                                    "Hidden",
+                                    muted.opacity(0.85),
+                                    muted.opacity(0.12),
+                                ))
                             })
-                            .child(shell_label),
+                            .when_some(context_pct, |el, pct| {
+                                let context_color: gpui::Hsla =
+                                    crate::terminal_header::ContextLevel::from_percentage(pct)
+                                        .color()
+                                        .into();
+                                el.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(context_color)
+                                        .flex_shrink_0()
+                                        .child(format!("{}%", (pct * 100.0) as u32)),
+                                )
+                            }),
+                    )
+                    .child(
+                        div()
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
+                                div()
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .text_xs()
+                                    .text_color(if is_focused {
+                                        muted.opacity(0.95)
+                                    } else {
+                                        muted.opacity(0.8)
+                                    })
+                                    .text_ellipsis()
+                                    .child(project_name.unwrap_or_else(|| {
+                                        session.working_directory.to_string_lossy().into_owned()
+                                    })),
+                            )
+                            .when_some(cli_name, |el, cli_name| {
+                                el.child(Self::render_session_metadata_badge(
+                                    &cli_name,
+                                    primary,
+                                    primary.opacity(0.12),
+                                ))
+                            })
+                            .child(Self::render_session_metadata_badge(
+                                &shell_label,
+                                if shell_warning.is_some() {
+                                    orange
+                                } else {
+                                    muted.opacity(0.85)
+                                },
+                                if shell_warning.is_some() {
+                                    orange.opacity(0.12)
+                                } else {
+                                    muted.opacity(0.12)
+                                },
+                            ))
+                            .when_some(branch_badge, |el, branch| {
+                                el.child(Self::render_session_metadata_badge(
+                                    &branch,
+                                    muted.opacity(0.85),
+                                    muted.opacity(0.12),
+                                ))
+                            }),
                     ),
             )
-            // Git branch (compact) - between name and context%
-            .when_some(session.git_info.as_ref(), |el, gi| {
-                let mut branch = gi.branch.clone();
-                if branch.chars().count() > 12 {
-                    branch = branch.chars().take(9).collect::<String>() + "...";
-                }
-                let branch_color = muted.opacity(0.5);
-                el.child(
-                    div()
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(div().text_xs().text_color(branch_color).child(branch))
-                        .when(gi.dirty_count > 0, |el| {
-                            el.child(
-                                div()
-                                    .text_xs()
-                                    .text_color(super::types::DIRTY_INDICATOR_COLOR)
-                                    .child(format!("\u{25CF}{}", gi.dirty_count)),
-                            )
-                        }),
-                )
-            })
-            // Context percentage (if available) with threshold-based coloring
-            .when_some(context_pct, |el, pct| {
-                let context_color: gpui::Hsla =
-                    crate::terminal_header::ContextLevel::from_percentage(pct)
-                        .color()
-                        .into();
-                el.child(
-                    div()
-                        .text_xs()
-                        .text_color(context_color)
-                        .flex_shrink_0()
-                        .child(format!("{}%", (pct * 100.0) as u32)),
-                )
-            })
             // Menu button
             .child(
                 div()
@@ -1216,8 +1234,8 @@ impl WorkspaceView {
                     .hover(|style| style.bg(super::types::CANCEL_BUTTON_HOVER))
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
-                            this.open_session_menu(session_id, cx);
+                        cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
+                            this.open_session_menu(session_id, Some(event.position.y.into()), cx);
                         }),
                     )
                     .child(
@@ -1228,6 +1246,51 @@ impl WorkspaceView {
                             .child(icons::more_horizontal()),
                     ),
             )
+    }
+
+    pub(super) fn session_drawer_row_offset(&self, session_id: SessionId) -> Option<f32> {
+        let sessions: Vec<Session> = self.workspace().sessions().to_vec();
+        let mut ungrouped: Vec<&Session> = Vec::new();
+        let mut groups: std::collections::BTreeMap<String, Vec<&Session>> =
+            std::collections::BTreeMap::new();
+        for session in &sessions {
+            match &session.group {
+                Some(group) if !group.is_empty() => {
+                    groups.entry(group.clone()).or_default().push(session);
+                }
+                _ => ungrouped.push(session),
+            }
+        }
+
+        let mut offset = 0.0;
+        for session in ungrouped {
+            if session.id == session_id {
+                return Some(offset);
+            }
+            offset += SESSION_DRAWER_ROW_HEIGHT;
+        }
+
+        for (group_name, group_sessions) in groups {
+            offset += SESSION_ROW_HEIGHT;
+            let expanded = self
+                .cache
+                .drawer_group_expanded
+                .get(&group_name)
+                .copied()
+                .unwrap_or(true);
+            if !expanded {
+                continue;
+            }
+
+            for session in group_sessions {
+                if session.id == session_id {
+                    return Some(offset);
+                }
+                offset += SESSION_DRAWER_ROW_HEIGHT;
+            }
+        }
+
+        None
     }
 
     fn render_session_metadata_badge(

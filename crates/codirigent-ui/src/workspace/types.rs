@@ -46,6 +46,9 @@ pub(super) const SHELL_PICKER_AUTO_DETECT_LABEL: &str = "(Auto-detect)";
 /// Height of session and group rows in the Sessions drawer panel.
 pub(super) const SESSION_ROW_HEIGHT: f32 = 28.0;
 
+/// Height of rows in the Sessions drawer list.
+pub(super) const SESSION_DRAWER_ROW_HEIGHT: f32 = 56.0;
+
 /// Height of input fields and modal rows (larger than session rows).
 pub(super) const MODAL_FIELD_HEIGHT: f32 = 36.0;
 
@@ -128,14 +131,6 @@ pub(super) const BRANCH_NAME_COLOR: Hsla = Hsla {
     h: 0.0,
     s: 0.0,
     l: 0.75,
-    a: 1.0,
-};
-
-/// Amber color used for the dirty-file count indicator in session rows.
-pub(super) const DIRTY_INDICATOR_COLOR: Hsla = Hsla {
-    h: 0.1,
-    s: 0.8,
-    l: 0.6,
     a: 1.0,
 };
 
@@ -320,6 +315,8 @@ pub(super) struct SelectionState {
     pub selected_session_id: Option<SessionId>,
     /// Session menu state: which session's menu is open (if any).
     pub session_menu_open: Option<SessionId>,
+    /// Vertical anchor position for the session menu overlay, in window pixels.
+    pub session_menu_anchor_y: Option<f32>,
     /// Whether the user is actively dragging a text selection in a terminal.
     pub is_selecting: bool,
     /// Session ID that is currently being selected in (for mouse move events).
@@ -445,6 +442,7 @@ impl SelectionState {
         Self {
             selected_session_id: None,
             session_menu_open: None,
+            session_menu_anchor_y: None,
             is_selecting: false,
             selecting_session_id: None,
             file_tree_context_menu: None,
