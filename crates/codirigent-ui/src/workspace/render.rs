@@ -20,8 +20,8 @@ use crate::icons;
 use crate::title_bar::TitleBar;
 use gpui::{
     div, prelude::FluentBuilder, px, ClickEvent, Context, FontWeight, InteractiveElement,
-    IntoElement, ParentElement, SharedString, StatefulInteractiveElement, Styled, Window,
-    WindowControlArea,
+    IntoElement, MouseButton, MouseDownEvent, ParentElement, SharedString,
+    StatefulInteractiveElement, Styled, Window, WindowControlArea,
 };
 use tracing::info;
 
@@ -328,11 +328,16 @@ impl WorkspaceView {
         // Transparent click-away backdrop (no dark overlay)
         let backdrop = div()
             .id("session-menu-backdrop")
+            .occlude()
             .absolute()
             .inset_0()
-            .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
-                this.close_session_menu(cx);
-            }));
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, _window, cx| {
+                    this.close_session_menu(cx);
+                    cx.stop_propagation();
+                }),
+            );
 
         // Build dropdown menu
         let mut dropdown = div()
@@ -469,14 +474,22 @@ impl WorkspaceView {
         Some(
             div()
                 .id("session-menu-container")
+                .occlude()
                 .absolute()
                 .inset_0()
                 .child(backdrop)
                 .child(
                     div()
+                        .occlude()
                         .absolute()
                         .left(px(left_offset))
                         .top(px(top_offset))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                                cx.stop_propagation();
+                            }),
+                        )
                         .child(dropdown),
                 ),
         )
