@@ -1,6 +1,7 @@
 //! Settings state management for WorkspaceView.
 
 use crate::settings::SettingsPage;
+use crate::theme_manager::ThemeManager;
 use codirigent_core::config::{ProjectConfig, UserSettings};
 use codirigent_core::config_service::DefaultConfigService;
 use std::path::PathBuf;
@@ -21,6 +22,10 @@ pub(super) struct SettingsState {
     pub(super) cached_user_settings: UserSettings,
     /// Cached project config for the current working directory.
     pub(super) cached_project_config: ProjectConfig,
+    /// Theme registry used to resolve theme IDs into runtime themes.
+    pub(super) theme_manager: ThemeManager,
+    /// Theme ID currently applied to the workspace runtime.
+    pub(super) active_theme_id: String,
     /// Working directory used for project-scoped settings.
     pub(super) current_working_dir: Option<PathBuf>,
     /// Whether settings have been loaded from disk at least once.
@@ -31,6 +36,8 @@ pub(super) struct SettingsState {
 
 impl SettingsState {
     pub(super) fn new() -> Self {
+        let theme_manager = ThemeManager::with_defaults();
+        let active_theme_id = theme_manager.active_id().to_string();
         Self {
             page: None,
             open: false,
@@ -39,9 +46,25 @@ impl SettingsState {
             save_task: None,
             cached_user_settings: UserSettings::default(),
             cached_project_config: ProjectConfig::default(),
+            theme_manager,
+            active_theme_id,
             current_working_dir: std::env::current_dir().ok(),
             loaded_once: false,
             restore_after_load: false,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::theme_manager::DEFAULT_THEME_ID;
+
+    #[test]
+    fn settings_state_starts_with_registry_default_theme_id() {
+        let state = SettingsState::new();
+
+        assert_eq!(state.active_theme_id, DEFAULT_THEME_ID);
+        assert_eq!(state.theme_manager.active_id(), DEFAULT_THEME_ID);
     }
 }

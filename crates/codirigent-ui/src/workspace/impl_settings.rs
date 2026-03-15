@@ -4,11 +4,21 @@ use super::gpui::WorkspaceView;
 use super::types::{ShellPickerOption, ShellPickerSection, SHELL_PICKER_AUTO_DETECT_LABEL};
 use crate::app::OpenSettings;
 use crate::settings::SettingsPage;
+use crate::theme::CodirigentTheme;
+use crate::theme_manager::ThemeManager;
 use codirigent_core::config_service::ConfigService;
 use gpui::{Context, Window};
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::time::Duration;
 use tracing::warn;
+
+struct LoadedSettingsSnapshot {
+    user_settings: codirigent_core::config::UserSettings,
+    project_config: codirigent_core::config::ProjectConfig,
+    project_dir: Option<PathBuf>,
+    theme_manager: ThemeManager,
+}
 
 fn shell_picker_display_label(shell: &str) -> String {
     if shell.is_empty() {
@@ -214,6 +224,25 @@ fn normalize_keybinding_display(binding: &str) -> String {
         .unwrap_or_else(|_| binding.to_string())
 }
 
+fn load_settings_snapshot(
+    config_service: &codirigent_core::config_service::DefaultConfigService,
+    project_dir: Option<PathBuf>,
+) -> LoadedSettingsSnapshot {
+    let user_settings = config_service.load_user_settings().unwrap_or_default();
+    let project_config = project_dir
+        .as_ref()
+        .and_then(|dir| config_service.load_project_config(dir).ok())
+        .unwrap_or_default();
+    let theme_manager = ThemeManager::with_user_themes(config_service.user_config_dir());
+
+    LoadedSettingsSnapshot {
+        user_settings,
+        project_config,
+        project_dir,
+        theme_manager,
+    }
+}
+
 impl WorkspaceView {
     pub(super) fn shell_picker_sections(
         &self,
@@ -246,6 +275,59 @@ impl WorkspaceView {
             .or_else(|| std::env::current_dir().ok())
     }
 
+    fn apply_theme_runtime_overrides(
+        theme: &mut CodirigentTheme,
+        user_settings: &codirigent_core::config::UserSettings,
+    ) {
+        theme.grid_gap = user_settings.appearance.grid_gap as f32;
+        theme.font_size_base = user_settings.appearance.font_size;
+        theme.font_size_small = (user_settings.appearance.font_size - Self::UI_FONT_VARIANT_DELTA)
+            .max(Self::MIN_UI_SMALL_FONT_SIZE);
+        theme.font_size_large = user_settings.appearance.font_size + Self::UI_FONT_VARIANT_DELTA;
+        theme.terminal_font_size = user_settings.terminal.font_size;
+        theme.terminal_line_height = user_settings.terminal.line_height;
+        if !user_settings.terminal.font_family.is_empty() {
+            theme.terminal_font_family = user_settings.terminal.font_family.clone();
+        }
+    }
+
+    fn apply_runtime_theme(&mut self, theme: CodirigentTheme) {
+        self.workspace.set_theme(theme.clone());
+        self.clipboard.clipboard_preview.set_theme(theme.clone());
+        for terminal_view in self.terminals_mut().values_mut() {
+            terminal_view.set_theme(theme.clone());
+        }
+    }
+
+    pub(super) fn resolve_and_apply_theme_id(
+        &mut self,
+        requested_id: &str,
+        user_settings: &codirigent_core::config::UserSettings,
+    ) -> String {
+        let resolution = self
+            .settings
+            .theme_manager
+            .resolve_runtime_theme(requested_id);
+        if resolution.used_fallback {
+            warn!(
+                requested_theme_id = %resolution.requested_id,
+                resolved_theme_id = %resolution.resolved_id,
+                "Failed to resolve requested theme ID, using fallback theme"
+            );
+        }
+
+        let mut theme = resolution.theme;
+        Self::apply_theme_runtime_overrides(&mut theme, user_settings);
+
+        self.settings.active_theme_id = resolution.resolved_id.clone();
+        let _ = self
+            .settings
+            .theme_manager
+            .set_active(&self.settings.active_theme_id);
+        self.apply_runtime_theme(theme);
+        self.settings.active_theme_id.clone()
+    }
+
     fn build_settings_page(&self) -> SettingsPage {
         let mut user_settings = self.settings.cached_user_settings.clone();
         let project_config = self.settings.cached_project_config.clone();
@@ -266,12 +348,7 @@ impl WorkspaceView {
             *v = normalize_keybinding_display(v);
         }
 
-        let bg: gpui::Hsla = self.workspace.theme().background.into();
-        user_settings.appearance.theme = if bg.l > 0.5 {
-            "light".to_string()
-        } else {
-            "dark".to_string()
-        };
+        user_settings.appearance.theme = self.settings.active_theme_id.clone();
 
         let theme = self.workspace.theme();
         user_settings.appearance.font_size = theme.font_size_base;
@@ -515,27 +592,25 @@ impl WorkspaceView {
         self.settings.load_task = Some(cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
             let loaded = cx
                 .background_executor()
-                .spawn(async move {
-                    let user_settings = config_service.load_user_settings().unwrap_or_default();
-                    let project_config = project_dir
-                        .as_ref()
-                        .and_then(|dir| config_service.load_project_config(dir).ok())
-                        .unwrap_or_default();
-                    (user_settings, project_config, project_dir)
-                })
+                .spawn(async move { load_settings_snapshot(&config_service, project_dir) })
                 .await;
 
             let _ = this.update(cx, |this, cx| {
                 let restore_after_load = std::mem::take(&mut this.settings.restore_after_load);
                 this.settings.load_task = None;
                 this.settings.loaded_once = true;
-                this.settings.cached_user_settings = loaded.0.clone();
-                this.settings.cached_project_config = loaded.1.clone();
-                this.settings.current_working_dir = loaded.2;
+                this.settings.theme_manager = loaded.theme_manager;
+                let mut user_settings = loaded.user_settings.clone();
+                let resolved_theme_id = this
+                    .resolve_and_apply_theme_id(&user_settings.appearance.theme, &user_settings);
+                user_settings.appearance.theme = resolved_theme_id;
+                this.settings.cached_user_settings = user_settings.clone();
+                this.settings.cached_project_config = loaded.project_config.clone();
+                this.settings.current_working_dir = loaded.project_dir;
                 this.notification_manager
-                    .update_settings(loaded.0.notifications.clone());
+                    .update_settings(user_settings.notifications.clone());
                 this.top_bar
-                    .load_saved_profiles(loaded.0.saved_layouts.clone());
+                    .load_saved_profiles(user_settings.saved_layouts.clone());
 
                 if let Some(existing_page) = this.settings.page.as_ref() {
                     if !existing_page.user_save_pending && !existing_page.project_save_pending {
@@ -624,6 +699,12 @@ impl WorkspaceView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme::CodirigentTheme;
+    use crate::theme_config::Theme;
+    use crate::theme_manager::CUSTOM_THEME_DIRECTORY_NAME;
+    use codirigent_core::config_service::DefaultConfigService;
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn test_binding_to_gpui_string_ctrl_n() {
@@ -848,5 +929,64 @@ mod tests {
              UserSettings::default_keybindings live-reload list ({live_reload_count} entries) \
              are out of sync — add the missing action to both tables"
         );
+    }
+
+    #[test]
+    fn apply_theme_runtime_overrides_preserves_user_preferences() {
+        let mut theme = CodirigentTheme::dark();
+        let mut user_settings = codirigent_core::config::UserSettings::default();
+        user_settings.appearance.font_size = 17.0;
+        user_settings.appearance.grid_gap = 7;
+        user_settings.terminal.font_size = 15.0;
+        user_settings.terminal.line_height = 1.3;
+        user_settings.terminal.font_family = "FiraCode Nerd Font".to_string();
+
+        WorkspaceView::apply_theme_runtime_overrides(&mut theme, &user_settings);
+
+        assert_eq!(theme.font_size_base, 17.0);
+        assert_eq!(theme.font_size_small, 15.0);
+        assert_eq!(theme.font_size_large, 19.0);
+        assert_eq!(theme.grid_gap, 7.0);
+        assert_eq!(theme.terminal_font_size, 15.0);
+        assert_eq!(theme.terminal_line_height, 1.3);
+        assert_eq!(theme.terminal_font_family, "FiraCode Nerd Font");
+    }
+
+    #[test]
+    fn apply_theme_runtime_overrides_keeps_theme_terminal_font_when_unset() {
+        let mut theme = CodirigentTheme::dark();
+        let original_font_family = theme.terminal_font_family.clone();
+        let mut user_settings = codirigent_core::config::UserSettings::default();
+        user_settings.terminal.font_family.clear();
+
+        WorkspaceView::apply_theme_runtime_overrides(&mut theme, &user_settings);
+
+        assert_eq!(theme.terminal_font_family, original_font_family);
+    }
+
+    #[test]
+    fn load_settings_snapshot_loads_custom_themes_from_user_config_dir() {
+        let dir = tempdir().unwrap();
+        let config_service = DefaultConfigService::with_config_dir(dir.path().to_path_buf());
+        let themes_dir = dir.path().join(CUSTOM_THEME_DIRECTORY_NAME);
+        fs::create_dir_all(&themes_dir).unwrap();
+
+        let mut settings = codirigent_core::config::UserSettings::default();
+        settings.appearance.theme = "aurora".to_string();
+        config_service.save_user_settings(&settings).unwrap();
+
+        let custom_theme =
+            Theme::from_runtime("aurora", "Aurora", false, &CodirigentTheme::light());
+        fs::write(
+            themes_dir.join("aurora.json"),
+            custom_theme.to_json().unwrap(),
+        )
+        .unwrap();
+
+        let snapshot = load_settings_snapshot(&config_service, None);
+
+        assert_eq!(snapshot.user_settings.appearance.theme, "aurora");
+        assert!(snapshot.theme_manager.get("aurora").is_some());
+        assert_eq!(snapshot.theme_manager.len(), 3);
     }
 }

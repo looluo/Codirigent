@@ -27,6 +27,7 @@ tokio.workspace = true
 tracing.workspace = true
 chrono.workspace = true
 dirs.workspace = true
+unicode-width = "0.2"
 
 # Image processing for thumbnail generation
 image = { version = "0.25", default-features = false, features = ["png", "jpeg"] }

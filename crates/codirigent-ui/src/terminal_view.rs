@@ -53,6 +53,7 @@ use crate::terminal_runtime::{TerminalRenderSnapshot, TerminalRuntimeHandle};
 use crate::theme::{CodirigentTheme, Rgba};
 use alacritty_terminal::term::TermMode;
 use codirigent_core::SessionId;
+use unicode_width::UnicodeWidthChar;
 
 /// A run of text with uniform style for efficient canvas painting.
 #[derive(Debug, Clone)]
@@ -100,6 +101,7 @@ pub(crate) struct CachedTerminalRow {
 }
 
 type ShapedTerminalRow = Arc<Vec<(usize, usize, gpui::ShapedLine)>>;
+type SelectionRange = ((i32, usize), (i32, usize));
 
 /// Cursor shape for rendering.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
@@ -236,6 +238,8 @@ pub struct TerminalView {
     cached_shaped_font_size: Option<f32>,
     /// Per-row shaped text derived from `cached_rows`.
     cached_shaped_rows: Option<Vec<ShapedTerminalRow>>,
+    /// Selection range used to build `cached_shaped_rows`.
+    cached_shaped_selection: Option<SelectionRange>,
     /// Dirty viewport rows after a partial content rebuild.
     dirty_rows: Option<Vec<usize>>,
     /// Whether cell dimensions have been initialized from font metrics.
@@ -290,6 +294,7 @@ impl TerminalView {
             cached_shaped_font_family: None,
             cached_shaped_font_size: None,
             cached_shaped_rows: None,
+            cached_shaped_selection: None,
             dirty_rows: None,
             dimensions_initialized: false,
             cached_terminal_bg,
@@ -660,6 +665,7 @@ impl TerminalView {
         self.cached_shaped_font_family = None;
         self.cached_shaped_font_size = None;
         self.cached_shaped_rows = None;
+        self.cached_shaped_selection = None;
         self.dirty_rows = None;
     }
 
@@ -687,12 +693,16 @@ impl TerminalView {
     ) -> Vec<ShapedTerminalRow> {
         let font_family = self.font_family.clone();
         let font_size = self.font_size;
+        let selection_range = self.selection.normalized();
+        let selection_fg: gpui::Hsla = self.theme.terminal_selection_fg.into();
 
         let font_changed = self.cached_shaped_font_family.as_ref() != Some(&font_family)
             || self
                 .cached_shaped_font_size
                 .map_or(true, |size| (size - font_size).abs() > 0.01);
+        let selection_changed = self.cached_shaped_selection != selection_range;
         let row_shapes_need_full_rebuild = font_changed
+            || selection_changed
             || self.cached_shaped_rows.is_none()
             || self.cached_rows.len()
                 != self
@@ -704,22 +714,30 @@ impl TerminalView {
             let row_shapes = self
                 .cached_rows
                 .iter()
-                .map(|row| {
+                .enumerate()
+                .map(|(row_index, row)| {
                     shape_text_runs(
                         text_system,
                         row.text_runs_hsla.as_ref(),
                         &font_family,
                         font_size,
+                        self.selection_range_for_viewport_row(row_index),
+                        selection_fg,
                     )
                 })
                 .collect::<Vec<_>>();
             self.cached_shaped_font_family = Some(font_family);
             self.cached_shaped_font_size = Some(font_size);
+            self.cached_shaped_selection = selection_range;
             self.cached_shaped_rows = Some(row_shapes);
             self.dirty_rows = None;
         } else if let Some(dirty_rows) = self.dirty_rows.take() {
+            let dirty_selection_ranges = dirty_rows
+                .iter()
+                .map(|row| (*row, self.selection_range_for_viewport_row(*row)))
+                .collect::<Vec<_>>();
             if let Some(row_shapes) = self.cached_shaped_rows.as_mut() {
-                for row in dirty_rows {
+                for (row, selection_range) in dirty_selection_ranges {
                     if row >= self.cached_rows.len() || row >= row_shapes.len() {
                         continue;
                     }
@@ -728,6 +746,8 @@ impl TerminalView {
                         self.cached_rows[row].text_runs_hsla.as_ref(),
                         &font_family,
                         font_size,
+                        selection_range,
+                        selection_fg,
                     );
                 }
             }
@@ -858,6 +878,32 @@ impl TerminalView {
         rects
     }
 
+    fn selection_range_for_viewport_row(&self, row: usize) -> Option<(usize, usize)> {
+        let ((start_line, start_col), (end_line, end_col)) = self.selection.normalized()?;
+        let grid_line = self.viewport_row_to_grid_line(row);
+        if grid_line < start_line || grid_line > end_line {
+            return None;
+        }
+
+        let max_col = self.cols as usize;
+        if max_col == 0 {
+            return None;
+        }
+
+        let start = if grid_line == start_line {
+            start_col.min(max_col)
+        } else {
+            0
+        };
+        let end = if grid_line == end_line {
+            end_col.saturating_add(1).min(max_col)
+        } else {
+            max_col
+        };
+
+        (start < end).then_some((start, end))
+    }
+
     /// Snapshot the cursor viewport position into `cached_cursor_viewport_pos`.
     fn refresh_cursor_cache(&mut self, cursor_viewport_cell: Option<(usize, usize)>) {
         if let Some((row, col)) = cursor_viewport_cell {
@@ -881,6 +927,8 @@ fn shape_text_runs(
     text_runs: &[(TextRunSegment, gpui::Hsla)],
     font_family: &str,
     font_size: f32,
+    selection_columns: Option<(usize, usize)>,
+    selection_fg: gpui::Hsla,
 ) -> Arc<Vec<(usize, usize, gpui::ShapedLine)>> {
     use gpui::{px, Font, FontFeatures, FontStyle, FontWeight, TextRun};
 
@@ -889,59 +937,153 @@ fn shape_text_runs(
     let mut shaped_runs = Vec::with_capacity(text_runs.len());
 
     for (run, fg_color) in text_runs.iter() {
-        let weight = if run.bold {
-            FontWeight::BOLD
-        } else {
-            FontWeight::NORMAL
-        };
-        let style = if run.italic {
-            FontStyle::Italic
-        } else {
-            FontStyle::Normal
-        };
+        for (split_run, split_fg) in
+            split_text_run_by_selection(run, *fg_color, selection_columns, selection_fg)
+        {
+            let weight = if split_run.bold {
+                FontWeight::BOLD
+            } else {
+                FontWeight::NORMAL
+            };
+            let style = if split_run.italic {
+                FontStyle::Italic
+            } else {
+                FontStyle::Normal
+            };
 
-        let font = Font {
-            family: font_family.clone(),
-            features: FontFeatures::default(),
-            fallbacks: None,
-            weight,
-            style,
-        };
+            let font = Font {
+                family: font_family.clone(),
+                features: FontFeatures::default(),
+                fallbacks: None,
+                weight,
+                style,
+            };
 
-        let underline = if run.underline {
-            Some(gpui::UnderlineStyle {
-                thickness: px(1.0),
-                color: Some(*fg_color),
-                wavy: false,
-            })
-        } else {
-            None
-        };
+            let underline = if split_run.underline {
+                Some(gpui::UnderlineStyle {
+                    thickness: px(1.0),
+                    color: Some(split_fg),
+                    wavy: false,
+                })
+            } else {
+                None
+            };
 
-        let strikethrough = if run.strikethrough {
-            Some(gpui::StrikethroughStyle {
-                thickness: px(1.0),
-                color: Some(*fg_color),
-            })
-        } else {
-            None
-        };
+            let strikethrough = if split_run.strikethrough {
+                Some(gpui::StrikethroughStyle {
+                    thickness: px(1.0),
+                    color: Some(split_fg),
+                })
+            } else {
+                None
+            };
 
-        let text: gpui::SharedString = run.text.clone().into();
-        let text_run = TextRun {
-            len: text.len(),
-            font,
-            color: *fg_color,
-            background_color: None,
-            underline,
-            strikethrough,
-        };
+            let text: gpui::SharedString = split_run.text.clone().into();
+            let text_run = TextRun {
+                len: text.len(),
+                font,
+                color: split_fg,
+                background_color: None,
+                underline,
+                strikethrough,
+            };
 
-        let shaped = text_system.shape_line(text, font_size_px, &[text_run], None);
-        shaped_runs.push((run.row, run.start_col, shaped));
+            let shaped = text_system.shape_line(text, font_size_px, &[text_run], None);
+            shaped_runs.push((split_run.row, split_run.start_col, shaped));
+        }
     }
 
     Arc::new(shaped_runs)
+}
+
+fn split_text_run_by_selection(
+    run: &TextRunSegment,
+    default_fg: gpui::Hsla,
+    selection_columns: Option<(usize, usize)>,
+    selection_fg: gpui::Hsla,
+) -> Vec<(TextRunSegment, gpui::Hsla)> {
+    let Some((selection_start, selection_end)) = selection_columns else {
+        return vec![(run.clone(), default_fg)];
+    };
+
+    let run_end = run.start_col + run.cell_count;
+    if selection_end <= run.start_col || selection_start >= run_end {
+        return vec![(run.clone(), default_fg)];
+    }
+
+    let mut segments = Vec::new();
+    let mut segment_text = String::new();
+    let mut segment_start_col = run.start_col;
+    let mut segment_cell_count = 0usize;
+    let mut segment_fg = default_fg;
+    let mut current_col = run.start_col;
+    let mut has_segment = false;
+
+    for character in run.text.chars() {
+        let cell_width = terminal_char_width(character);
+        let character_fg =
+            if current_col < selection_end && current_col + cell_width > selection_start {
+                selection_fg
+            } else {
+                default_fg
+            };
+
+        if !has_segment {
+            segment_start_col = current_col;
+            segment_fg = character_fg;
+            has_segment = true;
+        } else if character_fg != segment_fg {
+            segments.push((
+                clone_text_run_segment(
+                    run,
+                    segment_text.clone(),
+                    segment_start_col,
+                    segment_cell_count,
+                ),
+                segment_fg,
+            ));
+            segment_text.clear();
+            segment_start_col = current_col;
+            segment_cell_count = 0;
+            segment_fg = character_fg;
+        }
+
+        segment_text.push(character);
+        segment_cell_count += cell_width;
+        current_col += cell_width;
+    }
+
+    if has_segment {
+        segments.push((
+            clone_text_run_segment(run, segment_text, segment_start_col, segment_cell_count),
+            segment_fg,
+        ));
+    }
+
+    segments
+}
+
+fn clone_text_run_segment(
+    run: &TextRunSegment,
+    text: String,
+    start_col: usize,
+    cell_count: usize,
+) -> TextRunSegment {
+    TextRunSegment {
+        text,
+        foreground: run.foreground,
+        bold: run.bold,
+        italic: run.italic,
+        underline: run.underline,
+        strikethrough: run.strikethrough,
+        row: run.row,
+        start_col,
+        cell_count,
+    }
+}
+
+fn terminal_char_width(character: char) -> usize {
+    UnicodeWidthChar::width(character).unwrap_or(1).max(1)
 }
 
 /// Compute cell dimensions from actual font metrics using the text system.
@@ -1053,6 +1195,58 @@ mod tests {
         selection.set_end(5, 0);
         assert!(selection.contains(5, 0));
         assert!(selection.contains(7, 40));
+    }
+
+    #[test]
+    fn test_split_text_run_by_selection_uses_selection_foreground() {
+        let theme = CodirigentTheme::dark();
+        let default_fg: gpui::Hsla = Rgba::rgb(255, 255, 255).into();
+        let selection_fg: gpui::Hsla = Rgba::rgb(255, 0, 0).into();
+        let run = TextRunSegment {
+            text: "hello".to_string(),
+            foreground: theme.terminal_foreground,
+            bold: false,
+            italic: false,
+            underline: false,
+            strikethrough: false,
+            row: 0,
+            start_col: 0,
+            cell_count: 5,
+        };
+
+        let segments = split_text_run_by_selection(&run, default_fg, Some((1, 4)), selection_fg);
+
+        assert_eq!(segments.len(), 3);
+        assert_eq!(segments[0].0.text, "h");
+        assert_eq!(segments[0].1, default_fg);
+        assert_eq!(segments[1].0.text, "ell");
+        assert_eq!(segments[1].1, selection_fg);
+        assert_eq!(segments[2].0.text, "o");
+        assert_eq!(segments[2].1, default_fg);
+    }
+
+    #[test]
+    fn test_split_text_run_by_selection_keeps_wide_chars_whole() {
+        let theme = CodirigentTheme::dark();
+        let default_fg: gpui::Hsla = Rgba::rgb(255, 255, 255).into();
+        let selection_fg: gpui::Hsla = Rgba::rgb(255, 0, 0).into();
+        let run = TextRunSegment {
+            text: "中a".to_string(),
+            foreground: theme.terminal_foreground,
+            bold: false,
+            italic: false,
+            underline: false,
+            strikethrough: false,
+            row: 0,
+            start_col: 0,
+            cell_count: 3,
+        };
+
+        let segments = split_text_run_by_selection(&run, default_fg, Some((1, 3)), selection_fg);
+
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].0.text, "中a");
+        assert_eq!(segments[0].1, selection_fg);
     }
 
     /// Verifies lexicographic row-major ordering: the column at the end of
