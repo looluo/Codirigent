@@ -895,8 +895,13 @@ impl WorkspaceView {
 
     /// Handle keyboard input when the settings panel is open.
     ///
+    /// **Precondition:** must only be called when `self.settings.open` is true.
     /// Returns `true` if the key was consumed and should not be forwarded to the PTY.
     fn handle_settings_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        debug_assert!(
+            self.settings.open,
+            "handle_settings_key called with settings closed"
+        );
         // Navigate Keyboard Shortcuts panel with keyboard when not recording.
         if self
             .settings
@@ -949,6 +954,8 @@ impl WorkspaceView {
                         }
                         cx.notify();
                     }
+                    // When no row is focused, Enter/Space is still consumed (not forwarded to PTY)
+                    // because the settings panel is open and these keys have no terminal meaning here.
                     true
                 }
                 _ => false,
@@ -971,6 +978,7 @@ impl WorkspaceView {
                 // Escape cancels recording without saving and without closing settings.
                 if let Some(page) = self.settings.page.as_mut() {
                     page.recording_shortcut = None;
+                    page.focused_shortcut_row = None;
                 }
                 cx.notify();
                 cx.stop_propagation();
@@ -1032,6 +1040,14 @@ impl WorkspaceView {
         // GPUI's `secondary-<key>` bindings map to Cmd on macOS and Ctrl on
         // Windows/Linux, so the action system handles all modifier shortcuts correctly.
         if event.keystroke.modifiers.platform {
+            return;
+        }
+
+        // On Windows/Linux, Ctrl sets modifiers.control (not modifiers.platform).
+        // Guard here so Ctrl+<key> never reaches the PTY even if the GPUI action
+        // system fails to match a secondary-* binding.
+        #[cfg(not(target_os = "macos"))]
+        if event.keystroke.modifiers.control {
             return;
         }
 

@@ -62,6 +62,43 @@ mod actions_impl {
 
 pub use actions_impl::*;
 
+/// Build the complete list of default GPUI key bindings.
+///
+/// This function is used both at startup (to register the initial binding set)
+/// and in the settings-save callback (to re-register the full default set before
+/// appending user overrides). Because GPUI's `bind_keys` appends rather than
+/// replaces, re-registering the complete default set before user overrides ensures
+/// last-registered-wins gives a consistent snapshot on every save.
+pub(crate) fn default_gpui_keybindings() -> Vec<KeyBinding> {
+    vec![
+        KeyBinding::new("secondary-n", NewSession, None),
+        KeyBinding::new("secondary-w", CloseSession, None),
+        KeyBinding::new("secondary-q", Quit, None),
+        KeyBinding::new("secondary-\\", NextLayout, None),
+        // Ctrl+B / Cmd+B — toggle sidebar (repo drawer)
+        KeyBinding::new("secondary-b", ToggleSidebar, None),
+        // Ctrl+T / Cmd+T — toggle task board
+        KeyBinding::new("secondary-t", ToggleTaskBoard, None),
+        // Ctrl+K / Cmd+K — quick switch
+        KeyBinding::new("secondary-k", QuickSwitch, None),
+        KeyBinding::new("secondary-v", Paste, None),
+        KeyBinding::new("secondary-c", Copy, None),
+        KeyBinding::new("secondary-d", SplitHorizontal, None),
+        KeyBinding::new("secondary-shift-d", SplitVertical, None),
+        KeyBinding::new("secondary-shift-w", ClosePane, None),
+        KeyBinding::new("secondary-,", OpenSettings, None),
+        KeyBinding::new("secondary-1", FocusSession1, None),
+        KeyBinding::new("secondary-2", FocusSession2, None),
+        KeyBinding::new("secondary-3", FocusSession3, None),
+        KeyBinding::new("secondary-4", FocusSession4, None),
+        KeyBinding::new("secondary-5", FocusSession5, None),
+        KeyBinding::new("secondary-6", FocusSession6, None),
+        KeyBinding::new("secondary-7", FocusSession7, None),
+        KeyBinding::new("secondary-8", FocusSession8, None),
+        KeyBinding::new("secondary-9", FocusSession9, None),
+    ]
+}
+
 /// Default splash screen duration in milliseconds.
 const DEFAULT_SPLASH_DURATION_MS: u64 = 2000;
 
@@ -411,33 +448,7 @@ impl CodirigentApp {
 
             // Bind keyboard shortcuts to actions.
             // "secondary-" is GPUI's platform-aware modifier: Cmd on macOS, Ctrl elsewhere.
-            cx.bind_keys([
-                KeyBinding::new("secondary-n", NewSession, None),
-                KeyBinding::new("secondary-w", CloseSession, None),
-                KeyBinding::new("secondary-q", Quit, None),
-                KeyBinding::new("secondary-\\", NextLayout, None),
-                // Ctrl+B / Cmd+B — toggle sidebar (repo drawer)
-                KeyBinding::new("secondary-b", ToggleSidebar, None),
-                // Ctrl+T / Cmd+T — toggle task board
-                KeyBinding::new("secondary-t", ToggleTaskBoard, None),
-                // Ctrl+K / Cmd+K — quick switch (default_keybindings binding)
-                KeyBinding::new("secondary-k", QuickSwitch, None),
-                KeyBinding::new("secondary-v", Paste, None),
-                KeyBinding::new("secondary-c", Copy, None),
-                KeyBinding::new("secondary-d", SplitHorizontal, None),
-                KeyBinding::new("secondary-shift-d", SplitVertical, None),
-                KeyBinding::new("secondary-shift-w", ClosePane, None),
-                KeyBinding::new("secondary-,", OpenSettings, None),
-                KeyBinding::new("secondary-1", FocusSession1, None),
-                KeyBinding::new("secondary-2", FocusSession2, None),
-                KeyBinding::new("secondary-3", FocusSession3, None),
-                KeyBinding::new("secondary-4", FocusSession4, None),
-                KeyBinding::new("secondary-5", FocusSession5, None),
-                KeyBinding::new("secondary-6", FocusSession6, None),
-                KeyBinding::new("secondary-7", FocusSession7, None),
-                KeyBinding::new("secondary-8", FocusSession8, None),
-                KeyBinding::new("secondary-9", FocusSession9, None),
-            ]);
+            cx.bind_keys(default_gpui_keybindings());
 
             // Create the main window
             let session_manager = self.session_manager.clone();

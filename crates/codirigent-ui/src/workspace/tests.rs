@@ -1609,12 +1609,3 @@ fn test_apply_session_drag_drop_moves_into_empty_pane_body() {
         vec![SessionId(2), SessionId(1)]
     );
 }
-
-#[cfg(all(test, not(target_os = "macos")))]
-#[test]
-fn test_handle_key_down_ctrl_block_removed() {
-    // Compile-time canary: this test existing and compiling confirms
-    // the manual Ctrl dispatch block has been removed. The real
-    // behavior is covered by the GPUI action system (Task 1).
-    let _proof = "manual ctrl block removed";
-}

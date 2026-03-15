@@ -97,12 +97,12 @@ mod tests {
     }
 
     #[test]
-    fn test_format_keystroke_ctrl_n_windows() {
+    fn test_format_keystroke_ctrl_key() {
+        // control=true: on macOS maps to Ctrl modifier; on Windows/Linux folds
+        // into the cmd/platform slot which still displays as "Ctrl".
+        // Both platforms produce "Ctrl+N" for this keystroke.
         let ks = make_keystroke("n", true, false, false, false);
         let result = format_keystroke_as_binding(&ks);
-        #[cfg(not(target_os = "macos"))]
-        assert_eq!(result, Some("Ctrl+N".to_string()));
-        #[cfg(target_os = "macos")]
         assert_eq!(result, Some("Ctrl+N".to_string()));
     }
 

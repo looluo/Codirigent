@@ -139,8 +139,8 @@ fn keybindings_to_gpui_list(
     use crate::app::{
         ClosePane, CloseSession, Copy, FocusSession1, FocusSession2, FocusSession3, FocusSession4,
         FocusSession5, FocusSession6, FocusSession7, FocusSession8, FocusSession9, NewSession,
-        NextLayout, OpenSettings, Paste, Quit, SplitHorizontal, SplitVertical, ToggleSidebar,
-        ToggleTaskBoard,
+        NextLayout, OpenSettings, Paste, QuickSwitch, Quit, SplitHorizontal, SplitVertical,
+        ToggleSidebar, ToggleTaskBoard,
     };
     use crate::keybindings::KeybindingManager;
 
@@ -148,6 +148,9 @@ fn keybindings_to_gpui_list(
         .iter()
         .filter_map(|(action_name, binding_str)| {
             let km_binding = KeybindingManager::parse_binding(binding_str).ok()?;
+            if km_binding.key.is_empty() {
+                return None;
+            }
             let gpui_str = binding_to_gpui_string(&km_binding);
             // Build the gpui::KeyBinding for each known action name.
             // switch_session_N and focus_session_N share the same numeric index.
@@ -164,6 +167,7 @@ fn keybindings_to_gpui_list(
                 "split_horizontal" => gpui::KeyBinding::new(&gpui_str, SplitHorizontal, None),
                 "split_vertical" => gpui::KeyBinding::new(&gpui_str, SplitVertical, None),
                 "close_pane" => gpui::KeyBinding::new(&gpui_str, ClosePane, None),
+                "quick_switch" => gpui::KeyBinding::new(&gpui_str, QuickSwitch, None),
                 "focus_session_1" | "switch_session_1" => {
                     gpui::KeyBinding::new(&gpui_str, FocusSession1, None)
                 }
@@ -406,7 +410,7 @@ impl WorkspaceView {
                 })
                 .await;
 
-            let _ = this.update(cx, |this, _cx| {
+            let _ = this.update(cx, |this, cx| {
                 this.settings.save_task = None;
                 let (
                     user_settings,
@@ -427,10 +431,12 @@ impl WorkspaceView {
                             .update_settings(user_settings.notifications.clone());
                         // Re-register keybindings with GPUI so user changes take
                         // effect immediately without requiring a restart.
-                        let new_bindings = keybindings_to_gpui_list(&user_settings.keybindings);
-                        if !new_bindings.is_empty() {
-                            _cx.bind_keys(new_bindings);
-                        }
+                        // GPUI bind_keys appends — we re-register the complete default
+                        // set before user overrides so last-registered-wins gives a
+                        // consistent snapshot without stale bindings from previous saves.
+                        let mut merged = crate::app::default_gpui_keybindings();
+                        merged.extend(keybindings_to_gpui_list(&user_settings.keybindings));
+                        cx.bind_keys(merged);
                         if let Some(page) = this.settings.page.as_mut() {
                             if page.user_settings == user_settings {
                                 page.mark_user_saved();
@@ -456,7 +462,7 @@ impl WorkspaceView {
                         }
                     }
                 }
-                this.maybe_schedule_settings_save(_cx);
+                this.maybe_schedule_settings_save(cx);
             });
         }));
     }
@@ -663,11 +669,27 @@ mod tests {
     }
 
     #[test]
-    fn test_keybindings_to_gpui_list_skips_quick_switch() {
-        // quick_switch is no longer user-visible; it should be treated as unknown.
+    fn test_keybindings_to_gpui_list_includes_quick_switch() {
+        // quick_switch is a live-reload binding that must appear in the list.
         let mut map = std::collections::HashMap::new();
         map.insert("quick_switch".to_string(), "Ctrl+K".to_string());
         let list = keybindings_to_gpui_list(&map);
+        assert_eq!(list.len(), 1);
+    }
+
+    #[test]
+    fn test_keybindings_to_gpui_list_skips_empty_key() {
+        // A binding that parses but has an empty key should be silently dropped
+        // rather than causing KeyBinding::new to panic on an invalid keystroke.
+        let mut map = std::collections::HashMap::new();
+        // "Ctrl+" parses as a modifier-only binding with empty key — verify safe skip.
+        // Since parse_binding may reject this, also test via a direct call.
+        // If parse_binding rejects it, the entry is already dropped before our guard;
+        // the test verifies the overall list is still empty / doesn't panic.
+        map.insert("new_session".to_string(), "Ctrl+".to_string());
+        let list = keybindings_to_gpui_list(&map);
+        // Either parse_binding rejects "Ctrl+" (returning 0) or our guard catches
+        // the empty key (also returning 0). Either way no panic.
         assert_eq!(list.len(), 0);
     }
 

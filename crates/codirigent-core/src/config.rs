@@ -329,6 +329,7 @@ impl UserSettings {
         bindings.insert("split_horizontal".to_string(), format!("{m}+D"));
         bindings.insert("split_vertical".to_string(), format!("{m}+Shift+D"));
         bindings.insert("close_pane".to_string(), format!("{m}+Shift+W"));
+        bindings.insert("quick_switch".to_string(), format!("{m}+K"));
         bindings
     }
 }
@@ -805,7 +806,7 @@ mod tests {
                 Some(&"Ctrl+T".to_string())
             );
         }
-        assert!(!bindings.contains_key("quick_switch"));
+        assert!(bindings.contains_key("quick_switch"));
         assert!(bindings.contains_key("toggle_task_board"));
         assert!(bindings.contains_key("toggle_sidebar"));
         assert!(bindings.contains_key("open_settings"));
