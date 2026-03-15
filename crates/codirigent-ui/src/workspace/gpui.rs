@@ -897,14 +897,9 @@ impl WorkspaceView {
     fn handle_key_down(
         &mut self,
         event: &KeyDownEvent,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Suppress unused-variable warning on macOS where the cfg-gated
-        // Ctrl-shortcut block (which uses `window`) is compiled out.
-        #[cfg(target_os = "macos")]
-        let _ = &window;
-
         // Escape closes settings page if open
         if self.settings.open && event.keystroke.key == "escape" {
             self.close_settings(cx);
@@ -919,76 +914,10 @@ impl WorkspaceView {
         }
 
         // Don't send platform-modifier shortcuts to PTY (handled as GPUI actions).
-        // On macOS, `platform` maps to Command key and GPUI's `cmd-v` bindings work
-        // natively. On Windows/Linux, `platform` is false for Ctrl+key, so we handle
-        // Ctrl shortcuts directly below.
+        // GPUI's `secondary-<key>` bindings map to Cmd on macOS and Ctrl on
+        // Windows/Linux, so the action system handles all modifier shortcuts correctly.
         if event.keystroke.modifiers.platform {
             return;
-        }
-
-        // On Windows/Linux, GPUI's `cmd-<key>` keybindings expect `modifiers.platform`,
-        // but Ctrl+key only sets `modifiers.control`. The action system never matches,
-        // so we must handle Ctrl shortcuts directly here.
-        #[cfg(not(target_os = "macos"))]
-        if event.keystroke.modifiers.control {
-            let key = event.keystroke.key.as_ref();
-            match key {
-                "v" => {
-                    self.handle_paste(&crate::app::Paste, window, cx);
-                    return;
-                }
-                "c" => {
-                    self.handle_copy(&crate::app::Copy, window, cx);
-                    return;
-                }
-                "n" => {
-                    self.create_session(cx);
-                    return;
-                }
-                "w" => {
-                    self.close_focused_session(cx);
-                    return;
-                }
-                "q" => {
-                    cx.quit();
-                    return;
-                }
-                "b" => {
-                    self.toggle_task_board(cx);
-                    return;
-                }
-                "e" => {
-                    self.toggle_sidebar(cx);
-                    return;
-                }
-                "k" => {
-                    self.toggle_sidebar(cx);
-                    return;
-                }
-                "p" if event.keystroke.modifiers.shift => {
-                    self.open_task_creation_modal();
-                    cx.notify();
-                    return;
-                }
-                "\\" => {
-                    self.next_layout(cx);
-                    return;
-                }
-                "," => {
-                    self.open_settings();
-                    cx.notify();
-                    return;
-                }
-                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" => {
-                    let num: usize = match key.parse::<usize>() {
-                        Ok(n) => n,
-                        Err(_) => return, // unreachable given match arm, but safe
-                    };
-                    self.focus_session_number(num, cx);
-                    return;
-                }
-                _ => {} // Other Ctrl combos go to PTY (Ctrl+D, Ctrl+L, etc.)
-            }
         }
 
         // Text input (including IME commits) is delivered through the
