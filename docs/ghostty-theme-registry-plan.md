@@ -10,6 +10,29 @@ plan for the branch `feat/ghostty-theme-registry`.
 
 ---
 
+## Execution Summary
+
+This branch is now complete. The implementation landed as the planned task
+series with small reviewable commits:
+
+1. `ced6530` `Add theme registry conversion backbone`
+2. `d2c0be0` `Apply saved theme IDs during settings load`
+3. `03d208f` `Make settings theme picker registry-driven`
+4. `f632676` `Load custom themes during settings startup`
+5. `4df2b36` `Apply selection text color in terminal rendering`
+6. `eb020b1` `Update lockfile for theme rendering dependency`
+
+Final outcome:
+
+- theme selection is registry-based instead of hardcoded `dark/light`
+- `appearance.theme` now round-trips as a durable theme ID
+- startup/settings load resolves and applies saved theme IDs through one path
+- custom themes load from the user config `themes/` directory off the UI thread
+- terminal fg/bg/cursor/selection/ANSI palette are all on the active theme path
+- terminal selection foreground is now actually rendered, not just stored in the schema
+
+---
+
 ## Purpose
 
 Codirigent already has the terminal rendering primitives needed for richer
@@ -296,6 +319,10 @@ Done when:
 
 - a theme ID can produce a runtime theme without `if theme == "light"`
 
+Status:
+
+- complete in `ced6530`
+
 ### Task 2. Apply Saved Theme IDs During Settings Load / Startup
 
 Deliverables:
@@ -307,6 +334,10 @@ Deliverables:
 Done when:
 
 - restarting the app with a non-default theme keeps the same theme selected
+
+Status:
+
+- complete in `d2c0be0`
 
 ### Task 3. Make The Settings Theme Picker Dynamic
 
@@ -321,6 +352,10 @@ Done when:
 - custom or built-in registry themes are selectable from settings without
   hardcoded branching
 
+Status:
+
+- complete in `03d208f`
+
 ### Task 4. Load Custom Theme Files From Disk
 
 Deliverables:
@@ -334,6 +369,10 @@ Done when:
 
 - dropping a valid theme JSON file into the theme directory makes it selectable
 
+Status:
+
+- complete in `f632676`
+
 ### Task 5. Expand Terminal Theme Fidelity Where Needed
 
 Deliverables:
@@ -345,6 +384,10 @@ Deliverables:
 Done when:
 
 - terminal behavior remains visually consistent after switching among themes
+
+Status:
+
+- complete in `4df2b36`
 
 ---
 
@@ -423,6 +466,26 @@ Required review pass after verification:
 - confirm new constants are named and justified
 - confirm touched files remain at maintainable size
 
+Final verification executed on the completed branch:
+
+```bash
+cargo build --all-features
+cargo test --all --all-targets --all-features
+cargo test -p codirigent-ui --lib --features gpui-full
+cargo clippy --all --all-targets --all-features -- -D warnings
+cargo fmt --all --check
+bash scripts/audit-unwraps.sh
+```
+
+Result:
+
+- build passed
+- full test suite passed
+- `gpui-full` UI tests passed
+- clippy passed with `-D warnings`
+- formatting check passed
+- unwrap audit reported only the existing repository-wide baseline
+
 ---
 
 ## Suggested File Touch Order
@@ -480,4 +543,4 @@ This plan is complete only when all of the following are true:
 - terminal colors switch consistently with the active theme
 - each task is verified and reviewed per `docs/task-verification-workflow.md`
 
-Until then, the branch is still in progress.
+This completion standard is now satisfied for `feat/ghostty-theme-registry`.
