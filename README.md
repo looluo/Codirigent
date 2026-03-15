@@ -19,7 +19,9 @@
   <a href="https://codirigent.dev">Website</a> ·
   <a href="https://github.com/oso95/Codirigent/releases/latest">Download</a> ·
   <a href="https://github.com/oso95/Codirigent/issues">Report a Bug</a> ·
-  <a href="./README.zh-TW.md">繁體中文</a>
+  <a href="./README.zh-TW.md">繁體中文</a> ·
+  <a href="./README.zh-CN.md">简体中文</a>
+
 </p>
 
 ---
