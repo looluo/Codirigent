@@ -696,38 +696,18 @@ impl super::gpui::WorkspaceView {
                     &theme_name,
                     cx,
                     |this, val, _, _| {
+                        let mut user_settings = None;
                         if let Some(page) = this.settings.page.as_mut() {
                             page.user_settings.appearance.theme = val.clone();
                             page.user_save_pending = true;
+                            user_settings = Some(page.user_settings.clone());
                         }
-                        let new_theme = if val == "light" {
-                            crate::theme::CodirigentTheme::light()
-                        } else {
-                            crate::theme::CodirigentTheme::dark()
-                        };
-                        // Preserve user settings across theme switch
-                        let (gap, ui_size, term_size) = this
-                            .settings
-                            .page
-                            .as_ref()
-                            .map(|p| {
-                                (
-                                    p.user_settings.appearance.grid_gap,
-                                    p.user_settings.appearance.font_size,
-                                    p.user_settings.terminal.font_size,
-                                )
-                            })
-                            .unwrap_or((4, 13.0, 13.0));
-                        this.workspace.set_theme(new_theme);
-                        let t = this.workspace.theme_mut();
-                        t.grid_gap = gap as f32;
-                        t.font_size_base = ui_size;
-                        t.font_size_small = (ui_size - 2.0).max(8.0);
-                        t.font_size_large = ui_size + 2.0;
-                        t.terminal_font_size = term_size;
-                        let terminal_theme = t.clone();
-                        for tv in this.terminals_mut().values_mut() {
-                            tv.set_theme(terminal_theme.clone());
+                        if let Some(user_settings) = user_settings {
+                            let resolved_theme_id =
+                                this.resolve_and_apply_theme_id(&val, &user_settings);
+                            if let Some(page) = this.settings.page.as_mut() {
+                                page.user_settings.appearance.theme = resolved_theme_id;
+                            }
                         }
                     },
                 ),

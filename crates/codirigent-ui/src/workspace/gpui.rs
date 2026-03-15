@@ -166,6 +166,10 @@ impl WorkspaceView {
     const MAINTENANCE_POLL_INTERVAL_MS: u64 = 250;
     /// Debounce window for persisted app-state saves.
     const STATE_SAVE_DEBOUNCE: Duration = Duration::from_millis(200);
+    /// Delta used to derive the small and large UI font variants from the base size.
+    pub(super) const UI_FONT_VARIANT_DELTA: f32 = 2.0;
+    /// Lower bound for derived small UI text.
+    pub(super) const MIN_UI_SMALL_FONT_SIZE: f32 = 8.0;
 
     fn session_is_shell_idle(&self, session_id: SessionId) -> bool {
         self.with_detector(|detector| {
@@ -816,8 +820,9 @@ impl WorkspaceView {
     pub(super) fn apply_ui_font_size(&mut self, size: f32) {
         let theme = self.workspace.theme_mut();
         theme.font_size_base = size;
-        theme.font_size_small = (size - 2.0).max(8.0);
-        theme.font_size_large = size + 2.0;
+        theme.font_size_small =
+            (size - Self::UI_FONT_VARIANT_DELTA).max(Self::MIN_UI_SMALL_FONT_SIZE);
+        theme.font_size_large = size + Self::UI_FONT_VARIANT_DELTA;
     }
 
     /// Apply terminal font size update to theme and all terminal views.
