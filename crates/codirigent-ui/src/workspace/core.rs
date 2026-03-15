@@ -514,6 +514,39 @@ impl Workspace {
         }
     }
 
+    fn replace_hidden_session_into_grouped_pane(
+        &mut self,
+        pane_id: PaneId,
+        session_id: SessionId,
+    ) -> bool {
+        let Some(previous_active_session_id) = self.active_session_for_pane(pane_id.clone()) else {
+            return false;
+        };
+
+        if !self.set_pane_active_session(pane_id.clone(), session_id) {
+            return false;
+        }
+
+        let Some(group) = self.pane_tab_groups.get_mut(&pane_id) else {
+            return true;
+        };
+
+        if let Some(index) = group
+            .session_ids
+            .iter()
+            .position(|current| *current == previous_active_session_id)
+        {
+            group.session_ids[index] = session_id;
+        } else if !group.session_ids.contains(&session_id) {
+            group.session_ids.push(session_id);
+        }
+
+        let mut seen = HashSet::new();
+        group.session_ids.retain(|current| seen.insert(*current));
+        group.active_session_id = session_id;
+        true
+    }
+
     fn remove_session_from_pane_group(&mut self, pane_id: PaneId, session_id: SessionId) {
         let Some(mut group) = self.pane_tab_groups.remove(&pane_id) else {
             return;
@@ -993,79 +1026,143 @@ impl Workspace {
             }
         }
 
-        let focused = match &mut self.layout_state {
-            WorkspaceLayoutState::Grid(s) => {
-                if s.profile() == LayoutProfile::Single {
-                    if let Some(visible_index) =
-                        s.assignments().iter().position(|cell| *cell == Some(id))
+        let focused = match &self.layout_state {
+            WorkspaceLayoutState::Grid(_) => {
+                enum GridFocusAction {
+                    Complete(bool),
+                    ReplaceGrouped(PaneId),
+                    SwapHidden(usize),
+                }
+
+                let action = {
+                    let Some(state) = self.layout_state.as_grid_mut() else {
+                        return false;
+                    };
+
+                    if state.profile() == LayoutProfile::Single {
+                        if let Some(visible_index) = state
+                            .assignments()
+                            .iter()
+                            .position(|cell| *cell == Some(id))
+                        {
+                            state.focus_index(visible_index);
+                            GridFocusAction::Complete(true)
+                        } else {
+                            let replacement_index = state.focused_index().or(Some(0));
+                            let Some(replacement_index) = replacement_index else {
+                                return false;
+                            };
+                            GridFocusAction::SwapHidden(replacement_index)
+                        }
+                    } else if let Some(target_index) = state
+                        .assignments()
+                        .iter()
+                        .position(|cell| *cell == Some(id))
                     {
-                        s.focus_index(visible_index);
-                        true
+                        state.focus_index(target_index);
+                        GridFocusAction::Complete(true)
                     } else {
-                        let replacement_index = s.focused_index().or(Some(0));
+                        let replacement_index = state
+                            .first_empty_index()
+                            .or_else(|| state.focused_index())
+                            .or_else(|| state.occupied_indices().into_iter().next())
+                            .or_else(|| state.first_empty_index());
+
                         let Some(replacement_index) = replacement_index else {
                             return false;
                         };
-                        s.swap_hidden_into_index(id, replacement_index).is_some()
-                    }
-                } else if let Some(target_index) =
-                    s.assignments().iter().position(|cell| *cell == Some(id))
-                {
-                    s.focus_index(target_index);
-                    true
-                } else {
-                    let replacement_index = s
-                        .first_empty_index()
-                        .or_else(|| s.focused_index())
-                        .or_else(|| s.occupied_indices().into_iter().next())
-                        .or_else(|| s.first_empty_index());
 
-                    let Some(replacement_index) = replacement_index else {
-                        return false;
-                    };
-
-                    if s.session_at(replacement_index).is_none() {
-                        if s.assign_session_to_index(id, replacement_index) {
-                            s.focus_index(replacement_index);
-                            true
+                        if state.session_at(replacement_index).is_none() {
+                            if state.assign_session_to_index(id, replacement_index) {
+                                state.focus_index(replacement_index);
+                                GridFocusAction::Complete(true)
+                            } else {
+                                GridFocusAction::Complete(false)
+                            }
+                        } else if self.pane_tab_groups.contains_key(&PaneId::GridCell {
+                            index: replacement_index,
+                        }) {
+                            GridFocusAction::ReplaceGrouped(PaneId::GridCell {
+                                index: replacement_index,
+                            })
                         } else {
-                            false
+                            GridFocusAction::SwapHidden(replacement_index)
                         }
-                    } else {
-                        s.swap_hidden_into_index(id, replacement_index).is_some()
                     }
+                };
+
+                match action {
+                    GridFocusAction::Complete(result) => result,
+                    GridFocusAction::ReplaceGrouped(pane_id) => {
+                        self.replace_hidden_session_into_grouped_pane(pane_id, id)
+                    }
+                    GridFocusAction::SwapHidden(index) => self
+                        .layout_state
+                        .as_grid_mut()
+                        .and_then(|state| state.swap_hidden_into_index(id, index))
+                        .is_some(),
                 }
             }
-            WorkspaceLayoutState::SplitTree(s) => {
-                if s.focus_session(id) {
-                    true
-                } else {
-                    let target_slot = s
-                        .focused_slot()
-                        .or_else(|| {
-                            s.assignments().iter().find_map(|(slot, session)| {
-                                if session.is_some()
-                                    || self
-                                        .pane_tab_groups
-                                        .contains_key(&PaneId::SplitSlot { slot: *slot })
-                                {
-                                    Some(*slot)
-                                } else {
-                                    None
-                                }
-                            })
-                        })
-                        .or_else(|| {
-                            s.assignments()
-                                .iter()
-                                .find_map(|(slot, session)| session.is_none().then_some(*slot))
-                        });
+            WorkspaceLayoutState::SplitTree(_) => {
+                enum SplitFocusAction {
+                    Complete(bool),
+                    ReplaceGrouped(PaneId),
+                    ReplaceSlot(SlotId),
+                }
 
-                    let Some(target_slot) = target_slot else {
+                let action = {
+                    let Some(state) = self.layout_state.as_split_tree_mut() else {
                         return false;
                     };
 
-                    s.replace_session_in_slot(target_slot, id).is_some()
+                    if state.focus_session(id) {
+                        SplitFocusAction::Complete(true)
+                    } else {
+                        let target_slot = state
+                            .focused_slot()
+                            .or_else(|| {
+                                state.assignments().iter().find_map(|(slot, session)| {
+                                    if session.is_some()
+                                        || self
+                                            .pane_tab_groups
+                                            .contains_key(&PaneId::SplitSlot { slot: *slot })
+                                    {
+                                        Some(*slot)
+                                    } else {
+                                        None
+                                    }
+                                })
+                            })
+                            .or_else(|| {
+                                state
+                                    .assignments()
+                                    .iter()
+                                    .find_map(|(slot, session)| session.is_none().then_some(*slot))
+                            });
+
+                        let Some(target_slot) = target_slot else {
+                            return false;
+                        };
+
+                        let target_pane = PaneId::SplitSlot { slot: target_slot };
+                        if self.pane_tab_groups.contains_key(&target_pane) {
+                            SplitFocusAction::ReplaceGrouped(target_pane)
+                        } else {
+                            SplitFocusAction::ReplaceSlot(target_slot)
+                        }
+                    }
+                };
+
+                match action {
+                    SplitFocusAction::Complete(result) => result,
+                    SplitFocusAction::ReplaceGrouped(pane_id) => {
+                        self.replace_hidden_session_into_grouped_pane(pane_id, id)
+                    }
+                    SplitFocusAction::ReplaceSlot(slot) => self
+                        .layout_state
+                        .as_split_tree_mut()
+                        .and_then(|state| state.replace_session_in_slot(slot, id))
+                        .is_some(),
                 }
             }
         };

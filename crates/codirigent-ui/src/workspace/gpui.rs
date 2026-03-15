@@ -1577,7 +1577,7 @@ impl Render for WorkspaceView {
             sidebar_width: actual_sidebar_width,
             right_panel_width: right_panel_w,
             grid_gap: self.workspace.theme().grid_gap,
-            focused_session_id: self.render_focus_signature(),
+            rendered_sessions_signature: self.rendered_session_signature(),
         };
         if self.cache.render_cell_info_dirty
             || self.cache.render_layout_signature != Some(layout_signature)
