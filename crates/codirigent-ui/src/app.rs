@@ -407,28 +407,29 @@ impl CodirigentApp {
             // Register global actions
             Self::register_actions(cx);
 
-            // Bind keyboard shortcuts to actions
+            // Bind keyboard shortcuts to actions.
+            // "secondary-" is GPUI's platform-aware modifier: Cmd on macOS, Ctrl elsewhere.
             cx.bind_keys([
-                KeyBinding::new("cmd-n", NewSession, None),
-                KeyBinding::new("cmd-w", CloseSession, None),
-                KeyBinding::new("cmd-q", Quit, None),
-                KeyBinding::new("cmd-\\", NextLayout, None),
-                KeyBinding::new("cmd-b", ToggleSidebar, None),
-                KeyBinding::new("cmd-v", Paste, None),
-                KeyBinding::new("cmd-c", Copy, None),
-                KeyBinding::new("cmd-d", SplitHorizontal, None),
-                KeyBinding::new("cmd-shift-d", SplitVertical, None),
-                KeyBinding::new("cmd-shift-w", ClosePane, None),
-                KeyBinding::new("cmd-,", OpenSettings, None),
-                KeyBinding::new("cmd-1", FocusSession1, None),
-                KeyBinding::new("cmd-2", FocusSession2, None),
-                KeyBinding::new("cmd-3", FocusSession3, None),
-                KeyBinding::new("cmd-4", FocusSession4, None),
-                KeyBinding::new("cmd-5", FocusSession5, None),
-                KeyBinding::new("cmd-6", FocusSession6, None),
-                KeyBinding::new("cmd-7", FocusSession7, None),
-                KeyBinding::new("cmd-8", FocusSession8, None),
-                KeyBinding::new("cmd-9", FocusSession9, None),
+                KeyBinding::new("secondary-n", NewSession, None),
+                KeyBinding::new("secondary-w", CloseSession, None),
+                KeyBinding::new("secondary-q", Quit, None),
+                KeyBinding::new("secondary-\\", NextLayout, None),
+                KeyBinding::new("secondary-b", ToggleSidebar, None),
+                KeyBinding::new("secondary-v", Paste, None),
+                KeyBinding::new("secondary-c", Copy, None),
+                KeyBinding::new("secondary-d", SplitHorizontal, None),
+                KeyBinding::new("secondary-shift-d", SplitVertical, None),
+                KeyBinding::new("secondary-shift-w", ClosePane, None),
+                KeyBinding::new("secondary-,", OpenSettings, None),
+                KeyBinding::new("secondary-1", FocusSession1, None),
+                KeyBinding::new("secondary-2", FocusSession2, None),
+                KeyBinding::new("secondary-3", FocusSession3, None),
+                KeyBinding::new("secondary-4", FocusSession4, None),
+                KeyBinding::new("secondary-5", FocusSession5, None),
+                KeyBinding::new("secondary-6", FocusSession6, None),
+                KeyBinding::new("secondary-7", FocusSession7, None),
+                KeyBinding::new("secondary-8", FocusSession8, None),
+                KeyBinding::new("secondary-9", FocusSession9, None),
             ]);
 
             // Create the main window
@@ -637,5 +638,16 @@ mod tests {
             app.splash_duration,
             Duration::from_millis(DEFAULT_SPLASH_DURATION_MS)
         );
+    }
+
+    #[test]
+    fn test_secondary_modifier_bindings_are_valid_keystroke_strings() {
+        // "secondary-" is GPUI's platform-aware modifier token (Cmd on macOS, Ctrl elsewhere).
+        // Verify that representative binding strings are parseable by GPUI's keystroke parser.
+        use gpui::Keystroke;
+        assert!(Keystroke::parse("secondary-n").is_ok());
+        assert!(Keystroke::parse("secondary-shift-d").is_ok());
+        assert!(Keystroke::parse("secondary-,").is_ok());
+        assert!(Keystroke::parse("secondary-\\").is_ok());
     }
 }
