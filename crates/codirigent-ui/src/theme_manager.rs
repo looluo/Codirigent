@@ -17,10 +17,27 @@
 //! assert_eq!(manager.active().id, "light");
 //! ```
 
+use crate::theme::CodirigentTheme;
 use crate::theme_config::Theme;
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::Path;
+
+/// Built-in theme ID used as the final fallback.
+pub const DEFAULT_THEME_ID: &str = "dark";
+
+/// Result of resolving a requested theme into a runtime theme.
+#[derive(Debug, Clone)]
+pub struct RuntimeThemeResolution {
+    /// Theme ID originally requested by the caller.
+    pub requested_id: String,
+    /// Theme ID that was actually resolved.
+    pub resolved_id: String,
+    /// Runtime theme used by the UI.
+    pub theme: CodirigentTheme,
+    /// Whether the resolution required a fallback.
+    pub used_fallback: bool,
+}
 
 /// Manages available themes.
 ///
@@ -64,12 +81,12 @@ impl ThemeManager {
     /// ```
     pub fn with_defaults() -> Self {
         let mut themes = HashMap::new();
-        themes.insert("dark".to_string(), Theme::dark());
+        themes.insert(DEFAULT_THEME_ID.to_string(), Theme::dark());
         themes.insert("light".to_string(), Theme::light());
 
         Self {
             themes,
-            active_theme: "dark".to_string(),
+            active_theme: DEFAULT_THEME_ID.to_string(),
         }
     }
 
@@ -171,7 +188,7 @@ impl ThemeManager {
     pub fn active(&self) -> &Theme {
         self.themes.get(&self.active_theme).unwrap_or_else(|| {
             self.themes
-                .get("dark")
+                .get(DEFAULT_THEME_ID)
                 .expect("Dark theme must always exist")
         })
     }
@@ -282,14 +299,14 @@ impl ThemeManager {
     /// ```
     pub fn remove_theme(&mut self, id: &str) -> bool {
         // Cannot remove built-in themes
-        if id == "dark" || id == "light" {
+        if id == DEFAULT_THEME_ID || id == "light" {
             return false;
         }
         let removed = self.themes.remove(id).is_some();
 
         // If we removed the active theme, fall back to dark
         if removed && self.active_theme == id {
-            self.active_theme = "dark".to_string();
+            self.active_theme = DEFAULT_THEME_ID.to_string();
         }
 
         removed
@@ -302,7 +319,7 @@ impl ThemeManager {
         if self.active().is_dark {
             self.set_active("light");
         } else {
-            self.set_active("dark");
+            self.set_active(DEFAULT_THEME_ID);
         }
     }
 
@@ -320,6 +337,38 @@ impl ThemeManager {
     pub fn light_themes(&self) -> Vec<&Theme> {
         self.themes.values().filter(|t| !t.is_dark).collect()
     }
+
+    /// Convert a registered theme into the runtime theme model.
+    pub fn runtime_theme(&self, id: &str) -> Result<CodirigentTheme> {
+        let theme = self
+            .get(id)
+            .ok_or_else(|| anyhow::anyhow!("Theme '{id}' not found"))?;
+        CodirigentTheme::try_from(theme).map_err(anyhow::Error::from)
+    }
+
+    /// Resolve a requested theme ID into a runtime theme, falling back to the
+    /// built-in dark theme when the requested theme is missing or invalid.
+    pub fn resolve_runtime_theme(&self, requested_id: &str) -> RuntimeThemeResolution {
+        if let Ok(theme) = self.runtime_theme(requested_id) {
+            return RuntimeThemeResolution {
+                requested_id: requested_id.to_string(),
+                resolved_id: requested_id.to_string(),
+                theme,
+                used_fallback: false,
+            };
+        }
+
+        let fallback_theme = self
+            .runtime_theme(DEFAULT_THEME_ID)
+            .unwrap_or_else(|_| CodirigentTheme::dark());
+
+        RuntimeThemeResolution {
+            requested_id: requested_id.to_string(),
+            resolved_id: DEFAULT_THEME_ID.to_string(),
+            theme: fallback_theme,
+            used_fallback: requested_id != DEFAULT_THEME_ID,
+        }
+    }
 }
 
 impl Default for ThemeManager {
@@ -331,6 +380,7 @@ impl Default for ThemeManager {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::theme_config::TerminalPalette;
     use std::io::Write;
     use tempfile::tempdir;
 
@@ -620,5 +670,49 @@ mod tests {
         manager.active_theme = "nonexistent".to_string();
         // Should fall back to dark theme
         assert_eq!(manager.active().id, "dark");
+    }
+
+    #[test]
+    fn test_runtime_theme_converts_registered_theme() {
+        let manager = ThemeManager::with_defaults();
+        let runtime = manager
+            .runtime_theme(DEFAULT_THEME_ID)
+            .expect("runtime theme");
+
+        assert_eq!(runtime.background, CodirigentTheme::dark().background);
+        assert_eq!(
+            runtime.terminal_cursor,
+            CodirigentTheme::dark().terminal_cursor
+        );
+    }
+
+    #[test]
+    fn test_resolve_runtime_theme_falls_back_for_missing_id() {
+        let manager = ThemeManager::with_defaults();
+        let resolved = manager.resolve_runtime_theme("missing-theme");
+
+        assert_eq!(resolved.requested_id, "missing-theme");
+        assert_eq!(resolved.resolved_id, DEFAULT_THEME_ID);
+        assert!(resolved.used_fallback);
+        assert_eq!(
+            resolved.theme.background,
+            CodirigentTheme::dark().background
+        );
+    }
+
+    #[test]
+    fn test_resolve_runtime_theme_falls_back_for_invalid_theme_payload() {
+        let mut manager = ThemeManager::with_defaults();
+        let mut broken = Theme::dark();
+        broken.id = "broken".to_string();
+        broken.colors.terminal.palette = TerminalPalette {
+            red: "#zz0000".to_string(),
+            ..broken.colors.terminal.palette.clone()
+        };
+        manager.add_theme(broken);
+
+        let resolved = manager.resolve_runtime_theme("broken");
+        assert_eq!(resolved.resolved_id, DEFAULT_THEME_ID);
+        assert!(resolved.used_fallback);
     }
 }
