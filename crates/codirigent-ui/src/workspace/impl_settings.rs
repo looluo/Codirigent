@@ -431,9 +431,10 @@ impl WorkspaceView {
                             .update_settings(user_settings.notifications.clone());
                         // Re-register keybindings with GPUI so user changes take
                         // effect immediately without requiring a restart.
-                        // GPUI bind_keys appends — we re-register the complete default
-                        // set before user overrides so last-registered-wins gives a
-                        // consistent snapshot without stale bindings from previous saves.
+                        // Clear the existing keymap first (GPUI bind_keys appends — without
+                        // clearing, the list grows by 44 entries on every save and dispatch
+                        // becomes O(saves)).
+                        cx.clear_key_bindings();
                         let mut merged = crate::app::default_gpui_keybindings();
                         merged.extend(keybindings_to_gpui_list(&user_settings.keybindings));
                         cx.bind_keys(merged);

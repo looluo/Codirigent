@@ -284,13 +284,13 @@ impl KeybindingManager {
             manager.set_binding(binding, Action::ToggleLayout);
         }
         if let Ok(binding) = Self::parse_binding(&format!("{m}+B")) {
-            manager.set_binding(binding, Action::ToggleTaskBoard);
+            manager.set_binding(binding, Action::ToggleSidebar);
         }
         if let Ok(binding) = Self::parse_binding(&format!("{m}+Shift+B")) {
             manager.set_binding(binding, Action::Broadcast);
         }
-        if let Ok(binding) = Self::parse_binding(&format!("{m}+E")) {
-            manager.set_binding(binding, Action::ToggleSidebar);
+        if let Ok(binding) = Self::parse_binding(&format!("{m}+T")) {
+            manager.set_binding(binding, Action::ToggleTaskBoard);
         }
 
         // Clipboard

@@ -965,8 +965,11 @@ impl super::gpui::WorkspaceView {
         let panel_bg: Hsla = theme.panel_background.into();
         let border: Hsla = theme.border.into();
 
-        let mut sorted: Vec<_> = page.user_settings.keybindings.iter().collect();
-        sorted.sort_by_key(|(k, _)| (*k).clone());
+        let sorted: Vec<_> = page
+            .sorted_shortcut_keys
+            .iter()
+            .filter_map(|k| page.user_settings.keybindings.get(k).map(|v| (k, v)))
+            .collect();
 
         let recording = page.recording_shortcut.clone();
         let focused_row = page.focused_shortcut_row.clone();

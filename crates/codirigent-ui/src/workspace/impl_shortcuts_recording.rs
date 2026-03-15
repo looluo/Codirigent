@@ -61,6 +61,23 @@ pub(super) fn normalise_key_name(key: &str) -> String {
         "left" => "Left".to_string(),
         "right" => "Right".to_string(),
         "delete" => "Delete".to_string(),
+        "pageup" => "PageUp".to_string(),
+        "pagedown" => "PageDown".to_string(),
+        "home" => "Home".to_string(),
+        "end" => "End".to_string(),
+        "insert" => "Insert".to_string(),
+        "f1" => "F1".to_string(),
+        "f2" => "F2".to_string(),
+        "f3" => "F3".to_string(),
+        "f4" => "F4".to_string(),
+        "f5" => "F5".to_string(),
+        "f6" => "F6".to_string(),
+        "f7" => "F7".to_string(),
+        "f8" => "F8".to_string(),
+        "f9" => "F9".to_string(),
+        "f10" => "F10".to_string(),
+        "f11" => "F11".to_string(),
+        "f12" => "F12".to_string(),
         _ => {
             let mut chars = key.chars();
             match chars.next() {
@@ -152,5 +169,16 @@ mod tests {
     fn test_normalise_key_name_plain_letter() {
         assert_eq!(normalise_key_name("n"), "N");
         assert_eq!(normalise_key_name("a"), "A");
+    }
+
+    #[test]
+    fn test_normalise_key_name_extended_keys() {
+        assert_eq!(normalise_key_name("pageup"), "PageUp");
+        assert_eq!(normalise_key_name("pagedown"), "PageDown");
+        assert_eq!(normalise_key_name("home"), "Home");
+        assert_eq!(normalise_key_name("end"), "End");
+        assert_eq!(normalise_key_name("insert"), "Insert");
+        assert_eq!(normalise_key_name("f1"), "F1");
+        assert_eq!(normalise_key_name("f12"), "F12");
     }
 }

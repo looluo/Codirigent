@@ -917,22 +917,17 @@ impl WorkspaceView {
             let shift = event.keystroke.modifiers.shift;
             let handled = match key {
                 "tab" | "down" | "up" => {
-                    let sorted_keys: Vec<String> = self
+                    let sorted_keys = self
                         .settings
                         .page
                         .as_ref()
-                        .map(|p| {
-                            let mut v: Vec<String> =
-                                p.user_settings.keybindings.keys().cloned().collect();
-                            v.sort();
-                            v
-                        })
+                        .map(|p| p.sorted_shortcut_keys.as_slice())
                         .unwrap_or_default();
                     let move_down = (key == "tab" && !shift) || key == "down";
                     let new_focus = self.settings.page.as_ref().and_then(|p| {
                         super::impl_shortcuts_nav::navigate_shortcuts_focus(
                             p,
-                            &sorted_keys,
+                            sorted_keys,
                             move_down,
                         )
                     });
@@ -991,6 +986,7 @@ impl WorkspaceView {
                     page.user_settings
                         .keybindings
                         .insert(action_name, binding_str);
+                    page.refresh_sorted_shortcut_keys();
                     page.recording_shortcut = None;
                     page.focused_shortcut_row = None;
                     page.user_save_pending = true;
