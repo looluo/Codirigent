@@ -163,6 +163,7 @@ impl WorkspaceView {
         Some(
             div()
                 .id("custom-layout-modal-overlay")
+                .occlude()
                 .absolute()
                 .inset_0()
                 .flex()
@@ -182,6 +183,7 @@ impl WorkspaceView {
                 .child(
                     div()
                         .id("custom-layout-modal")
+                        .occlude()
                         .w(px(400.0))
                         .bg(bg)
                         .border_1()
@@ -771,12 +773,19 @@ impl WorkspaceView {
         Some(
             div()
                 .id("session-action-overlay")
+                .occlude()
                 .absolute()
                 .inset_0()
                 .flex()
                 .items_center()
                 .justify_center()
                 .bg(gpui::Hsla::black().opacity(0.5))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                        cx.stop_propagation();
+                    }),
+                )
                 .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
                     this.close_session_action_modal();
                     cx.notify();
@@ -784,6 +793,7 @@ impl WorkspaceView {
                 .child(
                     div()
                         .id("session-action-modal")
+                        .occlude()
                         .w(px(420.0))
                         .bg(panel_bg)
                         .border_1()
@@ -791,6 +801,12 @@ impl WorkspaceView {
                         .rounded_lg()
                         .flex()
                         .flex_col()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                                cx.stop_propagation();
+                            }),
+                        )
                         // Prevent closing when clicking modal content
                         .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
                             cx.stop_propagation();
@@ -941,12 +957,19 @@ impl WorkspaceView {
         Some(
             div()
                 .id("session-create-overlay")
+                .occlude()
                 .absolute()
                 .inset_0()
                 .flex()
                 .items_center()
                 .justify_center()
                 .bg(gpui::Hsla::black().opacity(0.5))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                        cx.stop_propagation();
+                    }),
+                )
                 .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
                     if !modal_pending {
                         this.close_session_creation_modal();
@@ -956,6 +979,7 @@ impl WorkspaceView {
                 .child(
                     div()
                         .id("session-create-modal")
+                        .occlude()
                         .w(px(460.0))
                         .bg(panel_bg)
                         .border_1()
@@ -963,6 +987,12 @@ impl WorkspaceView {
                         .rounded_lg()
                         .flex()
                         .flex_col()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                                cx.stop_propagation();
+                            }),
+                        )
                         .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
                             cx.stop_propagation();
                         }))
@@ -1007,109 +1037,142 @@ impl WorkspaceView {
                                         .child("Shell"),
                                 )
                                 .child({
-                                    let mut list = div().flex().flex_col().gap_2().max_h(px(220.0));
+                                    let shell_sections =
+                                        self.shell_picker_sections(&modal.shell_options);
+                                    let mut list = div().flex().flex_col().gap_2();
 
-                                    for (index, option) in modal.shell_options.iter().enumerate() {
-                                        let is_selected = index == modal.selected_shell_index;
-                                        let option_label =
-                                            WorkspaceView::shell_display_label(Some(option));
-                                        let option_hint = if option.is_empty() {
-                                            "Use the default shell setting or the platform default."
-                                        } else {
-                                            "Open the session in this shell."
-                                        };
-                                        let option_border =
-                                            if is_selected { primary } else { border_color };
-                                        let option_bg = if is_selected {
-                                            primary.opacity(0.12)
-                                        } else {
-                                            gpui::Hsla::transparent_black()
-                                        };
+                                    for (section_index, section) in shell_sections.iter().enumerate() {
+                                        if section_index > 0 {
+                                            list = list.child(
+                                                div()
+                                                    .h(px(1.0))
+                                                    .my_1()
+                                                    .bg(border_color.opacity(0.5)),
+                                            );
+                                        }
+                                        if let Some(title) = section.title {
+                                            list = list.child(
+                                                div()
+                                                    .px_1()
+                                                    .pt(px(4.0))
+                                                    .text_xs()
+                                                    .font_weight(FontWeight::MEDIUM)
+                                                    .text_color(muted.opacity(0.8))
+                                                    .child(title),
+                                            );
+                                        }
 
-                                        list = list.child(
-                                            div()
-                                                .id(SharedString::from(format!(
-                                                    "session-shell-option-{}",
-                                                    index
-                                                )))
-                                                .w_full()
-                                                .p_3()
-                                                .border_1()
-                                                .border_color(option_border)
-                                                .rounded_md()
-                                                .bg(option_bg)
-                                                .cursor_pointer()
-                                                .hover(|style| style.bg(row_hover))
-                                                .on_click(cx.listener({
-                                                    move |this, _: &ClickEvent, _window, cx| {
-                                                        if modal_pending {
-                                                            return;
+                                        for option in &section.options {
+                                            let index = option.source_index;
+                                            let is_selected = index == modal.selected_shell_index;
+                                            let option_hint = if option.raw_value.is_empty() {
+                                                "Use the default shell setting or the platform default."
+                                            } else {
+                                                "Open the session in this shell."
+                                            };
+                                            let option_border =
+                                                if is_selected { primary } else { border_color };
+                                            let option_bg = if is_selected {
+                                                primary.opacity(0.12)
+                                            } else {
+                                                gpui::Hsla::transparent_black()
+                                            };
+
+                                            list = list.child(
+                                                div()
+                                                    .id(SharedString::from(format!(
+                                                        "session-shell-option-{}",
+                                                        index
+                                                    )))
+                                                    .w_full()
+                                                    .p_3()
+                                                    .border_1()
+                                                    .border_color(option_border)
+                                                    .rounded_md()
+                                                    .bg(option_bg)
+                                                    .cursor_pointer()
+                                                    .hover(|style| style.bg(row_hover))
+                                                    .on_click(cx.listener({
+                                                        move |this, _: &ClickEvent, _window, cx| {
+                                                            if modal_pending {
+                                                                return;
+                                                            }
+                                                            if let Some(active) =
+                                                                this.modals.session_creation.as_mut()
+                                                            {
+                                                                active.selected_shell_index = index;
+                                                                active.error = None;
+                                                            }
+                                                            cx.notify();
                                                         }
-                                                        if let Some(active) =
-                                                            this.modals.session_creation.as_mut()
-                                                        {
-                                                            active.selected_shell_index = index;
-                                                            active.error = None;
-                                                        }
-                                                        cx.notify();
-                                                    }
-                                                }))
-                                                .child(
-                                                    div()
-                                                        .flex()
-                                                        .items_start()
-                                                        .gap_3()
-                                                        .child(
-                                                            div()
-                                                                .mt_px()
-                                                                .w(px(14.0))
-                                                                .h(px(14.0))
-                                                                .rounded_full()
-                                                                .border_1()
-                                                                .border_color(if is_selected {
-                                                                    primary
-                                                                } else {
-                                                                    muted
-                                                                })
-                                                                .bg(if is_selected {
-                                                                    primary
-                                                                } else {
-                                                                    gpui::Hsla::transparent_black()
-                                                                }),
-                                                        )
-                                                        .child(
-                                                            div()
-                                                                .flex_1()
-                                                                .flex()
-                                                                .flex_col()
-                                                                .gap_1()
-                                                                .child(
-                                                                    div()
-                                                                        .text_sm()
-                                                                        .font_weight(
-                                                                            FontWeight::MEDIUM,
-                                                                        )
-                                                                        .text_color(fg)
-                                                                        .child(option_label),
-                                                                )
-                                                                .child(
-                                                                    div()
-                                                                        .text_xs()
-                                                                        .text_color(
-                                                                            if option.is_empty() {
-                                                                                warning.opacity(0.9)
-                                                                            } else {
-                                                                                muted
-                                                                            },
-                                                                        )
-                                                                        .child(option_hint),
-                                                                ),
-                                                        ),
-                                                ),
-                                        );
+                                                    }))
+                                                    .child(
+                                                        div()
+                                                            .flex()
+                                                            .items_start()
+                                                            .gap_3()
+                                                            .child(
+                                                                div()
+                                                                    .mt_px()
+                                                                    .w(px(14.0))
+                                                                    .h(px(14.0))
+                                                                    .rounded_full()
+                                                                    .border_1()
+                                                                    .border_color(if is_selected {
+                                                                        primary
+                                                                    } else {
+                                                                        muted
+                                                                    })
+                                                                    .bg(if is_selected {
+                                                                        primary
+                                                                    } else {
+                                                                        gpui::Hsla::transparent_black()
+                                                                    }),
+                                                            )
+                                                            .child(
+                                                                div()
+                                                                    .flex_1()
+                                                                    .flex()
+                                                                    .flex_col()
+                                                                    .gap_1()
+                                                                    .child(
+                                                                        div()
+                                                                            .text_sm()
+                                                                            .font_weight(
+                                                                                FontWeight::MEDIUM,
+                                                                            )
+                                                                            .text_color(fg)
+                                                                            .child(
+                                                                                option.label.clone(),
+                                                                            ),
+                                                                    )
+                                                                    .child(
+                                                                        div()
+                                                                            .text_xs()
+                                                                            .text_color(
+                                                                                if option.raw_value.is_empty()
+                                                                                {
+                                                                                    warning.opacity(0.9)
+                                                                                } else {
+                                                                                    muted
+                                                                                },
+                                                                            )
+                                                                            .child(option_hint),
+                                                                    ),
+                                                            ),
+                                                    ),
+                                            );
+                                        }
                                     }
 
-                                    list
+                                    div()
+                                        .id("session-creation-shell-scroll")
+                                        .flex()
+                                        .flex_col()
+                                        .overflow_y_scroll()
+                                        .max_h(px(220.0))
+                                        .pr_1()
+                                        .child(list)
                                 })
                                 .when_some(modal.error.clone(), |this, error| {
                                     this.child(div().text_sm().text_color(error_color).child(error))

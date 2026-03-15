@@ -1,14 +1,123 @@
 //! Settings management for WorkspaceView.
 
 use super::gpui::WorkspaceView;
+use super::types::{ShellPickerOption, ShellPickerSection, SHELL_PICKER_AUTO_DETECT_LABEL};
 use crate::app::OpenSettings;
 use crate::settings::SettingsPage;
 use codirigent_core::config_service::ConfigService;
 use gpui::{Context, Window};
+use std::collections::{HashMap, HashSet};
 use std::time::Duration;
 use tracing::warn;
 
+fn shell_picker_display_label(shell: &str) -> String {
+    if shell.is_empty() {
+        SHELL_PICKER_AUTO_DETECT_LABEL.to_string()
+    } else {
+        WorkspaceView::shell_display_label(Some(shell))
+    }
+}
+
+fn is_common_shell_option(shell: &str) -> bool {
+    matches!(
+        WorkspaceView::shell_display_label(Some(shell))
+            .to_ascii_lowercase()
+            .as_str(),
+        "zsh" | "bash" | "fish" | "sh" | "pwsh" | "powershell" | "cmd"
+    )
+}
+
+fn build_shell_picker_options(shell_options: &[String]) -> Vec<ShellPickerOption> {
+    let mut normalized_label_counts = HashMap::new();
+    for raw_value in shell_options {
+        *normalized_label_counts
+            .entry(shell_picker_display_label(raw_value))
+            .or_insert(0usize) += 1;
+    }
+
+    shell_options
+        .iter()
+        .enumerate()
+        .map(|(source_index, raw_value)| {
+            let base_label = shell_picker_display_label(raw_value);
+            let label = if normalized_label_counts
+                .get(&base_label)
+                .copied()
+                .unwrap_or_default()
+                > 1
+                && !raw_value.is_empty()
+                && raw_value != &base_label
+            {
+                format!("{base_label} ({raw_value})")
+            } else {
+                base_label
+            };
+
+            ShellPickerOption {
+                source_index,
+                raw_value: raw_value.clone(),
+                label,
+            }
+        })
+        .collect()
+}
+
+fn build_shell_picker_sections(shell_options: &[String]) -> Vec<ShellPickerSection> {
+    let mut primary = Vec::new();
+    let mut more = Vec::new();
+
+    for option in build_shell_picker_options(shell_options) {
+        if option.raw_value.is_empty() || is_common_shell_option(&option.raw_value) {
+            primary.push(option);
+        } else {
+            more.push(option);
+        }
+    }
+
+    let mut sections = Vec::new();
+    if !primary.is_empty() {
+        sections.push(ShellPickerSection {
+            title: None,
+            options: primary,
+        });
+    }
+    if !more.is_empty() {
+        sections.push(ShellPickerSection {
+            title: Some("More"),
+            options: more,
+        });
+    }
+    sections
+}
+
+fn shell_picker_option_order(shell_options: &[String]) -> Vec<usize> {
+    build_shell_picker_sections(shell_options)
+        .into_iter()
+        .flat_map(|section| {
+            section
+                .options
+                .into_iter()
+                .map(|option| option.source_index)
+        })
+        .collect()
+}
+
 impl WorkspaceView {
+    pub(super) fn shell_picker_sections(
+        &self,
+        shell_options: &[String],
+    ) -> Vec<ShellPickerSection> {
+        build_shell_picker_sections(shell_options)
+    }
+
+    pub(super) fn shell_picker_display_label(shell: &str) -> String {
+        shell_picker_display_label(shell)
+    }
+
+    pub(super) fn shell_picker_option_order(&self, shell_options: &[String]) -> Vec<usize> {
+        shell_picker_option_order(shell_options)
+    }
+
     pub(super) fn effective_user_settings(&self) -> &codirigent_core::config::UserSettings {
         self.settings
             .page
@@ -74,6 +183,8 @@ impl WorkspaceView {
         if !detected_shells.iter().any(|s| s.is_empty()) {
             detected_shells.insert(0, String::new());
         }
+        let mut seen_shells = HashSet::new();
+        detected_shells.retain(|shell| seen_shells.insert(shell.clone()));
 
         let mut detected_fonts = self.cache.monospace_fonts.clone().unwrap_or_default();
         let current_font = &user_settings.terminal.font_family;
@@ -370,5 +481,96 @@ impl WorkspaceView {
                 cx,
             );
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_picker_sections_group_common_shells_before_more() {
+        let sections = build_shell_picker_sections(&[
+            String::new(),
+            "nu".to_string(),
+            "zsh".to_string(),
+            "bash".to_string(),
+            "xonsh".to_string(),
+        ]);
+
+        assert_eq!(sections.len(), 2);
+        assert_eq!(sections[0].title, None);
+        assert_eq!(
+            sections[0]
+                .options
+                .iter()
+                .map(|option| option.label.as_str())
+                .collect::<Vec<_>>(),
+            vec![SHELL_PICKER_AUTO_DETECT_LABEL, "zsh", "bash"]
+        );
+        assert_eq!(sections[1].title, Some("More"));
+        assert_eq!(
+            sections[1]
+                .options
+                .iter()
+                .map(|option| option.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["nu", "xonsh"]
+        );
+    }
+
+    #[test]
+    fn shell_picker_sections_treat_normalized_common_shells_as_primary() {
+        let sections = build_shell_picker_sections(&[
+            r"C:\Windows\System32\WindowsPowerShell\v1.0\POWERSHELL.EXE".to_string(),
+            "/bin/zsh".to_string(),
+        ]);
+
+        assert_eq!(sections.len(), 1);
+        assert_eq!(
+            sections[0]
+                .options
+                .iter()
+                .map(|option| option.label.as_str())
+                .collect::<Vec<_>>(),
+            vec!["POWERSHELL", "zsh"]
+        );
+    }
+
+    #[test]
+    fn shell_picker_sections_disambiguate_duplicate_normalized_labels() {
+        let sections = build_shell_picker_sections(&[
+            "zsh".to_string(),
+            "/bin/zsh".to_string(),
+            r"C:\Windows\System32\cmd.exe".to_string(),
+            "cmd".to_string(),
+        ]);
+
+        assert_eq!(sections.len(), 1);
+        assert_eq!(
+            sections[0]
+                .options
+                .iter()
+                .map(|option| option.label.as_str())
+                .collect::<Vec<_>>(),
+            vec![
+                "zsh",
+                "zsh (/bin/zsh)",
+                r"cmd (C:\Windows\System32\cmd.exe)",
+                "cmd",
+            ]
+        );
+    }
+
+    #[test]
+    fn shell_picker_option_order_matches_visual_section_order() {
+        let order = shell_picker_option_order(&[
+            String::new(),
+            "nu".to_string(),
+            "zsh".to_string(),
+            "bash".to_string(),
+        ]);
+
+        assert_eq!(order, vec![0, 2, 3, 1]);
     }
 }

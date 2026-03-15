@@ -100,9 +100,15 @@ impl WorkspaceView {
     }
 
     /// Open the session context menu for a specific session.
-    pub fn open_session_menu(&mut self, session_id: SessionId, cx: &mut Context<Self>) {
+    pub fn open_session_menu(
+        &mut self,
+        session_id: SessionId,
+        anchor_y: Option<f32>,
+        cx: &mut Context<Self>,
+    ) {
         info!(?session_id, "Opening session menu");
         self.selection.session_menu_open = Some(session_id);
+        self.selection.session_menu_anchor_y = anchor_y;
         cx.notify();
     }
 
@@ -110,6 +116,7 @@ impl WorkspaceView {
     pub fn close_session_menu(&mut self, cx: &mut Context<Self>) {
         info!("Closing session menu");
         self.selection.session_menu_open = None;
+        self.selection.session_menu_anchor_y = None;
         cx.notify();
     }
 

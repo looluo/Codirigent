@@ -20,13 +20,10 @@ use crate::icons;
 use crate::title_bar::TitleBar;
 use gpui::{
     div, prelude::FluentBuilder, px, ClickEvent, Context, FontWeight, InteractiveElement,
-    IntoElement, ParentElement, SharedString, StatefulInteractiveElement, Styled, Window,
-    WindowControlArea,
+    IntoElement, MouseButton, MouseDownEvent, ParentElement, SharedString,
+    StatefulInteractiveElement, Styled, Window, WindowControlArea,
 };
 use tracing::info;
-
-/// Row height for session entries in the session context menu.
-const SESSION_MENU_ROW_HEIGHT: f32 = 36.0;
 
 impl WorkspaceView {
     /// Render the title bar with window controls (minimize, maximize, close).
@@ -197,8 +194,11 @@ impl WorkspaceView {
     }
 
     /// Render empty cell inline with pre-computed colors (returns Stateful<Div>).
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn render_empty_cell_inline_with_colors(
         &mut self,
+        pane_id: codirigent_core::PaneId,
+        index: usize,
         position: codirigent_core::GridPosition,
         panel_bg: gpui::Hsla,
         border_color: gpui::Hsla,
@@ -206,7 +206,20 @@ impl WorkspaceView {
         cell_height: f32,
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
-        div()
+        let is_drop_target = self
+            .selection
+            .drag
+            .as_ref()
+            .and_then(|drag| drag.target.as_ref())
+            .is_some_and(|target| target.pane_id == pane_id && target.index == index);
+        let current_border = if is_drop_target {
+            let primary: gpui::Hsla = self.workspace().theme().primary.into();
+            primary
+        } else {
+            border_color
+        };
+
+        let empty = div()
             .id(SharedString::from(format!(
                 "empty-cell-{}-{}",
                 position.row, position.col
@@ -214,8 +227,7 @@ impl WorkspaceView {
             .w_full()
             .h(px(cell_height))
             .bg(panel_bg)
-            .border_1()
-            .border_color(border_color)
+            .border_color(current_border)
             .rounded_lg()
             .border_dashed()
             .flex()
@@ -241,7 +253,13 @@ impl WorkspaceView {
                     .text_xs()
                     .text_color(muted)
                     .child(super::types::EMPTY_CELL_MESSAGE),
-            )
+            );
+
+        if is_drop_target {
+            empty.border_2()
+        } else {
+            empty.border_1()
+        }
     }
 
     /// Render the session context menu (right-click dropdown).
@@ -263,10 +281,16 @@ impl WorkspaceView {
         let destructive = super::types::DESTRUCTIVE_ITEM_COLOR;
         let orange: gpui::Hsla = theme.orange.into();
 
-        // Check if this session has a group
-        let (session_group, session_shell) = {
+        // Check if this session has a group and collect metadata shown in the dropdown.
+        let (session_group, session_shell, project_name, cli_name) = {
             let session = self.workspace().session(session_id)?;
-            (session.group.clone(), session.shell.clone())
+            (
+                session.group.clone(),
+                session.shell.clone(),
+                super::gpui::session_project_name(session)
+                    .unwrap_or_else(|| "Unknown project".to_string()),
+                self.session_cli_display_name(session_id),
+            )
         };
         let has_group = session_group.is_some();
         let (shell_label, shell_warning) =
@@ -286,30 +310,30 @@ impl WorkspaceView {
             groups
         };
 
-        // Compute vertical position based on session's index in the list
-        let row_index = self
-            .workspace()
-            .sessions()
-            .iter()
-            .position(|s| s.id == session_id)
-            .unwrap_or(0);
-        let top_offset = crate::title_bar::TitleBar::DEFAULT_HEIGHT
-            + crate::top_bar::TopBar::HEIGHT
-            + super::types::DRAWER_HEADER_HEIGHT
-            + (row_index as f32) * SESSION_MENU_ROW_HEIGHT;
+        let top_offset = self.selection.session_menu_anchor_y.unwrap_or_else(|| {
+            crate::title_bar::TitleBar::DEFAULT_HEIGHT
+                + crate::top_bar::TopBar::HEIGHT
+                + super::types::DRAWER_HEADER_HEIGHT
+                + self.session_drawer_row_offset(session_id).unwrap_or(0.0)
+        });
 
         // Transparent click-away backdrop (no dark overlay)
         let backdrop = div()
             .id("session-menu-backdrop")
+            .occlude()
             .absolute()
             .inset_0()
-            .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
-                this.close_session_menu(cx);
-            }));
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(|this, _: &MouseDownEvent, _window, cx| {
+                    this.close_session_menu(cx);
+                    cx.stop_propagation();
+                }),
+            );
 
         // Build dropdown menu
         let mut dropdown = div()
-            .w(px(180.0))
+            .w(px(240.0))
             .bg(panel_bg)
             .border_1()
             .border_color(border_color)
@@ -329,6 +353,24 @@ impl WorkspaceView {
                     .flex()
                     .flex_col()
                     .gap_1()
+                    .child(
+                        div()
+                            .text_xs()
+                            .text_color(muted.opacity(0.6))
+                            .child("PROJECT"),
+                    )
+                    .child(
+                        div()
+                            .text_sm()
+                            .text_color(fg)
+                            .overflow_hidden()
+                            .text_ellipsis()
+                            .child(project_name),
+                    )
+                    .when_some(cli_name, |el, cli_name| {
+                        el.child(div().text_xs().text_color(muted.opacity(0.6)).child("CLI"))
+                            .child(div().text_sm().text_color(fg).child(cli_name))
+                    })
                     .child(
                         div()
                             .text_xs()
@@ -424,14 +466,22 @@ impl WorkspaceView {
         Some(
             div()
                 .id("session-menu-container")
+                .occlude()
                 .absolute()
                 .inset_0()
                 .child(backdrop)
                 .child(
                     div()
+                        .occlude()
                         .absolute()
                         .left(px(left_offset))
                         .top(px(top_offset))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                                cx.stop_propagation();
+                            }),
+                        )
                         .child(dropdown),
                 ),
         )

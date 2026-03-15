@@ -639,15 +639,20 @@ impl WorkspaceView {
                 "menu-{}-{}",
                 id_suffix, session_id.0
             )))
+            .occlude()
             .h(px(30.0))
             .px_3()
             .flex()
             .items_center()
             .cursor_pointer()
             .hover(move |style| style.bg(hover_bg.opacity(0.1)))
-            .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
-                this.handle_session_menu_action(session_id, action.clone(), cx);
-            }))
+            .on_mouse_down(
+                MouseButton::Left,
+                cx.listener(move |this, _: &MouseDownEvent, _window, cx| {
+                    this.handle_session_menu_action(session_id, action.clone(), cx);
+                    cx.stop_propagation();
+                }),
+            )
             .child(self.aligned_icon_label_row(
                 icon,
                 fg,

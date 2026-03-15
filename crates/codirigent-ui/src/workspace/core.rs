@@ -127,9 +127,11 @@ impl Workspace {
     /// When switching from split tree to grid, sessions are re-assigned
     /// in their current order to the new grid.
     pub fn set_layout(&mut self, profile: LayoutProfile) {
-        let stacks = self.current_pane_stacks_in_order();
-        self.layout_state = WorkspaceLayoutState::Grid(self.rebuild_grid_state(profile, &stacks));
-        self.apply_pane_stacks_to_current_layout(stacks);
+        let stacks = self.layout_transition_stacks();
+        let rebuilt_layout = WorkspaceLayoutState::Grid(self.rebuild_grid_state(profile, &stacks));
+        let ordered_stacks = Self::stacks_ordered_for_layout_state(&rebuilt_layout, &stacks);
+        self.layout_state = rebuilt_layout;
+        self.apply_pane_stacks_to_current_layout(ordered_stacks);
     }
 
     /// Cycle to the next layout profile.
@@ -347,6 +349,28 @@ impl Workspace {
         stacks
     }
 
+    fn layout_transition_stacks(&self) -> Vec<PaneStack> {
+        let mut stacks = self.current_pane_stacks_in_order();
+        let session_positions = self
+            .sessions
+            .iter()
+            .enumerate()
+            .map(|(index, session)| (session.id, index))
+            .collect::<HashMap<_, _>>();
+
+        stacks.sort_by_key(|stack| {
+            stack
+                .session_ids
+                .iter()
+                .filter_map(|session_id| session_positions.get(session_id))
+                .copied()
+                .min()
+                .unwrap_or(usize::MAX)
+        });
+
+        stacks
+    }
+
     fn apply_pane_stacks_to_current_layout(&mut self, stacks: Vec<PaneStack>) {
         let pane_ids = self.visible_pane_ids();
         self.pane_tab_groups.clear();
@@ -372,6 +396,43 @@ impl Workspace {
         self.cleanup_pane_tab_groups();
     }
 
+    fn stacks_ordered_for_layout_state(
+        layout_state: &WorkspaceLayoutState,
+        stacks: &[PaneStack],
+    ) -> Vec<PaneStack> {
+        let visible_session_order = match layout_state {
+            WorkspaceLayoutState::Grid(state) => state
+                .assignments()
+                .iter()
+                .flatten()
+                .copied()
+                .collect::<Vec<_>>(),
+            WorkspaceLayoutState::SplitTree(state) => state.assigned_sessions(),
+        };
+
+        let mut ordered = Vec::with_capacity(stacks.len());
+        let mut used_indices = HashSet::new();
+
+        for visible_session_id in visible_session_order {
+            if let Some((index, stack)) = stacks.iter().enumerate().find(|(index, stack)| {
+                !used_indices.contains(index) && stack.session_ids.contains(&visible_session_id)
+            }) {
+                used_indices.insert(index);
+                ordered.push(stack.clone());
+            }
+        }
+
+        ordered.extend(
+            stacks
+                .iter()
+                .enumerate()
+                .filter(|(index, _)| !used_indices.contains(index))
+                .map(|(_, stack)| stack.clone()),
+        );
+
+        ordered
+    }
+
     fn stack_session_order(stack: &PaneStack) -> Vec<SessionId> {
         let mut ordered = vec![stack.active_session_id];
         ordered.extend(
@@ -381,32 +442,6 @@ impl Workspace {
                 .copied()
                 .filter(|session_id| *session_id != stack.active_session_id),
         );
-        ordered
-    }
-
-    fn layout_session_order(stacks: &[PaneStack], visible_panes: usize) -> Vec<SessionId> {
-        let mut ordered = Vec::new();
-        let visible_len = visible_panes.min(stacks.len());
-
-        ordered.extend(
-            stacks
-                .iter()
-                .take(visible_len)
-                .map(|stack| stack.active_session_id),
-        );
-        for stack in stacks.iter().take(visible_len) {
-            ordered.extend(
-                stack
-                    .session_ids
-                    .iter()
-                    .copied()
-                    .filter(|session_id| *session_id != stack.active_session_id),
-            );
-        }
-        for stack in stacks.iter().skip(visible_len) {
-            ordered.extend(Self::stack_session_order(stack));
-        }
-
         ordered
     }
 
@@ -565,7 +600,19 @@ impl Workspace {
     fn rebuild_grid_state(&self, profile: LayoutProfile, stacks: &[PaneStack]) -> LayoutState {
         let focused = self.layout_state.focused_session();
         let mut grid_state = LayoutState::with_profile(profile);
-        grid_state.set_assignments(Self::layout_session_order(stacks, profile.max_sessions()));
+        let visible_panes = profile.max_sessions();
+        let visible_sessions = stacks
+            .iter()
+            .take(visible_panes)
+            .map(|stack| stack.active_session_id)
+            .collect::<Vec<_>>();
+        grid_state.set_assignments(visible_sessions);
+
+        for stack in stacks.iter().skip(visible_panes) {
+            for session_id in Self::stack_session_order(stack) {
+                let _ = grid_state.append_hidden_session(session_id);
+            }
+        }
 
         if let Some(session_id) = focused {
             if !grid_state.focus_session(session_id) && profile == LayoutProfile::Single {
@@ -599,7 +646,11 @@ impl Workspace {
         let focused = self.layout_state.focused_session();
         let mut split_state = SplitLayoutState::new(tree);
 
-        for session_id in Self::layout_session_order(stacks, split_state.slot_count()) {
+        for session_id in stacks
+            .iter()
+            .take(split_state.slot_count())
+            .map(|stack| stack.active_session_id)
+        {
             if !split_state.add_session(session_id) {
                 break;
             }
@@ -654,6 +705,29 @@ impl Workspace {
                 if let Some(session_id) = split_state.assigned_sessions().first().copied() {
                     split_state.focus_session(session_id);
                 }
+            }
+        }
+    }
+
+    /// Fill any newly available grid cells with hidden sessions in overflow
+    /// order so deleting a visible session keeps the grid as full as possible.
+    fn promote_hidden_sessions_into_grid_slots(&mut self) {
+        let Some(grid_state) = self.layout_state.as_grid_mut() else {
+            return;
+        };
+
+        while let (Some(index), Some(session_id)) = (
+            grid_state.first_empty_index(),
+            grid_state.overflow().first().copied(),
+        ) {
+            if !grid_state.assign_session_to_index(session_id, index) {
+                break;
+            }
+        }
+
+        if grid_state.focused_session().is_none() {
+            if let Some(index) = grid_state.occupied_indices().into_iter().next() {
+                grid_state.focus_index(index);
             }
         }
     }
@@ -783,6 +857,7 @@ impl Workspace {
         if let Some(pos) = self.sessions.iter().position(|s| s.id == id) {
             let removed = self.sessions.remove(pos);
             self.cleanup_pane_tab_groups();
+            self.promote_hidden_sessions_into_grid_slots();
             self.promote_hidden_sessions_into_split_slots();
             Some(removed)
         } else {
@@ -940,7 +1015,8 @@ impl Workspace {
                     true
                 } else {
                     let replacement_index = s
-                        .focused_index()
+                        .first_empty_index()
+                        .or_else(|| s.focused_index())
                         .or_else(|| s.occupied_indices().into_iter().next())
                         .or_else(|| s.first_empty_index());
 
@@ -948,7 +1024,16 @@ impl Workspace {
                         return false;
                     };
 
-                    s.swap_hidden_into_index(id, replacement_index).is_some()
+                    if s.session_at(replacement_index).is_none() {
+                        if s.assign_session_to_index(id, replacement_index) {
+                            s.focus_index(replacement_index);
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        s.swap_hidden_into_index(id, replacement_index).is_some()
+                    }
                 }
             }
             WorkspaceLayoutState::SplitTree(s) => {
@@ -1077,10 +1162,12 @@ impl Workspace {
     ///
     /// Transfers current sessions and focus to the new tree.
     pub fn set_split_tree(&mut self, tree: LayoutNode) {
-        let stacks = self.current_pane_stacks_in_order();
-        self.layout_state =
+        let stacks = self.layout_transition_stacks();
+        let rebuilt_layout =
             WorkspaceLayoutState::SplitTree(self.rebuild_split_state(tree, &stacks));
-        self.apply_pane_stacks_to_current_layout(stacks);
+        let ordered_stacks = Self::stacks_ordered_for_layout_state(&rebuilt_layout, &stacks);
+        self.layout_state = rebuilt_layout;
+        self.apply_pane_stacks_to_current_layout(ordered_stacks);
     }
 
     // --- Split Pane Operations ---
@@ -1129,10 +1216,12 @@ impl Workspace {
             };
 
         if should_switch_to_single {
-            let stacks = self.current_pane_stacks_in_order();
-            self.layout_state =
+            let stacks = self.layout_transition_stacks();
+            let rebuilt_layout =
                 WorkspaceLayoutState::Grid(self.rebuild_grid_state(LayoutProfile::Single, &stacks));
-            self.apply_pane_stacks_to_current_layout(stacks);
+            let ordered_stacks = Self::stacks_ordered_for_layout_state(&rebuilt_layout, &stacks);
+            self.layout_state = rebuilt_layout;
+            self.apply_pane_stacks_to_current_layout(ordered_stacks);
         }
 
         result
@@ -1164,7 +1253,7 @@ impl Workspace {
 
     /// Convert the current grid layout to an equivalent split tree.
     fn convert_to_split_tree(&mut self) {
-        let stacks = self.current_pane_stacks_in_order();
+        let stacks = self.layout_transition_stacks();
         let tree = if let WorkspaceLayoutState::Grid(grid_state) = &self.layout_state {
             let (rows, cols) = grid_state.profile().dimensions();
             Some(LayoutNode::from_grid(rows, cols))
@@ -1173,9 +1262,11 @@ impl Workspace {
         };
 
         if let Some(tree) = tree {
-            self.layout_state =
+            let rebuilt_layout =
                 WorkspaceLayoutState::SplitTree(self.rebuild_split_state(tree, &stacks));
-            self.apply_pane_stacks_to_current_layout(stacks);
+            let ordered_stacks = Self::stacks_ordered_for_layout_state(&rebuilt_layout, &stacks);
+            self.layout_state = rebuilt_layout;
+            self.apply_pane_stacks_to_current_layout(ordered_stacks);
         }
     }
 
@@ -1463,6 +1554,50 @@ impl Workspace {
             .collect()
     }
 
+    /// Get pane bounds for drag/drop hit testing, including empty panes.
+    pub fn pane_drop_target_info(&self) -> Vec<PaneDropTargetInfo> {
+        match &self.layout_state {
+            WorkspaceLayoutState::Grid(state) => self.grid_pane_drop_target_info(state),
+            WorkspaceLayoutState::SplitTree(state) => self.split_pane_drop_target_info(state),
+        }
+    }
+
+    fn grid_pane_drop_target_info(&self, state: &LayoutState) -> Vec<PaneDropTargetInfo> {
+        let layout = self.grid_layout();
+        state
+            .assignments()
+            .iter()
+            .enumerate()
+            .filter_map(|(index, session_id)| {
+                let bounds = layout.cell_bounds_for_index(index)?;
+                Some(PaneDropTargetInfo {
+                    pane_id: PaneId::GridCell { index },
+                    active_session_id: *session_id,
+                    index,
+                    bounds,
+                })
+            })
+            .collect()
+    }
+
+    fn split_pane_drop_target_info(&self, state: &SplitLayoutState) -> Vec<PaneDropTargetInfo> {
+        let Some(layout) = self.split_layout() else {
+            return Vec::new();
+        };
+
+        layout
+            .leaf_bounds()
+            .into_iter()
+            .enumerate()
+            .map(|(index, (slot, bounds))| PaneDropTargetInfo {
+                pane_id: PaneId::SplitSlot { slot },
+                active_session_id: state.session_at_slot(slot),
+                index,
+                bounds,
+            })
+            .collect()
+    }
+
     /// Get all tab sessions for a pane in display order.
     pub fn pane_tab_session_ids(&self, pane_id: PaneId) -> Vec<SessionId> {
         self.pane_sessions(pane_id)
@@ -1607,8 +1742,9 @@ impl Workspace {
                 self.rebuild_split_state(state.tree().clone(), &stacks),
             ),
         };
+        let ordered_stacks = Self::stacks_ordered_for_layout_state(&rebuilt_layout, &stacks);
         self.layout_state = rebuilt_layout;
-        self.apply_pane_stacks_to_current_layout(stacks);
+        self.apply_pane_stacks_to_current_layout(ordered_stacks);
     }
 
     /// Restore legacy persisted pane tab groups after sessions have been recreated.
@@ -1663,5 +1799,18 @@ pub struct CellInfo {
     /// Grid index (0-based).
     pub index: usize,
     /// Cell bounds.
+    pub bounds: Bounds,
+}
+
+/// Pane bounds used for drag/drop hit testing.
+#[derive(Debug, Clone)]
+pub struct PaneDropTargetInfo {
+    /// Visible pane identifier.
+    pub pane_id: PaneId,
+    /// Active session assigned to the pane, if any.
+    pub active_session_id: Option<SessionId>,
+    /// Logical grid/split ordering index.
+    pub index: usize,
+    /// Pane bounds in workspace coordinates.
     pub bounds: Bounds,
 }

@@ -13,8 +13,14 @@ use crate::terminal_view::CursorShape;
 
 use super::types::DROPDOWN_TRIGGER_HEIGHT;
 
-/// Displayed in dropdowns when no specific value is configured (auto-selected).
-const AUTO_DETECT_LABEL: &str = "(Auto-detect)";
+const SETTINGS_DROPDOWN_MAX_HEIGHT: f32 = 280.0;
+
+#[derive(Clone)]
+enum DropdownEntry {
+    Option { value: String, label: String },
+    Section { label: String },
+    Separator,
+}
 
 impl super::gpui::WorkspaceView {
     /// Render the full settings overlay (sidebar + content area).
@@ -176,8 +182,35 @@ impl super::gpui::WorkspaceView {
         cx: &mut Context<Self>,
         on_select: impl Fn(&mut Self, String, &mut Window, &mut Context<Self>) + 'static,
     ) -> impl IntoElement {
+        let entries = options
+            .iter()
+            .map(|option| DropdownEntry::Option {
+                value: (*option).to_string(),
+                label: (*option).to_string(),
+            })
+            .collect::<Vec<_>>();
+        self.render_dropdown_control_with_entries(
+            dropdown_id,
+            &entries,
+            selected,
+            selected,
+            cx,
+            on_select,
+        )
+    }
+
+    fn render_dropdown_control_with_entries(
+        &self,
+        dropdown_id: &str,
+        entries: &[DropdownEntry],
+        selected_value: &str,
+        selected_display: &str,
+        cx: &mut Context<Self>,
+        on_select: impl Fn(&mut Self, String, &mut Window, &mut Context<Self>) + 'static,
+    ) -> impl IntoElement {
         let theme = self.workspace.theme();
         let fg: Hsla = theme.foreground.into();
+        let muted: Hsla = theme.muted.into();
         let panel_bg: Hsla = theme.panel_background.into();
         let border: Hsla = theme.border.into();
         let hover_bg: Hsla = theme.hover.into();
@@ -191,7 +224,7 @@ impl super::gpui::WorkspaceView {
             == Some(dropdown_id);
 
         let dd_id = dropdown_id.to_string();
-        let selected_display = selected.to_string();
+        let selected_display = selected_display.to_string();
 
         // Trigger button -- stores click position for anchored overlay
         let trigger = div()
@@ -248,7 +281,69 @@ impl super::gpui::WorkspaceView {
                 .map(|p| p.dropdown_click_pos)
                 .unwrap_or((0.0, 0.0));
 
-            let mut options_list = div()
+            let mut options_body = div().flex().flex_col();
+
+            for entry in entries {
+                match entry {
+                    DropdownEntry::Option { value, label } => {
+                        let opt_value = value.clone();
+                        let opt_label = label.clone();
+                        let is_selected = value == selected_value;
+                        let cb = on_select.clone();
+
+                        options_body = options_body.child(
+                            div()
+                                .id(SharedString::from(format!("{}-opt-{}", dd_id, value)))
+                                .px_2()
+                                .py(px(6.0))
+                                .text_color(if is_selected { accent } else { fg })
+                                .bg(if is_selected {
+                                    Hsla { a: 0.1, ..accent }
+                                } else {
+                                    panel_bg
+                                })
+                                .cursor_pointer()
+                                .hover(|s| s.bg(hover_bg))
+                                .on_mouse_down(
+                                    MouseButton::Left,
+                                    cx.listener(move |this, _, window, cx| {
+                                        cb(this, opt_value.clone(), window, cx);
+                                        if let Some(page) = this.settings.page.as_mut() {
+                                            page.open_dropdown = None;
+                                        }
+                                        cx.notify();
+                                    }),
+                                )
+                                .child(opt_label),
+                        );
+                    }
+                    DropdownEntry::Section { label } => {
+                        options_body = options_body.child(
+                            div()
+                                .px_2()
+                                .pt(px(8.0))
+                                .pb(px(4.0))
+                                .text_xs()
+                                .text_color(muted.opacity(0.7))
+                                .child(label.clone()),
+                        );
+                    }
+                    DropdownEntry::Separator => {
+                        options_body =
+                            options_body.child(div().h(px(1.0)).mx_2().my_1().bg(border));
+                    }
+                }
+            }
+
+            let options_list = div()
+                .id(SharedString::from(format!("{}-scroll", dd_id)))
+                .flex()
+                .flex_col()
+                .overflow_y_scroll()
+                .max_h(px(SETTINGS_DROPDOWN_MAX_HEIGHT))
+                .child(options_body);
+
+            let options_panel = div()
                 .min_w(px(140.0))
                 .bg(panel_bg)
                 .border_1()
@@ -258,39 +353,8 @@ impl super::gpui::WorkspaceView {
                 .py_1()
                 .flex()
                 .flex_col()
-                .overflow_hidden();
-
-            for opt in options {
-                let opt_str = opt.to_string();
-                let is_selected = *opt == selected;
-                let cb = on_select.clone();
-
-                options_list = options_list.child(
-                    div()
-                        .id(SharedString::from(format!("{}-opt-{}", dd_id, opt)))
-                        .px_2()
-                        .py(px(6.0))
-                        .text_color(if is_selected { accent } else { fg })
-                        .bg(if is_selected {
-                            Hsla { a: 0.1, ..accent }
-                        } else {
-                            panel_bg
-                        })
-                        .cursor_pointer()
-                        .hover(|s| s.bg(hover_bg))
-                        .on_mouse_down(
-                            MouseButton::Left,
-                            cx.listener(move |this, _, window, cx| {
-                                cb(this, opt_str.clone(), window, cx);
-                                if let Some(page) = this.settings.page.as_mut() {
-                                    page.open_dropdown = None;
-                                }
-                                cx.notify();
-                            }),
-                        )
-                        .child(opt.to_string()),
-                );
-            }
+                .overflow_hidden()
+                .child(options_list);
 
             // Click-away backdrop (closes dropdown when clicking outside)
             let backdrop = div()
@@ -314,7 +378,7 @@ impl super::gpui::WorkspaceView {
                     .anchor(Corner::TopLeft)
                     .position(point(px(click_x), px(click_y + DROPDOWN_TRIGGER_HEIGHT)))
                     .snap_to_window_with_margin(px(8.0))
-                    .child(div().occlude().child(options_list)),
+                    .child(div().occlude().child(options_panel)),
             )
             .with_priority(1);
 
@@ -354,25 +418,25 @@ impl super::gpui::WorkspaceView {
 
         let editor_options: Vec<&str> = page.detected_editors.iter().map(|s| s.as_str()).collect();
 
-        // Build shell options: empty string displays as AUTO_DETECT_LABEL
-        let shell_display_options: Vec<String> = page
-            .detected_shells
-            .iter()
-            .map(|s| {
-                if s.is_empty() {
-                    AUTO_DETECT_LABEL.to_string()
-                } else {
-                    s.clone()
-                }
-            })
-            .collect();
-        let shell_option_refs: Vec<&str> =
-            shell_display_options.iter().map(|s| s.as_str()).collect();
-        let shell_display = if shell.is_empty() {
-            AUTO_DETECT_LABEL.to_string()
-        } else {
-            shell.clone()
-        };
+        let shell_sections = self.shell_picker_sections(&page.detected_shells);
+        let mut shell_entries = Vec::new();
+        for (section_index, section) in shell_sections.iter().enumerate() {
+            if section_index > 0 {
+                shell_entries.push(DropdownEntry::Separator);
+            }
+            if let Some(title) = section.title {
+                shell_entries.push(DropdownEntry::Section {
+                    label: title.to_string(),
+                });
+            }
+            for option in &section.options {
+                shell_entries.push(DropdownEntry::Option {
+                    value: option.raw_value.clone(),
+                    label: option.label.clone(),
+                });
+            }
+        }
+        let shell_display = Self::shell_picker_display_label(&shell);
 
         div()
             .flex()
@@ -401,20 +465,15 @@ impl super::gpui::WorkspaceView {
                 "Default shell",
                 "Shell used for new sessions",
                 theme,
-                self.render_dropdown_control(
+                self.render_dropdown_control_with_entries(
                     "dd-shell",
-                    &shell_option_refs,
+                    &shell_entries,
+                    &shell,
                     &shell_display,
                     cx,
                     |this, val, _, _| {
                         if let Some(page) = this.settings.page.as_mut() {
-                            // Map AUTO_DETECT_LABEL back to empty string
-                            let stored = if val == AUTO_DETECT_LABEL {
-                                String::new()
-                            } else {
-                                val
-                            };
-                            page.user_settings.general.default_shell = stored;
+                            page.user_settings.general.default_shell = val;
                             page.user_save_pending = true;
                         }
                     },

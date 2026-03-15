@@ -9,7 +9,7 @@
 
 use super::gpui::WorkspaceView;
 use super::types::{
-    git_colors, DRAWER_HEADER_HEIGHT, HEADER_HEIGHT, MODAL_FIELD_HEIGHT, SESSION_ROW_HEIGHT,
+    git_colors, DRAWER_HEADER_HEIGHT, HEADER_HEIGHT, SESSION_DRAWER_ROW_HEIGHT, SESSION_ROW_HEIGHT,
 };
 use crate::icons;
 use crate::theme::CodirigentTheme;
@@ -19,6 +19,71 @@ use gpui::{
     InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, SharedString,
     StatefulInteractiveElement, Styled,
 };
+use std::collections::BTreeMap;
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum SessionDrawerGroupKey {
+    Explicit(String),
+    Project {
+        display_name: String,
+        identity: String,
+    },
+}
+
+impl SessionDrawerGroupKey {
+    fn display_name(&self) -> &str {
+        match self {
+            Self::Explicit(name) => name,
+            Self::Project { display_name, .. } => display_name,
+        }
+    }
+
+    fn cache_key(&self) -> String {
+        match self {
+            Self::Explicit(name) => format!("explicit:{name}"),
+            Self::Project { identity, .. } => format!("project:{identity}"),
+        }
+    }
+}
+
+type SessionDrawerGroups<'a> = (
+    Vec<&'a Session>,
+    BTreeMap<SessionDrawerGroupKey, Vec<&'a Session>>,
+);
+
+fn session_drawer_groups<'a>(sessions: &'a [Session]) -> SessionDrawerGroups<'a> {
+    let mut ungrouped: Vec<&Session> = Vec::new();
+    let mut groups: BTreeMap<SessionDrawerGroupKey, Vec<&Session>> = BTreeMap::new();
+
+    for session in sessions {
+        let key = session
+            .group
+            .as_ref()
+            .filter(|group| !group.is_empty())
+            .cloned()
+            .map(SessionDrawerGroupKey::Explicit)
+            .or_else(|| {
+                let identity = session
+                    .git_info
+                    .as_ref()
+                    .map(|git_info| git_info.repo_root.to_string_lossy().into_owned())
+                    .or_else(|| Some(session.working_directory.to_string_lossy().into_owned()))?;
+                let display_name =
+                    super::gpui::session_project_name(session).unwrap_or_else(|| identity.clone());
+                Some(SessionDrawerGroupKey::Project {
+                    display_name,
+                    identity,
+                })
+            });
+
+        match key {
+            Some(group_key) => groups.entry(group_key).or_default().push(session),
+            None => ungrouped.push(session),
+        }
+    }
+
+    (ungrouped, groups)
+}
 
 impl WorkspaceView {
     pub(super) fn render_drawer(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -129,24 +194,20 @@ impl WorkspaceView {
         let session_count = sessions.len();
 
         // Separate ungrouped and grouped sessions
-        let mut ungrouped: Vec<&Session> = Vec::new();
-        let mut groups: std::collections::BTreeMap<String, Vec<&Session>> =
-            std::collections::BTreeMap::new();
-        for session in &sessions {
-            match &session.group {
-                Some(group) if !group.is_empty() => {
-                    groups.entry(group.clone()).or_default().push(session);
-                }
-                _ => ungrouped.push(session),
-            }
-        }
+        let (ungrouped, groups) = session_drawer_groups(&sessions);
 
-        let mut content = div().flex_1().overflow_hidden().flex().flex_col();
+        let mut content = div()
+            .id("sessions-scroll")
+            .flex_1()
+            .overflow_y_scroll()
+            .flex()
+            .flex_col();
 
         // Render ungrouped sessions first
         for session in &ungrouped {
             content = content.child(self.render_session_row(
                 session,
+                None,
                 focused_id,
                 visible_session_ids.contains(&session.id),
                 &theme,
@@ -156,12 +217,13 @@ impl WorkspaceView {
 
         // Render grouped sessions with headers
         let expanded_map = self.cache.drawer_group_expanded.clone();
-        for (group_name, group_sessions) in &groups {
+        for (group_key, group_sessions) in &groups {
             let color = group_sessions.first().and_then(|s| s.color.clone());
-            let expanded = expanded_map.get(group_name).copied().unwrap_or(true);
+            let cache_key = group_key.cache_key();
+            let expanded = expanded_map.get(&cache_key).copied().unwrap_or(true);
 
             content = content.child(self.render_session_group_header(
-                group_name,
+                group_key,
                 color.as_deref(),
                 group_sessions.len(),
                 expanded,
@@ -173,6 +235,7 @@ impl WorkspaceView {
                 for session in group_sessions {
                     content = content.child(self.render_session_row(
                         session,
+                        Some(group_key.display_name()),
                         focused_id,
                         visible_session_ids.contains(&session.id),
                         &theme,
@@ -187,7 +250,6 @@ impl WorkspaceView {
             .flex()
             .flex_col()
             .overflow_hidden()
-            // Scrollable session list
             .child(content)
             // Footer
             .child(
@@ -1045,6 +1107,7 @@ impl WorkspaceView {
     fn render_session_row(
         &mut self,
         session: &Session,
+        group_name: Option<&str>,
         focused_id: Option<SessionId>,
         is_visible: bool,
         theme: &CodirigentTheme,
@@ -1060,24 +1123,45 @@ impl WorkspaceView {
         } else {
             gpui::Hsla::transparent_black()
         };
-        let hover_bg: gpui::Hsla = theme.active.into();
+        let hover_bg: gpui::Hsla = if is_focused {
+            row_bg
+        } else {
+            theme.active.into()
+        };
         let orange: gpui::Hsla = theme.orange.into();
+        let primary: gpui::Hsla = theme.primary.into();
 
         let session_id = session.id;
         let session_name = session.name.clone();
+        let project_name = super::gpui::session_project_name(session);
+        let project_subtitle = project_name
+            .clone()
+            .or_else(|| Some(session.working_directory.to_string_lossy().into_owned()))
+            .filter(|project| group_name != Some(project.as_str()));
+        let cli_name = self.session_cli_display_name(session_id);
         let context_pct = session.context_usage;
         let (shell_label, shell_warning) =
             self.session_shell_display(session_id, session.shell.as_deref());
-
+        let show_shell_label = session.shell.is_some() || shell_warning.is_some();
+        let branch_badge = session.git_info.as_ref().map(|git_info| {
+            let mut branch = git_info.branch.clone();
+            if branch.chars().count() > 16 {
+                branch = branch.chars().take(13).collect::<String>() + "...";
+            }
+            branch
+        });
         div()
             .id(SharedString::from(format!("session-row-{}", session_id.0)))
-            .h(px(MODAL_FIELD_HEIGHT))
+            .h(px(SESSION_DRAWER_ROW_HEIGHT))
             .w_full()
             .px_3()
+            .py(px(6.0))
             .flex()
-            .items_center()
+            .items_start()
             .gap_2()
             .bg(row_bg)
+            .border_l_2()
+            .border_color(if is_focused { primary } else { row_bg })
             .cursor_pointer()
             .hover(move |style| style.bg(hover_bg))
             .on_mouse_down(
@@ -1097,101 +1181,127 @@ impl WorkspaceView {
                     .bg(status_color)
                     .flex_shrink_0(),
             )
-            // Session name (truncated)
             .child(
                 div()
                     .flex_1()
-                    .overflow_hidden()
-                    .text_xs()
-                    .text_color(if is_focused { fg } else { muted })
-                    .child(session_name),
-            )
-            .when(is_hidden, |el| {
-                el.child(
-                    div()
-                        .text_xs()
-                        .text_color(muted.opacity(0.75))
-                        .flex_shrink_0()
-                        .child("Hidden"),
-                )
-            })
-            .child(
-                div()
-                    .flex_shrink_0()
-                    .px(px(4.0))
-                    .py_px()
-                    .rounded_sm()
-                    .bg(if shell_warning.is_some() {
-                        orange.opacity(0.12)
-                    } else {
-                        muted.opacity(0.12)
-                    })
+                    .min_w_0()
+                    .flex()
+                    .flex_col()
+                    .gap(px(2.0))
                     .child(
                         div()
-                            .text_xs()
-                            .text_color(if shell_warning.is_some() {
-                                orange
-                            } else {
-                                muted.opacity(0.75)
-                            })
-                            .child(shell_label),
-                    ),
-            )
-            // Git branch (compact) - between name and context%
-            .when_some(session.git_info.as_ref(), |el, gi| {
-                let mut branch = gi.branch.clone();
-                if branch.chars().count() > 12 {
-                    branch = branch.chars().take(9).collect::<String>() + "...";
-                }
-                let branch_color = muted.opacity(0.5);
-                el.child(
-                    div()
-                        .flex_shrink_0()
-                        .flex()
-                        .items_center()
-                        .gap_1()
-                        .child(div().text_xs().text_color(branch_color).child(branch))
-                        .when(gi.dirty_count > 0, |el| {
-                            el.child(
+                            .w_full()
+                            .flex()
+                            .items_center()
+                            .gap_2()
+                            .child(
                                 div()
-                                    .text_xs()
-                                    .text_color(super::types::DIRTY_INDICATOR_COLOR)
-                                    .child(format!("\u{25CF}{}", gi.dirty_count)),
+                                    .flex_1()
+                                    .min_w_0()
+                                    .overflow_hidden()
+                                    .text_sm()
+                                    .font_weight(FontWeight::MEDIUM)
+                                    .text_color(fg)
+                                    .text_ellipsis()
+                                    .child(session_name),
                             )
-                        }),
-                )
-            })
-            // Context percentage (if available) with threshold-based coloring
-            .when_some(context_pct, |el, pct| {
-                let context_color: gpui::Hsla =
-                    crate::terminal_header::ContextLevel::from_percentage(pct)
-                        .color()
-                        .into();
-                el.child(
-                    div()
-                        .text_xs()
-                        .text_color(context_color)
-                        .flex_shrink_0()
-                        .child(format!("{}%", (pct * 100.0) as u32)),
-                )
-            })
+                            .when(is_hidden, |el| {
+                                el.child(Self::render_session_metadata_badge(
+                                    "Hidden",
+                                    muted.opacity(0.85),
+                                    muted.opacity(0.12),
+                                ))
+                            })
+                            .when_some(context_pct, |el, pct| {
+                                let context_color: gpui::Hsla =
+                                    crate::terminal_header::ContextLevel::from_percentage(pct)
+                                        .color()
+                                        .into();
+                                el.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(context_color)
+                                        .flex_shrink_0()
+                                        .child(format!("{}%", (pct * 100.0) as u32)),
+                                )
+                            })
+                            .when(show_shell_label, |el| {
+                                el.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(if shell_warning.is_some() {
+                                            orange
+                                        } else {
+                                            muted.opacity(0.8)
+                                        })
+                                        .flex_shrink_0()
+                                        .child(shell_label.clone()),
+                                )
+                            })
+                            .when_some(cli_name, |el, cli_name| {
+                                el.child(Self::render_session_metadata_badge(
+                                    &cli_name,
+                                    primary,
+                                    primary.opacity(0.12),
+                                ))
+                            }),
+                    )
+                    .when(project_subtitle.is_some() || branch_badge.is_some(), |el| {
+                        el.child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .when_some(project_subtitle.clone(), |row, project_subtitle| {
+                                    row.child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .overflow_hidden()
+                                            .text_xs()
+                                            .text_color(if is_focused {
+                                                muted.opacity(0.95)
+                                            } else {
+                                                muted.opacity(0.82)
+                                            })
+                                            .text_ellipsis()
+                                            .child(project_subtitle),
+                                    )
+                                })
+                                .when_some(branch_badge.clone(), |row, branch| {
+                                    row.child(
+                                        div()
+                                            .max_w(px(96.0))
+                                            .overflow_hidden()
+                                            .text_xs()
+                                            .text_color(muted.opacity(0.8))
+                                            .text_ellipsis()
+                                            .flex_shrink_0()
+                                            .child(branch),
+                                    )
+                                }),
+                        )
+                    }),
+            )
             // Menu button
             .child(
                 div()
                     .id(SharedString::from(format!("session-menu-{}", session_id.0)))
                     .w(px(24.0))
                     .h(px(24.0))
+                    .flex_shrink_0()
                     .rounded_md()
                     .flex()
                     .items_center()
                     .justify_center()
-                    .flex_shrink_0()
                     .cursor_pointer()
                     .hover(|style| style.bg(super::types::CANCEL_BUTTON_HOVER))
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
-                            this.open_session_menu(session_id, cx);
+                        cx.listener(move |this, event: &MouseDownEvent, _window, cx| {
+                            this.open_session_menu(session_id, Some(event.position.y.into()), cx);
+                            cx.stop_propagation();
                         }),
                     )
                     .child(
@@ -1204,10 +1314,68 @@ impl WorkspaceView {
             )
     }
 
+    pub(super) fn session_drawer_row_offset(&self, session_id: SessionId) -> Option<f32> {
+        let sessions: Vec<Session> = self.workspace().sessions().to_vec();
+        let (ungrouped, groups) = session_drawer_groups(&sessions);
+
+        let mut offset = 0.0;
+        for session in ungrouped {
+            if session.id == session_id {
+                return Some(offset);
+            }
+            offset += SESSION_DRAWER_ROW_HEIGHT;
+        }
+
+        for (group_key, group_sessions) in groups {
+            offset += SESSION_ROW_HEIGHT;
+            let cache_key = group_key.cache_key();
+            let expanded = self
+                .cache
+                .drawer_group_expanded
+                .get(&cache_key)
+                .copied()
+                .unwrap_or(true);
+            if !expanded {
+                continue;
+            }
+
+            for session in group_sessions {
+                if session.id == session_id {
+                    return Some(offset);
+                }
+                offset += SESSION_DRAWER_ROW_HEIGHT;
+            }
+        }
+
+        None
+    }
+
+    fn render_session_metadata_badge(
+        text: &str,
+        text_color: gpui::Hsla,
+        background: gpui::Hsla,
+    ) -> gpui::Div {
+        div()
+            .flex_shrink_0()
+            .max_w(px(120.0))
+            .px(px(4.0))
+            .py_px()
+            .rounded_sm()
+            .bg(background)
+            .child(
+                div()
+                    .overflow_hidden()
+                    .text_xs()
+                    .text_ellipsis()
+                    .text_color(text_color)
+                    .child(text.to_owned()),
+            )
+    }
+
     /// Render a session group header in the drawer session list.
     fn render_session_group_header(
         &mut self,
-        group_name: &str,
+        group_key: &SessionDrawerGroupKey,
         color: Option<&str>,
         count: usize,
         expanded: bool,
@@ -1228,15 +1396,12 @@ impl WorkspaceView {
             icons::chevron_right()
         };
 
-        let group_name_owned = group_name.to_string();
+        let group_name = group_key.display_name();
         let group_label = format!("{} ({})", group_name, count);
-        let toggle_key = group_name_owned.clone();
+        let toggle_key = group_key.cache_key();
 
         div()
-            .id(SharedString::from(format!(
-                "group-header-{}",
-                group_name_owned
-            )))
+            .id(SharedString::from(format!("group-header-{}", toggle_key)))
             .h(px(SESSION_ROW_HEIGHT))
             .w_full()
             .px_3()
@@ -1279,5 +1444,122 @@ impl WorkspaceView {
                 14.0,
                 6.0,
             ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codirigent_core::{GitRepoInfo, SessionId, SessionStatus};
+    use std::path::PathBuf;
+
+    fn test_session(id: u64, working_directory: &str) -> Session {
+        Session {
+            id: SessionId(id),
+            name: format!("Session {id}"),
+            status: SessionStatus::Idle,
+            working_directory: PathBuf::from(working_directory),
+            shell: None,
+            current_task: None,
+            context_usage: None,
+            created_at: chrono::Utc::now(),
+            group: None,
+            color: None,
+            git_info: None,
+            claude_session_id: None,
+            codex_session_id: None,
+            codex_execution_mode: None,
+            codex_started_at: None,
+            gemini_session_id: None,
+        }
+    }
+
+    #[test]
+    fn session_drawer_groups_falls_back_to_project_name() {
+        let sessions = vec![
+            test_session(1, "/workspace/dirigent"),
+            test_session(2, "/workspace/dirigent"),
+        ];
+
+        let (ungrouped, groups) = session_drawer_groups(&sessions);
+
+        assert!(ungrouped.is_empty());
+        assert_eq!(groups.len(), 1);
+        assert_eq!(
+            groups
+                .get(&SessionDrawerGroupKey::Project {
+                    display_name: "dirigent".to_string(),
+                    identity: "/workspace/dirigent".to_string(),
+                })
+                .map(Vec::len),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn session_drawer_groups_keep_explicit_and_project_groups_distinct() {
+        let mut explicit = test_session(1, "/workspace/dirigent");
+        explicit.group = Some("dirigent".to_string());
+
+        let mut derived = test_session(2, "/workspace/dirigent/subdir");
+        derived.git_info = Some(GitRepoInfo {
+            repo_root: PathBuf::from("/workspace/dirigent"),
+            branch: "main".to_string(),
+            dirty_count: 0,
+            has_staged: false,
+            head_sha: None,
+            unstaged_files: Vec::new(),
+            staged_files: Vec::new(),
+        });
+
+        let sessions = vec![explicit, derived];
+        let (_ungrouped, groups) = session_drawer_groups(&sessions);
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(
+            groups
+                .get(&SessionDrawerGroupKey::Explicit("dirigent".to_string()))
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            groups
+                .get(&SessionDrawerGroupKey::Project {
+                    display_name: "dirigent".to_string(),
+                    identity: "/workspace/dirigent".to_string(),
+                })
+                .map(Vec::len),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn session_drawer_groups_keep_duplicate_project_names_distinct_by_path() {
+        let sessions = vec![
+            test_session(1, "/workspace/apps/dirigent"),
+            test_session(2, "/workspace/tools/dirigent"),
+        ];
+
+        let (_ungrouped, groups) = session_drawer_groups(&sessions);
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(
+            groups
+                .get(&SessionDrawerGroupKey::Project {
+                    display_name: "dirigent".to_string(),
+                    identity: "/workspace/apps/dirigent".to_string(),
+                })
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            groups
+                .get(&SessionDrawerGroupKey::Project {
+                    display_name: "dirigent".to_string(),
+                    identity: "/workspace/tools/dirigent".to_string(),
+                })
+                .map(Vec::len),
+            Some(1)
+        );
     }
 }

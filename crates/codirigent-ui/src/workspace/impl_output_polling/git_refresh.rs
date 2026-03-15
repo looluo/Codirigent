@@ -60,10 +60,18 @@ impl WorkspaceView {
                 for (id, git_info) in &git_infos {
                     if let Some(header) = this.terminal_headers.get_mut(id) {
                         let branch = git_info.as_ref().map(|info| info.branch.clone());
-                        let dirty_count = git_info.as_ref().map(|info| info.dirty_count);
-                        if header.git_branch != branch || header.git_dirty_count != dirty_count {
+                        let (pending_additions, pending_deletions) = git_info
+                            .as_ref()
+                            .map(super::super::gpui::pending_git_file_counts)
+                            .map(|(added, deleted)| (Some(added), Some(deleted)))
+                            .unwrap_or((None, None));
+                        if header.git_branch != branch
+                            || header.git_pending_additions != pending_additions
+                            || header.git_pending_deletions != pending_deletions
+                        {
                             header.git_branch = branch;
-                            header.git_dirty_count = dirty_count;
+                            header.git_pending_additions = pending_additions;
+                            header.git_pending_deletions = pending_deletions;
                             git_changed = true;
                         }
                     }
@@ -118,12 +126,20 @@ impl WorkspaceView {
                 }
 
                 let branch = git_info.as_ref().map(|info| info.branch.clone());
-                let dirty_count = git_info.as_ref().map(|info| info.dirty_count);
+                let (pending_additions, pending_deletions) = git_info
+                    .as_ref()
+                    .map(super::super::gpui::pending_git_file_counts)
+                    .map(|(added, deleted)| (Some(added), Some(deleted)))
+                    .unwrap_or((None, None));
                 let mut changed = false;
                 if let Some(header) = this.terminal_headers.get_mut(&session_id) {
-                    if header.git_branch != branch || header.git_dirty_count != dirty_count {
+                    if header.git_branch != branch
+                        || header.git_pending_additions != pending_additions
+                        || header.git_pending_deletions != pending_deletions
+                    {
                         header.git_branch = branch.clone();
-                        header.git_dirty_count = dirty_count;
+                        header.git_pending_additions = pending_additions;
+                        header.git_pending_deletions = pending_deletions;
                         changed = true;
                     }
                 }

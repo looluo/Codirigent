@@ -1,6 +1,6 @@
 //! Derived UI state reducers and refresh helpers.
 
-use super::session_metadata::session_project_name;
+use super::session_metadata::{pending_git_file_counts, session_project_name};
 use super::WorkspaceView;
 use codirigent_core::SessionId;
 use std::collections::HashMap;
@@ -131,8 +131,14 @@ impl WorkspaceView {
         let focused_id = self.workspace.focused_session_id();
         for session in sessions {
             let project_name = session_project_name(session);
+            let cli_name = self.session_cli_display_name(session.id);
             let git_branch = session.git_info.as_ref().map(|gi| gi.branch.clone());
-            let git_dirty_count = session.git_info.as_ref().map(|gi| gi.dirty_count);
+            let (git_pending_additions, git_pending_deletions) = session
+                .git_info
+                .as_ref()
+                .map(pending_git_file_counts)
+                .map(|(added, deleted)| (Some(added), Some(deleted)))
+                .unwrap_or((None, None));
             let session_color = session
                 .color
                 .as_deref()
@@ -154,11 +160,17 @@ impl WorkspaceView {
                 if header.project_name != project_name {
                     header.project_name = project_name;
                 }
+                if header.cli_name != cli_name {
+                    header.cli_name = cli_name.clone();
+                }
                 if header.git_branch != git_branch {
                     header.git_branch = git_branch;
                 }
-                if header.git_dirty_count != git_dirty_count {
-                    header.git_dirty_count = git_dirty_count;
+                if header.git_pending_additions != git_pending_additions {
+                    header.git_pending_additions = git_pending_additions;
+                }
+                if header.git_pending_deletions != git_pending_deletions {
+                    header.git_pending_deletions = git_pending_deletions;
                 }
                 if header.session_color != session_color {
                     header.session_color = session_color;
@@ -229,8 +241,14 @@ impl WorkspaceView {
         };
         let focused_id = self.workspace.focused_session_id();
         let project_name = session_project_name(session);
+        let cli_name = self.session_cli_display_name(session.id);
         let git_branch = session.git_info.as_ref().map(|gi| gi.branch.clone());
-        let git_dirty_count = session.git_info.as_ref().map(|gi| gi.dirty_count);
+        let (git_pending_additions, git_pending_deletions) = session
+            .git_info
+            .as_ref()
+            .map(pending_git_file_counts)
+            .map(|(added, deleted)| (Some(added), Some(deleted)))
+            .unwrap_or((None, None));
         let session_color = session
             .color
             .as_deref()
@@ -255,12 +273,18 @@ impl WorkspaceView {
             if header.project_name != project_name {
                 header.project_name = project_name;
             }
+            if header.cli_name != cli_name {
+                header.cli_name = cli_name;
+            }
 
             if header.git_branch != git_branch {
                 header.git_branch = git_branch;
             }
-            if header.git_dirty_count != git_dirty_count {
-                header.git_dirty_count = git_dirty_count;
+            if header.git_pending_additions != git_pending_additions {
+                header.git_pending_additions = git_pending_additions;
+            }
+            if header.git_pending_deletions != git_pending_deletions {
+                header.git_pending_deletions = git_pending_deletions;
             }
             if header.session_color != session_color {
                 header.session_color = session_color;
