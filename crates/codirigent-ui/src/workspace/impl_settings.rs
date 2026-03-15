@@ -102,6 +102,18 @@ fn shell_picker_option_order(shell_options: &[String]) -> Vec<usize> {
         .collect()
 }
 
+/// Normalize a keybinding string to the platform-correct display form.
+///
+/// Parses the string and re-formats it through `format_binding`, which
+/// outputs "Ctrl" on Windows/Linux and "Cmd" on macOS for the platform
+/// modifier. Returns the original string unchanged on parse failure.
+fn normalize_keybinding_display(binding: &str) -> String {
+    use crate::keybindings::KeybindingManager;
+    KeybindingManager::parse_binding(binding)
+        .map(|b| KeybindingManager::format_binding(&b))
+        .unwrap_or_else(|_| binding.to_string())
+}
+
 impl WorkspaceView {
     pub(super) fn shell_picker_sections(
         &self,
@@ -147,6 +159,11 @@ impl WorkspaceView {
                 .keybindings
                 .entry(k.clone())
                 .or_insert_with(|| v.clone());
+        }
+        // Normalize all displayed binding values to platform-correct labels.
+        // This handles configs migrated from another platform (e.g. "Cmd+N" on Windows).
+        for v in user_settings.keybindings.values_mut() {
+            *v = normalize_keybinding_display(v);
         }
 
         let bg: gpui::Hsla = self.workspace.theme().background.into();
@@ -487,6 +504,31 @@ impl WorkspaceView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_normalize_keybinding_display_cmd_to_ctrl_on_non_macos() {
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(normalize_keybinding_display("Cmd+N"), "Ctrl+N");
+        #[cfg(target_os = "macos")]
+        assert_eq!(normalize_keybinding_display("Ctrl+N"), "Cmd+N");
+    }
+
+    #[test]
+    fn test_normalize_keybinding_display_preserves_valid_platform_string() {
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(normalize_keybinding_display("Ctrl+N"), "Ctrl+N");
+        #[cfg(target_os = "macos")]
+        assert_eq!(normalize_keybinding_display("Cmd+N"), "Cmd+N");
+    }
+
+    #[test]
+    fn test_normalize_keybinding_display_falls_back_on_invalid() {
+        // Unparseable strings should be returned unchanged.
+        assert_eq!(
+            normalize_keybinding_display("not-a-binding"),
+            "not-a-binding"
+        );
+    }
 
     #[test]
     fn shell_picker_sections_group_common_shells_before_more() {
