@@ -19,6 +19,58 @@ use gpui::{
     InteractiveElement, IntoElement, MouseButton, MouseDownEvent, ParentElement, SharedString,
     StatefulInteractiveElement, Styled,
 };
+use std::collections::BTreeMap;
+
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
+enum SessionDrawerGroupKey {
+    Explicit(String),
+    Project(String),
+}
+
+impl SessionDrawerGroupKey {
+    fn display_name(&self) -> &str {
+        match self {
+            Self::Explicit(name) | Self::Project(name) => name,
+        }
+    }
+
+    fn cache_key(&self) -> String {
+        match self {
+            Self::Explicit(name) => format!("explicit:{name}"),
+            Self::Project(name) => format!("project:{name}"),
+        }
+    }
+}
+
+type SessionDrawerGroups<'a> = (
+    Vec<&'a Session>,
+    BTreeMap<SessionDrawerGroupKey, Vec<&'a Session>>,
+);
+
+fn session_drawer_groups<'a>(sessions: &'a [Session]) -> SessionDrawerGroups<'a> {
+    let mut ungrouped: Vec<&Session> = Vec::new();
+    let mut groups: BTreeMap<SessionDrawerGroupKey, Vec<&Session>> = BTreeMap::new();
+
+    for session in sessions {
+        let key = session
+            .group
+            .as_ref()
+            .filter(|group| !group.is_empty())
+            .cloned()
+            .map(SessionDrawerGroupKey::Explicit)
+            .or_else(|| {
+                super::gpui::effective_session_group_name(session)
+                    .map(SessionDrawerGroupKey::Project)
+            });
+
+        match key {
+            Some(group_key) => groups.entry(group_key).or_default().push(session),
+            None => ungrouped.push(session),
+        }
+    }
+
+    (ungrouped, groups)
+}
 
 impl WorkspaceView {
     pub(super) fn render_drawer(&mut self, cx: &mut Context<Self>) -> impl IntoElement {
@@ -129,17 +181,7 @@ impl WorkspaceView {
         let session_count = sessions.len();
 
         // Separate ungrouped and grouped sessions
-        let mut ungrouped: Vec<&Session> = Vec::new();
-        let mut groups: std::collections::BTreeMap<String, Vec<&Session>> =
-            std::collections::BTreeMap::new();
-        for session in &sessions {
-            match &session.group {
-                Some(group) if !group.is_empty() => {
-                    groups.entry(group.clone()).or_default().push(session);
-                }
-                _ => ungrouped.push(session),
-            }
-        }
+        let (ungrouped, groups) = session_drawer_groups(&sessions);
 
         let mut content = div()
             .id("sessions-scroll")
@@ -161,12 +203,13 @@ impl WorkspaceView {
 
         // Render grouped sessions with headers
         let expanded_map = self.cache.drawer_group_expanded.clone();
-        for (group_name, group_sessions) in &groups {
+        for (group_key, group_sessions) in &groups {
             let color = group_sessions.first().and_then(|s| s.color.clone());
-            let expanded = expanded_map.get(group_name).copied().unwrap_or(true);
+            let cache_key = group_key.cache_key();
+            let expanded = expanded_map.get(&cache_key).copied().unwrap_or(true);
 
             content = content.child(self.render_session_group_header(
-                group_name,
+                group_key,
                 color.as_deref(),
                 group_sessions.len(),
                 expanded,
@@ -1248,17 +1291,7 @@ impl WorkspaceView {
 
     pub(super) fn session_drawer_row_offset(&self, session_id: SessionId) -> Option<f32> {
         let sessions: Vec<Session> = self.workspace().sessions().to_vec();
-        let mut ungrouped: Vec<&Session> = Vec::new();
-        let mut groups: std::collections::BTreeMap<String, Vec<&Session>> =
-            std::collections::BTreeMap::new();
-        for session in &sessions {
-            match &session.group {
-                Some(group) if !group.is_empty() => {
-                    groups.entry(group.clone()).or_default().push(session);
-                }
-                _ => ungrouped.push(session),
-            }
-        }
+        let (ungrouped, groups) = session_drawer_groups(&sessions);
 
         let mut offset = 0.0;
         for session in ungrouped {
@@ -1268,12 +1301,13 @@ impl WorkspaceView {
             offset += SESSION_DRAWER_ROW_HEIGHT;
         }
 
-        for (group_name, group_sessions) in groups {
+        for (group_key, group_sessions) in groups {
             offset += SESSION_ROW_HEIGHT;
+            let cache_key = group_key.cache_key();
             let expanded = self
                 .cache
                 .drawer_group_expanded
-                .get(&group_name)
+                .get(&cache_key)
                 .copied()
                 .unwrap_or(true);
             if !expanded {
@@ -1316,7 +1350,7 @@ impl WorkspaceView {
     /// Render a session group header in the drawer session list.
     fn render_session_group_header(
         &mut self,
-        group_name: &str,
+        group_key: &SessionDrawerGroupKey,
         color: Option<&str>,
         count: usize,
         expanded: bool,
@@ -1337,15 +1371,12 @@ impl WorkspaceView {
             icons::chevron_right()
         };
 
-        let group_name_owned = group_name.to_string();
+        let group_name = group_key.display_name();
         let group_label = format!("{} ({})", group_name, count);
-        let toggle_key = group_name_owned.clone();
+        let toggle_key = group_key.cache_key();
 
         div()
-            .id(SharedString::from(format!(
-                "group-header-{}",
-                group_name_owned
-            )))
+            .id(SharedString::from(format!("group-header-{}", toggle_key)))
             .h(px(SESSION_ROW_HEIGHT))
             .w_full()
             .px_3()
@@ -1388,5 +1419,86 @@ impl WorkspaceView {
                 14.0,
                 6.0,
             ))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use codirigent_core::{GitRepoInfo, SessionId, SessionStatus};
+    use std::path::PathBuf;
+
+    fn test_session(id: u64, working_directory: &str) -> Session {
+        Session {
+            id: SessionId(id),
+            name: format!("Session {id}"),
+            status: SessionStatus::Idle,
+            working_directory: PathBuf::from(working_directory),
+            shell: None,
+            current_task: None,
+            context_usage: None,
+            created_at: chrono::Utc::now(),
+            group: None,
+            color: None,
+            git_info: None,
+            claude_session_id: None,
+            codex_session_id: None,
+            codex_execution_mode: None,
+            codex_started_at: None,
+            gemini_session_id: None,
+        }
+    }
+
+    #[test]
+    fn session_drawer_groups_falls_back_to_project_name() {
+        let sessions = vec![
+            test_session(1, "/workspace/dirigent"),
+            test_session(2, "/workspace/dirigent"),
+        ];
+
+        let (ungrouped, groups) = session_drawer_groups(&sessions);
+
+        assert!(ungrouped.is_empty());
+        assert_eq!(groups.len(), 1);
+        assert_eq!(
+            groups
+                .get(&SessionDrawerGroupKey::Project("dirigent".to_string()))
+                .map(Vec::len),
+            Some(2)
+        );
+    }
+
+    #[test]
+    fn session_drawer_groups_keep_explicit_and_project_groups_distinct() {
+        let mut explicit = test_session(1, "/workspace/dirigent");
+        explicit.group = Some("dirigent".to_string());
+
+        let mut derived = test_session(2, "/workspace/dirigent/subdir");
+        derived.git_info = Some(GitRepoInfo {
+            repo_root: PathBuf::from("/workspace/dirigent"),
+            branch: "main".to_string(),
+            dirty_count: 0,
+            has_staged: false,
+            head_sha: None,
+            unstaged_files: Vec::new(),
+            staged_files: Vec::new(),
+        });
+
+        let sessions = vec![explicit, derived];
+        let (_ungrouped, groups) = session_drawer_groups(&sessions);
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(
+            groups
+                .get(&SessionDrawerGroupKey::Explicit("dirigent".to_string()))
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            groups
+                .get(&SessionDrawerGroupKey::Project("dirigent".to_string()))
+                .map(Vec::len),
+            Some(1)
+        );
     }
 }

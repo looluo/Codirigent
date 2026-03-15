@@ -163,6 +163,7 @@ impl WorkspaceView {
         Some(
             div()
                 .id("custom-layout-modal-overlay")
+                .occlude()
                 .absolute()
                 .inset_0()
                 .flex()
@@ -182,6 +183,7 @@ impl WorkspaceView {
                 .child(
                     div()
                         .id("custom-layout-modal")
+                        .occlude()
                         .w(px(400.0))
                         .bg(bg)
                         .border_1()
@@ -771,12 +773,19 @@ impl WorkspaceView {
         Some(
             div()
                 .id("session-action-overlay")
+                .occlude()
                 .absolute()
                 .inset_0()
                 .flex()
                 .items_center()
                 .justify_center()
                 .bg(gpui::Hsla::black().opacity(0.5))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                        cx.stop_propagation();
+                    }),
+                )
                 .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
                     this.close_session_action_modal();
                     cx.notify();
@@ -784,6 +793,7 @@ impl WorkspaceView {
                 .child(
                     div()
                         .id("session-action-modal")
+                        .occlude()
                         .w(px(420.0))
                         .bg(panel_bg)
                         .border_1()
@@ -791,6 +801,12 @@ impl WorkspaceView {
                         .rounded_lg()
                         .flex()
                         .flex_col()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                                cx.stop_propagation();
+                            }),
+                        )
                         // Prevent closing when clicking modal content
                         .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
                             cx.stop_propagation();
@@ -941,12 +957,19 @@ impl WorkspaceView {
         Some(
             div()
                 .id("session-create-overlay")
+                .occlude()
                 .absolute()
                 .inset_0()
                 .flex()
                 .items_center()
                 .justify_center()
                 .bg(gpui::Hsla::black().opacity(0.5))
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                        cx.stop_propagation();
+                    }),
+                )
                 .on_click(cx.listener(move |this, _: &ClickEvent, _window, cx| {
                     if !modal_pending {
                         this.close_session_creation_modal();
@@ -956,6 +979,7 @@ impl WorkspaceView {
                 .child(
                     div()
                         .id("session-create-modal")
+                        .occlude()
                         .w(px(460.0))
                         .bg(panel_bg)
                         .border_1()
@@ -963,6 +987,12 @@ impl WorkspaceView {
                         .rounded_lg()
                         .flex()
                         .flex_col()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                                cx.stop_propagation();
+                            }),
+                        )
                         .on_click(cx.listener(|_this, _: &ClickEvent, _window, cx| {
                             cx.stop_propagation();
                         }))

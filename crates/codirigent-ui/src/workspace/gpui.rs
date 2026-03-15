@@ -31,7 +31,8 @@ mod session_metadata;
 mod ui_events;
 
 pub(super) use session_metadata::{
-    cli_type_badge_name, pending_git_file_counts, session_project_name,
+    cli_type_badge_name, effective_session_group_name, pending_git_file_counts,
+    session_project_name,
 };
 
 // The root still owns `WorkspaceView`, trait impls, and high-level
@@ -63,9 +64,9 @@ use codirigent_session::clipboard_service::{ClipboardService, DefaultClipboardSe
 use codirigent_session::DefaultSessionManager;
 use gpui::{
     div, px, App, AppContext, Bounds, ClickEvent, Context, Entity, EntityInputHandler, FocusHandle,
-    Focusable, InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseMoveEvent,
-    MouseUpEvent, ParentElement, Pixels, Render, StatefulInteractiveElement, Styled,
-    UTF16Selection, Window,
+    Focusable, InteractiveElement, IntoElement, KeyDownEvent, MouseButton, MouseDownEvent,
+    MouseMoveEvent, MouseUpEvent, ParentElement, Pixels, Render, StatefulInteractiveElement,
+    Styled, UTF16Selection, Window,
 };
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -1218,14 +1219,22 @@ impl WorkspaceView {
 
             container = container.child(
                 div()
+                    .occlude()
                     .absolute()
                     .inset_0()
                     .bg(super::types::MODAL_BACKDROP)
                     .flex()
                     .items_center()
                     .justify_center()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                            cx.stop_propagation();
+                        }),
+                    )
                     .child(
                         div()
+                            .occlude()
                             .bg(panel_bg)
                             .border_1()
                             .border_color(border_color)
@@ -1235,6 +1244,12 @@ impl WorkspaceView {
                             .flex_col()
                             .gap_3()
                             .w(px(380.0))
+                            .on_mouse_down(
+                                MouseButton::Left,
+                                cx.listener(|_this, _: &MouseDownEvent, _window, cx| {
+                                    cx.stop_propagation();
+                                }),
+                            )
                             .child(
                                 div()
                                     .text_base()
@@ -1327,6 +1342,7 @@ impl WorkspaceView {
     pub(super) fn has_blocking_modal(&self) -> bool {
         self.custom_picker.is_open
             || self.modals.session_action.is_some()
+            || self.modals.session_creation.is_some()
             || self.modals.task_creation.is_some()
             || self.modals.pending_profile_deletion.is_some()
     }
