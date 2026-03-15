@@ -23,17 +23,6 @@ pub(in crate::workspace) fn session_project_name(
         .or_else(|| path_display_name(&session.working_directory))
 }
 
-pub(in crate::workspace) fn effective_session_group_name(
-    session: &codirigent_core::Session,
-) -> Option<String> {
-    session
-        .group
-        .as_ref()
-        .filter(|group| !group.is_empty())
-        .cloned()
-        .or_else(|| session_project_name(session))
-}
-
 pub(in crate::workspace) fn pending_git_file_counts(git_info: &GitRepoInfo) -> (usize, usize) {
     let mut added_or_edited = HashSet::new();
     let mut deleted = HashSet::new();
@@ -128,50 +117,6 @@ mod tests {
         );
 
         assert_eq!(session_project_name(&session), Some("/".to_string()));
-    }
-
-    #[test]
-    fn effective_session_group_name_prefers_explicit_group() {
-        let mut session = codirigent_core::Session::new(
-            codirigent_core::SessionId(1),
-            "Session 1".to_string(),
-            std::path::PathBuf::from("/workspace/project"),
-        );
-        session.group = Some("Backend".to_string());
-
-        assert_eq!(
-            effective_session_group_name(&session),
-            Some("Backend".to_string())
-        );
-    }
-
-    #[test]
-    fn effective_session_group_name_falls_back_to_project_name() {
-        let session = codirigent_core::Session::new(
-            codirigent_core::SessionId(1),
-            "Session 1".to_string(),
-            std::path::PathBuf::from("/workspace/project"),
-        );
-
-        assert_eq!(
-            effective_session_group_name(&session),
-            Some("project".to_string())
-        );
-    }
-
-    #[test]
-    fn effective_session_group_name_ignores_empty_explicit_group() {
-        let mut session = codirigent_core::Session::new(
-            codirigent_core::SessionId(1),
-            "Session 1".to_string(),
-            std::path::PathBuf::from("/workspace/project"),
-        );
-        session.group = Some(String::new());
-
-        assert_eq!(
-            effective_session_group_name(&session),
-            Some("project".to_string())
-        );
     }
 
     #[test]

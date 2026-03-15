@@ -24,20 +24,24 @@ use std::collections::BTreeMap;
 #[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord)]
 enum SessionDrawerGroupKey {
     Explicit(String),
-    Project(String),
+    Project {
+        display_name: String,
+        identity: String,
+    },
 }
 
 impl SessionDrawerGroupKey {
     fn display_name(&self) -> &str {
         match self {
-            Self::Explicit(name) | Self::Project(name) => name,
+            Self::Explicit(name) => name,
+            Self::Project { display_name, .. } => display_name,
         }
     }
 
     fn cache_key(&self) -> String {
         match self {
             Self::Explicit(name) => format!("explicit:{name}"),
-            Self::Project(name) => format!("project:{name}"),
+            Self::Project { identity, .. } => format!("project:{identity}"),
         }
     }
 }
@@ -59,8 +63,17 @@ fn session_drawer_groups<'a>(sessions: &'a [Session]) -> SessionDrawerGroups<'a>
             .cloned()
             .map(SessionDrawerGroupKey::Explicit)
             .or_else(|| {
-                super::gpui::effective_session_group_name(session)
-                    .map(SessionDrawerGroupKey::Project)
+                let identity = session
+                    .git_info
+                    .as_ref()
+                    .map(|git_info| git_info.repo_root.to_string_lossy().into_owned())
+                    .or_else(|| Some(session.working_directory.to_string_lossy().into_owned()))?;
+                let display_name =
+                    super::gpui::session_project_name(session).unwrap_or_else(|| identity.clone());
+                Some(SessionDrawerGroupKey::Project {
+                    display_name,
+                    identity,
+                })
             });
 
         match key {
@@ -1474,7 +1487,10 @@ mod tests {
         assert_eq!(groups.len(), 1);
         assert_eq!(
             groups
-                .get(&SessionDrawerGroupKey::Project("dirigent".to_string()))
+                .get(&SessionDrawerGroupKey::Project {
+                    display_name: "dirigent".to_string(),
+                    identity: "/workspace/dirigent".to_string(),
+                })
                 .map(Vec::len),
             Some(2)
         );
@@ -1508,7 +1524,40 @@ mod tests {
         );
         assert_eq!(
             groups
-                .get(&SessionDrawerGroupKey::Project("dirigent".to_string()))
+                .get(&SessionDrawerGroupKey::Project {
+                    display_name: "dirigent".to_string(),
+                    identity: "/workspace/dirigent".to_string(),
+                })
+                .map(Vec::len),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn session_drawer_groups_keep_duplicate_project_names_distinct_by_path() {
+        let sessions = vec![
+            test_session(1, "/workspace/apps/dirigent"),
+            test_session(2, "/workspace/tools/dirigent"),
+        ];
+
+        let (_ungrouped, groups) = session_drawer_groups(&sessions);
+
+        assert_eq!(groups.len(), 2);
+        assert_eq!(
+            groups
+                .get(&SessionDrawerGroupKey::Project {
+                    display_name: "dirigent".to_string(),
+                    identity: "/workspace/apps/dirigent".to_string(),
+                })
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            groups
+                .get(&SessionDrawerGroupKey::Project {
+                    display_name: "dirigent".to_string(),
+                    identity: "/workspace/tools/dirigent".to_string(),
+                })
                 .map(Vec::len),
             Some(1)
         );
