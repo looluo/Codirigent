@@ -7,7 +7,9 @@
 //! - State persistence to disk
 
 use super::cli_helpers::is_safe_cli_session_id;
-use super::gpui::{cli_type_badge_name, session_project_name, WorkspaceView};
+use super::gpui::{
+    cli_type_badge_name, pending_git_file_counts, session_project_name, WorkspaceView,
+};
 use super::types::{RestoreShellFallback, SESSION_NAME_PREFIX, SESSION_SHELL_AUTO_LABEL};
 use crate::terminal::Terminal;
 use crate::terminal_header::TerminalHeader;
@@ -1206,7 +1208,8 @@ impl WorkspaceView {
     ) -> TerminalHeader {
         let mut header = TerminalHeader::new(session_name, SessionStatus::Idle);
         if let Some(ref git_info) = session.git_info {
-            header = header.with_git_info(git_info.branch.clone(), git_info.dirty_count);
+            let (additions, deletions) = pending_git_file_counts(git_info);
+            header = header.with_git_info(git_info.branch.clone(), additions, deletions);
         }
 
         if let Some(project_name) = session_project_name(session) {

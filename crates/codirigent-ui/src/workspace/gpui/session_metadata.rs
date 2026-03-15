@@ -1,7 +1,7 @@
 //! Lightweight session metadata helpers.
 
-use codirigent_core::CliType;
-use std::collections::HashMap;
+use codirigent_core::{CliType, GitChangeKind, GitRepoInfo};
+use std::collections::{HashMap, HashSet};
 
 fn path_display_name(path: &std::path::Path) -> Option<String> {
     path.file_name()
@@ -21,6 +21,31 @@ pub(in crate::workspace) fn session_project_name(
         .as_ref()
         .and_then(|git_info| path_display_name(&git_info.repo_root))
         .or_else(|| path_display_name(&session.working_directory))
+}
+
+pub(in crate::workspace) fn pending_git_file_counts(git_info: &GitRepoInfo) -> (usize, usize) {
+    let mut added_or_edited = HashSet::new();
+    let mut deleted = HashSet::new();
+
+    for file in git_info
+        .staged_files
+        .iter()
+        .chain(git_info.unstaged_files.iter())
+    {
+        match file.change {
+            GitChangeKind::Deleted => {
+                deleted.insert(file.path.clone());
+                added_or_edited.remove(&file.path);
+            }
+            GitChangeKind::Added | GitChangeKind::Modified | GitChangeKind::Renamed => {
+                if !deleted.contains(&file.path) {
+                    added_or_edited.insert(file.path.clone());
+                }
+            }
+        }
+    }
+
+    (added_or_edited.len(), deleted.len())
 }
 
 pub(super) fn resolved_task_title(
@@ -129,5 +154,59 @@ mod tests {
             cli_type_badge_name(codirigent_core::CliType::GenericShell),
             None
         );
+    }
+
+    #[test]
+    fn pending_git_file_counts_dedupes_staged_and_unstaged_paths() {
+        let git_info = codirigent_core::GitRepoInfo {
+            repo_root: std::path::PathBuf::from("/workspace/project-root"),
+            branch: "main".to_string(),
+            dirty_count: 3,
+            has_staged: true,
+            head_sha: Some("deadbeef".to_string()),
+            unstaged_files: vec![
+                codirigent_core::GitChangedFile {
+                    path: "src/lib.rs".to_string(),
+                    change: codirigent_core::GitChangeKind::Modified,
+                },
+                codirigent_core::GitChangedFile {
+                    path: "removed.txt".to_string(),
+                    change: codirigent_core::GitChangeKind::Deleted,
+                },
+            ],
+            staged_files: vec![
+                codirigent_core::GitChangedFile {
+                    path: "src/lib.rs".to_string(),
+                    change: codirigent_core::GitChangeKind::Modified,
+                },
+                codirigent_core::GitChangedFile {
+                    path: "new.rs".to_string(),
+                    change: codirigent_core::GitChangeKind::Added,
+                },
+            ],
+        };
+
+        assert_eq!(pending_git_file_counts(&git_info), (2, 1));
+    }
+
+    #[test]
+    fn pending_git_file_counts_treats_deleted_state_as_removal() {
+        let git_info = codirigent_core::GitRepoInfo {
+            repo_root: std::path::PathBuf::from("/workspace/project-root"),
+            branch: "main".to_string(),
+            dirty_count: 2,
+            has_staged: true,
+            head_sha: Some("deadbeef".to_string()),
+            unstaged_files: vec![codirigent_core::GitChangedFile {
+                path: "rename-target.rs".to_string(),
+                change: codirigent_core::GitChangeKind::Renamed,
+            }],
+            staged_files: vec![codirigent_core::GitChangedFile {
+                path: "rename-target.rs".to_string(),
+                change: codirigent_core::GitChangeKind::Deleted,
+            }],
+        };
+
+        assert_eq!(pending_git_file_counts(&git_info), (0, 1));
     }
 }

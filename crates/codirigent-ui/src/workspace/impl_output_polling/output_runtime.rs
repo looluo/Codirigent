@@ -406,7 +406,8 @@ impl WorkspaceView {
         if let Some(mgr_session) = cwd_session {
             if let Some(header) = self.terminal_headers.get_mut(&session_id) {
                 header.git_branch = None;
-                header.git_dirty_count = None;
+                header.git_pending_additions = None;
+                header.git_pending_deletions = None;
             }
 
             if let Some(ws_session) = self.workspace.session_mut(session_id) {

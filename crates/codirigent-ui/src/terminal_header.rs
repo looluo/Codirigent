@@ -37,8 +37,10 @@ pub struct TerminalHeader {
     pub ai_summary: Option<String>,
     /// Git branch name (if in a git repo).
     pub git_branch: Option<String>,
-    /// Git dirty file count (if in a git repo).
-    pub git_dirty_count: Option<usize>,
+    /// Count of pending added/edited files.
+    pub git_pending_additions: Option<usize>,
+    /// Count of pending deleted files.
+    pub git_pending_deletions: Option<usize>,
     /// Group name (if session is in a group).
     pub group_name: Option<String>,
 }
@@ -59,7 +61,8 @@ impl Default for TerminalHeader {
             needs_attention: false,
             ai_summary: None,
             git_branch: None,
-            git_dirty_count: None,
+            git_pending_additions: None,
+            git_pending_deletions: None,
             group_name: None,
         }
     }
@@ -124,10 +127,11 @@ impl TerminalHeader {
         self
     }
 
-    /// Set git branch and dirty count info.
-    pub fn with_git_info(mut self, branch: String, dirty: usize) -> Self {
+    /// Set git branch and pending file counts.
+    pub fn with_git_info(mut self, branch: String, additions: usize, deletions: usize) -> Self {
         self.git_branch = Some(branch);
-        self.git_dirty_count = Some(dirty);
+        self.git_pending_additions = Some(additions);
+        self.git_pending_deletions = Some(deletions);
         self
     }
 
@@ -350,8 +354,10 @@ pub struct TerminalHeaderRenderHints {
     pub ai_summary: Option<String>,
     /// Git branch name.
     pub git_branch: Option<String>,
-    /// Git dirty file count.
-    pub git_dirty_count: Option<usize>,
+    /// Count of pending added/edited files.
+    pub git_pending_additions: Option<usize>,
+    /// Count of pending deleted files.
+    pub git_pending_deletions: Option<usize>,
     /// Group name (if session is in a group).
     pub group_name: Option<String>,
 }
@@ -377,7 +383,8 @@ impl TerminalHeader {
             needs_attention: self.needs_attention,
             ai_summary: self.ai_summary.clone(),
             git_branch: self.git_branch.clone(),
-            git_dirty_count: self.git_dirty_count,
+            git_pending_additions: self.git_pending_additions,
+            git_pending_deletions: self.git_pending_deletions,
             group_name: self.group_name.clone(),
         }
     }

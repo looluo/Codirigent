@@ -1084,11 +1084,7 @@ impl WorkspaceView {
             if branch.chars().count() > 16 {
                 branch = branch.chars().take(13).collect::<String>() + "...";
             }
-            if git_info.dirty_count > 0 {
-                format!("{} +{}", branch, git_info.dirty_count)
-            } else {
-                branch
-            }
+            branch
         });
         div()
             .id(SharedString::from(format!("session-row-{}", session_id.0)))

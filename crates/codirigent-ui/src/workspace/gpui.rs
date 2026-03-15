@@ -30,7 +30,9 @@ mod layout_sync;
 mod session_metadata;
 mod ui_events;
 
-pub(super) use session_metadata::{cli_type_badge_name, session_project_name};
+pub(super) use session_metadata::{
+    cli_type_badge_name, pending_git_file_counts, session_project_name,
+};
 
 // The root still owns `WorkspaceView`, trait impls, and high-level
 // orchestration. Child modules hold lower-coupling helper clusters.

@@ -283,9 +283,11 @@ impl WorkspaceView {
         hints: &TerminalHeaderRenderHints,
         border_color: gpui::Hsla,
         muted: gpui::Hsla,
-        orange: gpui::Hsla,
+        _orange: gpui::Hsla,
     ) -> gpui::Div {
         let git_fg = muted.opacity(0.8);
+        let git_addition: gpui::Hsla = crate::sidebar::Color::from_hex("#22c55e").into();
+        let git_deletion: gpui::Hsla = crate::sidebar::Color::from_hex("#ef4444").into();
         let git_badge_bg = border_color.opacity(0.25);
         let branch_label = if branch.chars().count() > 16 {
             let truncated: String = branch.chars().take(13).collect();
@@ -311,12 +313,21 @@ impl WorkspaceView {
             )
             .child(div().text_xs().text_color(git_fg).child(branch_label));
 
-        if let Some(count) = hints.git_dirty_count.filter(|count| *count > 0) {
+        if let Some(count) = hints.git_pending_additions.filter(|count| *count > 0) {
             git_badge = git_badge.child(
                 div()
                     .text_xs()
-                    .text_color(orange)
+                    .text_color(git_addition)
                     .child(format!("+{}", count)),
+            );
+        }
+
+        if let Some(count) = hints.git_pending_deletions.filter(|count| *count > 0) {
+            git_badge = git_badge.child(
+                div()
+                    .text_xs()
+                    .text_color(git_deletion)
+                    .child(format!("-{}", count)),
             );
         }
 
