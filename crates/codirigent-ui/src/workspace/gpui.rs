@@ -921,6 +921,69 @@ impl WorkspaceView {
             return;
         }
 
+        // Navigate Keyboard Shortcuts panel with keyboard when not recording.
+        if self.settings.open
+            && self
+                .settings
+                .page
+                .as_ref()
+                .map(|p| {
+                    p.active_category() == crate::settings::SettingsCategory::KeyboardShortcuts
+                        && p.recording_shortcut.is_none()
+                })
+                .unwrap_or(false)
+        {
+            let key = event.keystroke.key.as_str();
+            let shift = event.keystroke.modifiers.shift;
+            let handled = match key {
+                "tab" | "down" | "up" => {
+                    let sorted_keys: Vec<String> = self
+                        .settings
+                        .page
+                        .as_ref()
+                        .map(|p| {
+                            let mut v: Vec<String> =
+                                p.user_settings.keybindings.keys().cloned().collect();
+                            v.sort();
+                            v
+                        })
+                        .unwrap_or_default();
+                    let move_down = (key == "tab" && !shift) || key == "down";
+                    let new_focus = self.settings.page.as_ref().and_then(|p| {
+                        super::impl_shortcuts_nav::navigate_shortcuts_focus(
+                            p,
+                            &sorted_keys,
+                            move_down,
+                        )
+                    });
+                    if let Some(page) = self.settings.page.as_mut() {
+                        page.focused_shortcut_row = new_focus;
+                    }
+                    cx.notify();
+                    true
+                }
+                "enter" | " " => {
+                    if let Some(focused) = self
+                        .settings
+                        .page
+                        .as_ref()
+                        .and_then(|p| p.focused_shortcut_row.clone())
+                    {
+                        if let Some(page) = self.settings.page.as_mut() {
+                            page.recording_shortcut = Some(focused);
+                        }
+                        cx.notify();
+                    }
+                    true
+                }
+                _ => false,
+            };
+            if handled {
+                cx.stop_propagation();
+                return;
+            }
+        }
+
         // When a shortcut is being recorded in the Keyboard Shortcuts settings panel,
         // capture the next meaningful keystroke and save it.
         if self.settings.open {

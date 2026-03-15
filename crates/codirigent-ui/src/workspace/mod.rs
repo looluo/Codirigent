@@ -78,6 +78,9 @@ mod impl_settings;
 mod impl_shortcuts_recording;
 
 #[cfg(feature = "gpui-full")]
+mod impl_shortcuts_nav;
+
+#[cfg(feature = "gpui-full")]
 mod impl_ui_operations;
 
 #[cfg(feature = "gpui-full")]

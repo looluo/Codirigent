@@ -968,6 +968,7 @@ impl super::gpui::WorkspaceView {
         sorted.sort_by_key(|(k, _)| (*k).clone());
 
         let recording = page.recording_shortcut.clone();
+        let focused_row = page.focused_shortcut_row.clone();
 
         let mut container = div()
             .flex()
@@ -1002,6 +1003,7 @@ impl super::gpui::WorkspaceView {
         for (action, binding) in sorted {
             let action_name = action.clone();
             let is_recording = recording.as_deref() == Some(action.as_str());
+            let is_focused = focused_row.as_deref() == Some(action.as_str());
             let display = if is_recording {
                 "Press a key...".to_string()
             } else {
@@ -1020,6 +1022,14 @@ impl super::gpui::WorkspaceView {
                     .py(px(6.0))
                     .rounded_md()
                     .hover(|s| s.bg(Hsla { a: 0.05, ..fg }))
+                    .bg(if is_focused {
+                        Hsla { a: 0.08, ..fg }
+                    } else {
+                        Hsla {
+                            a: 0.0,
+                            ..Default::default()
+                        }
+                    })
                     .cursor_pointer()
                     .on_mouse_down(
                         MouseButton::Left,

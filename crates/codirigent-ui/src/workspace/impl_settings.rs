@@ -529,12 +529,14 @@ impl WorkspaceView {
                         let open_dropdown = existing_page.open_dropdown.clone();
                         let dropdown_click_pos = existing_page.dropdown_click_pos;
                         let recording_shortcut = existing_page.recording_shortcut.clone();
+                        let focused_shortcut_row = existing_page.focused_shortcut_row.clone();
 
                         let mut page = this.build_settings_page();
                         page.set_category(active_category);
                         page.open_dropdown = open_dropdown;
                         page.dropdown_click_pos = dropdown_click_pos;
                         page.recording_shortcut = recording_shortcut;
+                        page.focused_shortcut_row = focused_shortcut_row;
                         this.settings.page = Some(page);
                     }
                 } else if this.settings.open {

@@ -74,6 +74,8 @@ pub struct SettingsPage {
     original_project: ProjectConfig,
     /// Which keybinding is currently being recorded (action name).
     pub recording_shortcut: Option<String>,
+    /// Which shortcut row currently has keyboard focus (action name).
+    pub focused_shortcut_row: Option<String>,
     /// Which dropdown is currently open (by ID string).
     pub open_dropdown: Option<String>,
     /// Click position (window coordinates) where the dropdown was triggered.
@@ -106,6 +108,7 @@ impl SettingsPage {
             user_settings,
             project_config,
             recording_shortcut: None,
+            focused_shortcut_row: None,
             open_dropdown: None,
             dropdown_click_pos: (0.0, 0.0),
             user_save_pending: false,
@@ -217,6 +220,18 @@ mod tests {
         );
         assert_eq!(SettingsCategory::Sessions.label(), "Sessions");
         assert_eq!(SettingsCategory::Advanced.label(), "Advanced");
+    }
+
+    #[test]
+    fn test_settings_page_focused_shortcut_row_default_none() {
+        let page = SettingsPage::new(
+            UserSettings::default(),
+            ProjectConfig::default(),
+            vec![],
+            vec![],
+            vec![],
+        );
+        assert!(page.focused_shortcut_row.is_none());
     }
 
     #[test]
