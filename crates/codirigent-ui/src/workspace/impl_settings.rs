@@ -137,9 +137,10 @@ fn keybindings_to_gpui_list(
     keybindings: &std::collections::HashMap<String, String>,
 ) -> Vec<gpui::KeyBinding> {
     use crate::app::{
-        CloseSession, FocusSession1, FocusSession2, FocusSession3, FocusSession4, FocusSession5,
-        FocusSession6, FocusSession7, FocusSession8, FocusSession9, NewSession, NextLayout,
-        QuickSwitch, ToggleSidebar, ToggleTaskBoard,
+        ClosePane, CloseSession, Copy, FocusSession1, FocusSession2, FocusSession3, FocusSession4,
+        FocusSession5, FocusSession6, FocusSession7, FocusSession8, FocusSession9, NewSession,
+        NextLayout, OpenSettings, Paste, Quit, SplitHorizontal, SplitVertical, ToggleSidebar,
+        ToggleTaskBoard,
     };
     use crate::keybindings::KeybindingManager;
 
@@ -156,7 +157,13 @@ fn keybindings_to_gpui_list(
                 "toggle_layout" => gpui::KeyBinding::new(&gpui_str, NextLayout, None),
                 "toggle_sidebar" => gpui::KeyBinding::new(&gpui_str, ToggleSidebar, None),
                 "toggle_task_board" => gpui::KeyBinding::new(&gpui_str, ToggleTaskBoard, None),
-                "quick_switch" => gpui::KeyBinding::new(&gpui_str, QuickSwitch, None),
+                "open_settings" => gpui::KeyBinding::new(&gpui_str, OpenSettings, None),
+                "quit" => gpui::KeyBinding::new(&gpui_str, Quit, None),
+                "paste" => gpui::KeyBinding::new(&gpui_str, Paste, None),
+                "copy" => gpui::KeyBinding::new(&gpui_str, Copy, None),
+                "split_horizontal" => gpui::KeyBinding::new(&gpui_str, SplitHorizontal, None),
+                "split_vertical" => gpui::KeyBinding::new(&gpui_str, SplitVertical, None),
+                "close_pane" => gpui::KeyBinding::new(&gpui_str, ClosePane, None),
                 "focus_session_1" | "switch_session_1" => {
                     gpui::KeyBinding::new(&gpui_str, FocusSession1, None)
                 }
@@ -656,11 +663,26 @@ mod tests {
     }
 
     #[test]
-    fn test_keybindings_to_gpui_list_includes_quick_switch() {
+    fn test_keybindings_to_gpui_list_skips_quick_switch() {
+        // quick_switch is no longer user-visible; it should be treated as unknown.
         let mut map = std::collections::HashMap::new();
         map.insert("quick_switch".to_string(), "Ctrl+K".to_string());
         let list = keybindings_to_gpui_list(&map);
-        assert_eq!(list.len(), 1);
+        assert_eq!(list.len(), 0);
+    }
+
+    #[test]
+    fn test_keybindings_to_gpui_list_includes_new_actions() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("open_settings".to_string(), "Ctrl+,".to_string());
+        map.insert("quit".to_string(), "Ctrl+Q".to_string());
+        map.insert("paste".to_string(), "Ctrl+V".to_string());
+        map.insert("copy".to_string(), "Ctrl+C".to_string());
+        map.insert("split_horizontal".to_string(), "Ctrl+D".to_string());
+        map.insert("split_vertical".to_string(), "Ctrl+Shift+D".to_string());
+        map.insert("close_pane".to_string(), "Ctrl+Shift+W".to_string());
+        let list = keybindings_to_gpui_list(&map);
+        assert_eq!(list.len(), 7);
     }
 
     #[test]

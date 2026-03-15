@@ -893,45 +893,20 @@ impl WorkspaceView {
         &mut self.terminals
     }
 
-    /// Handle keyboard input for the focused session.
-    fn handle_key_down(
-        &mut self,
-        event: &KeyDownEvent,
-        _window: &mut Window,
-        cx: &mut Context<Self>,
-    ) {
-        // Escape closes settings page if open — but only when NOT recording a shortcut.
-        // When recording, Escape cancels the recording instead (handled below).
-        if self.settings.open
-            && event.keystroke.key == "escape"
-            && self
-                .settings
-                .page
-                .as_ref()
-                .map_or(true, |p| p.recording_shortcut.is_none())
-        {
-            self.close_settings(cx);
-            cx.notify();
-            return;
-        }
-
-        // Allow modals to capture input before sending to the terminal.
-        if self.handle_modal_key_down(event, cx) {
-            cx.stop_propagation();
-            return;
-        }
-
+    /// Handle keyboard input when the settings panel is open.
+    ///
+    /// Returns `true` if the key was consumed and should not be forwarded to the PTY.
+    fn handle_settings_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
         // Navigate Keyboard Shortcuts panel with keyboard when not recording.
-        if self.settings.open
-            && self
-                .settings
-                .page
-                .as_ref()
-                .map(|p| {
-                    p.active_category() == crate::settings::SettingsCategory::KeyboardShortcuts
-                        && p.recording_shortcut.is_none()
-                })
-                .unwrap_or(false)
+        if self
+            .settings
+            .page
+            .as_ref()
+            .map(|p| {
+                p.active_category() == crate::settings::SettingsCategory::KeyboardShortcuts
+                    && p.recording_shortcut.is_none()
+            })
+            .unwrap_or(false)
         {
             let key = event.keystroke.key.as_str();
             let shift = event.keystroke.modifiers.shift;
@@ -980,44 +955,77 @@ impl WorkspaceView {
             };
             if handled {
                 cx.stop_propagation();
-                return;
+                return true;
             }
         }
 
         // When a shortcut is being recorded in the Keyboard Shortcuts settings panel,
         // capture the next meaningful keystroke and save it.
-        if self.settings.open {
-            if let Some(action_name) = self
+        if let Some(action_name) = self
+            .settings
+            .page
+            .as_ref()
+            .and_then(|p| p.recording_shortcut.clone())
+        {
+            if event.keystroke.key == "escape" {
+                // Escape cancels recording without saving and without closing settings.
+                if let Some(page) = self.settings.page.as_mut() {
+                    page.recording_shortcut = None;
+                }
+                cx.notify();
+                cx.stop_propagation();
+                return true;
+            }
+            if let Some(binding_str) =
+                super::impl_shortcuts_recording::format_keystroke_as_binding(&event.keystroke)
+            {
+                if let Some(page) = self.settings.page.as_mut() {
+                    page.user_settings
+                        .keybindings
+                        .insert(action_name, binding_str);
+                    page.recording_shortcut = None;
+                    page.user_save_pending = true;
+                }
+                self.maybe_schedule_settings_save(cx);
+                cx.notify();
+            }
+            cx.stop_propagation();
+            return true;
+        }
+
+        false
+    }
+
+    /// Handle keyboard input for the focused session.
+    fn handle_key_down(
+        &mut self,
+        event: &KeyDownEvent,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        // Escape closes settings page if open — but only when NOT recording a shortcut.
+        // When recording, Escape cancels the recording instead (handled below).
+        if self.settings.open
+            && event.keystroke.key == "escape"
+            && self
                 .settings
                 .page
                 .as_ref()
-                .and_then(|p| p.recording_shortcut.clone())
-            {
-                if event.keystroke.key == "escape" {
-                    // Escape cancels recording without saving and without closing settings.
-                    if let Some(page) = self.settings.page.as_mut() {
-                        page.recording_shortcut = None;
-                    }
-                    cx.notify();
-                    cx.stop_propagation();
-                    return;
-                }
-                if let Some(binding_str) =
-                    super::impl_shortcuts_recording::format_keystroke_as_binding(&event.keystroke)
-                {
-                    if let Some(page) = self.settings.page.as_mut() {
-                        page.user_settings
-                            .keybindings
-                            .insert(action_name, binding_str);
-                        page.recording_shortcut = None;
-                        page.user_save_pending = true;
-                    }
-                    self.maybe_schedule_settings_save(cx);
-                    cx.notify();
-                }
-                cx.stop_propagation();
-                return;
-            }
+                .map_or(true, |p| p.recording_shortcut.is_none())
+        {
+            self.close_settings(cx);
+            cx.notify();
+            return;
+        }
+
+        // Allow modals to capture input before sending to the terminal.
+        if self.handle_modal_key_down(event, cx) {
+            cx.stop_propagation();
+            return;
+        }
+
+        if self.settings.open && self.handle_settings_key(event, cx) {
+            return;
         }
 
         // Don't send platform-modifier shortcuts to PTY (handled as GPUI actions).

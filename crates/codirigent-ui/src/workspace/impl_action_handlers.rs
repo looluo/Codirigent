@@ -100,7 +100,7 @@ impl WorkspaceView {
         self.next_layout(cx);
     }
 
-    /// Handle ToggleSidebar action (Cmd+E).
+    /// Handle ToggleSidebar action (Cmd+B).
     pub(super) fn handle_toggle_sidebar(
         &mut self,
         _action: &ToggleSidebar,

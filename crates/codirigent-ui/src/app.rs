@@ -416,10 +416,10 @@ impl CodirigentApp {
                 KeyBinding::new("secondary-w", CloseSession, None),
                 KeyBinding::new("secondary-q", Quit, None),
                 KeyBinding::new("secondary-\\", NextLayout, None),
-                // Ctrl+E / Cmd+E — toggle sidebar (repo drawer)
-                KeyBinding::new("secondary-e", ToggleSidebar, None),
-                // Ctrl+B / Cmd+B — toggle task board (default_keybindings binding)
-                KeyBinding::new("secondary-b", ToggleTaskBoard, None),
+                // Ctrl+B / Cmd+B — toggle sidebar (repo drawer)
+                KeyBinding::new("secondary-b", ToggleSidebar, None),
+                // Ctrl+T / Cmd+T — toggle task board
+                KeyBinding::new("secondary-t", ToggleTaskBoard, None),
                 // Ctrl+K / Cmd+K — quick switch (default_keybindings binding)
                 KeyBinding::new("secondary-k", QuickSwitch, None),
                 KeyBinding::new("secondary-v", Paste, None),

@@ -109,6 +109,7 @@ impl super::gpui::WorkspaceView {
                         if let Some(ref mut page) = this.settings.page {
                             page.set_category(cat);
                             page.open_dropdown = None;
+                            page.focused_shortcut_row = None;
                         }
                         cx.notify();
                     }))

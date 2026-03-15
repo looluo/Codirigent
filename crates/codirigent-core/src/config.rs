@@ -312,11 +312,23 @@ impl UserSettings {
         bindings.insert("switch_session_2".to_string(), format!("{m}+2"));
         bindings.insert("switch_session_3".to_string(), format!("{m}+3"));
         bindings.insert("switch_session_4".to_string(), format!("{m}+4"));
+        bindings.insert("switch_session_5".to_string(), format!("{m}+5"));
+        bindings.insert("switch_session_6".to_string(), format!("{m}+6"));
+        bindings.insert("switch_session_7".to_string(), format!("{m}+7"));
+        bindings.insert("switch_session_8".to_string(), format!("{m}+8"));
+        bindings.insert("switch_session_9".to_string(), format!("{m}+9"));
         bindings.insert("new_session".to_string(), format!("{m}+N"));
         bindings.insert("close_session".to_string(), format!("{m}+W"));
-        bindings.insert("quick_switch".to_string(), format!("{m}+K"));
         bindings.insert("toggle_layout".to_string(), format!("{m}+\\"));
-        bindings.insert("toggle_task_board".to_string(), format!("{m}+B"));
+        bindings.insert("toggle_sidebar".to_string(), format!("{m}+B"));
+        bindings.insert("toggle_task_board".to_string(), format!("{m}+T"));
+        bindings.insert("open_settings".to_string(), format!("{m}+,"));
+        bindings.insert("quit".to_string(), format!("{m}+Q"));
+        bindings.insert("paste".to_string(), format!("{m}+V"));
+        bindings.insert("copy".to_string(), format!("{m}+C"));
+        bindings.insert("split_horizontal".to_string(), format!("{m}+D"));
+        bindings.insert("split_vertical".to_string(), format!("{m}+Shift+D"));
+        bindings.insert("close_pane".to_string(), format!("{m}+Shift+W"));
         bindings
     }
 }
@@ -777,15 +789,34 @@ mod tests {
         {
             assert_eq!(bindings.get("new_session"), Some(&"Cmd+N".to_string()));
             assert_eq!(bindings.get("close_session"), Some(&"Cmd+W".to_string()));
-            assert_eq!(bindings.get("quick_switch"), Some(&"Cmd+K".to_string()));
+            assert_eq!(bindings.get("toggle_sidebar"), Some(&"Cmd+B".to_string()));
+            assert_eq!(
+                bindings.get("toggle_task_board"),
+                Some(&"Cmd+T".to_string())
+            );
         }
         #[cfg(not(target_os = "macos"))]
         {
             assert_eq!(bindings.get("new_session"), Some(&"Ctrl+N".to_string()));
             assert_eq!(bindings.get("close_session"), Some(&"Ctrl+W".to_string()));
-            assert_eq!(bindings.get("quick_switch"), Some(&"Ctrl+K".to_string()));
+            assert_eq!(bindings.get("toggle_sidebar"), Some(&"Ctrl+B".to_string()));
+            assert_eq!(
+                bindings.get("toggle_task_board"),
+                Some(&"Ctrl+T".to_string())
+            );
         }
+        assert!(!bindings.contains_key("quick_switch"));
         assert!(bindings.contains_key("toggle_task_board"));
+        assert!(bindings.contains_key("toggle_sidebar"));
+        assert!(bindings.contains_key("open_settings"));
+        assert!(bindings.contains_key("quit"));
+        assert!(bindings.contains_key("paste"));
+        assert!(bindings.contains_key("copy"));
+        assert!(bindings.contains_key("split_horizontal"));
+        assert!(bindings.contains_key("split_vertical"));
+        assert!(bindings.contains_key("close_pane"));
+        assert!(bindings.contains_key("switch_session_5"));
+        assert!(bindings.contains_key("switch_session_9"));
     }
 
     #[test]
