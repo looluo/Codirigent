@@ -139,7 +139,7 @@ fn keybindings_to_gpui_list(
     use crate::app::{
         CloseSession, FocusSession1, FocusSession2, FocusSession3, FocusSession4, FocusSession5,
         FocusSession6, FocusSession7, FocusSession8, FocusSession9, NewSession, NextLayout,
-        ToggleSidebar,
+        QuickSwitch, ToggleSidebar, ToggleTaskBoard,
     };
     use crate::keybindings::KeybindingManager;
 
@@ -155,6 +155,8 @@ fn keybindings_to_gpui_list(
                 "close_session" => gpui::KeyBinding::new(&gpui_str, CloseSession, None),
                 "toggle_layout" => gpui::KeyBinding::new(&gpui_str, NextLayout, None),
                 "toggle_sidebar" => gpui::KeyBinding::new(&gpui_str, ToggleSidebar, None),
+                "toggle_task_board" => gpui::KeyBinding::new(&gpui_str, ToggleTaskBoard, None),
+                "quick_switch" => gpui::KeyBinding::new(&gpui_str, QuickSwitch, None),
                 "focus_session_1" | "switch_session_1" => {
                     gpui::KeyBinding::new(&gpui_str, FocusSession1, None)
                 }
@@ -182,8 +184,6 @@ fn keybindings_to_gpui_list(
                 "focus_session_9" | "switch_session_9" => {
                     gpui::KeyBinding::new(&gpui_str, FocusSession9, None)
                 }
-                // toggle_task_board, quick_switch, and others have no GPUI action
-                // counterpart registered in app.rs — skip them.
                 _ => return None,
             };
             Some(kb)
@@ -645,6 +645,22 @@ mod tests {
         map.insert("unknown_action_xyz".to_string(), "Ctrl+N".to_string());
         let list = keybindings_to_gpui_list(&map);
         assert_eq!(list.len(), 0);
+    }
+
+    #[test]
+    fn test_keybindings_to_gpui_list_includes_toggle_task_board() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("toggle_task_board".to_string(), "Ctrl+B".to_string());
+        let list = keybindings_to_gpui_list(&map);
+        assert_eq!(list.len(), 1);
+    }
+
+    #[test]
+    fn test_keybindings_to_gpui_list_includes_quick_switch() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("quick_switch".to_string(), "Ctrl+K".to_string());
+        let list = keybindings_to_gpui_list(&map);
+        assert_eq!(list.len(), 1);
     }
 
     #[test]

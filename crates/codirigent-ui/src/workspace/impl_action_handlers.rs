@@ -100,7 +100,7 @@ impl WorkspaceView {
         self.next_layout(cx);
     }
 
-    /// Handle ToggleSidebar action (Cmd+B).
+    /// Handle ToggleSidebar action (Cmd+E).
     pub(super) fn handle_toggle_sidebar(
         &mut self,
         _action: &ToggleSidebar,
@@ -108,6 +108,31 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) {
         info!("ToggleSidebar action triggered");
+        self.toggle_sidebar(cx);
+    }
+
+    /// Handle ToggleTaskBoard action (Cmd+B).
+    pub(super) fn handle_toggle_task_board(
+        &mut self,
+        _action: &ToggleTaskBoard,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        info!("ToggleTaskBoard action triggered");
+        self.toggle_task_board(cx);
+    }
+
+    /// Handle QuickSwitch action (Cmd+K).
+    ///
+    /// No dedicated session-picker UI exists yet; toggles the sidebar as a
+    /// stand-in (matching the original manual Ctrl+K handler behaviour).
+    pub(super) fn handle_quick_switch(
+        &mut self,
+        _action: &QuickSwitch,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        info!("QuickSwitch action triggered (toggling sidebar as placeholder)");
         self.toggle_sidebar(cx);
     }
 }

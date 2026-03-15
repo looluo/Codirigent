@@ -1643,6 +1643,8 @@ impl Render for WorkspaceView {
             .on_action(cx.listener(Self::handle_close_session))
             .on_action(cx.listener(Self::handle_next_layout))
             .on_action(cx.listener(Self::handle_toggle_sidebar))
+            .on_action(cx.listener(Self::handle_toggle_task_board))
+            .on_action(cx.listener(Self::handle_quick_switch))
             .on_action(cx.listener(Self::handle_focus_session1))
             .on_action(cx.listener(Self::handle_focus_session2))
             .on_action(cx.listener(Self::handle_focus_session3))

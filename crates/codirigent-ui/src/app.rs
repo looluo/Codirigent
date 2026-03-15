@@ -47,6 +47,8 @@ mod actions_impl {
             FocusSession9,
             NextLayout,
             ToggleSidebar,
+            ToggleTaskBoard,
+            QuickSwitch,
             SplitHorizontal,
             SplitVertical,
             ClosePane,
@@ -414,7 +416,12 @@ impl CodirigentApp {
                 KeyBinding::new("secondary-w", CloseSession, None),
                 KeyBinding::new("secondary-q", Quit, None),
                 KeyBinding::new("secondary-\\", NextLayout, None),
-                KeyBinding::new("secondary-b", ToggleSidebar, None),
+                // Ctrl+E / Cmd+E — toggle sidebar (repo drawer)
+                KeyBinding::new("secondary-e", ToggleSidebar, None),
+                // Ctrl+B / Cmd+B — toggle task board (default_keybindings binding)
+                KeyBinding::new("secondary-b", ToggleTaskBoard, None),
+                // Ctrl+K / Cmd+K — quick switch (default_keybindings binding)
+                KeyBinding::new("secondary-k", QuickSwitch, None),
                 KeyBinding::new("secondary-v", Paste, None),
                 KeyBinding::new("secondary-c", Copy, None),
                 KeyBinding::new("secondary-d", SplitHorizontal, None),
@@ -559,6 +566,14 @@ impl CodirigentApp {
 
         cx.on_action(|_: &ToggleSidebar, _cx| {
             info!("ToggleSidebar action triggered (global fallback)");
+        });
+
+        cx.on_action(|_: &ToggleTaskBoard, _cx| {
+            info!("ToggleTaskBoard action triggered (global fallback)");
+        });
+
+        cx.on_action(|_: &QuickSwitch, _cx| {
+            info!("QuickSwitch action triggered (global fallback)");
         });
 
         // Session focus actions (global fallbacks) - use macro to reduce repetition
