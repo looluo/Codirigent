@@ -550,6 +550,15 @@ impl WorkspaceView {
                         page.dropdown_click_pos = dropdown_click_pos;
                         page.recording_shortcut = recording_shortcut;
                         page.focused_shortcut_row = focused_shortcut_row;
+                        // Validate the preserved recording state is still pointing to a known
+                        // action.  If the action was removed (e.g. by a downgrade), drop the
+                        // stale state.
+                        if let Some(ref name) = page.recording_shortcut {
+                            if !page.user_settings.keybindings.contains_key(name) {
+                                page.recording_shortcut = None;
+                                page.focused_shortcut_row = None;
+                            }
+                        }
                         this.settings.page = Some(page);
                     }
                 } else if this.settings.open {
@@ -816,5 +825,27 @@ mod tests {
         ]);
 
         assert_eq!(order, vec![0, 2, 3, 1]);
+    }
+
+    #[test]
+    fn test_default_binding_tables_are_in_sync() {
+        use crate::app::default_gpui_keybindings;
+        use codirigent_core::config::UserSettings;
+
+        let gpui_count = default_gpui_keybindings().len();
+        let settings_bindings = UserSettings::default_keybindings();
+        let live_reload_count = keybindings_to_gpui_list(&settings_bindings).len();
+
+        // Every action registered at startup must also be rebindable via settings.
+        // UserSettings::default_keybindings uses "switch_session_N" action names while
+        // default_gpui_keybindings uses "focus_session_N" action names — keybindings_to_gpui_list
+        // recognises both aliases, so counts should be equal.
+        // If this fails, a new action was added to one table but not the other.
+        assert_eq!(
+            live_reload_count, gpui_count,
+            "default_gpui_keybindings ({gpui_count} entries) and \
+             UserSettings::default_keybindings live-reload list ({live_reload_count} entries) \
+             are out of sync — add the missing action to both tables"
+        );
     }
 }

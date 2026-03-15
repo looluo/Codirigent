@@ -992,6 +992,7 @@ impl WorkspaceView {
                         .keybindings
                         .insert(action_name, binding_str);
                     page.recording_shortcut = None;
+                    page.focused_shortcut_row = None;
                     page.user_save_pending = true;
                 }
                 self.maybe_schedule_settings_save(cx);
@@ -1477,6 +1478,9 @@ impl EntityInputHandler for WorkspaceView {
             // Modal text fields are handled via key events; do not leak input to PTY.
             return;
         }
+        if self.settings.open {
+            return;
+        }
 
         let had_ime_overlay = self.ime_marked_range.is_some() || self.ime_preedit_text.is_some();
         self.ime_marked_range = None;
@@ -1509,7 +1513,7 @@ impl EntityInputHandler for WorkspaceView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.has_blocking_modal() {
+        if self.has_blocking_modal() || self.settings.open {
             let had_ime_overlay =
                 self.ime_marked_range.is_some() || self.ime_preedit_text.is_some();
             self.ime_marked_range = None;

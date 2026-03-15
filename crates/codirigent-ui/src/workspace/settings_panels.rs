@@ -1038,8 +1038,10 @@ impl super::gpui::WorkspaceView {
                             if let Some(page) = this.settings.page.as_mut() {
                                 if page.recording_shortcut.as_deref() == Some(&action_name) {
                                     page.recording_shortcut = None;
+                                    page.focused_shortcut_row = None;
                                 } else {
                                     page.recording_shortcut = Some(action_name.clone());
+                                    page.focused_shortcut_row = Some(action_name.clone());
                                 }
                             }
                             cx.notify();
