@@ -21,12 +21,9 @@ struct PreparedSessionOutput {
 }
 
 fn shell_prompt_event_reverts_cli(events: &[ShellState]) -> bool {
-    events.iter().any(|event| {
-        matches!(
-            event,
-            ShellState::PromptStart | ShellState::CommandInputStart
-        )
-    })
+    events
+        .iter()
+        .any(|event| matches!(event, ShellState::PromptStart))
 }
 
 fn prioritize_and_partition_output_sessions<F>(
@@ -479,7 +476,7 @@ mod tests {
     #[test]
     fn shell_prompt_events_revert_cli_to_shell() {
         assert!(shell_prompt_event_reverts_cli(&[ShellState::PromptStart]));
-        assert!(shell_prompt_event_reverts_cli(&[
+        assert!(!shell_prompt_event_reverts_cli(&[
             ShellState::CommandExecuted,
             ShellState::CommandInputStart,
         ]));
