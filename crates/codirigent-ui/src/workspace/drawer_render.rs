@@ -194,6 +194,7 @@ impl WorkspaceView {
         for session in &ungrouped {
             content = content.child(self.render_session_row(
                 session,
+                None,
                 focused_id,
                 visible_session_ids.contains(&session.id),
                 &theme,
@@ -221,6 +222,7 @@ impl WorkspaceView {
                 for session in group_sessions {
                     content = content.child(self.render_session_row(
                         session,
+                        Some(group_key.display_name()),
                         focused_id,
                         visible_session_ids.contains(&session.id),
                         &theme,
@@ -1092,6 +1094,7 @@ impl WorkspaceView {
     fn render_session_row(
         &mut self,
         session: &Session,
+        group_name: Option<&str>,
         focused_id: Option<SessionId>,
         is_visible: bool,
         theme: &CodirigentTheme,
@@ -1118,10 +1121,15 @@ impl WorkspaceView {
         let session_id = session.id;
         let session_name = session.name.clone();
         let project_name = super::gpui::session_project_name(session);
+        let project_subtitle = project_name
+            .clone()
+            .or_else(|| Some(session.working_directory.to_string_lossy().into_owned()))
+            .filter(|project| group_name != Some(project.as_str()));
         let cli_name = self.session_cli_display_name(session_id);
         let context_pct = session.context_usage;
         let (shell_label, shell_warning) =
             self.session_shell_display(session_id, session.shell.as_deref());
+        let show_shell_label = session.shell.is_some() || shell_warning.is_some();
         let branch_badge = session.git_info.as_ref().map(|git_info| {
             let mut branch = git_info.branch.clone();
             if branch.chars().count() > 16 {
@@ -1204,17 +1212,19 @@ impl WorkspaceView {
                                         .child(format!("{}%", (pct * 100.0) as u32)),
                                 )
                             })
-                            .child(
-                                div()
-                                    .text_xs()
-                                    .text_color(if shell_warning.is_some() {
-                                        orange
-                                    } else {
-                                        muted.opacity(0.8)
-                                    })
-                                    .flex_shrink_0()
-                                    .child(shell_label.clone()),
-                            )
+                            .when(show_shell_label, |el| {
+                                el.child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(if shell_warning.is_some() {
+                                            orange
+                                        } else {
+                                            muted.opacity(0.8)
+                                        })
+                                        .flex_shrink_0()
+                                        .child(shell_label.clone()),
+                                )
+                            })
                             .when_some(cli_name, |el, cli_name| {
                                 el.child(Self::render_session_metadata_badge(
                                     &cli_name,
@@ -1223,41 +1233,43 @@ impl WorkspaceView {
                                 ))
                             }),
                     )
-                    .child(
-                        div()
-                            .w_full()
-                            .flex()
-                            .items_center()
-                            .gap_2()
-                            .child(
-                                div()
-                                    .flex_1()
-                                    .min_w_0()
-                                    .overflow_hidden()
-                                    .text_xs()
-                                    .text_color(if is_focused {
-                                        muted.opacity(0.95)
-                                    } else {
-                                        muted.opacity(0.82)
-                                    })
-                                    .text_ellipsis()
-                                    .child(project_name.unwrap_or_else(|| {
-                                        session.working_directory.to_string_lossy().into_owned()
-                                    })),
-                            )
-                            .when_some(branch_badge, |el, branch| {
-                                el.child(
-                                    div()
-                                        .max_w(px(96.0))
-                                        .overflow_hidden()
-                                        .text_xs()
-                                        .text_color(muted.opacity(0.8))
-                                        .text_ellipsis()
-                                        .flex_shrink_0()
-                                        .child(branch),
-                                )
-                            }),
-                    ),
+                    .when(project_subtitle.is_some() || branch_badge.is_some(), |el| {
+                        el.child(
+                            div()
+                                .w_full()
+                                .flex()
+                                .items_center()
+                                .gap_2()
+                                .when_some(project_subtitle.clone(), |row, project_subtitle| {
+                                    row.child(
+                                        div()
+                                            .flex_1()
+                                            .min_w_0()
+                                            .overflow_hidden()
+                                            .text_xs()
+                                            .text_color(if is_focused {
+                                                muted.opacity(0.95)
+                                            } else {
+                                                muted.opacity(0.82)
+                                            })
+                                            .text_ellipsis()
+                                            .child(project_subtitle),
+                                    )
+                                })
+                                .when_some(branch_badge.clone(), |row, branch| {
+                                    row.child(
+                                        div()
+                                            .max_w(px(96.0))
+                                            .overflow_hidden()
+                                            .text_xs()
+                                            .text_color(muted.opacity(0.8))
+                                            .text_ellipsis()
+                                            .flex_shrink_0()
+                                            .child(branch),
+                                    )
+                                }),
+                        )
+                    }),
             )
             // Menu button
             .child(
