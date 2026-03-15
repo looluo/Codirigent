@@ -517,6 +517,13 @@ impl TerminalView {
             .is_some_and(|snapshot| self.apply_snapshot(snapshot))
     }
 
+    /// Get the current viewport scroll offset (lines above the live view).
+    ///
+    /// Returns 0 when the user is at the bottom (live terminal output).
+    pub fn display_offset(&self) -> usize {
+        self.display_offset
+    }
+
     /// Check whether the viewport is showing scrollback instead of the live prompt.
     pub fn is_scrolled_back(&self) -> bool {
         self.display_offset != 0

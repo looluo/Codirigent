@@ -301,7 +301,16 @@ impl WorkspaceView {
                                 tv.scroll_up(lines);
                             } else if delta_y < 0.0 {
                                 let lines = (-delta_y / cell_h).ceil().max(1.0) as usize;
-                                tv.scroll_down(lines);
+                                // Snap to bottom when scrolling down within one viewport
+                                // of the live view. Without this, accidentally scrolling
+                                // up by even 1 line causes every new output line to push
+                                // the viewport further from the bottom, making it feel
+                                // like there is no bottom wall.
+                                if tv.display_offset() <= tv.rows() as usize + lines {
+                                    tv.scroll_to_bottom();
+                                } else {
+                                    tv.scroll_down(lines);
+                                }
                             }
                             cx.notify();
                         }
