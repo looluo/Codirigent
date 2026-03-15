@@ -117,6 +117,9 @@ mod pane_header_render;
 mod settings_panels;
 
 #[cfg(feature = "gpui-full")]
+mod settings_theme_picker;
+
+#[cfg(feature = "gpui-full")]
 mod clipboard_state;
 
 #[cfg(feature = "gpui-full")]

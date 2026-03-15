@@ -11,6 +11,7 @@ use crate::settings::controls::{setting_row, setting_toggle, settings_section_he
 use crate::settings::SettingsCategory;
 use crate::terminal_view::CursorShape;
 
+use super::settings_theme_picker::{build_theme_picker_sections, theme_picker_display_label};
 use super::types::DROPDOWN_TRIGGER_HEIGHT;
 
 const SETTINGS_DROPDOWN_MAX_HEIGHT: f32 = 280.0;
@@ -20,6 +21,35 @@ enum DropdownEntry {
     Option { value: String, label: String },
     Section { label: String },
     Separator,
+}
+
+fn build_theme_dropdown_entries(
+    theme_manager: &crate::theme_manager::ThemeManager,
+) -> Vec<DropdownEntry> {
+    let sections = build_theme_picker_sections(theme_manager);
+    let mut entries = Vec::new();
+
+    for (section_index, section) in sections.into_iter().enumerate() {
+        if section_index > 0 {
+            entries.push(DropdownEntry::Separator);
+        }
+
+        entries.push(DropdownEntry::Section {
+            label: section.title.to_string(),
+        });
+
+        entries.extend(
+            section
+                .options
+                .into_iter()
+                .map(|option| DropdownEntry::Option {
+                    value: option.id,
+                    label: option.label,
+                }),
+        );
+    }
+
+    entries
 }
 
 impl super::gpui::WorkspaceView {
@@ -676,10 +706,13 @@ impl super::gpui::WorkspaceView {
             .page
             .as_ref()
             .expect("BUG: settings page should exist when rendering settings");
-        let theme_name = page.user_settings.appearance.theme.clone();
+        let theme_id = page.user_settings.appearance.theme.clone();
         let font_size = page.user_settings.appearance.font_size;
         let grid_gap = page.user_settings.appearance.grid_gap;
         let theme = self.workspace.theme();
+        let theme_entries = build_theme_dropdown_entries(&self.settings.theme_manager);
+        let selected_theme_label =
+            theme_picker_display_label(&self.settings.theme_manager, &theme_id);
 
         div()
             .flex()
@@ -688,12 +721,13 @@ impl super::gpui::WorkspaceView {
             .child(settings_section_header("Theme", theme, true))
             .child(setting_row(
                 "Color theme",
-                "Switch between dark and light themes",
+                "Select the active UI and terminal theme",
                 theme,
-                self.render_dropdown_control(
+                self.render_dropdown_control_with_entries(
                     "dd-theme",
-                    &["dark", "light"],
-                    &theme_name,
+                    &theme_entries,
+                    &theme_id,
+                    &selected_theme_label,
                     cx,
                     |this, val, _, _| {
                         let mut user_settings = None;
