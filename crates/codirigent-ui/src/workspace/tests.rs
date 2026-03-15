@@ -95,6 +95,27 @@ fn test_workspace_remove_session() {
 }
 
 #[test]
+fn test_workspace_remove_session_promotes_hidden_grid_session() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    for i in 1..=5 {
+        assert!(ws.add_session(make_session(i, &format!("S{}", i))));
+    }
+
+    let removed = ws.remove_session(SessionId(2));
+    assert!(removed.is_some());
+
+    assert_eq!(ws.visible_sessions().len(), 4);
+    assert!(ws.is_session_visible(SessionId(5)));
+    assert_eq!(
+        ws.cell_info()
+            .iter()
+            .map(|cell| cell.session_id)
+            .collect::<Vec<_>>(),
+        vec![SessionId(1), SessionId(5), SessionId(3), SessionId(4)]
+    );
+}
+
+#[test]
 fn test_workspace_session_access() {
     let mut ws = Workspace::new();
     ws.add_session(make_session(1, "Session 1"));
@@ -1123,6 +1144,28 @@ fn test_workspace_remove_active_tab_promotes_next_tab() {
         ws.pane_tab_session_ids(PaneId::GridCell { index: 1 }),
         vec![SessionId(2)]
     );
+}
+
+#[test]
+fn test_workspace_focus_hidden_grid_session_prefers_empty_cell() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    for i in 1..=5 {
+        assert!(ws.add_session(make_session(i, &format!("S{}", i))));
+    }
+
+    assert!(ws.group_session_into_pane(SessionId(1), PaneId::GridCell { index: 1 }));
+    assert!(!ws.is_session_visible(SessionId(5)));
+    assert_eq!(ws.visible_sessions().len(), 3);
+
+    assert!(ws.focus_session(SessionId(5)));
+    assert_eq!(
+        ws.cell_info()
+            .iter()
+            .map(|cell| cell.session_id)
+            .collect::<Vec<_>>(),
+        vec![SessionId(5), SessionId(1), SessionId(3), SessionId(4)]
+    );
+    assert!(ws.is_session_visible(SessionId(1)));
 }
 
 #[test]

@@ -709,6 +709,29 @@ impl Workspace {
         }
     }
 
+    /// Fill any newly available grid cells with hidden sessions in overflow
+    /// order so deleting a visible session keeps the grid as full as possible.
+    fn promote_hidden_sessions_into_grid_slots(&mut self) {
+        let Some(grid_state) = self.layout_state.as_grid_mut() else {
+            return;
+        };
+
+        while let (Some(index), Some(session_id)) = (
+            grid_state.first_empty_index(),
+            grid_state.overflow().first().copied(),
+        ) {
+            if !grid_state.assign_session_to_index(session_id, index) {
+                break;
+            }
+        }
+
+        if grid_state.focused_session().is_none() {
+            if let Some(index) = grid_state.occupied_indices().into_iter().next() {
+                grid_state.focus_index(index);
+            }
+        }
+    }
+
     // --- Session Management ---
 
     /// Get all sessions.
@@ -834,6 +857,7 @@ impl Workspace {
         if let Some(pos) = self.sessions.iter().position(|s| s.id == id) {
             let removed = self.sessions.remove(pos);
             self.cleanup_pane_tab_groups();
+            self.promote_hidden_sessions_into_grid_slots();
             self.promote_hidden_sessions_into_split_slots();
             Some(removed)
         } else {
@@ -991,7 +1015,8 @@ impl Workspace {
                     true
                 } else {
                     let replacement_index = s
-                        .focused_index()
+                        .first_empty_index()
+                        .or_else(|| s.focused_index())
                         .or_else(|| s.occupied_indices().into_iter().next())
                         .or_else(|| s.first_empty_index());
 
@@ -999,7 +1024,16 @@ impl Workspace {
                         return false;
                     };
 
-                    s.swap_hidden_into_index(id, replacement_index).is_some()
+                    if s.session_at(replacement_index).is_none() {
+                        if s.assign_session_to_index(id, replacement_index) {
+                            s.focus_index(replacement_index);
+                            true
+                        } else {
+                            false
+                        }
+                    } else {
+                        s.swap_hidden_into_index(id, replacement_index).is_some()
+                    }
                 }
             }
             WorkspaceLayoutState::SplitTree(s) => {
