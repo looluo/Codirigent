@@ -102,6 +102,95 @@ fn shell_picker_option_order(shell_options: &[String]) -> Vec<usize> {
         .collect()
 }
 
+/// Convert our `KeyBinding` struct to the GPUI keystroke string format.
+///
+/// GPUI format: lowercase, dash-separated, e.g. `"secondary-shift-n"`.
+/// Uses `"secondary-"` for the platform modifier (Cmd on macOS, Ctrl on
+/// Windows/Linux), which is how GPUI's `KeyBinding::new` accepts it.
+fn binding_to_gpui_string(binding: &crate::keybindings::KeyBinding) -> String {
+    let mut owned: Vec<String> = Vec::new();
+    if binding.modifiers.cmd {
+        owned.push("secondary".to_string());
+    }
+    if binding.modifiers.ctrl {
+        owned.push("ctrl".to_string());
+    }
+    if binding.modifiers.alt {
+        owned.push("alt".to_string());
+    }
+    if binding.modifiers.shift {
+        owned.push("shift".to_string());
+    }
+    owned.push(binding.key.to_lowercase());
+    owned.join("-")
+}
+
+/// Build a GPUI `KeyBinding` list from the user settings keybindings map.
+///
+/// Each entry maps an action name (e.g. `"new_session"`) to a display
+/// string (e.g. `"Ctrl+N"`). We parse the display string, convert it to
+/// GPUI keystroke format, and produce a `gpui::KeyBinding`.
+///
+/// Entries with unknown action names or unparseable binding strings are
+/// silently skipped.
+fn keybindings_to_gpui_list(
+    keybindings: &std::collections::HashMap<String, String>,
+) -> Vec<gpui::KeyBinding> {
+    use crate::app::{
+        CloseSession, FocusSession1, FocusSession2, FocusSession3, FocusSession4, FocusSession5,
+        FocusSession6, FocusSession7, FocusSession8, FocusSession9, NewSession, NextLayout,
+        ToggleSidebar,
+    };
+    use crate::keybindings::KeybindingManager;
+
+    keybindings
+        .iter()
+        .filter_map(|(action_name, binding_str)| {
+            let km_binding = KeybindingManager::parse_binding(binding_str).ok()?;
+            let gpui_str = binding_to_gpui_string(&km_binding);
+            // Build the gpui::KeyBinding for each known action name.
+            // switch_session_N and focus_session_N share the same numeric index.
+            let kb: gpui::KeyBinding = match action_name.as_str() {
+                "new_session" => gpui::KeyBinding::new(&gpui_str, NewSession, None),
+                "close_session" => gpui::KeyBinding::new(&gpui_str, CloseSession, None),
+                "toggle_layout" => gpui::KeyBinding::new(&gpui_str, NextLayout, None),
+                "toggle_sidebar" => gpui::KeyBinding::new(&gpui_str, ToggleSidebar, None),
+                "focus_session_1" | "switch_session_1" => {
+                    gpui::KeyBinding::new(&gpui_str, FocusSession1, None)
+                }
+                "focus_session_2" | "switch_session_2" => {
+                    gpui::KeyBinding::new(&gpui_str, FocusSession2, None)
+                }
+                "focus_session_3" | "switch_session_3" => {
+                    gpui::KeyBinding::new(&gpui_str, FocusSession3, None)
+                }
+                "focus_session_4" | "switch_session_4" => {
+                    gpui::KeyBinding::new(&gpui_str, FocusSession4, None)
+                }
+                "focus_session_5" | "switch_session_5" => {
+                    gpui::KeyBinding::new(&gpui_str, FocusSession5, None)
+                }
+                "focus_session_6" | "switch_session_6" => {
+                    gpui::KeyBinding::new(&gpui_str, FocusSession6, None)
+                }
+                "focus_session_7" | "switch_session_7" => {
+                    gpui::KeyBinding::new(&gpui_str, FocusSession7, None)
+                }
+                "focus_session_8" | "switch_session_8" => {
+                    gpui::KeyBinding::new(&gpui_str, FocusSession8, None)
+                }
+                "focus_session_9" | "switch_session_9" => {
+                    gpui::KeyBinding::new(&gpui_str, FocusSession9, None)
+                }
+                // toggle_task_board, quick_switch, and others have no GPUI action
+                // counterpart registered in app.rs — skip them.
+                _ => return None,
+            };
+            Some(kb)
+        })
+        .collect()
+}
+
 /// Normalize a keybinding string to the platform-correct display form.
 ///
 /// Parses the string and re-formats it through `format_binding`, which
@@ -329,6 +418,12 @@ impl WorkspaceView {
                         this.settings.cached_user_settings = user_settings.clone();
                         this.notification_manager
                             .update_settings(user_settings.notifications.clone());
+                        // Re-register keybindings with GPUI so user changes take
+                        // effect immediately without requiring a restart.
+                        let new_bindings = keybindings_to_gpui_list(&user_settings.keybindings);
+                        if !new_bindings.is_empty() {
+                            _cx.bind_keys(new_bindings);
+                        }
                         if let Some(page) = this.settings.page.as_mut() {
                             if page.user_settings == user_settings {
                                 page.mark_user_saved();
@@ -504,6 +599,51 @@ impl WorkspaceView {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_binding_to_gpui_string_ctrl_n() {
+        use crate::keybindings::{KeyBinding, Modifiers};
+        let binding = KeyBinding::new(
+            "N",
+            Modifiers {
+                cmd: true,
+                ..Default::default()
+            },
+        );
+        let result = binding_to_gpui_string(&binding);
+        assert_eq!(result, "secondary-n");
+    }
+
+    #[test]
+    fn test_binding_to_gpui_string_shift() {
+        use crate::keybindings::{KeyBinding, Modifiers};
+        let binding = KeyBinding::new(
+            "D",
+            Modifiers {
+                cmd: true,
+                shift: true,
+                ..Default::default()
+            },
+        );
+        let result = binding_to_gpui_string(&binding);
+        assert_eq!(result, "secondary-shift-d");
+    }
+
+    #[test]
+    fn test_keybindings_to_gpui_list_new_session() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("new_session".to_string(), "Ctrl+N".to_string());
+        let list = keybindings_to_gpui_list(&map);
+        assert_eq!(list.len(), 1);
+    }
+
+    #[test]
+    fn test_keybindings_to_gpui_list_skips_unknown_action() {
+        let mut map = std::collections::HashMap::new();
+        map.insert("unknown_action_xyz".to_string(), "Ctrl+N".to_string());
+        let list = keybindings_to_gpui_list(&map);
+        assert_eq!(list.len(), 0);
+    }
 
     #[test]
     fn test_normalize_keybinding_display_cmd_to_ctrl_on_non_macos() {
