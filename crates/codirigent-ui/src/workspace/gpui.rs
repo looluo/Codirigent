@@ -900,8 +900,16 @@ impl WorkspaceView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Escape closes settings page if open
-        if self.settings.open && event.keystroke.key == "escape" {
+        // Escape closes settings page if open — but only when NOT recording a shortcut.
+        // When recording, Escape cancels the recording instead (handled below).
+        if self.settings.open
+            && event.keystroke.key == "escape"
+            && self
+                .settings
+                .page
+                .as_ref()
+                .map_or(true, |p| p.recording_shortcut.is_none())
+        {
             self.close_settings(cx);
             cx.notify();
             return;
@@ -911,6 +919,42 @@ impl WorkspaceView {
         if self.handle_modal_key_down(event, cx) {
             cx.stop_propagation();
             return;
+        }
+
+        // When a shortcut is being recorded in the Keyboard Shortcuts settings panel,
+        // capture the next meaningful keystroke and save it.
+        if self.settings.open {
+            if let Some(action_name) = self
+                .settings
+                .page
+                .as_ref()
+                .and_then(|p| p.recording_shortcut.clone())
+            {
+                if event.keystroke.key == "escape" {
+                    // Escape cancels recording without saving and without closing settings.
+                    if let Some(page) = self.settings.page.as_mut() {
+                        page.recording_shortcut = None;
+                    }
+                    cx.notify();
+                    cx.stop_propagation();
+                    return;
+                }
+                if let Some(binding_str) =
+                    super::impl_shortcuts_recording::format_keystroke_as_binding(&event.keystroke)
+                {
+                    if let Some(page) = self.settings.page.as_mut() {
+                        page.user_settings
+                            .keybindings
+                            .insert(action_name, binding_str);
+                        page.recording_shortcut = None;
+                        page.user_save_pending = true;
+                    }
+                    self.maybe_schedule_settings_save(cx);
+                    cx.notify();
+                }
+                cx.stop_propagation();
+                return;
+            }
         }
 
         // Don't send platform-modifier shortcuts to PTY (handled as GPUI actions).
