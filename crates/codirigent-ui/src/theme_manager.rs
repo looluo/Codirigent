@@ -21,10 +21,13 @@ use crate::theme::CodirigentTheme;
 use crate::theme_config::Theme;
 use anyhow::Result;
 use std::collections::HashMap;
-use std::path::Path;
+use std::path::{Path, PathBuf};
+use tracing::warn;
 
 /// Built-in theme ID used as the final fallback.
 pub const DEFAULT_THEME_ID: &str = "dark";
+/// Directory name under the user config root that stores custom theme files.
+pub const CUSTOM_THEME_DIRECTORY_NAME: &str = "themes";
 
 /// Result of resolving a requested theme into a runtime theme.
 #[derive(Debug, Clone)]
@@ -88,6 +91,29 @@ impl ThemeManager {
             themes,
             active_theme: DEFAULT_THEME_ID.to_string(),
         }
+    }
+
+    /// Return the custom theme directory for a given user config root.
+    pub fn custom_theme_dir(user_config_dir: &Path) -> PathBuf {
+        user_config_dir.join(CUSTOM_THEME_DIRECTORY_NAME)
+    }
+
+    /// Create with built-in themes plus any user-installed custom themes.
+    ///
+    /// Invalid theme files are logged and ignored. An unreadable themes
+    /// directory is also logged, but does not prevent the manager from
+    /// returning built-in themes.
+    pub fn with_user_themes(user_config_dir: &Path) -> Self {
+        let mut manager = Self::with_defaults();
+        let theme_dir = Self::custom_theme_dir(user_config_dir);
+        if let Err(error) = manager.load_custom_themes(&theme_dir) {
+            warn!(
+                path = ?theme_dir,
+                error = %error,
+                "Failed to scan custom theme directory"
+            );
+        }
+        manager
     }
 
     /// Load custom themes from a directory.
@@ -406,6 +432,16 @@ mod tests {
     }
 
     #[test]
+    fn test_custom_theme_dir_appends_themes_directory() {
+        let config_dir = Path::new("/tmp/codirigent");
+
+        assert_eq!(
+            ThemeManager::custom_theme_dir(config_dir),
+            config_dir.join(CUSTOM_THEME_DIRECTORY_NAME)
+        );
+    }
+
+    #[test]
     fn test_active() {
         let manager = ThemeManager::with_defaults();
         assert_eq!(manager.active().id, "dark");
@@ -622,6 +658,24 @@ mod tests {
         let loaded = manager.load_custom_themes(dir.path()).unwrap();
         assert_eq!(loaded, 0);
         assert_eq!(manager.len(), 2); // Only built-in themes
+    }
+
+    #[test]
+    fn test_with_user_themes_loads_from_themes_subdirectory() {
+        let dir = tempdir().unwrap();
+        let themes_dir = ThemeManager::custom_theme_dir(dir.path());
+        std::fs::create_dir_all(&themes_dir).unwrap();
+
+        let custom = Theme::from_runtime("aurora", "Aurora", false, &CodirigentTheme::light());
+        let json = serde_json::to_string(&custom).unwrap();
+        let theme_path = themes_dir.join("aurora.json");
+        let mut file = std::fs::File::create(&theme_path).unwrap();
+        file.write_all(json.as_bytes()).unwrap();
+
+        let manager = ThemeManager::with_user_themes(dir.path());
+
+        assert_eq!(manager.len(), 3);
+        assert!(manager.get("aurora").is_some());
     }
 
     #[test]

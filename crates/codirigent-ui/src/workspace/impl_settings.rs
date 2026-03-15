@@ -5,11 +5,20 @@ use super::types::{ShellPickerOption, ShellPickerSection, SHELL_PICKER_AUTO_DETE
 use crate::app::OpenSettings;
 use crate::settings::SettingsPage;
 use crate::theme::CodirigentTheme;
+use crate::theme_manager::ThemeManager;
 use codirigent_core::config_service::ConfigService;
 use gpui::{Context, Window};
 use std::collections::{HashMap, HashSet};
+use std::path::PathBuf;
 use std::time::Duration;
 use tracing::warn;
+
+struct LoadedSettingsSnapshot {
+    user_settings: codirigent_core::config::UserSettings,
+    project_config: codirigent_core::config::ProjectConfig,
+    project_dir: Option<PathBuf>,
+    theme_manager: ThemeManager,
+}
 
 fn shell_picker_display_label(shell: &str) -> String {
     if shell.is_empty() {
@@ -101,6 +110,25 @@ fn shell_picker_option_order(shell_options: &[String]) -> Vec<usize> {
                 .map(|option| option.source_index)
         })
         .collect()
+}
+
+fn load_settings_snapshot(
+    config_service: &codirigent_core::config_service::DefaultConfigService,
+    project_dir: Option<PathBuf>,
+) -> LoadedSettingsSnapshot {
+    let user_settings = config_service.load_user_settings().unwrap_or_default();
+    let project_config = project_dir
+        .as_ref()
+        .and_then(|dir| config_service.load_project_config(dir).ok())
+        .unwrap_or_default();
+    let theme_manager = ThemeManager::with_user_themes(config_service.user_config_dir());
+
+    LoadedSettingsSnapshot {
+        user_settings,
+        project_config,
+        project_dir,
+        theme_manager,
+    }
 }
 
 impl WorkspaceView {
@@ -438,27 +466,21 @@ impl WorkspaceView {
         self.settings.load_task = Some(cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
             let loaded = cx
                 .background_executor()
-                .spawn(async move {
-                    let user_settings = config_service.load_user_settings().unwrap_or_default();
-                    let project_config = project_dir
-                        .as_ref()
-                        .and_then(|dir| config_service.load_project_config(dir).ok())
-                        .unwrap_or_default();
-                    (user_settings, project_config, project_dir)
-                })
+                .spawn(async move { load_settings_snapshot(&config_service, project_dir) })
                 .await;
 
             let _ = this.update(cx, |this, cx| {
                 let restore_after_load = std::mem::take(&mut this.settings.restore_after_load);
                 this.settings.load_task = None;
                 this.settings.loaded_once = true;
-                let mut user_settings = loaded.0.clone();
+                this.settings.theme_manager = loaded.theme_manager;
+                let mut user_settings = loaded.user_settings.clone();
                 let resolved_theme_id = this
                     .resolve_and_apply_theme_id(&user_settings.appearance.theme, &user_settings);
                 user_settings.appearance.theme = resolved_theme_id;
                 this.settings.cached_user_settings = user_settings.clone();
-                this.settings.cached_project_config = loaded.1.clone();
-                this.settings.current_working_dir = loaded.2;
+                this.settings.cached_project_config = loaded.project_config.clone();
+                this.settings.current_working_dir = loaded.project_dir;
                 this.notification_manager
                     .update_settings(user_settings.notifications.clone());
                 this.top_bar
@@ -541,6 +563,11 @@ impl WorkspaceView {
 mod tests {
     use super::*;
     use crate::theme::CodirigentTheme;
+    use crate::theme_config::Theme;
+    use crate::theme_manager::CUSTOM_THEME_DIRECTORY_NAME;
+    use codirigent_core::config_service::DefaultConfigService;
+    use std::fs;
+    use tempfile::tempdir;
 
     #[test]
     fn shell_picker_sections_group_common_shells_before_more() {
@@ -659,5 +686,31 @@ mod tests {
         WorkspaceView::apply_theme_runtime_overrides(&mut theme, &user_settings);
 
         assert_eq!(theme.terminal_font_family, original_font_family);
+    }
+
+    #[test]
+    fn load_settings_snapshot_loads_custom_themes_from_user_config_dir() {
+        let dir = tempdir().unwrap();
+        let config_service = DefaultConfigService::with_config_dir(dir.path().to_path_buf());
+        let themes_dir = dir.path().join(CUSTOM_THEME_DIRECTORY_NAME);
+        fs::create_dir_all(&themes_dir).unwrap();
+
+        let mut settings = codirigent_core::config::UserSettings::default();
+        settings.appearance.theme = "aurora".to_string();
+        config_service.save_user_settings(&settings).unwrap();
+
+        let custom_theme =
+            Theme::from_runtime("aurora", "Aurora", false, &CodirigentTheme::light());
+        fs::write(
+            themes_dir.join("aurora.json"),
+            custom_theme.to_json().unwrap(),
+        )
+        .unwrap();
+
+        let snapshot = load_settings_snapshot(&config_service, None);
+
+        assert_eq!(snapshot.user_settings.appearance.theme, "aurora");
+        assert!(snapshot.theme_manager.get("aurora").is_some());
+        assert_eq!(snapshot.theme_manager.len(), 3);
     }
 }

@@ -63,7 +63,7 @@ pub(super) fn theme_picker_display_label(
 }
 
 fn sort_theme_picker_options(options: &mut [ThemePickerOption]) {
-    options.sort_by(|left, right| theme_picker_sort_key(left).cmp(&theme_picker_sort_key(right)));
+    options.sort_by_key(theme_picker_sort_key);
 }
 
 fn theme_picker_sort_key(option: &ThemePickerOption) -> (String, String) {
