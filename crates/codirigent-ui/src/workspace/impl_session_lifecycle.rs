@@ -1727,6 +1727,10 @@ impl WorkspaceView {
                         }
                         this.polling.restore_in_flight = false;
                         info!("Session restoration complete");
+                        // Persist immediately so any session_uuids generated for
+                        // legacy state (via serde default) are stable on the next
+                        // restart and do not change between restarts.
+                        this.save_state_to_disk(cx);
                     }
 
                     this.refresh_derived_ui_state();

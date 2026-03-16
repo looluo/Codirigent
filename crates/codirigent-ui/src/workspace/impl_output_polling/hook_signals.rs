@@ -857,6 +857,14 @@ mod tests {
     }
 
     #[test]
+    fn claude_signal_with_no_uuid_fields_is_discarded() {
+        // A legacy signal that has only a numeric codirigent_session_id and no
+        // UUID fields must not route to any Claude session.
+        let sessions = vec![claude_session(1, Some("claude-abc"), "uuid-abc")];
+        assert_eq!(resolve_claude_target_session(&sessions, None, None), None);
+    }
+
+    #[test]
     fn hook_signal_cli_type_maps_to_codex() {
         assert_eq!(
             cli_type_from_hook_signal_name(CLI_TYPE_CODEX),
