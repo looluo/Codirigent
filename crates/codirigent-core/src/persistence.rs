@@ -10,7 +10,10 @@
 //! - [`Checkpoint`]: Named snapshot for manual save points
 //! - [`RecoveryResult`]: Result of session recovery attempt
 
-use crate::types::{CodexExecutionMode, LayoutMode, Session, SessionId, SessionStatus, TaskId};
+use crate::types::{
+    session::generate_session_uuid, CodexExecutionMode, LayoutMode, Session, SessionId,
+    SessionStatus, TaskId,
+};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
 
@@ -39,6 +42,9 @@ use std::path::PathBuf;
 pub struct PersistentSession {
     /// Session identifier.
     pub id: SessionId,
+    /// Immutable stable UUID for this session across renames and restores.
+    #[serde(default = "generate_session_uuid")]
+    pub session_uuid: String,
     /// Session name.
     pub name: String,
     /// Last known status.
@@ -108,6 +114,7 @@ impl PersistentSession {
     pub fn from_session(session: &Session) -> Self {
         Self {
             id: session.id,
+            session_uuid: session.session_uuid.clone(),
             name: session.name.clone(),
             status: session.status,
             working_directory: session.working_directory.clone(),
@@ -184,6 +191,7 @@ impl PersistentSession {
     pub fn to_session(&self) -> Session {
         Session {
             id: self.id,
+            session_uuid: self.session_uuid.clone(),
             name: self.name.clone(),
             status: SessionStatus::Idle, // Reset status on restore
             working_directory: self.working_directory.clone(),

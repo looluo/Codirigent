@@ -659,11 +659,13 @@ fn test_complete_workflow() {
 /// Test session state transition: Idle → Working
 #[test]
 fn test_session_idle_to_working() {
+    use codirigent_core::types::session::generate_session_uuid;
     use codirigent_core::types::{Session, SessionId, SessionStatus};
     use std::path::PathBuf;
 
     let mut session = Session {
         id: SessionId(1),
+        session_uuid: generate_session_uuid(),
         name: "Test Session".to_string(),
         status: SessionStatus::Idle,
         working_directory: PathBuf::from("/tmp"),
@@ -694,11 +696,13 @@ fn test_session_idle_to_working() {
 /// Test session state transition: Working → NeedsAttention
 #[test]
 fn test_session_working_to_needs_attention() {
+    use codirigent_core::types::session::generate_session_uuid;
     use codirigent_core::types::{Session, SessionId, SessionStatus};
     use std::path::PathBuf;
 
     let mut session = Session {
         id: SessionId(1),
+        session_uuid: generate_session_uuid(),
         name: "Test Session".to_string(),
         status: SessionStatus::Working,
         working_directory: PathBuf::from("/tmp"),
@@ -729,11 +733,13 @@ fn test_session_working_to_needs_attention() {
 /// Test session state transition: NeedsAttention → Idle
 #[test]
 fn test_session_needs_attention_to_idle() {
+    use codirigent_core::types::session::generate_session_uuid;
     use codirigent_core::types::{Session, SessionId, SessionStatus};
     use std::path::PathBuf;
 
     let mut session = Session {
         id: SessionId(1),
+        session_uuid: generate_session_uuid(),
         name: "Test Session".to_string(),
         status: SessionStatus::NeedsAttention,
         working_directory: PathBuf::from("/tmp"),
@@ -764,11 +770,13 @@ fn test_session_needs_attention_to_idle() {
 /// Test session state transition: Any → Error
 #[test]
 fn test_session_to_error_state() {
+    use codirigent_core::types::session::generate_session_uuid;
     use codirigent_core::types::{Session, SessionId, SessionStatus};
     use std::path::PathBuf;
 
     let mut session = Session {
         id: SessionId(1),
+        session_uuid: generate_session_uuid(),
         name: "Test Session".to_string(),
         status: SessionStatus::Working,
         working_directory: PathBuf::from("/tmp"),
@@ -796,11 +804,13 @@ fn test_session_to_error_state() {
 /// Test session state invariants
 #[test]
 fn test_session_state_invariants() {
+    use codirigent_core::types::session::generate_session_uuid;
     use codirigent_core::types::{Session, SessionId, SessionStatus};
     use std::path::PathBuf;
 
     let session = Session {
         id: SessionId(1),
+        session_uuid: generate_session_uuid(),
         name: "Test Session".to_string(),
         status: SessionStatus::Idle,
         working_directory: PathBuf::from("/tmp"),

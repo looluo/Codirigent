@@ -7,6 +7,11 @@ use super::git::GitRepoInfo;
 use super::ids::{SessionId, TaskId};
 use super::status::SessionStatus;
 
+/// Generate a new stable UUID for a session.
+pub fn generate_session_uuid() -> String {
+    uuid::Uuid::new_v4().to_string()
+}
+
 /// Effective Codex execution mode for a session.
 ///
 /// This is persisted so restored sessions can reuse the same launch flags and
@@ -28,6 +33,9 @@ pub enum CodexExecutionMode {
 pub struct Session {
     /// Unique session identifier.
     pub id: SessionId,
+    /// Immutable stable UUID for this session across renames and restores.
+    #[serde(default = "generate_session_uuid")]
+    pub session_uuid: String,
     /// Human-readable session name.
     pub name: String,
     /// Current session status.
@@ -73,6 +81,7 @@ impl Session {
     pub fn new(id: SessionId, name: String, working_directory: PathBuf) -> Self {
         Self {
             id,
+            session_uuid: generate_session_uuid(),
             name,
             status: SessionStatus::default(),
             working_directory,

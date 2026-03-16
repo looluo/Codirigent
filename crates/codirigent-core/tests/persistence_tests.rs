@@ -4,7 +4,9 @@
 
 use codirigent_core::persistence::{PersistentSession, PersistentState};
 use codirigent_core::persistence_service::{DefaultPersistenceService, PersistenceService};
+use codirigent_core::types::session::generate_session_uuid;
 use codirigent_core::{Session, SessionId, SessionStatus};
+use serde_json::json;
 use std::path::PathBuf;
 use tempfile::TempDir;
 
@@ -17,6 +19,7 @@ fn test_save_and_load_state() {
     // Create a simple state with one session
     let session = Session {
         id: SessionId(1),
+        session_uuid: generate_session_uuid(),
         name: "Test Session".to_string(),
         status: SessionStatus::Idle,
         working_directory: temp.path().to_path_buf(),
@@ -88,6 +91,7 @@ fn test_overwrite_state() {
     // Save initial state with 1 session
     let session1 = Session {
         id: SessionId(1),
+        session_uuid: generate_session_uuid(),
         name: "Session 1".to_string(),
         status: SessionStatus::Idle,
         working_directory: temp.path().to_path_buf(),
@@ -114,6 +118,7 @@ fn test_overwrite_state() {
     // Overwrite with 2 sessions
     let session2 = Session {
         id: SessionId(2),
+        session_uuid: generate_session_uuid(),
         name: "Session 2".to_string(),
         status: SessionStatus::Idle,
         working_directory: temp.path().to_path_buf(),
@@ -256,6 +261,7 @@ fn test_multiple_checkpoints_independent() {
     let mut state1 = PersistentState::default();
     let session1 = Session {
         id: SessionId(1),
+        session_uuid: generate_session_uuid(),
         name: "State 1".to_string(),
         status: SessionStatus::Idle,
         working_directory: temp.path().to_path_buf(),
@@ -279,6 +285,7 @@ fn test_multiple_checkpoints_independent() {
     let mut state2 = PersistentState::default();
     let session2 = Session {
         id: SessionId(2),
+        session_uuid: generate_session_uuid(),
         name: "State 2".to_string(),
         status: SessionStatus::Idle,
         working_directory: temp.path().to_path_buf(),
@@ -372,6 +379,7 @@ fn test_persistent_state_defaults() {
 fn test_session_to_persistent_conversion() {
     let session = Session {
         id: SessionId(42),
+        session_uuid: generate_session_uuid(),
         name: "Test".to_string(),
         status: SessionStatus::Working,
         working_directory: PathBuf::from("/tmp"),
@@ -392,7 +400,41 @@ fn test_session_to_persistent_conversion() {
     let persistent = PersistentSession::from_session(&session);
 
     assert_eq!(persistent.id, SessionId(42));
+    assert_eq!(persistent.session_uuid, session.session_uuid);
     assert_eq!(persistent.name, "Test");
     assert_eq!(persistent.group, Some("backend".to_string()));
     assert_eq!(persistent.color, Some("#ff0000".to_string()));
+}
+
+/// Test legacy persisted sessions get a UUID assigned and keep it after save-back.
+#[test]
+fn test_legacy_persistent_session_missing_uuid_gets_generated_and_persists() {
+    let legacy_json = json!({
+        "id": 7,
+        "name": "Legacy Session",
+        "status": "Idle",
+        "working_directory": "/tmp",
+        "shell": null,
+        "current_task": null,
+        "worktree_path": null,
+        "context_usage": null,
+        "started_at": "2026-03-15T00:00:00Z",
+        "last_checkpoint": "2026-03-15T00:00:00Z",
+        "scrollback_hash": null,
+        "group": null,
+        "color": null,
+        "claude_session_id": null,
+        "codex_session_id": null,
+        "codex_execution_mode": null,
+        "codex_started_at": null,
+        "gemini_session_id": null,
+        "claude_permission_mode": null
+    });
+
+    let upgraded: PersistentSession = serde_json::from_value(legacy_json).unwrap();
+    assert!(!upgraded.session_uuid.is_empty());
+
+    let round_tripped: PersistentSession =
+        serde_json::from_str(&serde_json::to_string(&upgraded).unwrap()).unwrap();
+    assert_eq!(round_tripped.session_uuid, upgraded.session_uuid);
 }

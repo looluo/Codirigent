@@ -29,6 +29,7 @@ tokio = { version = "1.49.0", features = ["full"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.22", features = ["env-filter"] }
 chrono = { version = "0.4.43", features = ["serde"] }
+uuid = { version = "1", features = ["v4"] }
 
 # PTY and terminal
 portable-pty = "0.9"

@@ -34,6 +34,7 @@ use tracing::{info, warn};
 #[derive(Debug, Clone)]
 struct RestoreSessionPlan {
     original_session_id: SessionId,
+    session_uuid: String,
     session_name: String,
     working_dir: PathBuf,
     shell: Option<String>,
@@ -655,6 +656,7 @@ mod tests {
     fn restore_resume_commands_preserve_cli_order() {
         let plan = RestoreSessionPlan {
             original_session_id: SessionId(1),
+            session_uuid: "session-uuid-1".to_string(),
             session_name: "Session 1".to_string(),
             working_dir: sample_working_dir(),
             shell: None,
@@ -963,6 +965,7 @@ mod tests {
     fn restore_plan_cli_type_prefers_known_resume_metadata() {
         let base = RestoreSessionPlan {
             original_session_id: SessionId(1),
+            session_uuid: "session-uuid-1".to_string(),
             session_name: "Session 1".to_string(),
             working_dir: PathBuf::from("/tmp"),
             shell: None,
@@ -1412,6 +1415,7 @@ impl WorkspaceView {
             let codex_started_at = plan.codex_started_at;
             if let Ok(manager) = self.session_manager.lock() {
                 manager.with_session_state_mut(bootstrapped.session_id, |state| {
+                    state.session.session_uuid = plan.session_uuid.clone();
                     state.session.codex_execution_mode = codex_execution_mode;
                     state.session.codex_started_at = codex_started_at;
                 });
@@ -1419,6 +1423,7 @@ impl WorkspaceView {
         }
 
         let mut session = bootstrapped.session;
+        session.session_uuid = plan.session_uuid.clone();
         session.shell = bootstrapped.request.requested_shell.clone();
         session.group = plan.group.clone();
         session.color = plan.color.clone();
@@ -1600,6 +1605,7 @@ impl WorkspaceView {
 
             sessions.push(RestoreSessionPlan {
                 original_session_id: saved.id,
+                session_uuid: saved.session_uuid.clone(),
                 session_name,
                 working_dir,
                 shell: saved.shell,
