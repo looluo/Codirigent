@@ -120,6 +120,11 @@ const TEST_LINE_FORWARDER_SENTINEL: &str = "__codirigent_test_line_forwarder__";
 const POWERSHELL_INIT_COMMAND: &str = concat!(
     "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; ",
     "$OutputEncoding=[System.Text.Encoding]::UTF8; ",
+    "if (Get-Command fnm -ErrorAction SilentlyContinue) { ",
+    "try { ",
+    "Invoke-Expression (fnm env --shell powershell) ",
+    "} catch { } ",
+    "} ",
     "function prompt { ",
     "$gle = $global:LASTEXITCODE; ",
     "if ($null -eq $gle) { $gle = 0 }; ",
