@@ -992,6 +992,25 @@ mod tests {
 
         assert_eq!(restore_plan_cli_type(&base), CliType::GenericShell);
     }
+
+    #[test]
+    fn restore_resume_commands_empty_for_plan_with_no_cli_fields() {
+        let plan = RestoreSessionPlan {
+            original_session_id: SessionId(1),
+            session_uuid: "uuid".to_string(),
+            session_name: "Session 1".to_string(),
+            working_dir: sample_working_dir(),
+            shell: None,
+            group: None,
+            color: None,
+            claude_resume: None,
+            codex_resume: None,
+            codex_execution_mode: None,
+            codex_started_at: None,
+            gemini_resume: None,
+        };
+        assert!(restore_resume_commands(&plan).is_empty());
+    }
 }
 
 impl WorkspaceView {
@@ -1406,15 +1425,26 @@ impl WorkspaceView {
                 bootstrapped.request.launch_shell.as_deref(),
             ),
         );
+        let restore_cli = self
+            .effective_user_settings()
+            .general
+            .restore_cli_on_startup;
+        let cli_type = if restore_cli {
+            restore_plan_cli_type(&plan)
+        } else {
+            CliType::GenericShell
+        };
         self.clipboard
             .clipboard_service
-            .set_session_cli_type(bootstrapped.session_id, restore_plan_cli_type(&plan));
+            .set_session_cli_type(bootstrapped.session_id, cli_type);
 
-        if plan.codex_execution_mode.is_some() || plan.codex_started_at.is_some() {
+        if restore_cli && (plan.codex_execution_mode.is_some() || plan.codex_started_at.is_some()) {
             let codex_execution_mode = plan.codex_execution_mode;
             let codex_started_at = plan.codex_started_at;
             if let Ok(manager) = self.session_manager.lock() {
                 manager.with_session_state_mut(bootstrapped.session_id, |state| {
+                    // session_uuid is set only inside this restore_cli-gated block;
+                    // the local session struct receives the same guard at the assignment below.
                     state.session.session_uuid = plan.session_uuid.clone();
                     state.session.codex_execution_mode = codex_execution_mode;
                     state.session.codex_started_at = codex_started_at;
@@ -1423,12 +1453,22 @@ impl WorkspaceView {
         }
 
         let mut session = bootstrapped.session;
-        session.session_uuid = plan.session_uuid.clone();
+        if restore_cli {
+            session.session_uuid = plan.session_uuid.clone();
+        }
         session.shell = bootstrapped.request.requested_shell.clone();
         session.group = plan.group.clone();
         session.color = plan.color.clone();
-        session.codex_execution_mode = plan.codex_execution_mode;
-        session.codex_started_at = plan.codex_started_at;
+        session.codex_execution_mode = if restore_cli {
+            plan.codex_execution_mode
+        } else {
+            None
+        };
+        session.codex_started_at = if restore_cli {
+            plan.codex_started_at
+        } else {
+            None
+        };
 
         if !self.attach_bootstrapped_session(
             session,
@@ -1450,15 +1490,18 @@ impl WorkspaceView {
             });
         }
 
-        for command in restore_resume_commands(&plan) {
-            if let Ok(manager) = self.session_manager.lock() {
-                if let Err(error) = manager.send_input(bootstrapped.session_id, command.as_bytes())
-                {
-                    warn!(
-                        ?bootstrapped.session_id,
-                        %error,
-                        "Failed to send resume command"
-                    );
+        if restore_cli {
+            for command in restore_resume_commands(&plan) {
+                if let Ok(manager) = self.session_manager.lock() {
+                    if let Err(error) =
+                        manager.send_input(bootstrapped.session_id, command.as_bytes())
+                    {
+                        warn!(
+                            ?bootstrapped.session_id,
+                            %error,
+                            "Failed to send resume command"
+                        );
+                    }
                 }
             }
         }
