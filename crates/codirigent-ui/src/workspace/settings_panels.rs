@@ -433,6 +433,7 @@ impl super::gpui::WorkspaceView {
         let shell = page.user_settings.general.default_shell.clone();
         let working_dir = page.user_settings.general.default_working_dir.clone();
         let show_splash = page.user_settings.general.show_splash;
+        let restore_cli_on_startup = page.user_settings.general.restore_cli_on_startup;
         let notif = page.user_settings.notifications.clone();
         let theme = self.workspace.theme();
 
@@ -529,6 +530,24 @@ impl super::gpui::WorkspaceView {
                     }
                     cx.notify();
                 }),
+            ))
+            .child(setting_row(
+                "Restore AI sessions",
+                "Resume previous Claude/Codex/Gemini sessions on startup",
+                theme,
+                self.render_toggle_control(
+                    "toggle-restore-cli",
+                    restore_cli_on_startup,
+                    cx,
+                    |this, _, cx| {
+                        if let Some(page) = this.settings.page.as_mut() {
+                            page.user_settings.general.restore_cli_on_startup =
+                                !page.user_settings.general.restore_cli_on_startup;
+                            page.user_save_pending = true;
+                        }
+                        cx.notify();
+                    },
+                ),
             ))
             .child(settings_section_header("Notifications", theme, false))
             .child(setting_row(
