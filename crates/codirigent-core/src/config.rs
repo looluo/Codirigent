@@ -188,6 +188,10 @@ pub struct GeneralSettings {
     pub default_working_dir: Option<String>,
     /// Show splash screen on startup.
     pub show_splash: bool,
+    /// Resume CLI sessions (claude/codex/gemini) on startup restore.
+    /// When false, sessions open as generic shells with no CLI launched.
+    #[serde(default = "default_true")]
+    pub restore_cli_on_startup: bool,
 }
 
 impl Default for GeneralSettings {
@@ -197,6 +201,7 @@ impl Default for GeneralSettings {
             default_shell: String::new(),
             default_working_dir: None,
             show_splash: true,
+            restore_cli_on_startup: true,
         }
     }
 }
@@ -829,6 +834,36 @@ mod tests {
 
         assert_eq!(settings1, settings2);
         assert_ne!(settings1, settings3);
+    }
+
+    // GeneralSettings tests
+
+    #[test]
+    fn test_general_settings_restore_cli_defaults_true() {
+        let settings = GeneralSettings::default();
+        assert!(settings.restore_cli_on_startup);
+    }
+
+    #[test]
+    fn test_general_settings_restore_cli_serialization() {
+        let settings = GeneralSettings {
+            editor_command: "vim".to_string(),
+            default_shell: String::new(),
+            default_working_dir: None,
+            show_splash: true,
+            restore_cli_on_startup: false,
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        let parsed: GeneralSettings = serde_json::from_str(&json).unwrap();
+        assert!(!parsed.restore_cli_on_startup);
+    }
+
+    #[test]
+    fn test_general_settings_restore_cli_backward_compat() {
+        // Existing settings files lack this field — must deserialize as true
+        let json = r#"{"editor_command":"code","default_shell":"","show_splash":true}"#;
+        let parsed: GeneralSettings = serde_json::from_str(json).unwrap();
+        assert!(parsed.restore_cli_on_startup);
     }
 
     // AppearanceSettings tests
