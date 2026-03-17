@@ -38,10 +38,43 @@ Both are required:
 
 ### 2. Session restore gate (`codirigent-ui/src/workspace/impl_session_lifecycle.rs`)
 
-In `finalize_restored_session_bootstrap`, extract the flag into a local `bool` before the loop, then gate on it:
+Extract the flag once at the top of `finalize_restored_session_bootstrap`, then gate all CLI-specific state on it:
 
 ```rust
 let restore_cli = self.effective_user_settings().general.restore_cli_on_startup;
+```
+
+**When `restore_cli = false`, the session is a generic shell.** Three things must be gated:
+
+**a) CLI type badge** — pass `GenericShell` instead of the saved CLI type:
+```rust
+let cli_type = if restore_cli {
+    restore_plan_cli_type(&plan)
+} else {
+    CliType::GenericShell
+};
+self.clipboard
+    .clipboard_service
+    .set_session_cli_type(bootstrapped.session_id, cli_type);
+```
+
+**b) Codex session manager state** — skip setting `codex_execution_mode` / `codex_started_at` on the session manager:
+```rust
+if restore_cli && (plan.codex_execution_mode.is_some() || plan.codex_started_at.is_some()) {
+    // ... existing with_session_state_mut block unchanged
+}
+```
+
+**c) Codex session struct fields** — clear them on the session before attaching:
+```rust
+if !restore_cli {
+    session.codex_execution_mode = None;
+    session.codex_started_at = None;
+}
+```
+
+**d) Resume commands** — skip sending:
+```rust
 if restore_cli {
     for command in restore_resume_commands(&plan) {
         if let Ok(manager) = self.session_manager.lock() {
@@ -53,9 +86,9 @@ if restore_cli {
 }
 ```
 
-Extracting to a local `bool` is a clarity/defensive measure — it cleanly separates the settings read from the loop body. `effective_user_settings(&self)` takes only `&self` — no `cx` parameter needed.
+Extracting to a local `bool` is a clarity/defensive measure. `effective_user_settings(&self)` takes only `&self` — no `cx` parameter needed.
 
-`finalize_restored_session_bootstrap` is the **sole call site** of `restore_resume_commands` — no other location in the codebase sends resume commands during restore.
+`finalize_restored_session_bootstrap` is the **sole call site** of `restore_resume_commands` and the sole place CLI type + codex metadata are applied during restore.
 
 ### 3. Settings UI (`codirigent-ui/src/workspace/settings_panels.rs`)
 
@@ -100,10 +133,10 @@ On next startup:
   settings loaded into cached_user_settings
   → spawn_restore_sessions_from_disk
   → apply_restore_plan (per session batch)
-    → finalize_restored_session_bootstrap [sole resume command site]
+    → finalize_restored_session_bootstrap [sole CLI restore site]
       → reads restore_cli_on_startup into local bool
-      → if true: send_input resume commands to PTY
-      → if false: skip (shell opens in working dir, no CLI launched)
+      → if true:  set CLI type badge, set codex metadata, send resume commands
+      → if false: set CLI type = GenericShell, skip codex metadata, skip resume commands
 ```
 
 ## Files Changed
@@ -112,7 +145,7 @@ On next startup:
 |------|--------|
 | `crates/codirigent-core/src/config.rs` | Add `restore_cli_on_startup` field + serde default + `impl Default` + tests |
 | `crates/codirigent-ui/src/workspace/settings_panels.rs` | Add toggle in Startup section |
-| `crates/codirigent-ui/src/workspace/impl_session_lifecycle.rs` | Gate resume commands on setting + test for skipped-commands path |
+| `crates/codirigent-ui/src/workspace/impl_session_lifecycle.rs` | Gate CLI type, codex metadata, and resume commands on setting + tests |
 
 ## Non-Goals
 
