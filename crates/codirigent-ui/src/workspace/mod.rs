@@ -111,6 +111,9 @@ mod top_bar_render;
 mod modal_render;
 
 #[cfg(feature = "gpui-full")]
+mod toast_render;
+
+#[cfg(feature = "gpui-full")]
 mod grid_render;
 
 #[cfg(feature = "gpui-full")]
