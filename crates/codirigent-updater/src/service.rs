@@ -375,9 +375,7 @@ impl UpdateService {
                 // Delete the corrupt artifact and clear state.
                 let _ = std::fs::remove_file(&staged.artifact_path);
                 *self.state.lock().unwrap() = UpdateState::Idle;
-                anyhow::bail!(
-                    "SHA256 mismatch on re-verification — artifact may be corrupt"
-                );
+                anyhow::bail!("SHA256 mismatch on re-verification — artifact may be corrupt");
             }
         }
 
@@ -496,7 +494,10 @@ mod tests {
     fn new_parses_valid_version() {
         let bus = Arc::new(TestEventBus::new());
         let svc = UpdateService::new("0.1.0", bus).unwrap();
-        assert_eq!(svc.current_version, "0.1.0".parse::<semver::Version>().unwrap());
+        assert_eq!(
+            svc.current_version,
+            "0.1.0".parse::<semver::Version>().unwrap()
+        );
     }
 
     #[test]

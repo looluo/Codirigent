@@ -99,7 +99,10 @@ impl WorkspaceView {
                                 "Update",
                                 primary,
                                 gpui::Hsla::white(),
-                                |this: &mut Self, _: &ClickEvent, _window, cx: &mut gpui::Context<Self>| {
+                                |this: &mut Self,
+                                 _: &ClickEvent,
+                                 _window,
+                                 cx: &mut gpui::Context<Self>| {
                                     if let Some(svc) = &this.update_service {
                                         svc.start_download();
                                     }
@@ -129,7 +132,10 @@ impl WorkspaceView {
                                 "Cancel",
                                 border_color,
                                 fg,
-                                |this: &mut Self, _: &ClickEvent, _window, cx: &mut gpui::Context<Self>| {
+                                |this: &mut Self,
+                                 _: &ClickEvent,
+                                 _window,
+                                 cx: &mut gpui::Context<Self>| {
                                     if let Some(svc) = &this.update_service {
                                         svc.cancel_download();
                                     }
@@ -252,10 +258,7 @@ impl WorkspaceView {
                                     .text_sm()
                                     .font_weight(FontWeight::SEMIBOLD)
                                     .text_color(fg)
-                                    .child(SharedString::from(format!(
-                                        "Updated to v{}",
-                                        version
-                                    ))),
+                                    .child(SharedString::from(format!("Updated to v{}", version))),
                             )
                             .child(self.render_dismiss_button(muted, cx)),
                     )
@@ -267,35 +270,34 @@ impl WorkspaceView {
                     );
 
                 if release_url.is_some() {
-                    toast = toast.child(
-                        div()
-                            .flex()
-                            .gap_2()
-                            .justify_end()
-                            .child(self.render_toast_button(
-                                "release-notes-btn",
-                                "Release Notes",
-                                border_color,
-                                fg,
-                                move |this: &mut Self, _: &ClickEvent, _window, cx: &mut gpui::Context<Self>| {
-                                    // Try to open release URL in browser
-                                    if let Some(svc) = &this.update_service {
-                                        // Use a generic release page URL
-                                        let url = format!(
-                                            "https://github.com/oso95/Codirigent/releases/tag/v{}",
-                                            this.post_update_version
-                                                .as_deref()
-                                                .unwrap_or(env!("CARGO_PKG_VERSION"))
-                                        );
-                                        let _ = svc; // suppress unused warning
-                                        open_url_in_browser(&url);
-                                    }
-                                    this.post_update_version = None;
-                                    cx.notify();
-                                },
-                                cx,
-                            )),
-                    );
+                    toast = toast.child(div().flex().gap_2().justify_end().child(
+                        self.render_toast_button(
+                            "release-notes-btn",
+                            "Release Notes",
+                            border_color,
+                            fg,
+                            move |this: &mut Self,
+                                  _: &ClickEvent,
+                                  _window,
+                                  cx: &mut gpui::Context<Self>| {
+                                // Try to open release URL in browser
+                                if let Some(svc) = &this.update_service {
+                                    // Use a generic release page URL
+                                    let url = format!(
+                                        "https://github.com/oso95/Codirigent/releases/tag/v{}",
+                                        this.post_update_version
+                                            .as_deref()
+                                            .unwrap_or(env!("CARGO_PKG_VERSION"))
+                                    );
+                                    let _ = svc; // suppress unused warning
+                                    open_url_in_browser(&url);
+                                }
+                                this.post_update_version = None;
+                                cx.notify();
+                            },
+                            cx,
+                        ),
+                    ));
                 }
             }
         }
@@ -304,11 +306,7 @@ impl WorkspaceView {
     }
 
     /// Render a small dismiss (X) button for the toast.
-    fn render_dismiss_button(
-        &self,
-        muted: gpui::Hsla,
-        cx: &mut Context<Self>,
-    ) -> impl IntoElement {
+    fn render_dismiss_button(&self, muted: gpui::Hsla, cx: &mut Context<Self>) -> impl IntoElement {
         div()
             .id("dismiss-update-toast")
             .text_xs()

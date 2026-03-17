@@ -102,8 +102,7 @@ pub fn load_state_from(path: &Path) -> Result<UpdatePersistentState> {
     }
     let content = std::fs::read_to_string(path)
         .with_context(|| format!("Failed to read {}", path.display()))?;
-    serde_json::from_str(&content)
-        .with_context(|| format!("Failed to parse {}", path.display()))
+    serde_json::from_str(&content).with_context(|| format!("Failed to parse {}", path.display()))
 }
 
 /// Save the update state to an explicit path.
@@ -190,7 +189,10 @@ mod tests {
     fn state_file_path_returns_some() {
         // On macOS, Windows, and Linux with a home directory, this should return Some.
         let path = state_file_path();
-        assert!(path.is_some(), "state_file_path() should return Some on supported platforms");
+        assert!(
+            path.is_some(),
+            "state_file_path() should return Some on supported platforms"
+        );
         let path = path.unwrap();
         assert!(path.ends_with("codirigent/update-state.json"));
     }
@@ -198,7 +200,10 @@ mod tests {
     #[test]
     fn cache_dir_returns_some() {
         let dir = cache_dir();
-        assert!(dir.is_some(), "cache_dir() should return Some on supported platforms");
+        assert!(
+            dir.is_some(),
+            "cache_dir() should return Some on supported platforms"
+        );
         let dir = dir.unwrap();
         assert!(dir.ends_with("codirigent"));
     }
@@ -206,7 +211,11 @@ mod tests {
     #[test]
     fn save_creates_parent_directories() {
         let dir = tempfile::tempdir().expect("tempdir");
-        let path = dir.path().join("nested").join("deep").join("update-state.json");
+        let path = dir
+            .path()
+            .join("nested")
+            .join("deep")
+            .join("update-state.json");
 
         let state = UpdatePersistentState::default();
         save_state_to(&state, &path).expect("save with nested dirs");

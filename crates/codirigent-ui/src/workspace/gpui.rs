@@ -162,7 +162,8 @@ pub struct WorkspaceView {
     /// Whether this is the first launch after a successful update.
     pub(super) post_update_version: Option<String>,
     /// Receiver for update events from the EventBus.
-    pub(super) update_event_rx: Option<tokio::sync::broadcast::Receiver<codirigent_core::CodirigentEvent>>,
+    pub(super) update_event_rx:
+        Option<tokio::sync::broadcast::Receiver<codirigent_core::CodirigentEvent>>,
 }
 
 /// Returns `true` if the editor command refers to a terminal-based editor

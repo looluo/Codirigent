@@ -101,11 +101,7 @@ open "$APP_PATH"
 /// Writes the update script to the cache directory and launches it as a
 /// detached process. The script will wait for the current app to exit before
 /// performing the swap.
-pub fn apply_update(
-    artifact_path: &Path,
-    current_app_path: &Path,
-    current_pid: u32,
-) -> Result<()> {
+pub fn apply_update(artifact_path: &Path, current_app_path: &Path, current_pid: u32) -> Result<()> {
     let cache = crate::state::cache_dir().context("Could not determine cache directory")?;
     std::fs::create_dir_all(&cache)
         .with_context(|| format!("Failed to create cache directory: {}", cache.display()))?;

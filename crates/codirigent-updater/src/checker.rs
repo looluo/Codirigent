@@ -78,9 +78,13 @@ pub fn parse_release(
         serde_json::from_str(response_json).context("Failed to parse GitHub release JSON")?;
 
     // Strip optional leading 'v' from tag.
-    let tag = release.tag_name.strip_prefix('v').unwrap_or(&release.tag_name);
-    let remote_version: semver::Version =
-        tag.parse().with_context(|| format!("Invalid semver in tag: {}", release.tag_name))?;
+    let tag = release
+        .tag_name
+        .strip_prefix('v')
+        .unwrap_or(&release.tag_name);
+    let remote_version: semver::Version = tag
+        .parse()
+        .with_context(|| format!("Invalid semver in tag: {}", release.tag_name))?;
 
     // A pre-release current version (e.g. 0.3.0-alpha) is "ahead" of a stable
     // release (e.g. 0.2.0) if its major.minor.patch is greater. But a
@@ -109,17 +113,17 @@ pub fn parse_release(
         }
     };
 
-    let artifact = release.assets.iter().find(|a| {
-        a.name.contains(triple) && a.name.ends_with(suffix)
-    });
+    let artifact = release
+        .assets
+        .iter()
+        .find(|a| a.name.contains(triple) && a.name.ends_with(suffix));
 
     let artifact = match artifact {
         Some(a) => a,
         None => {
             debug!(
                 triple,
-                suffix,
-                "No matching platform artifact found in release assets"
+                suffix, "No matching platform artifact found in release assets"
             );
             return Ok(None);
         }
@@ -182,8 +186,7 @@ pub async fn check_for_update(
     }
 
     // 403 / 429 → rate-limited; treat as "no update" and try again later.
-    if status == reqwest::StatusCode::FORBIDDEN
-        || status == reqwest::StatusCode::TOO_MANY_REQUESTS
+    if status == reqwest::StatusCode::FORBIDDEN || status == reqwest::StatusCode::TOO_MANY_REQUESTS
     {
         warn!(
             status = status.as_u16(),
@@ -213,11 +216,7 @@ mod tests {
     ) -> String {
         let asset_entries: Vec<String> = assets
             .iter()
-            .map(|(name, url)| {
-                format!(
-                    r#"{{"name": "{name}", "browser_download_url": "{url}"}}"#
-                )
-            })
+            .map(|(name, url)| format!(r#"{{"name": "{name}", "browser_download_url": "{url}"}}"#))
             .collect();
 
         format!(
@@ -232,8 +231,7 @@ mod tests {
 
     /// Build release JSON with typical assets for the current platform.
     fn make_platform_release(tag: &str) -> String {
-        let (triple, suffix) = platform_asset_filter()
-            .unwrap_or(("aarch64-apple-darwin", ".dmg"));
+        let (triple, suffix) = platform_asset_filter().unwrap_or(("aarch64-apple-darwin", ".dmg"));
         let artifact_name = format!("Codirigent-{triple}{suffix}");
         let artifact_url = format!("https://example.com/{artifact_name}");
         make_release_json(
@@ -301,8 +299,7 @@ mod tests {
     #[test]
     fn missing_checksum_asset_returns_none() {
         let current: semver::Version = "0.1.0".parse().unwrap();
-        let (triple, suffix) = platform_asset_filter()
-            .unwrap_or(("aarch64-apple-darwin", ".dmg"));
+        let (triple, suffix) = platform_asset_filter().unwrap_or(("aarch64-apple-darwin", ".dmg"));
         let artifact_name = format!("Codirigent-{triple}{suffix}");
         // Release with the artifact but NO checksums-sha256.txt
         let json = make_release_json(

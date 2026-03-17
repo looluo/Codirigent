@@ -31,8 +31,12 @@ pub fn find_checksum(checksums_content: &str, filename: &str) -> Option<String> 
 /// The comparison is case-insensitive. Returns `Ok(true)` on match,
 /// `Ok(false)` on mismatch, or an error if the file cannot be read.
 pub fn verify_sha256(file_path: &Path, expected_hex: &str) -> Result<bool> {
-    let data = std::fs::read(file_path)
-        .with_context(|| format!("Failed to read file for SHA256 verification: {}", file_path.display()))?;
+    let data = std::fs::read(file_path).with_context(|| {
+        format!(
+            "Failed to read file for SHA256 verification: {}",
+            file_path.display()
+        )
+    })?;
 
     let mut hasher = Sha256::new();
     hasher.update(&data);
@@ -98,9 +102,12 @@ where
     }
 
     // Ensure destination directory exists.
-    tokio::fs::create_dir_all(dest_dir)
-        .await
-        .with_context(|| format!("Failed to create download directory: {}", dest_dir.display()))?;
+    tokio::fs::create_dir_all(dest_dir).await.with_context(|| {
+        format!(
+            "Failed to create download directory: {}",
+            dest_dir.display()
+        )
+    })?;
 
     let dest_path = dest_dir.join(filename);
 
@@ -148,7 +155,9 @@ where
         }
     }
 
-    file.flush().await.context("Failed to flush downloaded file")?;
+    file.flush()
+        .await
+        .context("Failed to flush downloaded file")?;
 
     // Ensure 100% is reported.
     if last_percent < 100 {
@@ -200,12 +209,8 @@ where
         .with_context(|| format!("No checksum found for '{}' in checksums file", filename))?;
 
     // 4. Verify.
-    let valid = verify_sha256(&artifact_path, &expected_hash).with_context(|| {
-        format!(
-            "SHA256 verification failed for {}",
-            artifact_path.display()
-        )
-    })?;
+    let valid = verify_sha256(&artifact_path, &expected_hash)
+        .with_context(|| format!("SHA256 verification failed for {}", artifact_path.display()))?;
 
     if !valid {
         // Delete the corrupt artifact.

@@ -11,10 +11,7 @@ use anyhow::Result;
 use std::path::Path;
 
 /// Apply a staged update. Platform-specific.
-pub fn apply_update(
-    artifact_path: &Path,
-    current_pid: u32,
-) -> Result<()> {
+pub fn apply_update(artifact_path: &Path, current_pid: u32) -> Result<()> {
     #[cfg(target_os = "macos")]
     return macos::apply_update(artifact_path, &detect_app_path()?, current_pid);
 
@@ -42,7 +39,10 @@ fn detect_app_path() -> Result<std::path::PathBuf> {
             }
             path = parent;
         }
-        anyhow::bail!("Could not find .app bundle from exe path: {}", exe.display())
+        anyhow::bail!(
+            "Could not find .app bundle from exe path: {}",
+            exe.display()
+        )
     }
 
     #[cfg(target_os = "windows")]
