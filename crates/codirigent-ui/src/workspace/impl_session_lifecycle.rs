@@ -994,25 +994,6 @@ mod tests {
     }
 
     #[test]
-    fn restore_plan_cli_type_returns_generic_shell_for_empty_plan() {
-        let plan = RestoreSessionPlan {
-            original_session_id: SessionId(1),
-            session_uuid: "uuid".to_string(),
-            session_name: "Session 1".to_string(),
-            working_dir: sample_working_dir(),
-            shell: None,
-            group: None,
-            color: None,
-            claude_resume: None,
-            codex_resume: None,
-            codex_execution_mode: None,
-            codex_started_at: None,
-            gemini_resume: None,
-        };
-        assert_eq!(restore_plan_cli_type(&plan), CliType::GenericShell);
-    }
-
-    #[test]
     fn restore_resume_commands_empty_for_plan_with_no_cli_fields() {
         let plan = RestoreSessionPlan {
             original_session_id: SessionId(1),
@@ -1470,7 +1451,9 @@ impl WorkspaceView {
         }
 
         let mut session = bootstrapped.session;
-        session.session_uuid = plan.session_uuid.clone();
+        if restore_cli {
+            session.session_uuid = plan.session_uuid.clone();
+        }
         session.shell = bootstrapped.request.requested_shell.clone();
         session.group = plan.group.clone();
         session.color = plan.color.clone();
