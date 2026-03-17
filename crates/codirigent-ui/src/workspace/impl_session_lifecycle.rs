@@ -1443,6 +1443,8 @@ impl WorkspaceView {
             let codex_started_at = plan.codex_started_at;
             if let Ok(manager) = self.session_manager.lock() {
                 manager.with_session_state_mut(bootstrapped.session_id, |state| {
+                    // session_uuid is set only inside this restore_cli-gated block;
+                    // the local session struct receives the same guard at the assignment below.
                     state.session.session_uuid = plan.session_uuid.clone();
                     state.session.codex_execution_mode = codex_execution_mode;
                     state.session.codex_started_at = codex_started_at;
