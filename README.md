@@ -127,3 +127,5 @@ Open an issue before major changes. PRs welcome.
 ## License
 
 GPL-3.0 — see [LICENSE](LICENSE).
+
+Authored by ChengYuanWang
