@@ -1444,7 +1444,10 @@ impl WorkspaceView {
                 bootstrapped.request.launch_shell.as_deref(),
             ),
         );
-        let restore_cli = self.effective_user_settings().general.restore_cli_on_startup;
+        let restore_cli = self
+            .effective_user_settings()
+            .general
+            .restore_cli_on_startup;
         let cli_type = if restore_cli {
             restore_plan_cli_type(&plan)
         } else {
