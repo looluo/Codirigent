@@ -54,7 +54,7 @@ use crate::theme::CodirigentTheme;
 use crate::toolbar::CustomLayoutPicker;
 use codirigent_core::compaction::{CompactionConfig, CompactionService};
 use codirigent_core::{
-    CodexExecutionMode, DefaultEventBus, FileStorageService, ProcessMonitor, SessionId,
+    CodexExecutionMode, DefaultEventBus, EventBus, FileStorageService, ProcessMonitor, SessionId,
     SessionManager, SessionStatus, TaskManager, TaskManagerConfig,
 };
 use codirigent_detector::{InputDetector, NotificationManager};

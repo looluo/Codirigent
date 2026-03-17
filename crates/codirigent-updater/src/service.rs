@@ -183,12 +183,7 @@ impl UpdateService {
                             version: staged_ver,
                             artifact_path: staged.artifact_path.clone(),
                             release_url: staged.release_url.clone(),
-                            // We don't have the SHA stored in StagedUpdateState,
-                            // but we can set an empty string — apply() will
-                            // re-verify from the file if needed. In practice the
-                            // task spec says StagedUpdateState should also store
-                            // the hash; for now we use an empty sentinel.
-                            expected_sha256: String::new(),
+                            expected_sha256: staged.expected_sha256.clone(),
                         };
                         *state.lock().unwrap() = UpdateState::Staged(staged_update);
                         event_bus.publish(CodirigentEvent::UpdateReadyToApply);
@@ -322,6 +317,7 @@ impl UpdateService {
                         version: info.version.to_string(),
                         artifact_path,
                         release_url: info.release_url.clone(),
+                        expected_sha256: staged.expected_sha256.clone(),
                     });
                     if let Err(e) = state::save_state(&persistent) {
                         warn!("Failed to persist staged update: {e}");

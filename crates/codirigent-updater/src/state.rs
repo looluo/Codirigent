@@ -29,6 +29,7 @@ pub struct UpdatePersistentState {
 
 /// Metadata for a staged (downloaded) update artifact.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
 pub struct StagedUpdateState {
     /// Semantic version string of the staged release.
     pub version: String,
@@ -38,6 +39,24 @@ pub struct StagedUpdateState {
 
     /// URL to the GitHub release page (for user-facing links).
     pub release_url: String,
+
+    /// Expected SHA256 hash of the artifact (hex-encoded).
+    ///
+    /// Persisted so we can re-verify the artifact before applying, even after
+    /// a restart. Empty string means the hash was not recorded (e.g. from an
+    /// older state file format).
+    pub expected_sha256: String,
+}
+
+impl Default for StagedUpdateState {
+    fn default() -> Self {
+        Self {
+            version: String::new(),
+            artifact_path: PathBuf::new(),
+            release_url: String::new(),
+            expected_sha256: String::new(),
+        }
+    }
 }
 
 /// Returns the default path for `update-state.json`.
@@ -133,6 +152,7 @@ mod tests {
                 version: "0.2.0".to_string(),
                 artifact_path: PathBuf::from("/tmp/codirigent-0.2.0.dmg"),
                 release_url: "https://github.com/oso95/Codirigent/releases/tag/v0.2.0".to_string(),
+                expected_sha256: "abc123def456".to_string(),
             }),
         };
         let json = serde_json::to_string_pretty(&state).expect("serialize full");

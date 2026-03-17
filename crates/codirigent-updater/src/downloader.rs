@@ -85,6 +85,18 @@ where
         .filter(|s| !s.is_empty())
         .context("Could not extract filename from artifact URL")?;
 
+    // Validate that the filename contains only safe characters to prevent
+    // path traversal or other filesystem attacks.
+    if !filename
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '.' || c == '_')
+    {
+        bail!(
+            "Unsafe characters in artifact filename '{}': only alphanumeric, hyphens, dots, and underscores are allowed",
+            filename
+        );
+    }
+
     // Ensure destination directory exists.
     tokio::fs::create_dir_all(dest_dir)
         .await
