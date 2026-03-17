@@ -44,7 +44,7 @@ Extract the flag once at the top of `finalize_restored_session_bootstrap`, then 
 let restore_cli = self.effective_user_settings().general.restore_cli_on_startup;
 ```
 
-**When `restore_cli = false`, the session is a generic shell.** Three things must be gated:
+**When `restore_cli = false`, the session is a generic shell.** Four things must be gated:
 
 **a) CLI type badge** — pass `GenericShell` instead of the saved CLI type:
 ```rust
@@ -92,18 +92,27 @@ Extracting to a local `bool` is a clarity/defensive measure. `effective_user_set
 
 ### 3. Settings UI (`codirigent-ui/src/workspace/settings_panels.rs`)
 
-In `render_general_settings`, extract the value into a local `bool` (Copy) at the top of the function alongside the other locals (e.g. `show_splash`):
+In `render_general_settings`, extract the value into a local `bool` (Copy) at the top of the function alongside the other locals (e.g. `show_splash`, `theme`):
 
 ```rust
 let restore_cli_on_startup = page.user_settings.general.restore_cli_on_startup;
 ```
 
-Must be a `bool` copy (not a reference), to avoid a borrow conflict with the closure that later mutably borrows `this`.
+Must be a `bool` copy (not a reference), to avoid a borrow conflict with the closure that later mutably borrows `this`. `theme` is already extracted as a local earlier in the function and is required by `setting_row`.
 
-Add a toggle under the existing **Startup** section, **after `show_splash` and before the Notifications section header**:
+Add a `setting_row(...)` call under the existing **Startup** section, **after `show_splash` and before the Notifications section header**. The full call site shape:
 
-- **Label:** Restore AI sessions
-- **Description:** Resume previous Claude/Codex/Gemini sessions on startup
+```rust
+.child(setting_row(
+    "Restore AI sessions",
+    "Resume previous Claude/Codex/Gemini sessions on startup",
+    theme,
+    self.render_toggle_control("toggle-restore-cli", restore_cli_on_startup, cx, |this, _, cx| {
+        // callback
+    }),
+))
+```
+
 - **Toggle ID:** `toggle-restore-cli`
 - **Current value:** `restore_cli_on_startup` (the local extracted above)
 
@@ -129,7 +138,7 @@ User toggles setting
   → page.user_save_pending = true
   → debounced save persists via settings service
 
-On next startup:
+On startup (settings load before restore runs, so the setting takes effect the same launch):
   settings loaded into cached_user_settings
   → spawn_restore_sessions_from_disk
   → apply_restore_plan (per session batch)
