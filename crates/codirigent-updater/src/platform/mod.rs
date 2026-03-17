@@ -1,11 +1,10 @@
 //! Platform-specific update application.
 //!
 //! Dispatches to macOS or Windows implementations via `#[cfg(target_os)]`.
+//! Both modules are always compiled so that their unit tests (which only test
+//! script generation, not execution) run on every platform.
 
-#[cfg(target_os = "macos")]
 pub mod macos;
-
-#[cfg(target_os = "windows")]
 pub mod windows;
 
 use anyhow::Result;
@@ -30,6 +29,7 @@ pub fn apply_update(
 }
 
 /// Detect the current application path.
+#[cfg(any(target_os = "macos", target_os = "windows"))]
 fn detect_app_path() -> Result<std::path::PathBuf> {
     let exe = std::env::current_exe()?;
 
@@ -51,7 +51,4 @@ fn detect_app_path() -> Result<std::path::PathBuf> {
             .map(|p| p.to_path_buf())
             .ok_or_else(|| anyhow::anyhow!("Could not determine install directory"))
     }
-
-    #[cfg(not(any(target_os = "macos", target_os = "windows")))]
-    anyhow::bail!("Platform not supported")
 }
