@@ -22,39 +22,71 @@ Add `restore_cli_on_startup: bool` to `GeneralSettings`:
 pub restore_cli_on_startup: bool,
 ```
 
-- Default: `true` (preserves current behaviour, backward-compatible via serde default)
-- Stored in: `~/.config/codirigent/settings.json`
+Also add to `impl Default for GeneralSettings`:
+
+```rust
+restore_cli_on_startup: true,
+```
+
+Both are required:
+- `impl Default` — ensures `GeneralSettings::default()` compiles and returns the correct value.
+- `#[serde(default = "default_true")]` — handles backward-compatible deserialization of existing settings files that contain a `general` key but lack this new field. `show_splash` has no such attribute because it was an original field and always exists in saved files; new fields added to an existing struct must carry field-level serde defaults.
+
+- Default: `true` (preserves current behaviour)
+- Stored via the existing settings service (platform-specific path resolved at runtime)
+- Note: `default_true()` helper already exists in `config.rs` and can be reused directly.
 
 ### 2. Session restore gate (`codirigent-ui/src/workspace/impl_session_lifecycle.rs`)
 
-In `finalize_restored_session_bootstrap`, wrap the existing resume command loop:
+In `finalize_restored_session_bootstrap`, extract the flag into a local `bool` before the loop, then gate on it:
 
 ```rust
-if self.effective_user_settings().general.restore_cli_on_startup {
+let restore_cli = self.effective_user_settings().general.restore_cli_on_startup;
+if restore_cli {
     for command in restore_resume_commands(&plan) {
-        // send_input ...
+        if let Ok(manager) = self.session_manager.lock() {
+            if let Err(error) = manager.send_input(bootstrapped.session_id, command.as_bytes()) {
+                warn!(?bootstrapped.session_id, %error, "Failed to send resume command");
+            }
+        }
     }
 }
 ```
 
-No structural changes needed — `effective_user_settings()` is already accessible in this method.
+Extracting to a local `bool` is a clarity/defensive measure — it cleanly separates the settings read from the loop body. `effective_user_settings(&self)` takes only `&self` — no `cx` parameter needed.
+
+`finalize_restored_session_bootstrap` is the **sole call site** of `restore_resume_commands` — no other location in the codebase sends resume commands during restore.
 
 ### 3. Settings UI (`codirigent-ui/src/workspace/settings_panels.rs`)
 
-In `render_general_settings`, add a toggle under the existing **Startup** section after `show_splash`:
+In `render_general_settings`, extract the value into a local `bool` (Copy) at the top of the function alongside the other locals (e.g. `show_splash`):
+
+```rust
+let restore_cli_on_startup = page.user_settings.general.restore_cli_on_startup;
+```
+
+Must be a `bool` copy (not a reference), to avoid a borrow conflict with the closure that later mutably borrows `this`.
+
+Add a toggle under the existing **Startup** section, **after `show_splash` and before the Notifications section header**:
 
 - **Label:** Restore AI sessions
 - **Description:** Resume previous Claude/Codex/Gemini sessions on startup
 - **Toggle ID:** `toggle-restore-cli`
+- **Current value:** `restore_cli_on_startup` (the local extracted above)
 
-Callback follows the existing pattern:
+Callback exactly matches the existing pattern (including guard and notify):
 ```rust
-page.user_settings.general.restore_cli_on_startup =
-    !page.user_settings.general.restore_cli_on_startup;
-page.user_save_pending = true;
+|this, _, cx| {
+    if let Some(page) = this.settings.page.as_mut() {
+        page.user_settings.general.restore_cli_on_startup =
+            !page.user_settings.general.restore_cli_on_startup;
+        page.user_save_pending = true;
+    }
+    cx.notify();
+}
 ```
 
-Setting `user_save_pending = true` triggers the existing debounced save pipeline, persisting the value to `~/.config/codirigent/settings.json`.
+`user_save_pending = true` triggers the debounced save pipeline. `cx.notify()` triggers a UI re-render.
 
 ## Data Flow
 
@@ -62,23 +94,25 @@ Setting `user_save_pending = true` triggers the existing debounced save pipeline
 User toggles setting
   → page.user_settings.general.restore_cli_on_startup updated
   → page.user_save_pending = true
-  → debounced save writes ~/.config/codirigent/settings.json
+  → debounced save persists via settings service
 
 On next startup:
   settings loaded into cached_user_settings
   → spawn_restore_sessions_from_disk
   → apply_restore_plan (per session batch)
-  → finalize_restored_session_bootstrap
-  → if restore_cli_on_startup: send resume commands
+    → finalize_restored_session_bootstrap [sole resume command site]
+      → reads restore_cli_on_startup into local bool
+      → if true: send_input resume commands to PTY
+      → if false: skip (shell opens in working dir, no CLI launched)
 ```
 
 ## Files Changed
 
 | File | Change |
 |------|--------|
-| `crates/codirigent-core/src/config.rs` | Add `restore_cli_on_startup` field + serde default + tests |
+| `crates/codirigent-core/src/config.rs` | Add `restore_cli_on_startup` field + serde default + `impl Default` + tests |
 | `crates/codirigent-ui/src/workspace/settings_panels.rs` | Add toggle in Startup section |
-| `crates/codirigent-ui/src/workspace/impl_session_lifecycle.rs` | Gate resume commands on setting |
+| `crates/codirigent-ui/src/workspace/impl_session_lifecycle.rs` | Gate resume commands on setting + test for skipped-commands path |
 
 ## Non-Goals
 
