@@ -1474,12 +1474,16 @@ impl WorkspaceView {
         session.shell = bootstrapped.request.requested_shell.clone();
         session.group = plan.group.clone();
         session.color = plan.color.clone();
-        session.codex_execution_mode = plan.codex_execution_mode;
-        session.codex_started_at = plan.codex_started_at;
-        if !restore_cli {
-            session.codex_execution_mode = None;
-            session.codex_started_at = None;
-        }
+        session.codex_execution_mode = if restore_cli {
+            plan.codex_execution_mode
+        } else {
+            None
+        };
+        session.codex_started_at = if restore_cli {
+            plan.codex_started_at
+        } else {
+            None
+        };
 
         if !self.attach_bootstrapped_session(
             session,

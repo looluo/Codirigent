@@ -187,6 +187,7 @@ pub struct GeneralSettings {
     /// Default working directory for new sessions.
     pub default_working_dir: Option<String>,
     /// Show splash screen on startup.
+    #[serde(default = "default_true")]
     pub show_splash: bool,
     /// Resume CLI sessions (claude/codex/gemini) on startup restore.
     /// When false, sessions open as generic shells with no CLI launched.
