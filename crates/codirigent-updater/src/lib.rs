@@ -28,6 +28,8 @@ pub mod checker;
 pub mod downloader;
 pub mod platform;
 pub mod service;
+pub mod state;
 
 pub use checker::UpdateInfo;
 pub use service::{StagedUpdate, UpdateService, UpdateState};
+pub use state::{StagedUpdateState, UpdatePersistentState};
