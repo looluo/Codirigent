@@ -352,6 +352,30 @@ pub enum CodirigentEvent {
         /// The new working directory.
         new_dir: PathBuf,
     },
+
+    // === Update Events ===
+    /// A newer stable version is available on GitHub.
+    UpdateAvailable {
+        /// The new version string (e.g., "0.2.0").
+        version: String,
+        /// URL to the GitHub release page.
+        release_url: String,
+    },
+
+    /// Download progress for an update artifact.
+    UpdateDownloadProgress {
+        /// Percentage complete (0-100).
+        percent: u8,
+    },
+
+    /// The update artifact has been downloaded and verified, ready to apply.
+    UpdateReadyToApply,
+
+    /// An update operation failed.
+    UpdateFailed {
+        /// Human-readable error description.
+        error: String,
+    },
 }
 
 #[cfg(test)]
@@ -1025,6 +1049,16 @@ mod tests {
                 id: SessionId(1),
                 old_dir: PathBuf::from("/old/dir"),
                 new_dir: PathBuf::from("/new/dir"),
+            },
+            // Update events
+            CodirigentEvent::UpdateAvailable {
+                version: "0.2.0".to_string(),
+                release_url: "https://github.com/oso95/Codirigent/releases/v0.2.0".to_string(),
+            },
+            CodirigentEvent::UpdateDownloadProgress { percent: 50 },
+            CodirigentEvent::UpdateReadyToApply,
+            CodirigentEvent::UpdateFailed {
+                error: "Download failed".to_string(),
             },
         ];
 
