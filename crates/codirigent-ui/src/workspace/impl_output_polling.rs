@@ -219,6 +219,11 @@ impl WorkspaceView {
                         }
                         cx.notify();
                     }
+                    codirigent_core::CodirigentEvent::UpdateApplyingOnStartup => {
+                        // A staged update is being applied — quit so the helper
+                        // script can swap the app and relaunch.
+                        cx.quit();
+                    }
                     codirigent_core::CodirigentEvent::UpdateFailed { error } => {
                         warn!("Update failed: {}", error);
                         self.update_download_progress = None;

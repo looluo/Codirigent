@@ -202,20 +202,6 @@ impl WorkspaceView {
                                 primary,
                                 gpui::Hsla::white(),
                                 |this: &mut Self, _: &ClickEvent, _window, cx: &mut gpui::Context<Self>| {
-                                    // TODO: Replace this with a confirmation modal dialog in a
-                                    // future iteration so the user can choose to force-restart
-                                    // even when sessions are actively working.
-                                    let has_working = this.workspace.sessions().iter().any(|s| {
-                                        s.status == codirigent_core::SessionStatus::Working
-                                    });
-                                    if has_working {
-                                        tracing::warn!(
-                                            "Update restart blocked: one or more sessions are actively working. \
-                                             Please wait until sessions are idle and try again."
-                                        );
-                                        return;
-                                    }
-
                                     if let Some(svc) = &this.update_service {
                                         match svc.apply() {
                                             Ok(()) => {

@@ -371,6 +371,9 @@ pub enum CodirigentEvent {
     /// The update artifact has been downloaded and verified, ready to apply.
     UpdateReadyToApply,
 
+    /// A staged update is being applied on startup — the app should quit.
+    UpdateApplyingOnStartup,
+
     /// An update operation failed.
     UpdateFailed {
         /// Human-readable error description.

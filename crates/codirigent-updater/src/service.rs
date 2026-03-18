@@ -170,24 +170,62 @@ impl UpdateService {
                 }
             }
 
-            // 4. Restore valid staged update — publish event and return early.
-            if let Some(ref staged) = persistent.staged_update {
+            // 4. Auto-apply valid staged update on startup.
+            //    The user already acknowledged this update (clicked "Later" in a
+            //    previous session), so apply it now while no sessions are active.
+            //    The helper script waits for this process to exit, swaps the app,
+            //    and relaunches.
+            if let Some(staged) = persistent.staged_update.clone() {
                 if let Ok(staged_ver) = staged.version.parse::<semver::Version>() {
                     if staged.artifact_path.exists() && staged_ver > version {
                         info!(
                             staged_version = %staged_ver,
                             artifact = %staged.artifact_path.display(),
-                            "Restoring valid staged update"
+                            "Auto-applying staged update on startup"
                         );
-                        let staged_update = StagedUpdate {
-                            version: staged_ver,
-                            artifact_path: staged.artifact_path.clone(),
-                            release_url: staged.release_url.clone(),
-                            expected_sha256: staged.expected_sha256.clone(),
-                        };
-                        *state.lock().unwrap() = UpdateState::Staged(staged_update);
-                        event_bus.publish(CodirigentEvent::UpdateReadyToApply);
-                        return;
+
+                        // Verify SHA256 if available.
+                        let mut verified = true;
+                        if !staged.expected_sha256.is_empty() {
+                            match downloader::verify_sha256(
+                                &staged.artifact_path,
+                                &staged.expected_sha256,
+                            ) {
+                                Ok(true) => {}
+                                Ok(false) => {
+                                    warn!("SHA256 mismatch on staged artifact — clearing");
+                                    let _ = std::fs::remove_file(&staged.artifact_path);
+                                    persistent.staged_update = None;
+                                    let _ = state::save_state(&persistent);
+                                    verified = false;
+                                }
+                                Err(e) => {
+                                    warn!("SHA256 verification error: {e} — clearing staged update");
+                                    let _ = std::fs::remove_file(&staged.artifact_path);
+                                    persistent.staged_update = None;
+                                    let _ = state::save_state(&persistent);
+                                    verified = false;
+                                }
+                            }
+                        }
+
+                        // If staged update is still valid after verification, apply it.
+                        if verified {
+                            let pid = std::process::id();
+                            match crate::platform::apply_update(&staged.artifact_path, pid) {
+                                Ok(()) => {
+                                    *state.lock().unwrap() = UpdateState::Applying;
+                                    event_bus.publish(CodirigentEvent::UpdateApplyingOnStartup);
+                                    return;
+                                }
+                                Err(e) => {
+                                    warn!("Failed to auto-apply staged update: {e}");
+                                    let _ = std::fs::remove_file(&staged.artifact_path);
+                                    persistent.staged_update = None;
+                                    let _ = state::save_state(&persistent);
+                                }
+                            }
+                        }
                     }
                 }
             }
