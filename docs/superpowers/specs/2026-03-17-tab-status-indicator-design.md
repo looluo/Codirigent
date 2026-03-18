@@ -95,7 +95,7 @@ pub struct TabStatusDecoration {
 
 - Add a `pulse_counter: u8` field to `WorkspaceView`
 - Increment it each maintenance poll cycle
-- Derive pulse phase: `pulse_counter % 3 == 0` gives ~750ms on/off cycles
+- Derive pulse phase: `pulse_counter % 6` — 3 ticks on, 3 ticks off gives ~750ms equal duty cycle
 - The render code reads `self.pulse_counter` to choose between full and reduced opacity (1.0 vs 0.4) for pulsing elements
 - No new `cx.spawn()`, no new background task — reuses existing infrastructure
 
