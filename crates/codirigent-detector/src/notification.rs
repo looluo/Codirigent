@@ -269,6 +269,68 @@ impl NotificationActor {
     }
 }
 
+/// Non-blocking handle for sending notifications from any thread.
+///
+/// Wraps an `mpsc::Sender` to a background `NotificationActor`. All methods
+/// take `&self` and return immediately — the actual notification dispatch
+/// (including blocking OS calls) happens on the actor's dedicated thread.
+///
+/// The actor thread exits automatically when all `NotificationHandle` clones
+/// are dropped.
+#[derive(Clone)]
+pub struct NotificationHandle {
+    tx: mpsc::Sender<NotificationCommand>,
+}
+
+impl NotificationHandle {
+    /// Spawn the background notification actor and return a handle.
+    ///
+    /// The actor runs on a dedicated OS thread named `"notification-actor"`.
+    /// It processes commands sequentially, applying toggle/cooldown checks
+    /// before making blocking platform notification calls.
+    pub fn new(settings: NotificationSettings) -> Self {
+        let (tx, rx) = mpsc::channel();
+        let actor = NotificationActor {
+            rx,
+            settings,
+            last_sent: HashMap::new(),
+        };
+        thread::Builder::new()
+            .name("notification-actor".into())
+            .spawn(move || actor.run())
+            .expect("failed to spawn notification actor thread");
+        Self { tx }
+    }
+
+    /// Queue a notification for background dispatch.
+    ///
+    /// Returns immediately. The actor will check master toggle, per-type
+    /// toggles, and per-session cooldown before sending.
+    pub fn send(
+        &self,
+        kind: NotificationType,
+        session_id: SessionId,
+        session_name: &str,
+        detail: Option<&str>,
+    ) {
+        if let Err(e) = self.tx.send(NotificationCommand::Send {
+            kind,
+            session_id,
+            session_name: session_name.to_owned(),
+            detail: detail.map(|s| s.to_owned()),
+        }) {
+            warn!("Notification actor unreachable: {}", e);
+        }
+    }
+
+    /// Update notification settings on the actor (non-blocking).
+    pub fn update_settings(&self, settings: NotificationSettings) {
+        if let Err(e) = self.tx.send(NotificationCommand::UpdateSettings(settings)) {
+            warn!("Notification actor unreachable (settings update): {}", e);
+        }
+    }
+}
+
 /// Default notification title for input required alerts.
 pub const DEFAULT_TITLE: &str = "Codirigent - Input Required";
 
@@ -994,5 +1056,35 @@ mod tests {
             detail: None,
         });
         assert!(actor.last_sent.contains_key(&SessionId(1)));
+    }
+
+    // ── NotificationHandle tests ──
+
+    #[test]
+    fn test_notification_handle_send_does_not_panic() {
+        let handle = NotificationHandle::new(NotificationSettings::default());
+        handle.send(NotificationType::InputRequired, SessionId(1), "Test", None);
+    }
+
+    #[test]
+    fn test_notification_handle_update_settings() {
+        let handle = NotificationHandle::new(NotificationSettings::default());
+        handle.update_settings(NotificationSettings {
+            desktop: false,
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_notification_handle_is_clone() {
+        let handle = NotificationHandle::new(NotificationSettings::default());
+        let _clone = handle.clone();
+    }
+
+    #[test]
+    fn test_notification_handle_send_after_clone_drop() {
+        let handle = NotificationHandle::new(NotificationSettings::default());
+        drop(handle.clone());
+        handle.send(NotificationType::InputRequired, SessionId(1), "Test", None);
     }
 }
