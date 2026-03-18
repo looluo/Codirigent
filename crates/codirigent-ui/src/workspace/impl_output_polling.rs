@@ -177,6 +177,8 @@ impl WorkspaceView {
         if self.update_clipboard_preview(cx) {
             cx.notify();
         }
+
+        self.pulse_counter = self.pulse_counter.wrapping_add(1);
     }
 
     pub(super) fn spawn_background_detector_maintenance(&mut self, cx: &mut Context<Self>) {

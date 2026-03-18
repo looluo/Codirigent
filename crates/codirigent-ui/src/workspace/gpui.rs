@@ -147,6 +147,9 @@ pub struct WorkspaceView {
     /// Notification handle — sends commands to a background actor for desktop notifications.
     /// All desktop notifications must go through this instead of calling send_notification directly.
     pub(super) notification_handle: NotificationHandle,
+    /// Counter incremented each maintenance poll cycle for tab pulse animation.
+    /// Render code derives pulse phase from `pulse_counter % 6` (3 ticks on, 3 off = ~750ms each).
+    pub(super) pulse_counter: u8,
 }
 
 /// Returns `true` if the editor command refers to a terminal-based editor
@@ -526,6 +529,7 @@ impl WorkspaceView {
             cli_readers: Arc::new(Mutex::new(CliReaders::new())),
             cache: CacheState::new(),
             notification_handle: NotificationHandle::new(Default::default()),
+            pulse_counter: 0,
         };
 
         // Pre-detect editors and shells in the background so settings open instantly
