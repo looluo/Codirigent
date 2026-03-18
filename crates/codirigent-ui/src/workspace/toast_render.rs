@@ -30,10 +30,6 @@ impl WorkspaceView {
             ToastVariant::UpdateAvailable {
                 version: info.version.to_string(),
             }
-        } else if let Some(ref version) = self.post_update_version {
-            ToastVariant::PostUpdate {
-                version: version.clone(),
-            }
         } else {
             return None;
         };
@@ -223,72 +219,6 @@ impl WorkspaceView {
                             )),
                     );
             }
-            ToastVariant::PostUpdate { version } => {
-                let release_url = self
-                    .update_service
-                    .as_ref()
-                    .and_then(|svc| match svc.state() {
-                        codirigent_updater::UpdateState::Idle => None,
-                        codirigent_updater::UpdateState::UpdateAvailable(info) => {
-                            Some(info.release_url.clone())
-                        }
-                        _ => None,
-                    });
-
-                toast = toast
-                    .child(
-                        div()
-                            .flex()
-                            .flex_row()
-                            .items_center()
-                            .justify_between()
-                            .child(
-                                div()
-                                    .text_sm()
-                                    .font_weight(FontWeight::SEMIBOLD)
-                                    .text_color(fg)
-                                    .child(SharedString::from(format!("Updated to v{}", version))),
-                            )
-                            .child(self.render_dismiss_button(muted, cx)),
-                    )
-                    .child(
-                        div()
-                            .text_xs()
-                            .text_color(muted)
-                            .child("Codirigent has been updated successfully."),
-                    );
-
-                if release_url.is_some() {
-                    toast = toast.child(div().flex().gap_2().justify_end().child(
-                        self.render_toast_button(
-                            "release-notes-btn",
-                            "Release Notes",
-                            border_color,
-                            fg,
-                            move |this: &mut Self,
-                                  _: &ClickEvent,
-                                  _window,
-                                  cx: &mut gpui::Context<Self>| {
-                                // Try to open release URL in browser
-                                if let Some(svc) = &this.update_service {
-                                    // Use a generic release page URL
-                                    let url = format!(
-                                        "https://github.com/oso95/Codirigent/releases/tag/v{}",
-                                        this.post_update_version
-                                            .as_deref()
-                                            .unwrap_or(env!("CARGO_PKG_VERSION"))
-                                    );
-                                    let _ = svc; // suppress unused warning
-                                    open_url_in_browser(&url);
-                                }
-                                this.post_update_version = None;
-                                cx.notify();
-                            },
-                            cx,
-                        ),
-                    ));
-                }
-            }
         }
 
         Some(toast)
@@ -307,7 +237,6 @@ impl WorkspaceView {
             .child("\u{2715}") // Unicode X mark
             .on_click(cx.listener(|this, _: &ClickEvent, _window, cx| {
                 this.update_dismissed = true;
-                this.post_update_version = None;
                 cx.notify();
             }))
     }
@@ -364,23 +293,4 @@ enum ToastVariant {
     UpdateAvailable { version: String },
     Downloading { percent: u8 },
     ReadyToApply { version: String },
-    PostUpdate { version: String },
-}
-
-/// Open a URL in the platform default browser.
-fn open_url_in_browser(url: &str) {
-    #[cfg(target_os = "macos")]
-    let result = std::process::Command::new("open").arg(url).spawn();
-
-    #[cfg(target_os = "windows")]
-    let result = std::process::Command::new("cmd")
-        .args(["/C", "start", url])
-        .spawn();
-
-    #[cfg(target_os = "linux")]
-    let result = std::process::Command::new("xdg-open").arg(url).spawn();
-
-    if let Err(e) = result {
-        tracing::warn!("Failed to open URL in browser: {e}");
-    }
 }
