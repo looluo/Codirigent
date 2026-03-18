@@ -364,11 +364,18 @@ pub struct AppearanceSettings {
     pub font_size: f32,
     /// Grid gap in pixels.
     pub grid_gap: u32,
+    /// Tab status indicator style: "dot", "badge", or "glow".
+    #[serde(default = "AppearanceSettings::default_tab_status_style")]
+    pub tab_status_style: String,
 }
 
 impl AppearanceSettings {
     fn default_font_size() -> f32 {
         13.0
+    }
+
+    fn default_tab_status_style() -> String {
+        "dot".to_string()
     }
 }
 
@@ -378,6 +385,7 @@ impl Default for AppearanceSettings {
             theme: "dark".to_string(),
             font_size: 13.0,
             grid_gap: 4,
+            tab_status_style: "dot".to_string(),
         }
     }
 }
@@ -875,6 +883,7 @@ mod tests {
         assert_eq!(settings.theme, "dark");
         assert_eq!(settings.font_size, 13.0);
         assert_eq!(settings.grid_gap, 4);
+        assert_eq!(settings.tab_status_style, "dot");
     }
 
     #[test]
@@ -883,12 +892,33 @@ mod tests {
             theme: "light".to_string(),
             font_size: 14.0,
             grid_gap: 8,
+            ..Default::default()
         };
         let json = serde_json::to_string(&settings).unwrap();
         let parsed: AppearanceSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.theme, "light");
         assert_eq!(parsed.font_size, 14.0);
         assert_eq!(parsed.grid_gap, 8);
+    }
+
+    #[test]
+    fn test_appearance_settings_tab_status_style_serialization() {
+        for style in &["dot", "badge", "glow"] {
+            let settings = AppearanceSettings {
+                tab_status_style: style.to_string(),
+                ..Default::default()
+            };
+            let json = serde_json::to_string(&settings).unwrap();
+            let parsed: AppearanceSettings = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed.tab_status_style, *style);
+        }
+    }
+
+    #[test]
+    fn test_appearance_settings_missing_tab_status_style_defaults() {
+        let json = r#"{"theme":"dark","font_size":13.0,"grid_gap":4}"#;
+        let parsed: AppearanceSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.tab_status_style, "dot");
     }
 
     // NotificationSettings tests
