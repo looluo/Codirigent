@@ -200,7 +200,9 @@ impl UpdateService {
                                     verified = false;
                                 }
                                 Err(e) => {
-                                    warn!("SHA256 verification error: {e} — clearing staged update");
+                                    warn!(
+                                        "SHA256 verification error: {e} — clearing staged update"
+                                    );
                                     let _ = std::fs::remove_file(&staged.artifact_path);
                                     persistent.staged_update = None;
                                     let _ = state::save_state(&persistent);

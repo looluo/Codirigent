@@ -190,7 +190,10 @@ impl WorkspaceView {
                                 "Later",
                                 border_color,
                                 fg,
-                                |this: &mut Self, _: &ClickEvent, _window, cx: &mut gpui::Context<Self>| {
+                                |this: &mut Self,
+                                 _: &ClickEvent,
+                                 _window,
+                                 cx: &mut gpui::Context<Self>| {
                                     this.update_dismissed = true;
                                     cx.notify();
                                 },
@@ -201,17 +204,17 @@ impl WorkspaceView {
                                 "Restart Now",
                                 primary,
                                 gpui::Hsla::white(),
-                                |this: &mut Self, _: &ClickEvent, _window, cx: &mut gpui::Context<Self>| {
+                                |this: &mut Self,
+                                 _: &ClickEvent,
+                                 _window,
+                                 cx: &mut gpui::Context<Self>| {
                                     if let Some(svc) = &this.update_service {
                                         match svc.apply() {
                                             Ok(()) => {
                                                 cx.quit();
                                             }
                                             Err(e) => {
-                                                tracing::error!(
-                                                    "Failed to apply update: {}",
-                                                    e
-                                                );
+                                                tracing::error!("Failed to apply update: {}", e);
                                             }
                                         }
                                     }
