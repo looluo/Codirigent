@@ -178,6 +178,8 @@ impl WorkspaceView {
             cx.notify();
         }
 
+        self.pulse_counter = self.pulse_counter.wrapping_add(1);
+
         self.poll_update_events(cx);
     }
 

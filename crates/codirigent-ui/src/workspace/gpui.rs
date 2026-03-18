@@ -147,6 +147,9 @@ pub struct WorkspaceView {
     /// Notification handle — sends commands to a background actor for desktop notifications.
     /// All desktop notifications must go through this instead of calling send_notification directly.
     pub(super) notification_handle: NotificationHandle,
+    /// Counter incremented each maintenance poll cycle for tab pulse animation.
+    /// Render code derives pulse phase from `pulse_counter % 6` (3 ticks on, 3 off = ~750ms each).
+    pub(super) pulse_counter: u8,
 
     // --- Auto-update state ---
     /// Update service for auto-update checking and downloading.
@@ -558,6 +561,7 @@ impl WorkspaceView {
             cli_readers: Arc::new(Mutex::new(CliReaders::new())),
             cache: CacheState::new(),
             notification_handle: NotificationHandle::new(Default::default()),
+            pulse_counter: 0,
             update_service,
             update_info: None,
             update_dismissed: false,

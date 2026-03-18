@@ -123,6 +123,9 @@ mod split_render;
 mod pane_header_render;
 
 #[cfg(feature = "gpui-full")]
+mod tab_status_render;
+
+#[cfg(feature = "gpui-full")]
 mod settings_panels;
 
 #[cfg(feature = "gpui-full")]

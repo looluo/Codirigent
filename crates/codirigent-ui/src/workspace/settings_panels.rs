@@ -729,6 +729,7 @@ impl super::gpui::WorkspaceView {
         let theme_id = page.user_settings.appearance.theme.clone();
         let font_size = page.user_settings.appearance.font_size;
         let grid_gap = page.user_settings.appearance.grid_gap;
+        let tab_status_style = page.user_settings.appearance.tab_status_style.clone();
         let theme = self.workspace.theme();
         let theme_entries = build_theme_dropdown_entries(&self.settings.theme_manager);
         let selected_theme_label =
@@ -832,6 +833,25 @@ impl super::gpui::WorkspaceView {
                             page.user_save_pending = true;
                             this.workspace.theme_mut().grid_gap =
                                 page.user_settings.appearance.grid_gap as f32;
+                        }
+                        cx.notify();
+                    },
+                ),
+            ))
+            .child(settings_section_header("Status", theme, false))
+            .child(setting_row(
+                "Tab status style",
+                "How session status is shown on tabs (dot, badge, or glow)",
+                theme,
+                self.render_dropdown_control(
+                    "dd-tab-status-style",
+                    &["dot", "badge", "glow"],
+                    &tab_status_style,
+                    cx,
+                    |this, val, _, cx| {
+                        if let Some(page) = this.settings.page.as_mut() {
+                            page.user_settings.appearance.tab_status_style = val;
+                            page.user_save_pending = true;
                         }
                         cx.notify();
                     },
