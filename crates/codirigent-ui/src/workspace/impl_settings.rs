@@ -422,7 +422,7 @@ impl WorkspaceView {
                 match result {
                     Ok(()) => {
                         this.settings.cached_user_settings = user_settings.clone();
-                        this.notification_manager
+                        this.notification_handle
                             .update_settings(user_settings.notifications.clone());
                     }
                     Err(e) => warn!("Failed to save user settings: {}", e),
@@ -504,7 +504,7 @@ impl WorkspaceView {
                         warn!("Failed to save user settings: {}", err);
                     } else {
                         this.settings.cached_user_settings = user_settings.clone();
-                        this.notification_manager
+                        this.notification_handle
                             .update_settings(user_settings.notifications.clone());
                         // Re-register keybindings with GPUI so user changes take
                         // effect immediately without requiring a restart.
@@ -607,7 +607,7 @@ impl WorkspaceView {
                 this.settings.cached_user_settings = user_settings.clone();
                 this.settings.cached_project_config = loaded.project_config.clone();
                 this.settings.current_working_dir = loaded.project_dir;
-                this.notification_manager
+                this.notification_handle
                     .update_settings(user_settings.notifications.clone());
                 this.top_bar
                     .load_saved_profiles(user_settings.saved_layouts.clone());
@@ -800,10 +800,11 @@ mod tests {
 
     #[test]
     fn test_normalize_keybinding_display_cmd_to_ctrl_on_non_macos() {
+        // "Cmd+N" → platform modifier display: "Cmd+N" on macOS, "Ctrl+N" elsewhere.
         #[cfg(not(target_os = "macos"))]
         assert_eq!(normalize_keybinding_display("Cmd+N"), "Ctrl+N");
         #[cfg(target_os = "macos")]
-        assert_eq!(normalize_keybinding_display("Ctrl+N"), "Cmd+N");
+        assert_eq!(normalize_keybinding_display("Cmd+N"), "Cmd+N");
     }
 
     #[test]

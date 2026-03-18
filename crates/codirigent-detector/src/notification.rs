@@ -27,6 +27,9 @@ use std::collections::HashMap;
 use std::time::Instant;
 use tracing::{debug, info, warn};
 
+use std::sync::mpsc;
+use std::thread;
+
 /// Types of notifications that can be sent.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum NotificationType {
@@ -144,6 +147,186 @@ impl NotificationManager {
         match self.last_sent.get(&session_id) {
             Some(last) => last.elapsed().as_secs() >= self.settings.cooldown_seconds,
             None => true,
+        }
+    }
+}
+
+/// Commands sent from `NotificationHandle` to the background `NotificationActor`.
+enum NotificationCommand {
+    /// Send a desktop notification (subject to toggle/cooldown checks).
+    Send {
+        kind: NotificationType,
+        session_id: SessionId,
+        session_name: String,
+        detail: Option<String>,
+    },
+    /// Update notification settings at runtime.
+    UpdateSettings(NotificationSettings),
+}
+
+/// Background actor that owns notification state and performs blocking OS calls.
+///
+/// Runs on a dedicated `std::thread` — never on the UI thread or a tokio worker.
+/// Receives commands via `std::sync::mpsc::Receiver`. Exits when the channel closes
+/// (all `NotificationHandle` instances dropped).
+struct NotificationActor {
+    rx: mpsc::Receiver<NotificationCommand>,
+    settings: NotificationSettings,
+    last_sent: HashMap<SessionId, Instant>,
+}
+
+impl NotificationActor {
+    fn run(mut self) {
+        debug!("Notification actor started");
+        while let Ok(cmd) = self.rx.recv() {
+            let result =
+                std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| self.handle(cmd)));
+            if let Err(e) = result {
+                warn!("Notification actor recovered from panic: {:?}", e);
+            }
+        }
+        debug!("Notification actor stopped: channel closed");
+    }
+
+    fn handle(&mut self, cmd: NotificationCommand) {
+        match cmd {
+            NotificationCommand::Send {
+                kind,
+                session_id,
+                ref session_name,
+                ref detail,
+            } => {
+                if !self.settings.desktop {
+                    debug!("Notification suppressed: desktop notifications disabled");
+                    return;
+                }
+                if !self.is_type_enabled(&kind) {
+                    debug!(?kind, "Notification suppressed: type disabled");
+                    return;
+                }
+                if !self.cooldown_elapsed(session_id) {
+                    debug!(%session_id, "Notification suppressed: cooldown active");
+                    return;
+                }
+
+                match kind {
+                    NotificationType::InputRequired => {
+                        notify_input_required(session_id, session_name);
+                    }
+                    NotificationType::TaskCompleted => {
+                        notify_task_completed(session_id, session_name, true);
+                    }
+                    NotificationType::TaskFailed => {
+                        notify_task_completed(session_id, session_name, false);
+                    }
+                    NotificationType::PermissionPrompt => {
+                        let body = match detail.as_deref() {
+                            Some(tool) => {
+                                format!("'{}' needs permission for {}", session_name, tool)
+                            }
+                            None => format!("'{}' needs your permission", session_name),
+                        };
+                        send_notification("Codirigent", &body);
+                    }
+                    NotificationType::ResponseReady => {
+                        let body = format!("'{}' finished responding", session_name);
+                        send_notification("Codirigent", &body);
+                    }
+                    NotificationType::Error => {
+                        let error_msg = detail.as_deref().unwrap_or("Unknown error");
+                        notify_error(session_id, session_name, error_msg);
+                    }
+                }
+
+                self.last_sent.insert(session_id, Instant::now());
+            }
+            NotificationCommand::UpdateSettings(settings) => {
+                debug!("Notification actor: settings updated");
+                self.settings = settings;
+            }
+        }
+    }
+
+    fn is_type_enabled(&self, kind: &NotificationType) -> bool {
+        match kind {
+            NotificationType::InputRequired => self.settings.input_required,
+            NotificationType::TaskCompleted => self.settings.task_completed,
+            NotificationType::TaskFailed => self.settings.task_failed,
+            NotificationType::PermissionPrompt => self.settings.permission_prompt,
+            NotificationType::ResponseReady => self.settings.response_ready,
+            NotificationType::Error => self.settings.error,
+        }
+    }
+
+    fn cooldown_elapsed(&self, session_id: SessionId) -> bool {
+        if self.settings.cooldown_seconds == 0 {
+            return true;
+        }
+        match self.last_sent.get(&session_id) {
+            Some(last) => last.elapsed().as_secs() >= self.settings.cooldown_seconds,
+            None => true,
+        }
+    }
+}
+
+/// Non-blocking handle for sending notifications from any thread.
+///
+/// Wraps an `mpsc::Sender` to a background `NotificationActor`. All methods
+/// take `&self` and return immediately — the actual notification dispatch
+/// (including blocking OS calls) happens on the actor's dedicated thread.
+///
+/// The actor thread exits automatically when all `NotificationHandle` clones
+/// are dropped.
+#[derive(Clone)]
+pub struct NotificationHandle {
+    tx: mpsc::Sender<NotificationCommand>,
+}
+
+impl NotificationHandle {
+    /// Spawn the background notification actor and return a handle.
+    ///
+    /// The actor runs on a dedicated OS thread named `"notification-actor"`.
+    /// It processes commands sequentially, applying toggle/cooldown checks
+    /// before making blocking platform notification calls.
+    pub fn new(settings: NotificationSettings) -> Self {
+        let (tx, rx) = mpsc::channel();
+        let actor = NotificationActor {
+            rx,
+            settings,
+            last_sent: HashMap::new(),
+        };
+        thread::Builder::new()
+            .name("notification-actor".into())
+            .spawn(move || actor.run())
+            .expect("failed to spawn notification actor thread");
+        Self { tx }
+    }
+
+    /// Queue a notification for background dispatch.
+    ///
+    /// Returns immediately. The actor will check master toggle, per-type
+    /// toggles, and per-session cooldown before sending.
+    pub fn send(
+        &self,
+        kind: NotificationType,
+        session_id: SessionId,
+        session_name: &str,
+        detail: Option<&str>,
+    ) {
+        if let Err(e) = self.tx.send(NotificationCommand::Send {
+            kind,
+            session_id,
+            session_name: session_name.to_owned(),
+            detail: detail.map(|s| s.to_owned()),
+        }) {
+            warn!("Notification actor unreachable: {}", e);
+        }
+    }
+
+    /// Update notification settings on the actor (non-blocking).
+    pub fn update_settings(&self, settings: NotificationSettings) {
+        if let Err(e) = self.tx.send(NotificationCommand::UpdateSettings(settings)) {
+            warn!("Notification actor unreachable (settings update): {}", e);
         }
     }
 }
@@ -733,5 +916,175 @@ mod tests {
             Some("Build failed"),
         );
         assert!(!sent);
+    }
+
+    // ── NotificationActor tests ──
+
+    #[test]
+    fn test_actor_processes_send_command() {
+        let (tx, rx) = mpsc::channel();
+        let actor = NotificationActor {
+            rx,
+            settings: NotificationSettings::default(),
+            last_sent: HashMap::new(),
+        };
+        tx.send(NotificationCommand::Send {
+            kind: NotificationType::InputRequired,
+            session_id: SessionId(1),
+            session_name: "Test".to_owned(),
+            detail: None,
+        })
+        .unwrap();
+        drop(tx);
+        actor.run();
+    }
+
+    #[test]
+    fn test_actor_cooldown_suppresses_second_notification() {
+        let (_tx, rx) = mpsc::channel();
+        let settings = NotificationSettings {
+            cooldown_seconds: 60,
+            ..Default::default()
+        };
+        let mut actor = NotificationActor {
+            rx,
+            settings,
+            last_sent: HashMap::new(),
+        };
+
+        let cmd1 = NotificationCommand::Send {
+            kind: NotificationType::InputRequired,
+            session_id: SessionId(1),
+            session_name: "Test".to_owned(),
+            detail: None,
+        };
+        actor.handle(cmd1);
+        assert!(actor.last_sent.contains_key(&SessionId(1)));
+
+        let prev_time = *actor.last_sent.get(&SessionId(1)).unwrap();
+        let cmd2 = NotificationCommand::Send {
+            kind: NotificationType::InputRequired,
+            session_id: SessionId(1),
+            session_name: "Test".to_owned(),
+            detail: None,
+        };
+        actor.handle(cmd2);
+        assert_eq!(*actor.last_sent.get(&SessionId(1)).unwrap(), prev_time);
+    }
+
+    #[test]
+    fn test_actor_per_session_cooldown_independent() {
+        let (_tx, rx) = mpsc::channel();
+        let settings = NotificationSettings {
+            cooldown_seconds: 60,
+            ..Default::default()
+        };
+        let mut actor = NotificationActor {
+            rx,
+            settings,
+            last_sent: HashMap::new(),
+        };
+
+        let cmd1 = NotificationCommand::Send {
+            kind: NotificationType::InputRequired,
+            session_id: SessionId(1),
+            session_name: "A".to_owned(),
+            detail: None,
+        };
+        actor.handle(cmd1);
+
+        let cmd2 = NotificationCommand::Send {
+            kind: NotificationType::InputRequired,
+            session_id: SessionId(2),
+            session_name: "B".to_owned(),
+            detail: None,
+        };
+        actor.handle(cmd2);
+
+        assert!(actor.last_sent.contains_key(&SessionId(1)));
+        assert!(actor.last_sent.contains_key(&SessionId(2)));
+    }
+
+    #[test]
+    fn test_actor_update_settings_disables_notifications() {
+        let (_tx, rx) = mpsc::channel();
+        let mut actor = NotificationActor {
+            rx,
+            settings: NotificationSettings::default(),
+            last_sent: HashMap::new(),
+        };
+
+        actor.handle(NotificationCommand::UpdateSettings(NotificationSettings {
+            desktop: false,
+            ..Default::default()
+        }));
+
+        actor.handle(NotificationCommand::Send {
+            kind: NotificationType::InputRequired,
+            session_id: SessionId(1),
+            session_name: "Test".to_owned(),
+            detail: None,
+        });
+        assert!(actor.last_sent.is_empty());
+    }
+
+    #[test]
+    fn test_actor_type_toggle_respected() {
+        let (_tx, rx) = mpsc::channel();
+        let mut actor = NotificationActor {
+            rx,
+            settings: NotificationSettings {
+                input_required: false,
+                cooldown_seconds: 0,
+                ..Default::default()
+            },
+            last_sent: HashMap::new(),
+        };
+
+        actor.handle(NotificationCommand::Send {
+            kind: NotificationType::InputRequired,
+            session_id: SessionId(1),
+            session_name: "Test".to_owned(),
+            detail: None,
+        });
+        assert!(actor.last_sent.is_empty());
+
+        actor.handle(NotificationCommand::Send {
+            kind: NotificationType::TaskCompleted,
+            session_id: SessionId(1),
+            session_name: "Test".to_owned(),
+            detail: None,
+        });
+        assert!(actor.last_sent.contains_key(&SessionId(1)));
+    }
+
+    // ── NotificationHandle tests ──
+
+    #[test]
+    fn test_notification_handle_send_does_not_panic() {
+        let handle = NotificationHandle::new(NotificationSettings::default());
+        handle.send(NotificationType::InputRequired, SessionId(1), "Test", None);
+    }
+
+    #[test]
+    fn test_notification_handle_update_settings() {
+        let handle = NotificationHandle::new(NotificationSettings::default());
+        handle.update_settings(NotificationSettings {
+            desktop: false,
+            ..Default::default()
+        });
+    }
+
+    #[test]
+    fn test_notification_handle_is_clone() {
+        let handle = NotificationHandle::new(NotificationSettings::default());
+        let _clone = handle.clone();
+    }
+
+    #[test]
+    fn test_notification_handle_send_after_clone_drop() {
+        let handle = NotificationHandle::new(NotificationSettings::default());
+        drop(handle.clone());
+        handle.send(NotificationType::InputRequired, SessionId(1), "Test", None);
     }
 }

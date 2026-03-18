@@ -57,7 +57,7 @@ use codirigent_core::{
     CodexExecutionMode, DefaultEventBus, FileStorageService, ProcessMonitor, SessionId,
     SessionManager, SessionStatus, TaskManager, TaskManagerConfig,
 };
-use codirigent_detector::{InputDetector, NotificationManager};
+use codirigent_detector::{InputDetector, NotificationHandle};
 use codirigent_filetree::FileTree;
 use codirigent_session::clipboard_service::{ClipboardService, DefaultClipboardService};
 use codirigent_session::DefaultSessionManager;
@@ -144,9 +144,9 @@ pub struct WorkspaceView {
     pub(super) cli_readers: Arc<Mutex<CliReaders>>,
     /// Cached detection results and memoized state.
     pub(super) cache: CacheState,
-    /// Notification manager — enforces master toggle, per-type toggles, and cooldown.
+    /// Notification handle — sends commands to a background actor for desktop notifications.
     /// All desktop notifications must go through this instead of calling send_notification directly.
-    pub(super) notification_manager: NotificationManager,
+    pub(super) notification_handle: NotificationHandle,
 }
 
 /// Returns `true` if the editor command refers to a terminal-based editor
@@ -525,7 +525,7 @@ impl WorkspaceView {
             update_tx,
             cli_readers: Arc::new(Mutex::new(CliReaders::new())),
             cache: CacheState::new(),
-            notification_manager: NotificationManager::new(Default::default()),
+            notification_handle: NotificationHandle::new(Default::default()),
         };
 
         // Pre-detect editors and shells in the background so settings open instantly

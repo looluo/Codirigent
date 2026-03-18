@@ -592,7 +592,7 @@ impl WorkspaceView {
                 .session(resolved_session_id)
                 .map(|s| s.name.clone())
                 .unwrap_or_else(|| format!("Session {}", resolved_session_id.0));
-            self.notification_manager.notify(
+            self.notification_handle.send(
                 NotificationType::InputRequired,
                 resolved_session_id,
                 &name,
@@ -608,7 +608,7 @@ impl WorkspaceView {
                 .session(resolved_session_id)
                 .map(|s| s.name.clone())
                 .unwrap_or_else(|| format!("Session {}", resolved_session_id.0));
-            self.notification_manager.notify(
+            self.notification_handle.send(
                 NotificationType::ResponseReady,
                 resolved_session_id,
                 &name,
