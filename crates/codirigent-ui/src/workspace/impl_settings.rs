@@ -422,7 +422,7 @@ impl WorkspaceView {
                 match result {
                     Ok(()) => {
                         this.settings.cached_user_settings = user_settings.clone();
-                        this.notification_manager
+                        this.notification_handle
                             .update_settings(user_settings.notifications.clone());
                     }
                     Err(e) => warn!("Failed to save user settings: {}", e),
@@ -504,7 +504,7 @@ impl WorkspaceView {
                         warn!("Failed to save user settings: {}", err);
                     } else {
                         this.settings.cached_user_settings = user_settings.clone();
-                        this.notification_manager
+                        this.notification_handle
                             .update_settings(user_settings.notifications.clone());
                         // Re-register keybindings with GPUI so user changes take
                         // effect immediately without requiring a restart.
@@ -607,7 +607,7 @@ impl WorkspaceView {
                 this.settings.cached_user_settings = user_settings.clone();
                 this.settings.cached_project_config = loaded.project_config.clone();
                 this.settings.current_working_dir = loaded.project_dir;
-                this.notification_manager
+                this.notification_handle
                     .update_settings(user_settings.notifications.clone());
                 this.top_bar
                     .load_saved_profiles(user_settings.saved_layouts.clone());
