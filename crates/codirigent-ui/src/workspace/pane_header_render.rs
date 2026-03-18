@@ -246,11 +246,12 @@ impl WorkspaceView {
                 tab = tab.border_1().border_color(glow_border);
             }
 
-            // Apply pulse opacity for animated states
+            // Apply pulse opacity for animated states.
+            // 6-step sine-like curve for smooth pulsing (250ms per step = 1.5s cycle).
             if decoration.should_pulse {
-                let phase = self.pulse_counter % 6;
-                let opacity = if phase < 3 { 1.0 } else { 0.4 };
-                tab = tab.opacity(opacity);
+                const PULSE_CURVE: [f32; 6] = [1.0, 0.85, 0.55, 0.4, 0.55, 0.85];
+                let phase = (self.pulse_counter % 6) as usize;
+                tab = tab.opacity(PULSE_CURVE[phase]);
             }
 
             let is_badge = tab_status_style == "badge";
