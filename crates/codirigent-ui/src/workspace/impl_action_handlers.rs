@@ -110,6 +110,31 @@ impl WorkspaceView {
         info!("ToggleSidebar action triggered");
         self.toggle_sidebar(cx);
     }
+
+    /// Handle ToggleTaskBoard action (Ctrl+T / Cmd+T).
+    pub(super) fn handle_toggle_task_board(
+        &mut self,
+        _action: &ToggleTaskBoard,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        info!("ToggleTaskBoard action triggered");
+        self.toggle_task_board(cx);
+    }
+
+    /// Handle QuickSwitch action (Ctrl+K / Cmd+K).
+    ///
+    /// This is a placeholder — no dedicated session-picker UI exists yet.
+    /// Toggles the sidebar as a stand-in until a real session picker is built.
+    pub(super) fn handle_quick_switch(
+        &mut self,
+        _action: &QuickSwitch,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        info!("QuickSwitch action triggered (toggling sidebar as placeholder)");
+        self.toggle_sidebar(cx);
+    }
 }
 
 /// Generate FocusSession handler methods for WorkspaceView.

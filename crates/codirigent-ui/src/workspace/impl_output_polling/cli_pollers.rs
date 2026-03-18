@@ -423,7 +423,7 @@ impl WorkspaceView {
                                     }
                                     Some(tool) => (NotificationType::PermissionPrompt, Some(tool)),
                                 };
-                                this.notification_manager.notify(
+                                this.notification_handle.send(
                                     notif_type,
                                     result.session_id,
                                     &session_name,

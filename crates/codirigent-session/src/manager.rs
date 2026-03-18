@@ -443,10 +443,19 @@ impl SessionManager for DefaultSessionManager {
             ));
         }
 
+        // Create session metadata before PTY spawn so the shell inherits the
+        // same stable UUID that will be stored for this session.
+        let mut session = Session::new(id, name, working_dir.clone());
+        session.shell = shell.clone().filter(|value| !value.is_empty());
+
         // Inject CODIRIGENT_SESSION_ID so codirigent-hook can match hook signals
         // back to this exact session without relying on CWD heuristics.
         let id_str = id.0.to_string();
-        let env_vars: &[(&str, &str)] = &[("CODIRIGENT_SESSION_ID", &id_str)];
+        let session_uuid = session.session_uuid.clone();
+        let env_vars: &[(&str, &str)] = &[
+            ("CODIRIGENT_SESSION_ID", &id_str),
+            ("CODIRIGENT_SESSION_UUID", &session_uuid),
+        ];
 
         // Spawn PTY: use specific shell if provided, otherwise auto-detect
         let mut pty = if let Some(ref shell_name) = shell {
@@ -535,10 +544,6 @@ impl SessionManager for DefaultSessionManager {
                 }
             },
         );
-
-        // Create session metadata
-        let mut session = Session::new(id, name, working_dir.clone());
-        session.shell = shell.filter(|value| !value.is_empty());
 
         // Detect git info for the working directory
         session.git_info = self

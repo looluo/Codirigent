@@ -7,7 +7,7 @@ use crate::icons;
 use crate::terminal_header::TerminalHeaderRenderHints;
 use crate::theme::CodirigentTheme;
 use crate::workspace::gpui::WorkspaceView;
-use codirigent_core::{PaneId, SessionId};
+use codirigent_core::{PaneId, SessionId, SessionStatus};
 use gpui::{
     div, px, ClickEvent, Context, FontWeight, InteractiveElement, MouseButton, MouseDownEvent,
     MouseMoveEvent, ParentElement, SharedString, StatefulInteractiveElement, Styled,
@@ -32,7 +32,6 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) -> gpui::Stateful<gpui::Div> {
         let color_indicator: gpui::Hsla = hints.color_indicator.into();
-        let status_color: gpui::Hsla = hints.status.color.into();
         let show_plus_button = self
             .workspace()
             .pane_active_session_id(pane_id.clone())
@@ -59,7 +58,6 @@ impl WorkspaceView {
                     .rounded_sm()
                     .bg(color_indicator),
             )
-            .child(div().w(px(8.0)).h(px(8.0)).rounded_full().bg(status_color))
             .child(self.render_pane_tab_strip(
                 pane_id.clone(),
                 session_id,
@@ -169,6 +167,12 @@ impl WorkspaceView {
         let pane_tab_ids = self.workspace().pane_tab_session_ids(pane_id.clone());
         let mut tab_strip = div().flex().items_center().gap_1().overflow_hidden();
 
+        let tab_status_style = self
+            .effective_user_settings()
+            .appearance
+            .tab_status_style
+            .clone();
+
         for tab_session_id in pane_tab_ids {
             let tab_is_active = tab_session_id == session_id;
             let tab_name = self
@@ -176,7 +180,27 @@ impl WorkspaceView {
                 .session(tab_session_id)
                 .map(|session| session.name.clone())
                 .unwrap_or_else(|| hints.name.clone());
-            let tab_bg = if tab_is_active {
+            let tab_status = self
+                .workspace()
+                .session(tab_session_id)
+                .map(|s| s.status)
+                .unwrap_or(SessionStatus::Idle);
+            let decoration = super::tab_status_render::render_tab_status(
+                &tab_status_style,
+                tab_status,
+                tab_is_active,
+            );
+
+            let tab_bg = if let Some(glow_bg) = decoration.tab_bg {
+                if tab_is_active {
+                    let mut base: gpui::Hsla = theme.active.into();
+                    base.h = glow_bg.h;
+                    base.s = glow_bg.s.max(base.s);
+                    base
+                } else {
+                    glow_bg
+                }
+            } else if tab_is_active {
                 theme.active.into()
             } else {
                 border_color.opacity(0.35)
@@ -215,20 +239,53 @@ impl WorkspaceView {
                             cx.notify();
                         }
                     }
-                }))
-                .child(
-                    div()
-                        .text_xs()
-                        .font_weight(if tab_is_active {
-                            FontWeight::SEMIBOLD
-                        } else {
-                            FontWeight::MEDIUM
-                        })
-                        .text_color(tab_fg)
-                        .overflow_hidden()
-                        .text_ellipsis()
-                        .child(tab_name),
-                );
+                }));
+
+            // Apply glow border if present
+            if let Some(glow_border) = decoration.tab_border {
+                tab = tab.border_1().border_color(glow_border);
+            }
+
+            // Apply pulse opacity for animated states.
+            // 6-step sine-like curve for smooth pulsing (250ms per step = 1.5s cycle).
+            if decoration.should_pulse {
+                const PULSE_CURVE: [f32; 6] = [1.0, 0.85, 0.55, 0.4, 0.55, 0.85];
+                let phase = (self.pulse_counter % 6) as usize;
+                tab = tab.opacity(PULSE_CURVE[phase]);
+            }
+
+            let is_badge = tab_status_style == "badge";
+            let is_glow = tab_status_style == "glow";
+            let mut status_child = decoration.child;
+
+            // Prepend dot (before name) for "dot" style or unknown styles
+            if !is_badge && !is_glow {
+                if let Some(child) = status_child.take() {
+                    tab = tab.child(child);
+                }
+            }
+
+            // Add the name label
+            tab = tab.child(
+                div()
+                    .text_xs()
+                    .font_weight(if tab_is_active {
+                        FontWeight::SEMIBOLD
+                    } else {
+                        FontWeight::MEDIUM
+                    })
+                    .text_color(tab_fg)
+                    .overflow_hidden()
+                    .text_ellipsis()
+                    .child(tab_name),
+            );
+
+            // Append badge (after name) for "badge" style
+            if is_badge {
+                if let Some(child) = status_child.take() {
+                    tab = tab.child(child);
+                }
+            }
 
             if tab_is_active {
                 let drag_source_pane_id = pane_id.clone();

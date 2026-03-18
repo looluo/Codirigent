@@ -49,6 +49,9 @@ struct SignalFile {
     approval_policy: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     sandbox_policy_type: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    codirigent_session_uuid: Option<String>,
+    // Legacy field kept for transition compatibility with older Codirigent builds.
     codirigent_session_id: Option<String>,
     ts: u64,
 }
@@ -65,7 +68,8 @@ fn main() {
 fn handle_payload(payload: HookPayload) {
     // Only process signals for sessions launched by Codirigent.
     let codirigent_session_id = env::var("CODIRIGENT_SESSION_ID").ok();
-    if codirigent_session_id.is_none() {
+    let codirigent_session_uuid = env::var("CODIRIGENT_SESSION_UUID").ok();
+    if codirigent_session_id.is_none() && codirigent_session_uuid.is_none() {
         return;
     }
 
@@ -104,6 +108,7 @@ fn handle_payload(payload: HookPayload) {
         cli_session_id,
         approval_policy: payload.approval_policy,
         sandbox_policy_type: sandbox_policy_type(payload.sandbox_policy.as_ref()),
+        codirigent_session_uuid,
         codirigent_session_id,
         ts: SystemTime::now()
             .duration_since(UNIX_EPOCH)

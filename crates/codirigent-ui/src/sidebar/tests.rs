@@ -1,11 +1,13 @@
 //! Tests for the session sidebar component.
 
 use super::*;
+use codirigent_core::types::session::generate_session_uuid;
 use std::path::PathBuf;
 
 fn create_test_session(id: u64, name: &str, status: SessionStatus) -> Session {
     Session {
         id: SessionId(id),
+        session_uuid: generate_session_uuid(),
         name: name.to_string(),
         status,
         working_directory: PathBuf::from("/tmp"),
@@ -33,6 +35,7 @@ fn create_grouped_session(
 ) -> Session {
     Session {
         id: SessionId(id),
+        session_uuid: generate_session_uuid(),
         name: name.to_string(),
         status,
         working_directory: PathBuf::from("/tmp"),
@@ -457,6 +460,7 @@ fn create_session_with_context(
 ) -> Session {
     Session {
         id: SessionId(id),
+        session_uuid: generate_session_uuid(),
         name: name.to_string(),
         status,
         working_directory: PathBuf::from("/tmp"),
@@ -479,6 +483,7 @@ fn create_session_with_task(id: u64, name: &str, status: SessionStatus, task: &s
     use codirigent_core::TaskId;
     Session {
         id: SessionId(id),
+        session_uuid: generate_session_uuid(),
         name: name.to_string(),
         status,
         working_directory: PathBuf::from("/tmp"),

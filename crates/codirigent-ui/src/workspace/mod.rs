@@ -75,6 +75,12 @@ mod impl_action_handlers;
 mod impl_settings;
 
 #[cfg(feature = "gpui-full")]
+mod impl_shortcuts_recording;
+
+#[cfg(feature = "gpui-full")]
+mod impl_shortcuts_nav;
+
+#[cfg(feature = "gpui-full")]
 mod impl_ui_operations;
 
 #[cfg(feature = "gpui-full")]
@@ -105,6 +111,9 @@ mod top_bar_render;
 mod modal_render;
 
 #[cfg(feature = "gpui-full")]
+mod toast_render;
+
+#[cfg(feature = "gpui-full")]
 mod grid_render;
 
 #[cfg(feature = "gpui-full")]
@@ -114,7 +123,13 @@ mod split_render;
 mod pane_header_render;
 
 #[cfg(feature = "gpui-full")]
+mod tab_status_render;
+
+#[cfg(feature = "gpui-full")]
 mod settings_panels;
+
+#[cfg(feature = "gpui-full")]
+mod settings_theme_picker;
 
 #[cfg(feature = "gpui-full")]
 mod clipboard_state;

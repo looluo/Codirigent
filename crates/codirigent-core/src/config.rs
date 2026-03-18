@@ -187,7 +187,12 @@ pub struct GeneralSettings {
     /// Default working directory for new sessions.
     pub default_working_dir: Option<String>,
     /// Show splash screen on startup.
+    #[serde(default = "default_true")]
     pub show_splash: bool,
+    /// Resume CLI sessions (claude/codex/gemini) on startup restore.
+    /// When false, sessions open as generic shells with no CLI launched.
+    #[serde(default = "default_true")]
+    pub restore_cli_on_startup: bool,
 }
 
 impl Default for GeneralSettings {
@@ -197,6 +202,7 @@ impl Default for GeneralSettings {
             default_shell: String::new(),
             default_working_dir: None,
             show_splash: true,
+            restore_cli_on_startup: true,
         }
     }
 }
@@ -312,11 +318,24 @@ impl UserSettings {
         bindings.insert("switch_session_2".to_string(), format!("{m}+2"));
         bindings.insert("switch_session_3".to_string(), format!("{m}+3"));
         bindings.insert("switch_session_4".to_string(), format!("{m}+4"));
+        bindings.insert("switch_session_5".to_string(), format!("{m}+5"));
+        bindings.insert("switch_session_6".to_string(), format!("{m}+6"));
+        bindings.insert("switch_session_7".to_string(), format!("{m}+7"));
+        bindings.insert("switch_session_8".to_string(), format!("{m}+8"));
+        bindings.insert("switch_session_9".to_string(), format!("{m}+9"));
         bindings.insert("new_session".to_string(), format!("{m}+N"));
         bindings.insert("close_session".to_string(), format!("{m}+W"));
-        bindings.insert("quick_switch".to_string(), format!("{m}+K"));
         bindings.insert("toggle_layout".to_string(), format!("{m}+\\"));
-        bindings.insert("toggle_task_board".to_string(), format!("{m}+B"));
+        bindings.insert("toggle_sidebar".to_string(), format!("{m}+B"));
+        bindings.insert("toggle_task_board".to_string(), format!("{m}+T"));
+        bindings.insert("open_settings".to_string(), format!("{m}+,"));
+        bindings.insert("quit".to_string(), format!("{m}+Q"));
+        bindings.insert("paste".to_string(), format!("{m}+V"));
+        bindings.insert("copy".to_string(), format!("{m}+C"));
+        bindings.insert("split_horizontal".to_string(), format!("{m}+D"));
+        bindings.insert("split_vertical".to_string(), format!("{m}+Shift+D"));
+        bindings.insert("close_pane".to_string(), format!("{m}+Shift+W"));
+        bindings.insert("quick_switch".to_string(), format!("{m}+K"));
         bindings
     }
 }
@@ -345,11 +364,18 @@ pub struct AppearanceSettings {
     pub font_size: f32,
     /// Grid gap in pixels.
     pub grid_gap: u32,
+    /// Tab status indicator style: "dot", "badge", or "glow".
+    #[serde(default = "AppearanceSettings::default_tab_status_style")]
+    pub tab_status_style: String,
 }
 
 impl AppearanceSettings {
     fn default_font_size() -> f32 {
         13.0
+    }
+
+    fn default_tab_status_style() -> String {
+        "dot".to_string()
     }
 }
 
@@ -359,6 +385,7 @@ impl Default for AppearanceSettings {
             theme: "dark".to_string(),
             font_size: 13.0,
             grid_gap: 4,
+            tab_status_style: "dot".to_string(),
         }
     }
 }
@@ -777,15 +804,34 @@ mod tests {
         {
             assert_eq!(bindings.get("new_session"), Some(&"Cmd+N".to_string()));
             assert_eq!(bindings.get("close_session"), Some(&"Cmd+W".to_string()));
-            assert_eq!(bindings.get("quick_switch"), Some(&"Cmd+K".to_string()));
+            assert_eq!(bindings.get("toggle_sidebar"), Some(&"Cmd+B".to_string()));
+            assert_eq!(
+                bindings.get("toggle_task_board"),
+                Some(&"Cmd+T".to_string())
+            );
         }
         #[cfg(not(target_os = "macos"))]
         {
             assert_eq!(bindings.get("new_session"), Some(&"Ctrl+N".to_string()));
             assert_eq!(bindings.get("close_session"), Some(&"Ctrl+W".to_string()));
-            assert_eq!(bindings.get("quick_switch"), Some(&"Ctrl+K".to_string()));
+            assert_eq!(bindings.get("toggle_sidebar"), Some(&"Ctrl+B".to_string()));
+            assert_eq!(
+                bindings.get("toggle_task_board"),
+                Some(&"Ctrl+T".to_string())
+            );
         }
+        assert!(bindings.contains_key("quick_switch"));
         assert!(bindings.contains_key("toggle_task_board"));
+        assert!(bindings.contains_key("toggle_sidebar"));
+        assert!(bindings.contains_key("open_settings"));
+        assert!(bindings.contains_key("quit"));
+        assert!(bindings.contains_key("paste"));
+        assert!(bindings.contains_key("copy"));
+        assert!(bindings.contains_key("split_horizontal"));
+        assert!(bindings.contains_key("split_vertical"));
+        assert!(bindings.contains_key("close_pane"));
+        assert!(bindings.contains_key("switch_session_5"));
+        assert!(bindings.contains_key("switch_session_9"));
     }
 
     #[test]
@@ -799,6 +845,36 @@ mod tests {
         assert_ne!(settings1, settings3);
     }
 
+    // GeneralSettings tests
+
+    #[test]
+    fn test_general_settings_restore_cli_defaults_true() {
+        let settings = GeneralSettings::default();
+        assert!(settings.restore_cli_on_startup);
+    }
+
+    #[test]
+    fn test_general_settings_restore_cli_serialization() {
+        let settings = GeneralSettings {
+            editor_command: "vim".to_string(),
+            default_shell: String::new(),
+            default_working_dir: None,
+            show_splash: true,
+            restore_cli_on_startup: false,
+        };
+        let json = serde_json::to_string(&settings).unwrap();
+        let parsed: GeneralSettings = serde_json::from_str(&json).unwrap();
+        assert!(!parsed.restore_cli_on_startup);
+    }
+
+    #[test]
+    fn test_general_settings_restore_cli_backward_compat() {
+        // Existing settings files lack this field — must deserialize as true
+        let json = r#"{"editor_command":"code","default_shell":"","show_splash":true}"#;
+        let parsed: GeneralSettings = serde_json::from_str(json).unwrap();
+        assert!(parsed.restore_cli_on_startup);
+    }
+
     // AppearanceSettings tests
 
     #[test]
@@ -807,6 +883,7 @@ mod tests {
         assert_eq!(settings.theme, "dark");
         assert_eq!(settings.font_size, 13.0);
         assert_eq!(settings.grid_gap, 4);
+        assert_eq!(settings.tab_status_style, "dot");
     }
 
     #[test]
@@ -815,12 +892,33 @@ mod tests {
             theme: "light".to_string(),
             font_size: 14.0,
             grid_gap: 8,
+            ..Default::default()
         };
         let json = serde_json::to_string(&settings).unwrap();
         let parsed: AppearanceSettings = serde_json::from_str(&json).unwrap();
         assert_eq!(parsed.theme, "light");
         assert_eq!(parsed.font_size, 14.0);
         assert_eq!(parsed.grid_gap, 8);
+    }
+
+    #[test]
+    fn test_appearance_settings_tab_status_style_serialization() {
+        for style in &["dot", "badge", "glow"] {
+            let settings = AppearanceSettings {
+                tab_status_style: style.to_string(),
+                ..Default::default()
+            };
+            let json = serde_json::to_string(&settings).unwrap();
+            let parsed: AppearanceSettings = serde_json::from_str(&json).unwrap();
+            assert_eq!(parsed.tab_status_style, *style);
+        }
+    }
+
+    #[test]
+    fn test_appearance_settings_missing_tab_status_style_defaults() {
+        let json = r#"{"theme":"dark","font_size":13.0,"grid_gap":4}"#;
+        let parsed: AppearanceSettings = serde_json::from_str(json).unwrap();
+        assert_eq!(parsed.tab_status_style, "dot");
     }
 
     // NotificationSettings tests

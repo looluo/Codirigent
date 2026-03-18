@@ -1169,6 +1169,127 @@ fn test_workspace_focus_hidden_grid_session_prefers_empty_cell() {
 }
 
 #[test]
+fn test_workspace_focus_hidden_grid_session_replaces_active_tab_in_grouped_pane() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    for i in 1..=6 {
+        assert!(ws.add_session(make_session(i, &format!("S{}", i))));
+    }
+
+    assert!(ws.group_session_into_pane(SessionId(1), PaneId::GridCell { index: 1 }));
+    assert!(ws.focus_session(SessionId(5)));
+    assert!(ws.focus_session(SessionId(1)));
+    assert!(ws.focus_session(SessionId(6)));
+
+    assert_eq!(
+        ws.pane_tab_session_ids(PaneId::GridCell { index: 1 }),
+        vec![SessionId(2), SessionId(6)]
+    );
+    assert_eq!(
+        ws.pane_active_session_id(PaneId::GridCell { index: 1 }),
+        Some(SessionId(6))
+    );
+    assert!(!ws.is_session_visible(SessionId(1)));
+    assert!(ws.focus_session(SessionId(1)));
+    assert_eq!(
+        ws.pane_active_session_id(PaneId::GridCell { index: 1 }),
+        Some(SessionId(1))
+    );
+}
+
+#[test]
+fn test_workspace_focus_hidden_custom_grid_session_replaces_active_tab_in_grouped_pane() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Custom { rows: 1, cols: 3 });
+    for i in 1..=5 {
+        assert!(ws.add_session(make_session(i, &format!("S{}", i))));
+    }
+
+    assert!(ws.group_session_into_pane(SessionId(1), PaneId::GridCell { index: 1 }));
+    assert!(ws.focus_session(SessionId(4)));
+    assert!(ws.focus_session(SessionId(1)));
+    assert!(ws.focus_session(SessionId(5)));
+
+    assert_eq!(
+        ws.pane_tab_session_ids(PaneId::GridCell { index: 1 }),
+        vec![SessionId(2), SessionId(5)]
+    );
+    assert_eq!(
+        ws.pane_active_session_id(PaneId::GridCell { index: 1 }),
+        Some(SessionId(5))
+    );
+    assert!(!ws.is_session_visible(SessionId(1)));
+    assert!(ws.focus_session(SessionId(1)));
+    assert_eq!(
+        ws.pane_active_session_id(PaneId::GridCell { index: 1 }),
+        Some(SessionId(1))
+    );
+}
+
+#[test]
+fn test_workspace_focus_hidden_split_session_replaces_active_tab_in_grouped_pane() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    for i in 1..=3 {
+        assert!(ws.add_session(make_session(i, &format!("S{}", i))));
+    }
+
+    ws.set_split_tree(LayoutNode::from_grid(1, 2));
+    assert!(ws.group_session_into_pane(SessionId(1), PaneId::SplitSlot { slot: SlotId(1) }));
+    assert!(ws.focus_session(SessionId(3)));
+
+    assert_eq!(
+        ws.pane_tab_session_ids(PaneId::SplitSlot { slot: SlotId(1) }),
+        vec![SessionId(2), SessionId(3)]
+    );
+    assert_eq!(
+        ws.pane_active_session_id(PaneId::SplitSlot { slot: SlotId(1) }),
+        Some(SessionId(3))
+    );
+    assert!(!ws.is_session_visible(SessionId(1)));
+    assert!(ws.focus_session(SessionId(1)));
+    assert_eq!(
+        ws.pane_active_session_id(PaneId::SplitSlot { slot: SlotId(1) }),
+        Some(SessionId(1))
+    );
+}
+
+#[test]
+fn test_workspace_focus_hidden_custom_split_session_replaces_active_tab_in_grouped_pane() {
+    let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
+    for i in 1..=4 {
+        assert!(ws.add_session(make_session(i, &format!("S{}", i))));
+    }
+
+    let tree = LayoutNode::Split {
+        direction: SplitDirection::Horizontal,
+        ratio: 0.55,
+        first: Box::new(LayoutNode::Leaf { slot: SlotId(0) }),
+        second: Box::new(LayoutNode::Split {
+            direction: SplitDirection::Vertical,
+            ratio: 0.4,
+            first: Box::new(LayoutNode::Leaf { slot: SlotId(1) }),
+            second: Box::new(LayoutNode::Leaf { slot: SlotId(2) }),
+        }),
+    };
+    ws.set_split_tree(tree);
+    assert!(ws.group_session_into_pane(SessionId(1), PaneId::SplitSlot { slot: SlotId(1) }));
+    assert!(ws.focus_session(SessionId(4)));
+
+    assert_eq!(
+        ws.pane_tab_session_ids(PaneId::SplitSlot { slot: SlotId(1) }),
+        vec![SessionId(2), SessionId(4)]
+    );
+    assert_eq!(
+        ws.pane_active_session_id(PaneId::SplitSlot { slot: SlotId(1) }),
+        Some(SessionId(4))
+    );
+    assert!(!ws.is_session_visible(SessionId(1)));
+    assert!(ws.focus_session(SessionId(1)));
+    assert_eq!(
+        ws.pane_active_session_id(PaneId::SplitSlot { slot: SlotId(1) }),
+        Some(SessionId(1))
+    );
+}
+
+#[test]
 fn test_workspace_restore_pane_tab_groups_rehydrates_active_tabs() {
     let mut ws = Workspace::with_profile(LayoutProfile::Grid2x2);
     assert!(ws.add_session(make_session(11, "S11")));

@@ -330,8 +330,6 @@ pub struct TerminalHeaderRenderHints {
     pub name: String,
     /// Color indicator color.
     pub color_indicator: Color,
-    /// Status indicator.
-    pub status: StatusIndicator,
     /// Task badge (if any).
     pub task: Option<TaskBadge>,
     /// Context display (if any).
@@ -371,7 +369,6 @@ impl TerminalHeader {
         TerminalHeaderRenderHints {
             name: self.session_name.clone(),
             color_indicator: self.session_color,
-            status: self.status_indicator(),
             task: self.task_badge(),
             context: self.context_display(),
             is_focused: self.is_focused,

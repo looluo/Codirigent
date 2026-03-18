@@ -74,6 +74,8 @@ pub struct SettingsPage {
     original_project: ProjectConfig,
     /// Which keybinding is currently being recorded (action name).
     pub recording_shortcut: Option<String>,
+    /// Which shortcut row currently has keyboard focus (action name).
+    pub focused_shortcut_row: Option<String>,
     /// Which dropdown is currently open (by ID string).
     pub open_dropdown: Option<String>,
     /// Click position (window coordinates) where the dropdown was triggered.
@@ -88,6 +90,9 @@ pub struct SettingsPage {
     pub detected_shells: Vec<String>,
     /// Monospace fonts detected on the system.
     pub detected_fonts: Vec<String>,
+    /// Pre-sorted list of keybinding action names for the Keyboard Shortcuts panel.
+    /// Rebuilt whenever `user_settings.keybindings` changes.
+    pub sorted_shortcut_keys: Vec<String>,
 }
 
 impl SettingsPage {
@@ -99,6 +104,9 @@ impl SettingsPage {
         detected_shells: Vec<String>,
         detected_fonts: Vec<String>,
     ) -> Self {
+        let mut sorted_shortcut_keys: Vec<String> =
+            user_settings.keybindings.keys().cloned().collect();
+        sorted_shortcut_keys.sort();
         Self {
             active_category: SettingsCategory::General,
             original_user: user_settings.clone(),
@@ -106,6 +114,7 @@ impl SettingsPage {
             user_settings,
             project_config,
             recording_shortcut: None,
+            focused_shortcut_row: None,
             open_dropdown: None,
             dropdown_click_pos: (0.0, 0.0),
             user_save_pending: false,
@@ -113,7 +122,14 @@ impl SettingsPage {
             detected_editors,
             detected_shells,
             detected_fonts,
+            sorted_shortcut_keys,
         }
+    }
+
+    /// Rebuild the sorted shortcut key cache after `user_settings.keybindings` changes.
+    pub fn refresh_sorted_shortcut_keys(&mut self) {
+        self.sorted_shortcut_keys = self.user_settings.keybindings.keys().cloned().collect();
+        self.sorted_shortcut_keys.sort();
     }
 
     /// Get the active category.
@@ -156,6 +172,7 @@ impl SettingsPage {
             }
             SettingsCategory::KeyboardShortcuts => {
                 self.user_settings.keybindings = defaults.keybindings;
+                self.refresh_sorted_shortcut_keys();
             }
             _ => {}
         }
@@ -217,6 +234,18 @@ mod tests {
         );
         assert_eq!(SettingsCategory::Sessions.label(), "Sessions");
         assert_eq!(SettingsCategory::Advanced.label(), "Advanced");
+    }
+
+    #[test]
+    fn test_settings_page_focused_shortcut_row_default_none() {
+        let page = SettingsPage::new(
+            UserSettings::default(),
+            ProjectConfig::default(),
+            vec![],
+            vec![],
+            vec![],
+        );
+        assert!(page.focused_shortcut_row.is_none());
     }
 
     #[test]

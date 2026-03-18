@@ -66,19 +66,31 @@ struct HookSignal {
     sandbox_policy_type: Option<String>,
     /// Codirigent session ID, present only when Claude Code was spawned by Codirigent
     /// (via the `CODIRIGENT_SESSION_ID` environment variable).
+    #[serde(default)]
     codirigent_session_id: Option<String>,
+    #[serde(default)]
+    codirigent_session_uuid: Option<String>,
     ts: u64,
 }
 
 #[derive(Debug)]
 struct HookSignalUpdate {
-    session_id: SessionId,
+    session_id: Option<SessionId>,
     signal_file_id: String,
     cli_session_id: Option<String>,
+    codirigent_session_id: Option<String>,
+    codirigent_session_uuid: Option<String>,
     codex_execution_mode: Option<CodexExecutionMode>,
     status: String,
     cli_type: Option<String>,
     ts: u64,
+}
+
+#[derive(Debug, Clone)]
+struct ClaudeRoutingSession {
+    id: SessionId,
+    claude_session_id: Option<String>,
+    session_uuid: String,
 }
 
 fn codex_execution_mode_fingerprint(mode: Option<CodexExecutionMode>) -> Option<&'static str> {
@@ -123,6 +135,7 @@ fn resolve_hook_cli_session_id(
     signal_file_id: &str,
     explicit_cli_session_id: Option<&str>,
     session_id: SessionId,
+    allow_filename_backfill: bool,
 ) -> Option<String> {
     if let Some(explicit_id) = explicit_cli_session_id
         .map(str::trim)
@@ -140,6 +153,10 @@ fn resolve_hook_cli_session_id(
         return None;
     }
 
+    if !allow_filename_backfill {
+        return None;
+    }
+
     let fallback = signal_file_id.trim();
     if fallback.is_empty() || fallback == session_id.0.to_string() {
         return None;
@@ -154,6 +171,63 @@ fn resolve_hook_cli_session_id(
     }
 
     Some(fallback.to_owned())
+}
+
+fn resolve_claude_target_session(
+    sessions: &[ClaudeRoutingSession],
+    cli_session_id: Option<&str>,
+    codirigent_session_uuid: Option<&str>,
+) -> Option<SessionId> {
+    if let Some(cli_id) = cli_session_id {
+        let matches: Vec<_> = sessions
+            .iter()
+            .filter(|session| session.claude_session_id.as_deref() == Some(cli_id))
+            .collect();
+        match matches.len() {
+            1 => return Some(matches[0].id),
+            n if n > 1 => {
+                warn!(
+                    cli_session_id = cli_id,
+                    count = n,
+                    "Ambiguous Claude cli_session_id match"
+                );
+                return None;
+            }
+            _ => {}
+        }
+    }
+
+    if let Some(session_uuid) = codirigent_session_uuid {
+        let matches: Vec<_> = sessions
+            .iter()
+            .filter(|session| session.session_uuid == session_uuid)
+            .collect();
+        match matches.len() {
+            1 => return Some(matches[0].id),
+            n if n > 1 => {
+                warn!(
+                    session_uuid,
+                    count = n,
+                    "Ambiguous Claude session_uuid match"
+                );
+                return None;
+            }
+            _ => {}
+        }
+    }
+
+    warn!(
+        ?cli_session_id,
+        ?codirigent_session_uuid,
+        "No Claude session matched for hook signal; discarding"
+    );
+    None
+}
+
+fn parse_legacy_hook_session_id(codirigent_session_id: Option<&str>) -> Option<SessionId> {
+    codirigent_session_id
+        .and_then(|id| id.parse::<u64>().ok())
+        .map(SessionId)
 }
 
 fn codex_execution_mode_from_approval_and_sandbox(
@@ -228,19 +302,12 @@ fn read_recent_hook_signal_updates() -> Vec<HookSignalUpdate> {
             continue;
         }
 
-        let session_id = match signal
-            .codirigent_session_id
-            .as_deref()
-            .and_then(|id| id.parse::<u64>().ok())
-        {
-            Some(id) => SessionId(id),
-            None => continue,
-        };
-
         updates.push(HookSignalUpdate {
-            session_id,
+            session_id: None,
             signal_file_id,
             cli_session_id: signal.cli_session_id,
+            codirigent_session_id: signal.codirigent_session_id,
+            codirigent_session_uuid: signal.codirigent_session_uuid,
             codex_execution_mode: codex_execution_mode_from_approval_and_sandbox(
                 signal.approval_policy.as_deref(),
                 signal.sandbox_policy_type.as_deref(),
@@ -288,6 +355,8 @@ impl WorkspaceView {
             session_id,
             signal_file_id,
             cli_session_id,
+            codirigent_session_id,
+            codirigent_session_uuid,
             codex_execution_mode,
             status,
             cli_type,
@@ -319,18 +388,49 @@ impl WorkspaceView {
         let mut id_changed = false;
         let mut cli_type_changed = false;
         let cli_type_name = cli_type.as_deref().unwrap_or(CLI_TYPE_CLAUDE);
+        let resolved_session_id = if cli_type_name == CLI_TYPE_CLAUDE {
+            let routing_sessions = self
+                .workspace
+                .sessions()
+                .iter()
+                .map(|session| ClaudeRoutingSession {
+                    id: session.id,
+                    claude_session_id: session.claude_session_id.clone(),
+                    session_uuid: session.session_uuid.clone(),
+                })
+                .collect::<Vec<_>>();
+            match resolve_claude_target_session(
+                &routing_sessions,
+                cli_session_id.as_deref(),
+                codirigent_session_uuid.as_deref(),
+            ) {
+                Some(session_id) => session_id,
+                None => return,
+            }
+        } else {
+            match session_id
+                .or_else(|| parse_legacy_hook_session_id(codirigent_session_id.as_deref()))
+            {
+                Some(session_id) => session_id,
+                None => return,
+            }
+        };
         if let Some(cli_type) = cli_type_from_hook_signal_name(cli_type_name) {
             let current_cli_type = self
                 .clipboard
                 .clipboard_service
-                .get_session_cli_type(session_id);
+                .get_session_cli_type(resolved_session_id);
             self.clipboard
                 .clipboard_service
-                .set_session_cli_type(session_id, cli_type);
+                .set_session_cli_type(resolved_session_id, cli_type);
             cli_type_changed = current_cli_type != cli_type;
         }
-        let resolved_cli_session_id =
-            resolve_hook_cli_session_id(&signal_file_id, cli_session_id.as_deref(), session_id);
+        let resolved_cli_session_id = resolve_hook_cli_session_id(
+            &signal_file_id,
+            cli_session_id.as_deref(),
+            resolved_session_id,
+            cli_type_name != CLI_TYPE_CLAUDE,
+        );
         if let Some(cli_session_id) = resolved_cli_session_id.as_deref() {
             match cli_type_name {
                 CLI_TYPE_CLAUDE => {
@@ -339,7 +439,7 @@ impl WorkspaceView {
                         .lock()
                         .ok()
                         .and_then(|mgr| {
-                            mgr.with_session_state_mut(session_id, |state| {
+                            mgr.with_session_state_mut(resolved_session_id, |state| {
                                 let changed = state.session.claude_session_id.as_deref()
                                     != Some(cli_session_id);
                                 state.session.claude_session_id = Some(cli_session_id.to_owned());
@@ -354,7 +454,7 @@ impl WorkspaceView {
                         .lock()
                         .ok()
                         .and_then(|mgr| {
-                            mgr.with_session_state_mut(session_id, |state| {
+                            mgr.with_session_state_mut(resolved_session_id, |state| {
                                 let changed = state.session.gemini_session_id.as_deref()
                                     != Some(cli_session_id);
                                 state.session.gemini_session_id = Some(cli_session_id.to_owned());
@@ -369,7 +469,7 @@ impl WorkspaceView {
                         .lock()
                         .ok()
                         .and_then(|mgr| {
-                            mgr.with_session_state_mut(session_id, |state| {
+                            mgr.with_session_state_mut(resolved_session_id, |state| {
                                 let changed = state.session.codex_session_id.as_deref()
                                     != Some(cli_session_id);
                                 state.session.codex_session_id = Some(cli_session_id.to_owned());
@@ -377,7 +477,7 @@ impl WorkspaceView {
                             })
                         })
                         .unwrap_or(false);
-                    if let Some(session) = self.workspace.session_mut(session_id) {
+                    if let Some(session) = self.workspace.session_mut(resolved_session_id) {
                         if session.codex_session_id.as_deref() != Some(cli_session_id) {
                             session.codex_session_id = Some(cli_session_id.to_owned());
                             id_changed = true;
@@ -394,7 +494,7 @@ impl WorkspaceView {
 
         if cli_type_name == CLI_TYPE_CODEX {
             if let Some(mode) = codex_execution_mode {
-                self.set_session_codex_execution_mode(session_id, Some(mode), cx);
+                self.set_session_codex_execution_mode(resolved_session_id, Some(mode), cx);
             }
             let started_at = chrono::Utc::now();
             let manager_changed = self
@@ -402,7 +502,7 @@ impl WorkspaceView {
                 .lock()
                 .ok()
                 .and_then(|mgr| {
-                    mgr.with_session_state_mut(session_id, |state| {
+                    mgr.with_session_state_mut(resolved_session_id, |state| {
                         if state.session.codex_started_at.is_none() {
                             state.session.codex_started_at = Some(started_at);
                             true
@@ -414,7 +514,7 @@ impl WorkspaceView {
                 .unwrap_or(false);
             let workspace_changed = self
                 .workspace
-                .session_mut(session_id)
+                .session_mut(resolved_session_id)
                 .map(|session| {
                     if session.codex_started_at.is_none() {
                         session.codex_started_at = Some(started_at);
@@ -432,8 +532,11 @@ impl WorkspaceView {
         }
 
         let focused_id = self.workspace.focused_session_id();
-        let is_focused = Some(session_id) == focused_id;
-        let prev_status = self.workspace.session(session_id).map(|s| s.status);
+        let is_focused = Some(resolved_session_id) == focused_id;
+        let prev_status = self
+            .workspace
+            .session(resolved_session_id)
+            .map(|s| s.status);
         let new_status = match status.as_str() {
             "working" => SessionStatus::Working,
             "needs_attention" => SessionStatus::NeedsAttention,
@@ -459,12 +562,12 @@ impl WorkspaceView {
         if let Ok(mut readers) = self.cli_readers.lock() {
             let status_since = readers
                 .cached_status
-                .get(&session_id)
+                .get(&resolved_session_id)
                 .filter(|c| c.status == new_status)
                 .map(|c| c.status_since)
                 .unwrap_or_else(Instant::now);
             readers.cached_status.insert(
-                session_id,
+                resolved_session_id,
                 CachedCliStatus {
                     status: new_status,
                     seen_at: Instant::now(),
@@ -481,17 +584,17 @@ impl WorkspaceView {
             && prev_status_for_notif != SessionStatus::NeedsAttention
         {
             self.event_bus.publish(CodirigentEvent::AttentionRequired {
-                session_id,
+                session_id: resolved_session_id,
                 detail: None,
             });
             let name = self
                 .workspace
-                .session(session_id)
+                .session(resolved_session_id)
                 .map(|s| s.name.clone())
-                .unwrap_or_else(|| format!("Session {}", session_id.0));
-            self.notification_manager.notify(
+                .unwrap_or_else(|| format!("Session {}", resolved_session_id.0));
+            self.notification_handle.send(
                 NotificationType::InputRequired,
-                session_id,
+                resolved_session_id,
                 &name,
                 None,
             );
@@ -502,19 +605,19 @@ impl WorkspaceView {
         {
             let name = self
                 .workspace
-                .session(session_id)
+                .session(resolved_session_id)
                 .map(|s| s.name.clone())
-                .unwrap_or_else(|| format!("Session {}", session_id.0));
-            self.notification_manager.notify(
+                .unwrap_or_else(|| format!("Session {}", resolved_session_id.0));
+            self.notification_handle.send(
                 NotificationType::ResponseReady,
-                session_id,
+                resolved_session_id,
                 &name,
                 None,
             );
         }
 
-        if self.sync_session_status(session_id) || cli_type_changed {
-            self.sync_session_header(session_id);
+        if self.sync_session_status(resolved_session_id) || cli_type_changed {
+            self.sync_session_header(resolved_session_id);
             cx.notify();
         }
     }
@@ -532,7 +635,20 @@ mod tests {
             approval_policy: None,
             sandbox_policy_type: None,
             codirigent_session_id: codirigent_session_id.map(str::to_owned),
+            codirigent_session_uuid: None,
             ts,
+        }
+    }
+
+    fn claude_session(
+        id: u64,
+        claude_session_id: Option<&str>,
+        session_uuid: &str,
+    ) -> ClaudeRoutingSession {
+        ClaudeRoutingSession {
+            id: SessionId(id),
+            claude_session_id: claude_session_id.map(str::to_owned),
+            session_uuid: session_uuid.to_owned(),
         }
     }
 
@@ -659,13 +775,16 @@ mod tests {
 
     #[test]
     fn numeric_signal_file_id_is_not_treated_as_codex_session_id() {
-        assert_eq!(resolve_hook_cli_session_id("3", None, SessionId(3)), None);
+        assert_eq!(
+            resolve_hook_cli_session_id("3", None, SessionId(3), true),
+            None
+        );
     }
 
     #[test]
     fn non_numeric_signal_file_id_can_backfill_cli_session_id() {
         assert_eq!(
-            resolve_hook_cli_session_id("codex-uuid", None, SessionId(3)),
+            resolve_hook_cli_session_id("codex-uuid", None, SessionId(3), true),
             Some("codex-uuid".to_string())
         );
     }
@@ -673,7 +792,7 @@ mod tests {
     #[test]
     fn explicit_cli_session_id_wins_over_signal_file_id() {
         assert_eq!(
-            resolve_hook_cli_session_id("3", Some("real-codex-id"), SessionId(3)),
+            resolve_hook_cli_session_id("3", Some("real-codex-id"), SessionId(3), true),
             Some("real-codex-id".to_string())
         );
     }
@@ -681,13 +800,68 @@ mod tests {
     #[test]
     fn unsafe_hook_cli_session_id_is_rejected() {
         assert_eq!(
-            resolve_hook_cli_session_id("3", Some("bad;id"), SessionId(3)),
+            resolve_hook_cli_session_id("3", Some("bad;id"), SessionId(3), true),
             None
         );
         assert_eq!(
-            resolve_hook_cli_session_id("bad;id", None, SessionId(3)),
+            resolve_hook_cli_session_id("bad;id", None, SessionId(3), true),
             None
         );
+    }
+
+    #[test]
+    fn claude_signal_does_not_backfill_cli_session_id_from_filename() {
+        assert_eq!(
+            resolve_hook_cli_session_id("claude-session-id", None, SessionId(3), false),
+            None
+        );
+    }
+
+    #[test]
+    fn claude_signal_routes_by_cli_session_id_before_session_uuid() {
+        let sessions = vec![
+            claude_session(1, Some("claude-parent"), "uuid-parent"),
+            claude_session(2, Some("claude-other"), "uuid-other"),
+        ];
+
+        assert_eq!(
+            resolve_claude_target_session(&sessions, Some("claude-parent"), Some("uuid-other")),
+            Some(SessionId(1))
+        );
+    }
+
+    #[test]
+    fn claude_signal_falls_back_to_codirigent_session_uuid() {
+        let sessions = vec![
+            claude_session(1, Some("claude-parent"), "uuid-parent"),
+            claude_session(2, Some("claude-other"), "uuid-other"),
+        ];
+
+        assert_eq!(
+            resolve_claude_target_session(&sessions, Some("unknown-subagent"), Some("uuid-parent")),
+            Some(SessionId(1))
+        );
+    }
+
+    #[test]
+    fn ambiguous_claude_uuid_match_is_rejected() {
+        let sessions = vec![
+            claude_session(1, Some("claude-parent"), "shared-uuid"),
+            claude_session(2, Some("claude-other"), "shared-uuid"),
+        ];
+
+        assert_eq!(
+            resolve_claude_target_session(&sessions, None, Some("shared-uuid")),
+            None
+        );
+    }
+
+    #[test]
+    fn claude_signal_with_no_uuid_fields_is_discarded() {
+        // A legacy signal that has only a numeric codirigent_session_id and no
+        // UUID fields must not route to any Claude session.
+        let sessions = vec![claude_session(1, Some("claude-abc"), "uuid-abc")];
+        assert_eq!(resolve_claude_target_session(&sessions, None, None), None);
     }
 
     #[test]

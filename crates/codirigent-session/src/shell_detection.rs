@@ -120,6 +120,11 @@ const TEST_LINE_FORWARDER_SENTINEL: &str = "__codirigent_test_line_forwarder__";
 const POWERSHELL_INIT_COMMAND: &str = concat!(
     "[Console]::OutputEncoding=[System.Text.Encoding]::UTF8; ",
     "$OutputEncoding=[System.Text.Encoding]::UTF8; ",
+    "if (Get-Command fnm -ErrorAction SilentlyContinue) { ",
+    "try { ",
+    "Invoke-Expression (fnm env --shell powershell) ",
+    "} catch { } ",
+    "} ",
     "function prompt { ",
     "$gle = $global:LASTEXITCODE; ",
     "if ($null -eq $gle) { $gle = 0 }; ",
@@ -141,7 +146,6 @@ pub fn setup_powershell_command(shell: &str) -> ShellCommand {
         program: shell.to_string(),
         args: vec![
             "-NoLogo".to_string(),
-            "-NoProfile".to_string(),
             "-NoExit".to_string(),
             "-Command".to_string(),
             POWERSHELL_INIT_COMMAND.to_string(),
@@ -635,5 +639,7 @@ mod tests {
         assert_eq!(cmd.program, "pwsh.exe");
         assert!(cmd.args.contains(&"-NoLogo".to_string()));
         assert!(cmd.args.contains(&"-NoExit".to_string()));
+        // Profile must load so user PATH additions (e.g. claude, codex) are available
+        assert!(!cmd.args.contains(&"-NoProfile".to_string()));
     }
 }

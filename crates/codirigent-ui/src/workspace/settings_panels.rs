@@ -11,6 +11,7 @@ use crate::settings::controls::{setting_row, setting_toggle, settings_section_he
 use crate::settings::SettingsCategory;
 use crate::terminal_view::CursorShape;
 
+use super::settings_theme_picker::{build_theme_picker_sections, theme_picker_display_label};
 use super::types::DROPDOWN_TRIGGER_HEIGHT;
 
 const SETTINGS_DROPDOWN_MAX_HEIGHT: f32 = 280.0;
@@ -20,6 +21,35 @@ enum DropdownEntry {
     Option { value: String, label: String },
     Section { label: String },
     Separator,
+}
+
+fn build_theme_dropdown_entries(
+    theme_manager: &crate::theme_manager::ThemeManager,
+) -> Vec<DropdownEntry> {
+    let sections = build_theme_picker_sections(theme_manager);
+    let mut entries = Vec::new();
+
+    for (section_index, section) in sections.into_iter().enumerate() {
+        if section_index > 0 {
+            entries.push(DropdownEntry::Separator);
+        }
+
+        entries.push(DropdownEntry::Section {
+            label: section.title.to_string(),
+        });
+
+        entries.extend(
+            section
+                .options
+                .into_iter()
+                .map(|option| DropdownEntry::Option {
+                    value: option.id,
+                    label: option.label,
+                }),
+        );
+    }
+
+    entries
 }
 
 impl super::gpui::WorkspaceView {
@@ -109,6 +139,7 @@ impl super::gpui::WorkspaceView {
                         if let Some(ref mut page) = this.settings.page {
                             page.set_category(cat);
                             page.open_dropdown = None;
+                            page.focused_shortcut_row = None;
                         }
                         cx.notify();
                     }))
@@ -402,6 +433,7 @@ impl super::gpui::WorkspaceView {
         let shell = page.user_settings.general.default_shell.clone();
         let working_dir = page.user_settings.general.default_working_dir.clone();
         let show_splash = page.user_settings.general.show_splash;
+        let restore_cli_on_startup = page.user_settings.general.restore_cli_on_startup;
         let notif = page.user_settings.notifications.clone();
         let theme = self.workspace.theme();
 
@@ -498,6 +530,24 @@ impl super::gpui::WorkspaceView {
                     }
                     cx.notify();
                 }),
+            ))
+            .child(setting_row(
+                "Restore AI sessions",
+                "Resume previous Claude/Codex/Gemini sessions on startup",
+                theme,
+                self.render_toggle_control(
+                    "toggle-restore-cli",
+                    restore_cli_on_startup,
+                    cx,
+                    |this, _, cx| {
+                        if let Some(page) = this.settings.page.as_mut() {
+                            page.user_settings.general.restore_cli_on_startup =
+                                !page.user_settings.general.restore_cli_on_startup;
+                            page.user_save_pending = true;
+                        }
+                        cx.notify();
+                    },
+                ),
             ))
             .child(settings_section_header("Notifications", theme, false))
             .child(setting_row(
@@ -676,10 +726,14 @@ impl super::gpui::WorkspaceView {
             .page
             .as_ref()
             .expect("BUG: settings page should exist when rendering settings");
-        let theme_name = page.user_settings.appearance.theme.clone();
+        let theme_id = page.user_settings.appearance.theme.clone();
         let font_size = page.user_settings.appearance.font_size;
         let grid_gap = page.user_settings.appearance.grid_gap;
+        let tab_status_style = page.user_settings.appearance.tab_status_style.clone();
         let theme = self.workspace.theme();
+        let theme_entries = build_theme_dropdown_entries(&self.settings.theme_manager);
+        let selected_theme_label =
+            theme_picker_display_label(&self.settings.theme_manager, &theme_id);
 
         div()
             .flex()
@@ -688,46 +742,27 @@ impl super::gpui::WorkspaceView {
             .child(settings_section_header("Theme", theme, true))
             .child(setting_row(
                 "Color theme",
-                "Switch between dark and light themes",
+                "Select the active UI and terminal theme",
                 theme,
-                self.render_dropdown_control(
+                self.render_dropdown_control_with_entries(
                     "dd-theme",
-                    &["dark", "light"],
-                    &theme_name,
+                    &theme_entries,
+                    &theme_id,
+                    &selected_theme_label,
                     cx,
                     |this, val, _, _| {
+                        let mut user_settings = None;
                         if let Some(page) = this.settings.page.as_mut() {
                             page.user_settings.appearance.theme = val.clone();
                             page.user_save_pending = true;
+                            user_settings = Some(page.user_settings.clone());
                         }
-                        let new_theme = if val == "light" {
-                            crate::theme::CodirigentTheme::light()
-                        } else {
-                            crate::theme::CodirigentTheme::dark()
-                        };
-                        // Preserve user settings across theme switch
-                        let (gap, ui_size, term_size) = this
-                            .settings
-                            .page
-                            .as_ref()
-                            .map(|p| {
-                                (
-                                    p.user_settings.appearance.grid_gap,
-                                    p.user_settings.appearance.font_size,
-                                    p.user_settings.terminal.font_size,
-                                )
-                            })
-                            .unwrap_or((4, 13.0, 13.0));
-                        this.workspace.set_theme(new_theme);
-                        let t = this.workspace.theme_mut();
-                        t.grid_gap = gap as f32;
-                        t.font_size_base = ui_size;
-                        t.font_size_small = (ui_size - 2.0).max(8.0);
-                        t.font_size_large = ui_size + 2.0;
-                        t.terminal_font_size = term_size;
-                        let terminal_theme = t.clone();
-                        for tv in this.terminals_mut().values_mut() {
-                            tv.set_theme(terminal_theme.clone());
+                        if let Some(user_settings) = user_settings {
+                            let resolved_theme_id =
+                                this.resolve_and_apply_theme_id(&val, &user_settings);
+                            if let Some(page) = this.settings.page.as_mut() {
+                                page.user_settings.appearance.theme = resolved_theme_id;
+                            }
                         }
                     },
                 ),
@@ -798,6 +833,25 @@ impl super::gpui::WorkspaceView {
                             page.user_save_pending = true;
                             this.workspace.theme_mut().grid_gap =
                                 page.user_settings.appearance.grid_gap as f32;
+                        }
+                        cx.notify();
+                    },
+                ),
+            ))
+            .child(settings_section_header("Status", theme, false))
+            .child(setting_row(
+                "Tab status style",
+                "How session status is shown on tabs (dot, badge, or glow)",
+                theme,
+                self.render_dropdown_control(
+                    "dd-tab-status-style",
+                    &["dot", "badge", "glow"],
+                    &tab_status_style,
+                    cx,
+                    |this, val, _, cx| {
+                        if let Some(page) = this.settings.page.as_mut() {
+                            page.user_settings.appearance.tab_status_style = val;
+                            page.user_save_pending = true;
                         }
                         cx.notify();
                     },
@@ -964,10 +1018,14 @@ impl super::gpui::WorkspaceView {
         let panel_bg: Hsla = theme.panel_background.into();
         let border: Hsla = theme.border.into();
 
-        let mut sorted: Vec<_> = page.user_settings.keybindings.iter().collect();
-        sorted.sort_by_key(|(k, _)| (*k).clone());
+        let sorted: Vec<_> = page
+            .sorted_shortcut_keys
+            .iter()
+            .filter_map(|k| page.user_settings.keybindings.get(k).map(|v| (k, v)))
+            .collect();
 
         let recording = page.recording_shortcut.clone();
+        let focused_row = page.focused_shortcut_row.clone();
 
         let mut container = div()
             .flex()
@@ -1002,6 +1060,7 @@ impl super::gpui::WorkspaceView {
         for (action, binding) in sorted {
             let action_name = action.clone();
             let is_recording = recording.as_deref() == Some(action.as_str());
+            let is_focused = focused_row.as_deref() == Some(action.as_str());
             let display = if is_recording {
                 "Press a key...".to_string()
             } else {
@@ -1020,6 +1079,14 @@ impl super::gpui::WorkspaceView {
                     .py(px(6.0))
                     .rounded_md()
                     .hover(|s| s.bg(Hsla { a: 0.05, ..fg }))
+                    .bg(if is_focused {
+                        Hsla { a: 0.08, ..fg }
+                    } else {
+                        Hsla {
+                            a: 0.0,
+                            ..Default::default()
+                        }
+                    })
                     .cursor_pointer()
                     .on_mouse_down(
                         MouseButton::Left,
@@ -1027,8 +1094,10 @@ impl super::gpui::WorkspaceView {
                             if let Some(page) = this.settings.page.as_mut() {
                                 if page.recording_shortcut.as_deref() == Some(&action_name) {
                                     page.recording_shortcut = None;
+                                    page.focused_shortcut_row = None;
                                 } else {
                                     page.recording_shortcut = Some(action_name.clone());
+                                    page.focused_shortcut_row = Some(action_name.clone());
                                 }
                             }
                             cx.notify();

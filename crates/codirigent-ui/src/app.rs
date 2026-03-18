@@ -47,6 +47,8 @@ mod actions_impl {
             FocusSession9,
             NextLayout,
             ToggleSidebar,
+            ToggleTaskBoard,
+            QuickSwitch,
             SplitHorizontal,
             SplitVertical,
             ClosePane,
@@ -59,6 +61,43 @@ mod actions_impl {
 }
 
 pub use actions_impl::*;
+
+/// Build the complete list of default GPUI key bindings.
+///
+/// This function is used both at startup (to register the initial binding set)
+/// and in the settings-save callback (to re-register the full default set before
+/// appending user overrides). Because GPUI's `bind_keys` appends rather than
+/// replaces, re-registering the complete default set before user overrides ensures
+/// last-registered-wins gives a consistent snapshot on every save.
+pub(crate) fn default_gpui_keybindings() -> Vec<KeyBinding> {
+    vec![
+        KeyBinding::new("secondary-n", NewSession, None),
+        KeyBinding::new("secondary-w", CloseSession, None),
+        KeyBinding::new("secondary-q", Quit, None),
+        KeyBinding::new("secondary-\\", NextLayout, None),
+        // Ctrl+B / Cmd+B — toggle sidebar (repo drawer)
+        KeyBinding::new("secondary-b", ToggleSidebar, None),
+        // Ctrl+T / Cmd+T — toggle task board
+        KeyBinding::new("secondary-t", ToggleTaskBoard, None),
+        // Ctrl+K / Cmd+K — quick switch
+        KeyBinding::new("secondary-k", QuickSwitch, None),
+        KeyBinding::new("secondary-v", Paste, None),
+        KeyBinding::new("secondary-c", Copy, None),
+        KeyBinding::new("secondary-d", SplitHorizontal, None),
+        KeyBinding::new("secondary-shift-d", SplitVertical, None),
+        KeyBinding::new("secondary-shift-w", ClosePane, None),
+        KeyBinding::new("secondary-,", OpenSettings, None),
+        KeyBinding::new("secondary-1", FocusSession1, None),
+        KeyBinding::new("secondary-2", FocusSession2, None),
+        KeyBinding::new("secondary-3", FocusSession3, None),
+        KeyBinding::new("secondary-4", FocusSession4, None),
+        KeyBinding::new("secondary-5", FocusSession5, None),
+        KeyBinding::new("secondary-6", FocusSession6, None),
+        KeyBinding::new("secondary-7", FocusSession7, None),
+        KeyBinding::new("secondary-8", FocusSession8, None),
+        KeyBinding::new("secondary-9", FocusSession9, None),
+    ]
+}
 
 /// Default splash screen duration in milliseconds.
 const DEFAULT_SPLASH_DURATION_MS: u64 = 2000;
@@ -407,29 +446,9 @@ impl CodirigentApp {
             // Register global actions
             Self::register_actions(cx);
 
-            // Bind keyboard shortcuts to actions
-            cx.bind_keys([
-                KeyBinding::new("cmd-n", NewSession, None),
-                KeyBinding::new("cmd-w", CloseSession, None),
-                KeyBinding::new("cmd-q", Quit, None),
-                KeyBinding::new("cmd-\\", NextLayout, None),
-                KeyBinding::new("cmd-b", ToggleSidebar, None),
-                KeyBinding::new("cmd-v", Paste, None),
-                KeyBinding::new("cmd-c", Copy, None),
-                KeyBinding::new("cmd-d", SplitHorizontal, None),
-                KeyBinding::new("cmd-shift-d", SplitVertical, None),
-                KeyBinding::new("cmd-shift-w", ClosePane, None),
-                KeyBinding::new("cmd-,", OpenSettings, None),
-                KeyBinding::new("cmd-1", FocusSession1, None),
-                KeyBinding::new("cmd-2", FocusSession2, None),
-                KeyBinding::new("cmd-3", FocusSession3, None),
-                KeyBinding::new("cmd-4", FocusSession4, None),
-                KeyBinding::new("cmd-5", FocusSession5, None),
-                KeyBinding::new("cmd-6", FocusSession6, None),
-                KeyBinding::new("cmd-7", FocusSession7, None),
-                KeyBinding::new("cmd-8", FocusSession8, None),
-                KeyBinding::new("cmd-9", FocusSession9, None),
-            ]);
+            // Bind keyboard shortcuts to actions.
+            // "secondary-" is GPUI's platform-aware modifier: Cmd on macOS, Ctrl elsewhere.
+            cx.bind_keys(default_gpui_keybindings());
 
             // Create the main window
             let session_manager = self.session_manager.clone();
@@ -560,6 +579,14 @@ impl CodirigentApp {
             info!("ToggleSidebar action triggered (global fallback)");
         });
 
+        cx.on_action(|_: &ToggleTaskBoard, _cx| {
+            info!("ToggleTaskBoard action triggered (global fallback)");
+        });
+
+        cx.on_action(|_: &QuickSwitch, _cx| {
+            info!("QuickSwitch action triggered (global fallback)");
+        });
+
         // Session focus actions (global fallbacks) - use macro to reduce repetition
         macro_rules! register_focus_fallback {
             ($cx:expr, $($action:ty),+ $(,)?) => {
@@ -637,5 +664,16 @@ mod tests {
             app.splash_duration,
             Duration::from_millis(DEFAULT_SPLASH_DURATION_MS)
         );
+    }
+
+    #[test]
+    fn test_secondary_modifier_bindings_are_valid_keystroke_strings() {
+        // "secondary-" is GPUI's platform-aware modifier token (Cmd on macOS, Ctrl elsewhere).
+        // Verify that representative binding strings are parseable by GPUI's keystroke parser.
+        use gpui::Keystroke;
+        assert!(Keystroke::parse("secondary-n").is_ok());
+        assert!(Keystroke::parse("secondary-shift-d").is_ok());
+        assert!(Keystroke::parse("secondary-,").is_ok());
+        assert!(Keystroke::parse("secondary-\\").is_ok());
     }
 }

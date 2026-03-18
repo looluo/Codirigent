@@ -1450,12 +1450,14 @@ impl WorkspaceView {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use codirigent_core::types::session::generate_session_uuid;
     use codirigent_core::{GitRepoInfo, SessionId, SessionStatus};
     use std::path::PathBuf;
 
     fn test_session(id: u64, working_directory: &str) -> Session {
         Session {
             id: SessionId(id),
+            session_uuid: generate_session_uuid(),
             name: format!("Session {id}"),
             status: SessionStatus::Idle,
             working_directory: PathBuf::from(working_directory),

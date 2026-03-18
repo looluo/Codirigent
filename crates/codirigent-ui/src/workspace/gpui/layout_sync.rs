@@ -7,6 +7,7 @@ use crate::workspace::types::{
 };
 use codirigent_core::{CodirigentEvent, EventBus, SessionId, SessionManager};
 use gpui::{Context, Window};
+use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant};
 use tracing::warn;
 
@@ -45,25 +46,14 @@ impl WorkspaceView {
         })
     }
 
-    pub(super) fn render_focus_signature(&self) -> Option<SessionId> {
-        Self::render_focus_signature_for_layout(
-            self.workspace.layout_profile(),
-            self.workspace.focused_session_id(),
-        )
+    pub(super) fn rendered_session_signature(&self) -> u64 {
+        Self::rendered_session_signature_for_ids(&self.workspace.visible_session_ids())
     }
 
-    fn render_focus_signature_for_layout(
-        layout_profile: crate::layout::LayoutProfile,
-        focused_session_id: Option<SessionId>,
-    ) -> Option<SessionId> {
-        // Only single-pane mode swaps which session is visibly rendered when focus
-        // changes. Multi-pane layouts already render every visible session, so
-        // focus changes alone should not invalidate the cell-layout cache.
-        if layout_profile == crate::layout::LayoutProfile::Single {
-            focused_session_id
-        } else {
-            None
-        }
+    fn rendered_session_signature_for_ids(session_ids: &[SessionId]) -> u64 {
+        let mut hasher = std::collections::hash_map::DefaultHasher::new();
+        session_ids.hash(&mut hasher);
+        hasher.finish()
     }
 
     /// Cycle to next layout.
@@ -312,24 +302,30 @@ mod tests {
     }
 
     #[test]
-    fn test_render_focus_signature_tracks_focus_in_single_layout() {
-        assert_eq!(
-            super::WorkspaceView::render_focus_signature_for_layout(
-                crate::layout::LayoutProfile::Single,
-                Some(codirigent_core::SessionId(2)),
-            ),
-            Some(codirigent_core::SessionId(2))
-        );
+    fn test_rendered_session_signature_changes_when_visible_sessions_change() {
+        let a = super::WorkspaceView::rendered_session_signature_for_ids(&[
+            codirigent_core::SessionId(1),
+            codirigent_core::SessionId(2),
+        ]);
+        let b = super::WorkspaceView::rendered_session_signature_for_ids(&[
+            codirigent_core::SessionId(1),
+            codirigent_core::SessionId(3),
+        ]);
+
+        assert_ne!(a, b);
     }
 
     #[test]
-    fn test_render_focus_signature_ignores_focus_outside_single_layout() {
-        assert_eq!(
-            super::WorkspaceView::render_focus_signature_for_layout(
-                crate::layout::LayoutProfile::Grid2x2,
-                Some(codirigent_core::SessionId(2)),
-            ),
-            None
-        );
+    fn test_rendered_session_signature_is_stable_for_same_visible_sessions() {
+        let a = super::WorkspaceView::rendered_session_signature_for_ids(&[
+            codirigent_core::SessionId(2),
+            codirigent_core::SessionId(5),
+        ]);
+        let b = super::WorkspaceView::rendered_session_signature_for_ids(&[
+            codirigent_core::SessionId(2),
+            codirigent_core::SessionId(5),
+        ]);
+
+        assert_eq!(a, b);
     }
 }

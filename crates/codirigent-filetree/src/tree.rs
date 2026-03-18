@@ -304,7 +304,10 @@ impl FileTree {
 /// Returns `None` when the path contains control characters, or when the
 /// target shell has no safe representation for the path.
 pub fn quote_path_for_terminal(path: &Path, style: TerminalPathStyle) -> Option<String> {
-    let path_str = path.to_string_lossy();
+    let path_str = match style {
+        TerminalPathStyle::Posix if cfg!(windows) => path.to_string_lossy().replace('\\', "/"),
+        _ => path.to_string_lossy().into_owned(),
+    };
     if path_str.chars().any(|c| c.is_control()) {
         return None;
     }
@@ -748,6 +751,19 @@ mod tests {
         assert_eq!(
             tree.path_for_terminal(&path, TerminalPathStyle::Posix),
             Some("'/tmp/hello;rm -rf.txt'".to_string())
+        );
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn test_path_for_terminal_posix_normalizes_windows_separators() {
+        let temp = TempDir::new().unwrap();
+        let tree = FileTree::new(temp.path().to_path_buf()).unwrap();
+
+        let path = PathBuf::from(r"..\..\README.md");
+        assert_eq!(
+            tree.path_for_terminal(&path, TerminalPathStyle::Posix),
+            Some("../../README.md".to_string())
         );
     }
 

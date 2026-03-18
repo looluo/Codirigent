@@ -54,10 +54,10 @@ use crate::theme::CodirigentTheme;
 use crate::toolbar::CustomLayoutPicker;
 use codirigent_core::compaction::{CompactionConfig, CompactionService};
 use codirigent_core::{
-    CodexExecutionMode, DefaultEventBus, FileStorageService, ProcessMonitor, SessionId,
+    CodexExecutionMode, DefaultEventBus, EventBus, FileStorageService, ProcessMonitor, SessionId,
     SessionManager, SessionStatus, TaskManager, TaskManagerConfig,
 };
-use codirigent_detector::{InputDetector, NotificationManager};
+use codirigent_detector::{InputDetector, NotificationHandle};
 use codirigent_filetree::FileTree;
 use codirigent_session::clipboard_service::{ClipboardService, DefaultClipboardService};
 use codirigent_session::DefaultSessionManager;
@@ -144,9 +144,27 @@ pub struct WorkspaceView {
     pub(super) cli_readers: Arc<Mutex<CliReaders>>,
     /// Cached detection results and memoized state.
     pub(super) cache: CacheState,
-    /// Notification manager — enforces master toggle, per-type toggles, and cooldown.
+    /// Notification handle — sends commands to a background actor for desktop notifications.
     /// All desktop notifications must go through this instead of calling send_notification directly.
-    pub(super) notification_manager: NotificationManager,
+    pub(super) notification_handle: NotificationHandle,
+    /// Counter incremented each maintenance poll cycle for tab pulse animation.
+    /// Render code derives pulse phase from `pulse_counter % 6` (3 ticks on, 3 off = ~750ms each).
+    pub(super) pulse_counter: u8,
+
+    // --- Auto-update state ---
+    /// Update service for auto-update checking and downloading.
+    pub(super) update_service: Option<Arc<codirigent_updater::UpdateService>>,
+    /// Current update info from the checker.
+    pub(super) update_info: Option<codirigent_updater::UpdateInfo>,
+    /// Whether the user dismissed the update toast this session.
+    pub(super) update_dismissed: bool,
+    /// Download progress percentage (0-100) during download.
+    pub(super) update_download_progress: Option<u8>,
+    /// Staged update ready to apply.
+    pub(super) staged_update: Option<codirigent_updater::StagedUpdate>,
+    /// Receiver for update events from the EventBus.
+    pub(super) update_event_rx:
+        Option<tokio::sync::broadcast::Receiver<codirigent_core::CodirigentEvent>>,
 }
 
 /// Returns `true` if the editor command refers to a terminal-based editor
@@ -166,6 +184,10 @@ impl WorkspaceView {
     const MAINTENANCE_POLL_INTERVAL_MS: u64 = 250;
     /// Debounce window for persisted app-state saves.
     const STATE_SAVE_DEBOUNCE: Duration = Duration::from_millis(200);
+    /// Delta used to derive the small and large UI font variants from the base size.
+    pub(super) const UI_FONT_VARIANT_DELTA: f32 = 2.0;
+    /// Lower bound for derived small UI text.
+    pub(super) const MIN_UI_SMALL_FONT_SIZE: f32 = 8.0;
 
     fn session_is_shell_idle(&self, session_id: SessionId) -> bool {
         self.with_detector(|detector| {
@@ -458,6 +480,23 @@ impl WorkspaceView {
             );
         }
 
+        let update_service = match codirigent_updater::UpdateService::new(
+            env!("CARGO_PKG_VERSION"),
+            event_bus.clone(),
+        ) {
+            Ok(svc) => {
+                svc.start_background_check();
+                Some(Arc::new(svc))
+            }
+            Err(e) => {
+                tracing::warn!("Failed to initialize update service: {}", e);
+                None
+            }
+        };
+
+        // Subscribe to EventBus for update events
+        let update_event_rx = Some(event_bus.subscribe());
+
         let (storage, task_manager) = Self::init_task_manager(event_bus.clone());
         let (file_tree, file_tree_model, project_root) = Self::init_file_tree();
 
@@ -521,7 +560,14 @@ impl WorkspaceView {
             update_tx,
             cli_readers: Arc::new(Mutex::new(CliReaders::new())),
             cache: CacheState::new(),
-            notification_manager: NotificationManager::new(Default::default()),
+            notification_handle: NotificationHandle::new(Default::default()),
+            pulse_counter: 0,
+            update_service,
+            update_info: None,
+            update_dismissed: false,
+            update_download_progress: None,
+            staged_update: None,
+            update_event_rx,
         };
 
         // Pre-detect editors and shells in the background so settings open instantly
@@ -816,8 +862,9 @@ impl WorkspaceView {
     pub(super) fn apply_ui_font_size(&mut self, size: f32) {
         let theme = self.workspace.theme_mut();
         theme.font_size_base = size;
-        theme.font_size_small = (size - 2.0).max(8.0);
-        theme.font_size_large = size + 2.0;
+        theme.font_size_small =
+            (size - Self::UI_FONT_VARIANT_DELTA).max(Self::MIN_UI_SMALL_FONT_SIZE);
+        theme.font_size_large = size + Self::UI_FONT_VARIANT_DELTA;
     }
 
     /// Apply terminal font size update to theme and all terminal views.
@@ -893,20 +940,131 @@ impl WorkspaceView {
         &mut self.terminals
     }
 
+    /// Handle keyboard input when the settings panel is open.
+    ///
+    /// **Precondition:** must only be called when `self.settings.open` is true.
+    /// Returns `true` if the key was consumed and should not be forwarded to the PTY.
+    fn handle_settings_key(&mut self, event: &KeyDownEvent, cx: &mut Context<Self>) -> bool {
+        debug_assert!(
+            self.settings.open,
+            "handle_settings_key called with settings closed"
+        );
+        // Navigate Keyboard Shortcuts panel with keyboard when not recording.
+        if self
+            .settings
+            .page
+            .as_ref()
+            .map(|p| {
+                p.active_category() == crate::settings::SettingsCategory::KeyboardShortcuts
+                    && p.recording_shortcut.is_none()
+            })
+            .unwrap_or(false)
+        {
+            let key = event.keystroke.key.as_str();
+            let shift = event.keystroke.modifiers.shift;
+            let handled = match key {
+                "tab" | "down" | "up" => {
+                    let sorted_keys = self
+                        .settings
+                        .page
+                        .as_ref()
+                        .map(|p| p.sorted_shortcut_keys.as_slice())
+                        .unwrap_or_default();
+                    let move_down = (key == "tab" && !shift) || key == "down";
+                    let new_focus = self.settings.page.as_ref().and_then(|p| {
+                        super::impl_shortcuts_nav::navigate_shortcuts_focus(
+                            p,
+                            sorted_keys,
+                            move_down,
+                        )
+                    });
+                    if let Some(page) = self.settings.page.as_mut() {
+                        page.focused_shortcut_row = new_focus;
+                    }
+                    cx.notify();
+                    true
+                }
+                "enter" | " " => {
+                    if let Some(focused) = self
+                        .settings
+                        .page
+                        .as_ref()
+                        .and_then(|p| p.focused_shortcut_row.clone())
+                    {
+                        if let Some(page) = self.settings.page.as_mut() {
+                            page.recording_shortcut = Some(focused);
+                        }
+                        cx.notify();
+                    }
+                    // When no row is focused, Enter/Space is still consumed (not forwarded to PTY)
+                    // because the settings panel is open and these keys have no terminal meaning here.
+                    true
+                }
+                _ => false,
+            };
+            if handled {
+                cx.stop_propagation();
+                return true;
+            }
+        }
+
+        // When a shortcut is being recorded in the Keyboard Shortcuts settings panel,
+        // capture the next meaningful keystroke and save it.
+        if let Some(action_name) = self
+            .settings
+            .page
+            .as_ref()
+            .and_then(|p| p.recording_shortcut.clone())
+        {
+            if event.keystroke.key == "escape" {
+                // Escape cancels recording without saving and without closing settings.
+                if let Some(page) = self.settings.page.as_mut() {
+                    page.recording_shortcut = None;
+                    page.focused_shortcut_row = None;
+                }
+                cx.notify();
+                cx.stop_propagation();
+                return true;
+            }
+            if let Some(binding_str) =
+                super::impl_shortcuts_recording::format_keystroke_as_binding(&event.keystroke)
+            {
+                if let Some(page) = self.settings.page.as_mut() {
+                    page.user_settings
+                        .keybindings
+                        .insert(action_name, binding_str);
+                    page.refresh_sorted_shortcut_keys();
+                    page.recording_shortcut = None;
+                    page.focused_shortcut_row = None;
+                    page.user_save_pending = true;
+                }
+                self.maybe_schedule_settings_save(cx);
+                cx.notify();
+            }
+            cx.stop_propagation();
+            return true;
+        }
+
+        false
+    }
+
     /// Handle keyboard input for the focused session.
     fn handle_key_down(
         &mut self,
         event: &KeyDownEvent,
-        window: &mut Window,
+        _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        // Suppress unused-variable warning on macOS where the cfg-gated
-        // Ctrl-shortcut block (which uses `window`) is compiled out.
-        #[cfg(target_os = "macos")]
-        let _ = &window;
-
-        // Escape closes settings page if open
-        if self.settings.open && event.keystroke.key == "escape" {
+        // Escape closes settings page if open — but only when NOT recording a shortcut.
+        // When recording, Escape cancels the recording instead (handled below).
+        if self.settings.open
+            && event.keystroke.key == "escape"
+            && self
+                .settings
+                .page
+                .as_ref()
+                .map_or(true, |p| p.recording_shortcut.is_none())
+        {
             self.close_settings(cx);
             cx.notify();
             return;
@@ -918,77 +1076,23 @@ impl WorkspaceView {
             return;
         }
 
+        if self.settings.open && self.handle_settings_key(event, cx) {
+            return;
+        }
+
         // Don't send platform-modifier shortcuts to PTY (handled as GPUI actions).
-        // On macOS, `platform` maps to Command key and GPUI's `cmd-v` bindings work
-        // natively. On Windows/Linux, `platform` is false for Ctrl+key, so we handle
-        // Ctrl shortcuts directly below.
+        // GPUI's `secondary-<key>` bindings map to Cmd on macOS and Ctrl on
+        // Windows/Linux, so the action system handles all modifier shortcuts correctly.
         if event.keystroke.modifiers.platform {
             return;
         }
 
-        // On Windows/Linux, GPUI's `cmd-<key>` keybindings expect `modifiers.platform`,
-        // but Ctrl+key only sets `modifiers.control`. The action system never matches,
-        // so we must handle Ctrl shortcuts directly here.
+        // On Windows/Linux, Ctrl sets modifiers.control (not modifiers.platform).
+        // Guard here so Ctrl+<key> never reaches the PTY even if the GPUI action
+        // system fails to match a secondary-* binding.
         #[cfg(not(target_os = "macos"))]
         if event.keystroke.modifiers.control {
-            let key = event.keystroke.key.as_ref();
-            match key {
-                "v" => {
-                    self.handle_paste(&crate::app::Paste, window, cx);
-                    return;
-                }
-                "c" => {
-                    self.handle_copy(&crate::app::Copy, window, cx);
-                    return;
-                }
-                "n" => {
-                    self.create_session(cx);
-                    return;
-                }
-                "w" => {
-                    self.close_focused_session(cx);
-                    return;
-                }
-                "q" => {
-                    cx.quit();
-                    return;
-                }
-                "b" => {
-                    self.toggle_task_board(cx);
-                    return;
-                }
-                "e" => {
-                    self.toggle_sidebar(cx);
-                    return;
-                }
-                "k" => {
-                    self.toggle_sidebar(cx);
-                    return;
-                }
-                "p" if event.keystroke.modifiers.shift => {
-                    self.open_task_creation_modal();
-                    cx.notify();
-                    return;
-                }
-                "\\" => {
-                    self.next_layout(cx);
-                    return;
-                }
-                "," => {
-                    self.open_settings();
-                    cx.notify();
-                    return;
-                }
-                "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" => {
-                    let num: usize = match key.parse::<usize>() {
-                        Ok(n) => n,
-                        Err(_) => return, // unreachable given match arm, but safe
-                    };
-                    self.focus_session_number(num, cx);
-                    return;
-                }
-                _ => {} // Other Ctrl combos go to PTY (Ctrl+D, Ctrl+L, etc.)
-            }
+            return;
         }
 
         // Text input (including IME commits) is delivered through the
@@ -1417,6 +1521,9 @@ impl EntityInputHandler for WorkspaceView {
             // Modal text fields are handled via key events; do not leak input to PTY.
             return;
         }
+        if self.settings.open {
+            return;
+        }
 
         let had_ime_overlay = self.ime_marked_range.is_some() || self.ime_preedit_text.is_some();
         self.ime_marked_range = None;
@@ -1449,7 +1556,7 @@ impl EntityInputHandler for WorkspaceView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
-        if self.has_blocking_modal() {
+        if self.has_blocking_modal() || self.settings.open {
             let had_ime_overlay =
                 self.ime_marked_range.is_some() || self.ime_preedit_text.is_some();
             self.ime_marked_range = None;
@@ -1577,7 +1684,7 @@ impl Render for WorkspaceView {
             sidebar_width: actual_sidebar_width,
             right_panel_width: right_panel_w,
             grid_gap: self.workspace.theme().grid_gap,
-            focused_session_id: self.render_focus_signature(),
+            rendered_sessions_signature: self.rendered_session_signature(),
         };
         if self.cache.render_cell_info_dirty
             || self.cache.render_layout_signature != Some(layout_signature)
@@ -1607,6 +1714,8 @@ impl Render for WorkspaceView {
             .on_action(cx.listener(Self::handle_close_session))
             .on_action(cx.listener(Self::handle_next_layout))
             .on_action(cx.listener(Self::handle_toggle_sidebar))
+            .on_action(cx.listener(Self::handle_toggle_task_board))
+            .on_action(cx.listener(Self::handle_quick_switch))
             .on_action(cx.listener(Self::handle_focus_session1))
             .on_action(cx.listener(Self::handle_focus_session2))
             .on_action(cx.listener(Self::handle_focus_session3))
@@ -1644,6 +1753,12 @@ impl Render for WorkspaceView {
         container = self.render_main_workspace(container, window, cx, grid_gap);
         container = self.render_active_modals(container, cx);
         container = self.render_overlays(container, cx);
+
+        // Update toast (rendered last, on top of everything)
+        if let Some(toast) = self.render_update_toast(cx) {
+            container = container.child(toast);
+        }
+
         container
     }
 }
