@@ -44,7 +44,7 @@ done
 echo "Process $APP_PID has exited."
 
 # --- Create a unique mount point ---
-MOUNT_POINT="$(mktemp -d /tmp/codirigent-mount.XXXXXX)"
+MOUNT_POINT="$(mktemp -d "${{TMPDIR:-/tmp}}/codirigent-mount.XXXXXX")"
 
 cleanup() {{
     # Unmount the DMG if mounted
@@ -213,7 +213,7 @@ mod tests {
         );
 
         assert!(
-            script.contains("mktemp -d /tmp/codirigent-mount.XXXXXX"),
+            script.contains("mktemp -d \"${TMPDIR:-/tmp}/codirigent-mount.XXXXXX\""),
             "Script should create unique mount point with mktemp"
         );
         assert!(

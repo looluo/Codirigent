@@ -16,7 +16,14 @@ pub fn apply_update(artifact_path: &Path, current_pid: u32) -> Result<()> {
     return macos::apply_update(artifact_path, &detect_app_path()?, current_pid);
 
     #[cfg(target_os = "windows")]
-    return windows::apply_update(artifact_path, &detect_app_path()?, current_pid);
+    {
+        let exe = std::env::current_exe()?;
+        let exe_name = exe
+            .file_name()
+            .and_then(|n| n.to_str())
+            .unwrap_or("codirigent.exe");
+        return windows::apply_update(artifact_path, &detect_app_path()?, current_pid, exe_name);
+    }
 
     #[cfg(not(any(target_os = "macos", target_os = "windows")))]
     {

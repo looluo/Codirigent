@@ -14,7 +14,12 @@ use tracing::info;
 ///
 /// The script waits for the running process (`pid`) to exit using `tasklist`,
 /// runs the MSI installer in passive mode, then relaunches the application.
-pub fn generate_update_script(msi_path: &Path, install_path: &Path, pid: u32) -> String {
+pub fn generate_update_script(
+    msi_path: &Path,
+    install_path: &Path,
+    pid: u32,
+    exe_name: &str,
+) -> String {
     let msi = msi_path.display();
     let install = install_path.display();
 
@@ -51,7 +56,7 @@ del /f "%MSI_PATH%" 2>NUL
 echo Update applied successfully.
 
 REM --- Relaunch ---
-start "" "%INSTALL_PATH%\codirigent.exe"
+start "" "%INSTALL_PATH%\{exe_name}"
 "#
     )
 }
@@ -61,13 +66,18 @@ start "" "%INSTALL_PATH%\codirigent.exe"
 /// Writes the update script to the cache directory and launches it as a
 /// detached process. The script will wait for the current app to exit before
 /// running the MSI installer.
-pub fn apply_update(artifact_path: &Path, install_path: &Path, current_pid: u32) -> Result<()> {
+pub fn apply_update(
+    artifact_path: &Path,
+    install_path: &Path,
+    current_pid: u32,
+    exe_name: &str,
+) -> Result<()> {
     let cache = crate::state::cache_dir().context("Could not determine cache directory")?;
     std::fs::create_dir_all(&cache)
         .with_context(|| format!("Failed to create cache directory: {}", cache.display()))?;
 
     let script_path = cache.join("codirigent-update.bat");
-    let script = generate_update_script(artifact_path, install_path, current_pid);
+    let script = generate_update_script(artifact_path, install_path, current_pid, exe_name);
 
     std::fs::write(&script_path, &script)
         .with_context(|| format!("Failed to write update script: {}", script_path.display()))?;
@@ -97,6 +107,7 @@ mod tests {
             &PathBuf::from("C:\\Users\\user\\Downloads\\Codirigent-0.2.0.msi"),
             &PathBuf::from("C:\\Program Files\\Codirigent"),
             12345,
+            "codirigent.exe",
         );
         assert!(
             script.contains("APP_PID=12345"),
@@ -108,7 +119,7 @@ mod tests {
     fn script_contains_correct_paths() {
         let msi = PathBuf::from("C:\\temp\\Codirigent-0.2.0.msi");
         let install = PathBuf::from("C:\\Program Files\\Codirigent");
-        let script = generate_update_script(&msi, &install, 99999);
+        let script = generate_update_script(&msi, &install, 99999, "codirigent.exe");
 
         assert!(
             script.contains("C:\\temp\\Codirigent-0.2.0.msi"),
@@ -126,6 +137,7 @@ mod tests {
             &PathBuf::from("C:\\temp\\update.msi"),
             &PathBuf::from("C:\\Program Files\\Codirigent"),
             1000,
+            "codirigent.exe",
         );
 
         assert!(
@@ -148,6 +160,7 @@ mod tests {
             &PathBuf::from("C:\\temp\\update.msi"),
             &PathBuf::from("C:\\Program Files\\Codirigent"),
             1000,
+            "codirigent.exe",
         );
 
         assert!(
@@ -162,6 +175,7 @@ mod tests {
             &PathBuf::from("C:\\temp\\update.msi"),
             &PathBuf::from("C:\\Program Files\\Codirigent"),
             1000,
+            "codirigent.exe",
         );
 
         assert!(
@@ -176,6 +190,7 @@ mod tests {
             &PathBuf::from("C:\\temp\\update.msi"),
             &PathBuf::from("C:\\Program Files\\Codirigent"),
             1000,
+            "codirigent.exe",
         );
 
         assert!(

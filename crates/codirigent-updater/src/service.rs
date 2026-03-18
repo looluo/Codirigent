@@ -126,7 +126,9 @@ impl UpdateService {
                     );
                     // Clear any staged update from the old version.
                     if let Some(ref staged) = persistent.staged_update {
-                        let _ = std::fs::remove_file(&staged.artifact_path);
+                        if let Err(e) = std::fs::remove_file(&staged.artifact_path) {
+                            warn!("Failed to remove old staged artifact: {e}");
+                        }
                     }
                     persistent.staged_update = None;
                     persistent.last_known_version = Some(version.to_string());
@@ -162,7 +164,9 @@ impl UpdateService {
                         version = %version,
                         "Already running staged version — clearing and deleting artifact"
                     );
-                    let _ = std::fs::remove_file(&staged.artifact_path);
+                    if let Err(e) = std::fs::remove_file(&staged.artifact_path) {
+                        warn!("Failed to remove same-version staged artifact: {e}");
+                    }
                     persistent.staged_update = None;
                     if let Err(e) = state::save_state(&persistent) {
                         warn!("Failed to save state after clearing same-version staged: {e}");
@@ -186,7 +190,11 @@ impl UpdateService {
 
                         // Verify SHA256 if available.
                         let mut verified = true;
-                        if !staged.expected_sha256.is_empty() {
+                        if staged.expected_sha256.is_empty() {
+                            warn!(
+                                "No SHA256 hash stored for staged artifact — skipping verification"
+                            );
+                        } else {
                             match downloader::verify_sha256(
                                 &staged.artifact_path,
                                 &staged.expected_sha256,
@@ -194,18 +202,26 @@ impl UpdateService {
                                 Ok(true) => {}
                                 Ok(false) => {
                                     warn!("SHA256 mismatch on staged artifact — clearing");
-                                    let _ = std::fs::remove_file(&staged.artifact_path);
+                                    if let Err(e) = std::fs::remove_file(&staged.artifact_path) {
+                                        warn!("Failed to remove mismatched artifact: {e}");
+                                    }
                                     persistent.staged_update = None;
-                                    let _ = state::save_state(&persistent);
+                                    if let Err(e) = state::save_state(&persistent) {
+                                        warn!("Failed to save state after SHA256 mismatch: {e}");
+                                    }
                                     verified = false;
                                 }
                                 Err(e) => {
                                     warn!(
                                         "SHA256 verification error: {e} — clearing staged update"
                                     );
-                                    let _ = std::fs::remove_file(&staged.artifact_path);
+                                    if let Err(e) = std::fs::remove_file(&staged.artifact_path) {
+                                        warn!("Failed to remove unverifiable artifact: {e}");
+                                    }
                                     persistent.staged_update = None;
-                                    let _ = state::save_state(&persistent);
+                                    if let Err(e) = state::save_state(&persistent) {
+                                        warn!("Failed to save state after verification error: {e}");
+                                    }
                                     verified = false;
                                 }
                             }
@@ -222,9 +238,13 @@ impl UpdateService {
                                 }
                                 Err(e) => {
                                     warn!("Failed to auto-apply staged update: {e}");
-                                    let _ = std::fs::remove_file(&staged.artifact_path);
+                                    if let Err(e) = std::fs::remove_file(&staged.artifact_path) {
+                                        warn!("Failed to remove artifact after apply failure: {e}");
+                                    }
                                     persistent.staged_update = None;
-                                    let _ = state::save_state(&persistent);
+                                    if let Err(e) = state::save_state(&persistent) {
+                                        warn!("Failed to save state after apply failure: {e}");
+                                    }
                                 }
                             }
                         }
@@ -310,7 +330,9 @@ impl UpdateService {
             if dest_dir.exists() {
                 if let Ok(entries) = std::fs::read_dir(&dest_dir) {
                     for entry in entries.flatten() {
-                        let _ = std::fs::remove_file(entry.path());
+                        if let Err(e) = std::fs::remove_file(entry.path()) {
+                            warn!("Failed to clean up old artifact {:?}: {e}", entry.path());
+                        }
                     }
                 }
             }
@@ -413,7 +435,9 @@ impl UpdateService {
 
             if !valid {
                 // Delete the corrupt artifact and clear state.
-                let _ = std::fs::remove_file(&staged.artifact_path);
+                if let Err(e) = std::fs::remove_file(&staged.artifact_path) {
+                    warn!("Failed to remove corrupt artifact: {e}");
+                }
                 *self.state.lock().unwrap() = UpdateState::Idle;
                 anyhow::bail!("SHA256 mismatch on re-verification — artifact may be corrupt");
             }
