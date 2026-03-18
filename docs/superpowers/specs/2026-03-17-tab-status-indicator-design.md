@@ -91,7 +91,13 @@ pub struct TabStatusDecoration {
 - Badge renderer: same as dot (caller decides prepend vs append based on style)
 - Glow renderer: returns `TabStatusDecoration` with `tab_bg` and `tab_border` set, no `child`
 
-**Animation:** The codebase does not currently use GPUI's animation API anywhere. Animation should be implemented using a timer-driven opacity toggle: a periodic callback (e.g., every 750ms) flips a boolean state on the workspace, and the render code reads this state to choose between full and reduced opacity (1.0 vs 0.4) for pulsing elements. This follows the pattern of other periodic updates in the codebase (e.g., the output polling loop).
+**Animation:** The codebase does not currently use GPUI's animation API anywhere. Animation piggybacks on the **existing maintenance polling loop** (250ms interval) to avoid adding a new background timer:
+
+- Add a `pulse_counter: u8` field to `WorkspaceView`
+- Increment it each maintenance poll cycle
+- Derive pulse phase: `pulse_counter % 3 == 0` gives ~750ms on/off cycles
+- The render code reads `self.pulse_counter` to choose between full and reduced opacity (1.0 vs 0.4) for pulsing elements
+- No new `cx.spawn()`, no new background task — reuses existing infrastructure
 
 ### Tab strip rendering changes (pane_header_render.rs)
 
@@ -118,9 +124,9 @@ Follows the existing dropdown pattern used by `theme` in the Appearance section.
 
 ## Threading & Performance
 
-- **No new async work**: tab rendering reads cached `SessionStatus` from the session struct, which is updated by the existing polling/reconciliation loop
-- **No UI thread blocking**: settings are read from an in-memory struct, status is read from cached state
-- **Animation**: timer-driven opacity toggle on the workspace struct, read during render. The timer callback only flips a boolean — no heavy work on the UI thread
+- **No new async work in render path**: tab rendering reads cached `SessionStatus` from the session struct and `tab_status_style` from `effective_user_settings()`. Both are in-memory reads — no I/O, no locks, no blocking
+- **No new timer**: pulse animation piggybacks on the existing 250ms maintenance polling loop by incrementing a counter. No new `cx.spawn()` or background task
+- **No additional render cost**: reading `pulse_counter` is a single integer check. The status color computation is a match on a 5-variant enum. Both are negligible in the render pass
 - **Settings wiring**: setting changes set `user_save_pending = true`, which is flushed by the render loop via `maybe_schedule_settings_save()`
 
 ## File Changes Summary
@@ -129,6 +135,8 @@ Follows the existing dropdown pattern used by `theme` in the Appearance section.
 |------|--------|
 | `codirigent-core/src/config.rs` | Add `tab_status_style` to `AppearanceSettings` with default |
 | `codirigent-ui/src/workspace/tab_status_render.rs` | **New** — status rendering per style + animation |
+| `codirigent-ui/src/workspace/gpui.rs` | Add `pulse_counter` field to `WorkspaceView` |
+| `codirigent-ui/src/workspace/impl_output_polling/*.rs` | Increment `pulse_counter` in maintenance loop |
 | `codirigent-ui/src/workspace/pane_header_render.rs` | Remove header dot, integrate tab status rendering |
 | `codirigent-ui/src/workspace/settings_panels.rs` | Add dropdown to Appearance section |
 | `codirigent-ui/src/workspace/mod.rs` | Add `mod tab_status_render` |
