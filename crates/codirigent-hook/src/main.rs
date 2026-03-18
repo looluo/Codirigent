@@ -79,17 +79,25 @@ fn handle_payload(payload: HookPayload) {
         .filter(|id| is_safe_filename(id))
         .map(str::to_owned);
 
+    // Prefer the CLI's own session ID (e.g. Claude's UUID), then
+    // CODIRIGENT_SESSION_UUID (stable across restarts), then the legacy
+    // integer CODIRIGENT_SESSION_ID as a last resort.
     let filename_session_id = payload
         .session_id
         .as_deref()
         .filter(|id| is_safe_filename(id))
+        .or_else(|| {
+            codirigent_session_uuid
+                .as_deref()
+                .filter(|id| is_safe_filename(id))
+        })
         .or_else(|| {
             codirigent_session_id
                 .as_deref()
                 .filter(|id| is_safe_filename(id))
         })
         .unwrap_or_default()
-        .to_owned(); // owned String releases the borrow on codirigent_session_id
+        .to_owned();
     if filename_session_id.is_empty() {
         return;
     }

@@ -230,6 +230,30 @@ fn parse_legacy_hook_session_id(codirigent_session_id: Option<&str>) -> Option<S
         .map(SessionId)
 }
 
+/// Resolve a Codirigent session by UUID. Works for any CLI type.
+fn resolve_session_by_uuid(
+    sessions: &[ClaudeRoutingSession],
+    codirigent_session_uuid: Option<&str>,
+) -> Option<SessionId> {
+    let session_uuid = codirigent_session_uuid?;
+    let matches: Vec<_> = sessions
+        .iter()
+        .filter(|s| s.session_uuid == session_uuid)
+        .collect();
+    match matches.len() {
+        1 => Some(matches[0].id),
+        n if n > 1 => {
+            warn!(
+                session_uuid,
+                count = n,
+                "Ambiguous session_uuid match"
+            );
+            None
+        }
+        _ => None,
+    }
+}
+
 fn codex_execution_mode_from_approval_and_sandbox(
     approval_policy: Option<&str>,
     sandbox_policy_type: Option<&str>,
@@ -388,17 +412,17 @@ impl WorkspaceView {
         let mut id_changed = false;
         let mut cli_type_changed = false;
         let cli_type_name = cli_type.as_deref().unwrap_or(CLI_TYPE_CLAUDE);
+        let routing_sessions = self
+            .workspace
+            .sessions()
+            .iter()
+            .map(|session| ClaudeRoutingSession {
+                id: session.id,
+                claude_session_id: session.claude_session_id.clone(),
+                session_uuid: session.session_uuid.clone(),
+            })
+            .collect::<Vec<_>>();
         let resolved_session_id = if cli_type_name == CLI_TYPE_CLAUDE {
-            let routing_sessions = self
-                .workspace
-                .sessions()
-                .iter()
-                .map(|session| ClaudeRoutingSession {
-                    id: session.id,
-                    claude_session_id: session.claude_session_id.clone(),
-                    session_uuid: session.session_uuid.clone(),
-                })
-                .collect::<Vec<_>>();
             match resolve_claude_target_session(
                 &routing_sessions,
                 cli_session_id.as_deref(),
@@ -408,8 +432,13 @@ impl WorkspaceView {
                 None => return,
             }
         } else {
-            match session_id
-                .or_else(|| parse_legacy_hook_session_id(codirigent_session_id.as_deref()))
+            // For Codex/Gemini: prefer UUID-based matching, fall back to legacy integer ID.
+            match resolve_session_by_uuid(
+                &routing_sessions,
+                codirigent_session_uuid.as_deref(),
+            )
+            .or(session_id)
+            .or_else(|| parse_legacy_hook_session_id(codirigent_session_id.as_deref()))
             {
                 Some(session_id) => session_id,
                 None => return,
@@ -862,6 +891,42 @@ mod tests {
         // UUID fields must not route to any Claude session.
         let sessions = vec![claude_session(1, Some("claude-abc"), "uuid-abc")];
         assert_eq!(resolve_claude_target_session(&sessions, None, None), None);
+    }
+
+    #[test]
+    fn resolve_session_by_uuid_matches_unique() {
+        let sessions = vec![
+            claude_session(1, None, "uuid-aaa"),
+            claude_session(2, None, "uuid-bbb"),
+        ];
+        assert_eq!(
+            resolve_session_by_uuid(&sessions, Some("uuid-bbb")),
+            Some(SessionId(2))
+        );
+    }
+
+    #[test]
+    fn resolve_session_by_uuid_returns_none_for_unknown() {
+        let sessions = vec![claude_session(1, None, "uuid-aaa")];
+        assert_eq!(resolve_session_by_uuid(&sessions, Some("uuid-zzz")), None);
+    }
+
+    #[test]
+    fn resolve_session_by_uuid_rejects_ambiguous() {
+        let sessions = vec![
+            claude_session(1, None, "shared-uuid"),
+            claude_session(2, None, "shared-uuid"),
+        ];
+        assert_eq!(
+            resolve_session_by_uuid(&sessions, Some("shared-uuid")),
+            None
+        );
+    }
+
+    #[test]
+    fn resolve_session_by_uuid_returns_none_when_no_uuid() {
+        let sessions = vec![claude_session(1, None, "uuid-aaa")];
+        assert_eq!(resolve_session_by_uuid(&sessions, None), None);
     }
 
     #[test]
