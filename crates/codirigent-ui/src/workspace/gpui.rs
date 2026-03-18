@@ -159,8 +159,6 @@ pub struct WorkspaceView {
     pub(super) update_download_progress: Option<u8>,
     /// Staged update ready to apply.
     pub(super) staged_update: Option<codirigent_updater::StagedUpdate>,
-    /// Whether this is the first launch after a successful update.
-    pub(super) post_update_version: Option<String>,
     /// Receiver for update events from the EventBus.
     pub(super) update_event_rx:
         Option<tokio::sync::broadcast::Receiver<codirigent_core::CodirigentEvent>>,
@@ -479,25 +477,6 @@ impl WorkspaceView {
             );
         }
 
-        // Detect post-update launch BEFORE starting the background check
-        // to avoid a race condition where the background check clears state
-        // before the UI can read it.
-        let post_update_version = {
-            if let Ok(persistent) = codirigent_updater::state::load_state() {
-                if let Some(ref last_ver) = persistent.last_known_version {
-                    if last_ver != env!("CARGO_PKG_VERSION") {
-                        Some(env!("CARGO_PKG_VERSION").to_string())
-                    } else {
-                        None
-                    }
-                } else {
-                    None
-                }
-            } else {
-                None
-            }
-        };
-
         let update_service = match codirigent_updater::UpdateService::new(
             env!("CARGO_PKG_VERSION"),
             event_bus.clone(),
@@ -584,7 +563,6 @@ impl WorkspaceView {
             update_dismissed: false,
             update_download_progress: None,
             staged_update: None,
-            post_update_version,
             update_event_rx,
         };
 
