@@ -87,7 +87,7 @@ impl UpdateService {
 
     /// Get the current update state.
     pub fn state(&self) -> UpdateState {
-        self.state.lock().unwrap().clone()
+        self.state.lock().unwrap_or_else(|p| p.into_inner()).clone()
     }
 
     /// Start a background update check.
@@ -232,7 +232,8 @@ impl UpdateService {
                             let pid = std::process::id();
                             match crate::platform::apply_update(&staged.artifact_path, pid) {
                                 Ok(()) => {
-                                    *state.lock().unwrap() = UpdateState::Applying;
+                                    *state.lock().unwrap_or_else(|p| p.into_inner()) =
+                                        UpdateState::Applying;
                                     event_bus.publish(CodirigentEvent::UpdateApplyingOnStartup);
                                     return;
                                 }
@@ -291,12 +292,12 @@ impl UpdateService {
 
         // Create a fresh cancellation token.
         let token = CancellationToken::new();
-        *cancel_store.lock().unwrap() = token.clone();
+        *cancel_store.lock().unwrap_or_else(|p| p.into_inner()) = token.clone();
 
         tokio::spawn(async move {
             // Extract UpdateInfo — only proceed from UpdateAvailable.
             let info = {
-                let guard = state.lock().unwrap();
+                let guard = state.lock().unwrap_or_else(|p| p.into_inner());
                 match &*guard {
                     UpdateState::UpdateAvailable(info) => info.clone(),
                     other => {
@@ -310,7 +311,8 @@ impl UpdateService {
             };
 
             // Transition to Downloading.
-            *state.lock().unwrap() = UpdateState::Downloading { percent: 0 };
+            *state.lock().unwrap_or_else(|p| p.into_inner()) =
+                UpdateState::Downloading { percent: 0 };
 
             // Determine download directory.
             let dest_dir = match state::cache_dir() {
@@ -321,7 +323,8 @@ impl UpdateService {
                     event_bus.publish(CodirigentEvent::UpdateFailed {
                         error: msg.to_string(),
                     });
-                    *state.lock().unwrap() = UpdateState::UpdateAvailable(info);
+                    *state.lock().unwrap_or_else(|p| p.into_inner()) =
+                        UpdateState::UpdateAvailable(info);
                     return;
                 }
             };
@@ -341,7 +344,8 @@ impl UpdateService {
             let state_for_progress = state.clone();
             let bus_for_progress = event_bus.clone();
             let on_progress = move |percent: u8| {
-                *state_for_progress.lock().unwrap() = UpdateState::Downloading { percent };
+                *state_for_progress.lock().unwrap_or_else(|p| p.into_inner()) =
+                    UpdateState::Downloading { percent };
                 bus_for_progress.publish(CodirigentEvent::UpdateDownloadProgress { percent });
             };
 
@@ -351,7 +355,7 @@ impl UpdateService {
             let result = tokio::select! {
                 _ = token.cancelled() => {
                     info!("Download cancelled by user");
-                    *state.lock().unwrap() = UpdateState::UpdateAvailable(info);
+                    *state.lock().unwrap_or_else(|p| p.into_inner()) = UpdateState::UpdateAvailable(info);
                     return;
                 }
                 result = downloader::download_and_verify(
@@ -385,7 +389,7 @@ impl UpdateService {
                         warn!("Failed to persist staged update: {e}");
                     }
 
-                    *state.lock().unwrap() = UpdateState::Staged(staged);
+                    *state.lock().unwrap_or_else(|p| p.into_inner()) = UpdateState::Staged(staged);
                     event_bus.publish(CodirigentEvent::UpdateReadyToApply);
 
                     info!(
@@ -398,7 +402,8 @@ impl UpdateService {
                     event_bus.publish(CodirigentEvent::UpdateFailed {
                         error: format!("{e:#}"),
                     });
-                    *state.lock().unwrap() = UpdateState::UpdateAvailable(info);
+                    *state.lock().unwrap_or_else(|p| p.into_inner()) =
+                        UpdateState::UpdateAvailable(info);
                 }
             }
         });
@@ -415,7 +420,7 @@ impl UpdateService {
     /// fails, or the platform apply fails.
     pub fn apply(&self) -> anyhow::Result<()> {
         let staged = {
-            let guard = self.state.lock().unwrap();
+            let guard = self.state.lock().unwrap_or_else(|p| p.into_inner());
             match &*guard {
                 UpdateState::Staged(s) => s.clone(),
                 other => {
@@ -438,13 +443,13 @@ impl UpdateService {
                 if let Err(e) = std::fs::remove_file(&staged.artifact_path) {
                     warn!("Failed to remove corrupt artifact: {e}");
                 }
-                *self.state.lock().unwrap() = UpdateState::Idle;
+                *self.state.lock().unwrap_or_else(|p| p.into_inner()) = UpdateState::Idle;
                 anyhow::bail!("SHA256 mismatch on re-verification — artifact may be corrupt");
             }
         }
 
         // Transition to Applying.
-        *self.state.lock().unwrap() = UpdateState::Applying;
+        *self.state.lock().unwrap_or_else(|p| p.into_inner()) = UpdateState::Applying;
 
         let current_pid = std::process::id();
         crate::platform::apply_update(&staged.artifact_path, current_pid)?;
@@ -457,7 +462,11 @@ impl UpdateService {
     /// If a download is running, cancels it via the cancellation token and
     /// transitions the state back to `UpdateAvailable`.
     pub fn cancel_download(&self) {
-        let token = self.download_cancel.lock().unwrap().clone();
+        let token = self
+            .download_cancel
+            .lock()
+            .unwrap_or_else(|p| p.into_inner())
+            .clone();
         token.cancel();
         // The download task will handle the state transition when it observes
         // the cancellation.
@@ -480,7 +489,7 @@ async fn do_check(
     state: &Arc<Mutex<UpdateState>>,
 ) {
     info!("Checking for updates...");
-    *state.lock().unwrap() = UpdateState::Checking;
+    *state.lock().unwrap_or_else(|p| p.into_inner()) = UpdateState::Checking;
 
     match checker::check_for_update(version, client).await {
         Ok(Some(info)) => {
@@ -492,18 +501,18 @@ async fn do_check(
                 version: info.version.to_string(),
                 release_url: info.release_url.clone(),
             });
-            *state.lock().unwrap() = UpdateState::UpdateAvailable(info);
+            *state.lock().unwrap_or_else(|p| p.into_inner()) = UpdateState::UpdateAvailable(info);
         }
         Ok(None) => {
             info!("Already up to date");
-            *state.lock().unwrap() = UpdateState::Idle;
+            *state.lock().unwrap_or_else(|p| p.into_inner()) = UpdateState::Idle;
         }
         Err(e) => {
             error!("Update check failed: {e:#}");
             event_bus.publish(CodirigentEvent::UpdateFailed {
                 error: format!("Update check failed: {e:#}"),
             });
-            *state.lock().unwrap() = UpdateState::Idle;
+            *state.lock().unwrap_or_else(|p| p.into_inner()) = UpdateState::Idle;
         }
     }
 
@@ -539,7 +548,10 @@ mod tests {
 
         #[allow(dead_code)]
         fn events(&self) -> Vec<CodirigentEvent> {
-            self.events.lock().unwrap().clone()
+            self.events
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .clone()
         }
     }
 
@@ -549,7 +561,10 @@ mod tests {
         }
 
         fn publish(&self, event: CodirigentEvent) {
-            self.events.lock().unwrap().push(event.clone());
+            self.events
+                .lock()
+                .unwrap_or_else(|p| p.into_inner())
+                .push(event.clone());
             let _ = self.tx.send(event);
         }
     }
@@ -620,7 +635,8 @@ mod tests {
             asset_url: "https://example.com/asset.dmg".to_string(),
             checksum_url: "https://example.com/checksums.txt".to_string(),
         };
-        *svc.state.lock().unwrap() = UpdateState::UpdateAvailable(info.clone());
+        *svc.state.lock().unwrap_or_else(|p| p.into_inner()) =
+            UpdateState::UpdateAvailable(info.clone());
         assert_eq!(svc.state(), UpdateState::UpdateAvailable(info));
     }
 }

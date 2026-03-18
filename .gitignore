@@ -9,7 +9,10 @@
 
 # Development plans
 plans/
-!docs/superpowers/plans/
+docs/superpowers/
+
+# Superpowers skill state
+.superpowers/
 
 # Code review results
 reviews/
