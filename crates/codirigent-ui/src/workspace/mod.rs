@@ -120,7 +120,6 @@ mod split_render;
 mod pane_header_render;
 
 #[cfg(feature = "gpui-full")]
-#[allow(dead_code)]
 mod tab_status_render;
 
 #[cfg(feature = "gpui-full")]
