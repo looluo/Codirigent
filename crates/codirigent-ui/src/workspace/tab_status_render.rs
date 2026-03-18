@@ -8,7 +8,7 @@
 //! (which flags Working and NeedsAttention for the pane header). This
 //! module defines its own animation policy.
 
-use crate::sidebar::Color;
+use crate::terminal_header::StatusIndicator;
 use codirigent_core::SessionStatus;
 use gpui::Hsla;
 
@@ -30,15 +30,11 @@ pub(super) struct TabStatusDecoration {
 }
 
 /// Map a `SessionStatus` to its indicator color as HSLA.
+///
+/// Reuses the canonical color mapping from [`StatusIndicator::for_status`]
+/// to avoid color duplication between the tab and header rendering paths.
 fn status_color(status: SessionStatus) -> Hsla {
-    let color = match status {
-        SessionStatus::Idle => Color::from_hex("#52525b"),
-        SessionStatus::Working => Color::from_hex("#f59e0b"),
-        SessionStatus::NeedsAttention => Color::from_hex("#f43f5e"),
-        SessionStatus::ResponseReady => Color::from_hex("#22c55e"),
-        SessionStatus::Error => Color::from_hex("#ef4444"),
-    };
-    color.into()
+    StatusIndicator::for_status(status).color.into()
 }
 
 /// Whether the given status should pulse on a background tab.
