@@ -54,7 +54,7 @@ use crate::theme::CodirigentTheme;
 use crate::toolbar::CustomLayoutPicker;
 use codirigent_core::compaction::{CompactionConfig, CompactionService};
 use codirigent_core::{
-    CodexExecutionMode, DefaultEventBus, FileStorageService, ProcessMonitor, SessionId,
+    CodexExecutionMode, DefaultEventBus, EventBus, FileStorageService, ProcessMonitor, SessionId,
     SessionManager, SessionStatus, TaskManager, TaskManagerConfig,
 };
 use codirigent_detector::{InputDetector, NotificationHandle};
@@ -147,6 +147,23 @@ pub struct WorkspaceView {
     /// Notification handle — sends commands to a background actor for desktop notifications.
     /// All desktop notifications must go through this instead of calling send_notification directly.
     pub(super) notification_handle: NotificationHandle,
+
+    // --- Auto-update state ---
+    /// Update service for auto-update checking and downloading.
+    pub(super) update_service: Option<Arc<codirigent_updater::UpdateService>>,
+    /// Current update info from the checker.
+    pub(super) update_info: Option<codirigent_updater::UpdateInfo>,
+    /// Whether the user dismissed the update toast this session.
+    pub(super) update_dismissed: bool,
+    /// Download progress percentage (0-100) during download.
+    pub(super) update_download_progress: Option<u8>,
+    /// Staged update ready to apply.
+    pub(super) staged_update: Option<codirigent_updater::StagedUpdate>,
+    /// Whether this is the first launch after a successful update.
+    pub(super) post_update_version: Option<String>,
+    /// Receiver for update events from the EventBus.
+    pub(super) update_event_rx:
+        Option<tokio::sync::broadcast::Receiver<codirigent_core::CodirigentEvent>>,
 }
 
 /// Returns `true` if the editor command refers to a terminal-based editor
@@ -462,6 +479,42 @@ impl WorkspaceView {
             );
         }
 
+        // Detect post-update launch BEFORE starting the background check
+        // to avoid a race condition where the background check clears state
+        // before the UI can read it.
+        let post_update_version = {
+            if let Ok(persistent) = codirigent_updater::state::load_state() {
+                if let Some(ref last_ver) = persistent.last_known_version {
+                    if last_ver != env!("CARGO_PKG_VERSION") {
+                        Some(env!("CARGO_PKG_VERSION").to_string())
+                    } else {
+                        None
+                    }
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        };
+
+        let update_service = match codirigent_updater::UpdateService::new(
+            env!("CARGO_PKG_VERSION"),
+            event_bus.clone(),
+        ) {
+            Ok(svc) => {
+                svc.start_background_check();
+                Some(Arc::new(svc))
+            }
+            Err(e) => {
+                tracing::warn!("Failed to initialize update service: {}", e);
+                None
+            }
+        };
+
+        // Subscribe to EventBus for update events
+        let update_event_rx = Some(event_bus.subscribe());
+
         let (storage, task_manager) = Self::init_task_manager(event_bus.clone());
         let (file_tree, file_tree_model, project_root) = Self::init_file_tree();
 
@@ -526,6 +579,13 @@ impl WorkspaceView {
             cli_readers: Arc::new(Mutex::new(CliReaders::new())),
             cache: CacheState::new(),
             notification_handle: NotificationHandle::new(Default::default()),
+            update_service,
+            update_info: None,
+            update_dismissed: false,
+            update_download_progress: None,
+            staged_update: None,
+            post_update_version,
+            update_event_rx,
         };
 
         // Pre-detect editors and shells in the background so settings open instantly
@@ -1711,6 +1771,12 @@ impl Render for WorkspaceView {
         container = self.render_main_workspace(container, window, cx, grid_gap);
         container = self.render_active_modals(container, cx);
         container = self.render_overlays(container, cx);
+
+        // Update toast (rendered last, on top of everything)
+        if let Some(toast) = self.render_update_toast(cx) {
+            container = container.child(toast);
+        }
+
         container
     }
 }

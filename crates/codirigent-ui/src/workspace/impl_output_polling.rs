@@ -177,6 +177,74 @@ impl WorkspaceView {
         if self.update_clipboard_preview(cx) {
             cx.notify();
         }
+
+        self.poll_update_events(cx);
+    }
+
+    /// Drain update-related events from the EventBus broadcast receiver.
+    fn poll_update_events(&mut self, cx: &mut gpui::Context<Self>) {
+        let Some(rx) = self.update_event_rx.as_mut() else {
+            return;
+        };
+
+        // Drain all pending update events from the broadcast channel.
+        loop {
+            match rx.try_recv() {
+                Ok(event) => match event {
+                    codirigent_core::CodirigentEvent::UpdateAvailable {
+                        version: _,
+                        release_url: _,
+                    } => {
+                        if !self.update_dismissed {
+                            if let Some(svc) = &self.update_service {
+                                if let codirigent_updater::UpdateState::UpdateAvailable(info) =
+                                    svc.state()
+                                {
+                                    self.update_info = Some(info);
+                                }
+                            }
+                            cx.notify();
+                        }
+                    }
+                    codirigent_core::CodirigentEvent::UpdateDownloadProgress { percent } => {
+                        self.update_download_progress = Some(percent);
+                        cx.notify();
+                    }
+                    codirigent_core::CodirigentEvent::UpdateReadyToApply => {
+                        if let Some(svc) = &self.update_service {
+                            if let codirigent_updater::UpdateState::Staged(staged) = svc.state() {
+                                self.staged_update = Some(staged);
+                                self.update_download_progress = None;
+                            }
+                        }
+                        cx.notify();
+                    }
+                    codirigent_core::CodirigentEvent::UpdateApplyingOnStartup => {
+                        // A staged update is being applied — quit so the helper
+                        // script can swap the app and relaunch.
+                        cx.quit();
+                    }
+                    codirigent_core::CodirigentEvent::UpdateFailed { error } => {
+                        warn!("Update failed: {}", error);
+                        self.update_download_progress = None;
+                        cx.notify();
+                    }
+                    _ => {
+                        // Ignore non-update events.
+                    }
+                },
+                Err(tokio::sync::broadcast::error::TryRecvError::Empty) => break,
+                Err(tokio::sync::broadcast::error::TryRecvError::Lagged(n)) => {
+                    warn!("Update event receiver lagged by {} messages", n);
+                    // Continue draining.
+                }
+                Err(tokio::sync::broadcast::error::TryRecvError::Closed) => {
+                    // Channel closed — stop polling.
+                    self.update_event_rx = None;
+                    break;
+                }
+            }
+        }
     }
 
     pub(super) fn spawn_background_detector_maintenance(&mut self, cx: &mut Context<Self>) {
