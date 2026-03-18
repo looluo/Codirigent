@@ -416,6 +416,7 @@ impl WorkspaceView {
             }
 
             self.spawn_session_git_refresh(session_id, mgr_session.working_directory.clone(), cx);
+            self.save_state_to_disk(cx);
             any_dirty = true;
         }
 
