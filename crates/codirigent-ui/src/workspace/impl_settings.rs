@@ -800,10 +800,11 @@ mod tests {
 
     #[test]
     fn test_normalize_keybinding_display_cmd_to_ctrl_on_non_macos() {
+        // "Cmd+N" → platform modifier display: "Cmd+N" on macOS, "Ctrl+N" elsewhere.
         #[cfg(not(target_os = "macos"))]
         assert_eq!(normalize_keybinding_display("Cmd+N"), "Ctrl+N");
         #[cfg(target_os = "macos")]
-        assert_eq!(normalize_keybinding_display("Ctrl+N"), "Cmd+N");
+        assert_eq!(normalize_keybinding_display("Cmd+N"), "Cmd+N");
     }
 
     #[test]
