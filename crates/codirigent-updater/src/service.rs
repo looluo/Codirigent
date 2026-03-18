@@ -52,12 +52,19 @@ pub struct StagedUpdate {
 }
 
 /// Orchestrates update checking, downloading, and applying.
+///
+/// Owns a dedicated Tokio runtime for async network operations. This is
+/// necessary because the host application (GPUI) uses its own async executor
+/// that is not Tokio-based, so `tokio::spawn` would panic without an
+/// explicit runtime context.
 pub struct UpdateService {
     current_version: semver::Version,
     event_bus: Arc<dyn EventBus>,
     state: Arc<Mutex<UpdateState>>,
     client: reqwest::Client,
     download_cancel: Arc<Mutex<CancellationToken>>,
+    /// Dedicated Tokio runtime for background update tasks.
+    runtime: tokio::runtime::Runtime,
 }
 
 impl UpdateService {
@@ -76,12 +83,27 @@ impl UpdateService {
             .parse()
             .map_err(|e| anyhow::anyhow!("Invalid current version '{}': {}", current_version, e))?;
 
+        let runtime = tokio::runtime::Builder::new_multi_thread()
+            .worker_threads(1)
+            .enable_all()
+            .thread_name("codirigent-updater")
+            .build()
+            .map_err(|e| anyhow::anyhow!("Failed to create updater runtime: {e}"))?;
+
+        // Create the reqwest client inside the runtime context so it can
+        // capture the Tokio handle for DNS resolution and TLS.
+        let client = {
+            let _guard = runtime.enter();
+            reqwest::Client::new()
+        };
+
         Ok(Self {
             current_version: version,
             event_bus,
             state: Arc::new(Mutex::new(UpdateState::Idle)),
-            client: reqwest::Client::new(),
+            client,
             download_cancel: Arc::new(Mutex::new(CancellationToken::new())),
+            runtime,
         })
     }
 
@@ -105,7 +127,7 @@ impl UpdateService {
         let event_bus = self.event_bus.clone();
         let state = self.state.clone();
 
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
             // 1. Load persistent state.
             let mut persistent = match state::load_state() {
                 Ok(s) => s,
@@ -294,7 +316,7 @@ impl UpdateService {
         let token = CancellationToken::new();
         *cancel_store.lock().unwrap_or_else(|p| p.into_inner()) = token.clone();
 
-        tokio::spawn(async move {
+        self.runtime.spawn(async move {
             // Extract UpdateInfo — only proceed from UpdateAvailable.
             let info = {
                 let guard = state.lock().unwrap_or_else(|p| p.into_inner());

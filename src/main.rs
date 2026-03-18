@@ -22,7 +22,34 @@
 use anyhow::Result;
 use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
 
+/// Install a panic hook that writes to a log file so panics are not lost
+/// in release builds where `windows_subsystem = "windows"` discards stderr.
+fn install_panic_log_hook() {
+    let default_hook = std::panic::take_hook();
+    std::panic::set_hook(Box::new(move |info| {
+        // Write to crash log in the platform data directory
+        if let Some(data_dir) = dirs::data_dir().map(|d| d.join("Codirigent")) {
+            let _ = std::fs::create_dir_all(&data_dir);
+            let crash_path = data_dir.join("crash.log");
+            let msg = format!(
+                "[{}] PANIC: {}\n",
+                chrono::Local::now().format("%Y-%m-%d %H:%M:%S"),
+                info,
+            );
+            let _ = std::fs::OpenOptions::new()
+                .create(true)
+                .append(true)
+                .open(&crash_path)
+                .and_then(|mut f| std::io::Write::write_all(&mut f, msg.as_bytes()));
+        }
+        // Also call the default hook (prints to stderr when available)
+        default_hook(info);
+    }));
+}
+
 fn main() -> Result<()> {
+    install_panic_log_hook();
+
     // Initialize tracing
     tracing_subscriber::registry()
         .with(tracing_subscriber::fmt::layer())
