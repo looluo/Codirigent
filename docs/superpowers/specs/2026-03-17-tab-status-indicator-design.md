@@ -23,6 +23,8 @@ Move the status indicator from the pane header into each session tab. Users can 
 
 Active tabs show the status indicator but never animate (you're already looking at it).
 
+**Note:** Tab animation rules differ from `StatusIndicator::animated` (which flags Working and NeedsAttention for the pane header). The tab module defines its own animation policy: only NeedsAttention and ResponseReady pulse, and only on background tabs. The existing `StatusIndicator::animated` field is not reused — the tab renderer makes its own decision based on `SessionStatus` and `is_active`.
+
 ## Tab Status Styles (Configurable)
 
 A new `tab_status_style` field on `AppearanceSettings`, exposed as a dropdown in the Appearance settings page.
@@ -52,7 +54,7 @@ pub tab_status_style: String,
 
 Default: `"dot"`. Valid values: `"dot"`, `"badge"`, `"glow"`.
 
-Follows the existing pattern used by `cursor_style` (string field + match in rendering code).
+Follows the existing dropdown pattern used by `theme` in `AppearanceSettings` for the settings UI, and the string-match dispatch pattern used by `cursor_style` in `TerminalSettings` for the rendering code.
 
 ## UI Changes
 
@@ -64,25 +66,44 @@ In `pane_header_render.rs`, remove the 8x8 status dot from the pane header (curr
 
 A new file in the `workspace` module containing:
 
-- `render_tab_status_indicator(style: &str, status: SessionStatus, is_active: bool) -> impl IntoElement`
+**Return type:**
+
+```rust
+pub struct TabStatusDecoration {
+    /// Optional child element (dot/badge circle). None for glow style.
+    pub child: Option<gpui::AnyElement>,
+    /// Optional background color to apply to the tab container. Used by glow style.
+    pub tab_bg: Option<gpui::Hsla>,
+    /// Optional border color to apply to the tab container. Used by glow style.
+    pub tab_border: Option<gpui::Hsla>,
+    /// Whether this tab should pulse (NeedsAttention/ResponseReady on background tabs).
+    pub should_pulse: bool,
+}
+```
+
+**Functions:**
+
+- `render_tab_status(style: &str, status: SessionStatus, is_active: bool) -> TabStatusDecoration`
   - Reads the style string and dispatches to the appropriate renderer
   - Unknown style values fall back to "dot"
-- Dot renderer: returns a colored 8x8 circle element
-- Badge renderer: returns a colored 8x8 circle element (same as dot, just positioned differently by the caller)
-- Glow renderer: returns background color + border styling to apply to the tab container
-- Animation wrapper: for NeedsAttention/ResponseReady on non-active tabs, wraps the element with GPUI's `with_animation` to pulse opacity between 0.4 and 1.0 on a 1.5s ease-in-out cycle
+  - Sets `should_pulse = true` only for NeedsAttention/ResponseReady when `is_active == false`
+- Dot renderer: returns `TabStatusDecoration` with `child` set to a colored 8x8 circle
+- Badge renderer: same as dot (caller decides prepend vs append based on style)
+- Glow renderer: returns `TabStatusDecoration` with `tab_bg` and `tab_border` set, no `child`
+
+**Animation:** The codebase does not currently use GPUI's animation API anywhere. Animation should be implemented using a timer-driven opacity toggle: a periodic callback (e.g., every 750ms) flips a boolean state on the workspace, and the render code reads this state to choose between full and reduced opacity (1.0 vs 0.4) for pulsing elements. This follows the pattern of other periodic updates in the codebase (e.g., the output polling loop).
 
 ### Tab strip rendering changes (pane_header_render.rs)
 
 In `render_pane_tab_strip()`, for each tab:
 
-1. Look up `tab_status_style` from user settings (in-memory, no async)
+1. Look up `tab_status_style` via `self.effective_user_settings().appearance.tab_status_style` (always available, in-memory)
 2. Look up `SessionStatus` from the session's cached state (already available)
 3. Determine `is_active` from the current pane's active session
-4. Call `render_tab_status_indicator()` from the new module
-5. For **dot** style: prepend the returned element before the name text
-6. For **badge** style: append the returned element after the name text
-7. For **glow** style: apply the returned styling to the tab container div
+4. Call `render_tab_status()` from the new module, receiving a `TabStatusDecoration`
+5. If `decoration.child` is `Some`: for **dot** style, prepend before the name; for **badge** style, append after the name
+6. If `decoration.tab_bg` / `decoration.tab_border` are `Some` (glow style): apply to the tab container div
+7. If `decoration.should_pulse`: apply the current pulse phase opacity from the workspace's timer-driven toggle
 
 ### Settings page (settings_panels.rs)
 
@@ -93,14 +114,14 @@ Add a dropdown in the **Appearance** section:
 - Options: `["Dot", "Badge", "Glow"]`
 - On change: update `page.user_settings.appearance.tab_status_style` and set `user_save_pending = true`
 
-Follows the existing dropdown pattern used by cursor style.
+Follows the existing dropdown pattern used by `theme` in the Appearance section.
 
 ## Threading & Performance
 
 - **No new async work**: tab rendering reads cached `SessionStatus` from the session struct, which is updated by the existing polling/reconciliation loop
 - **No UI thread blocking**: settings are read from an in-memory struct, status is read from cached state
-- **Animation**: uses GPUI's built-in animation primitives running on the render pipeline, not the main event loop
-- **Settings wiring**: setting changes trigger a debounced save via the existing `schedule_settings_save()` mechanism
+- **Animation**: timer-driven opacity toggle on the workspace struct, read during render. The timer callback only flips a boolean — no heavy work on the UI thread
+- **Settings wiring**: setting changes set `user_save_pending = true`, which is flushed by the render loop via `maybe_schedule_settings_save()`
 
 ## File Changes Summary
 
