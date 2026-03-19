@@ -6,4 +6,4 @@
 pub(crate) mod controls;
 mod page;
 
-pub use page::{SettingsCategory, SettingsPage};
+pub use page::{SettingsCategory, SettingsPage, TerminalStyleField};

@@ -211,6 +211,118 @@ impl Default for GeneralSettings {
 // Terminal Settings
 // ============================================================================
 
+/// Optional ANSI palette overrides layered on top of the selected theme.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TerminalPaletteOverrides {
+    /// ANSI black override.
+    #[serde(default)]
+    pub black: String,
+    /// ANSI red override.
+    #[serde(default)]
+    pub red: String,
+    /// ANSI green override.
+    #[serde(default)]
+    pub green: String,
+    /// ANSI yellow override.
+    #[serde(default)]
+    pub yellow: String,
+    /// ANSI blue override.
+    #[serde(default)]
+    pub blue: String,
+    /// ANSI magenta override.
+    #[serde(default)]
+    pub magenta: String,
+    /// ANSI cyan override.
+    #[serde(default)]
+    pub cyan: String,
+    /// ANSI white override.
+    #[serde(default)]
+    pub white: String,
+    /// ANSI bright black override.
+    #[serde(default)]
+    pub bright_black: String,
+    /// ANSI bright red override.
+    #[serde(default)]
+    pub bright_red: String,
+    /// ANSI bright green override.
+    #[serde(default)]
+    pub bright_green: String,
+    /// ANSI bright yellow override.
+    #[serde(default)]
+    pub bright_yellow: String,
+    /// ANSI bright blue override.
+    #[serde(default)]
+    pub bright_blue: String,
+    /// ANSI bright magenta override.
+    #[serde(default)]
+    pub bright_magenta: String,
+    /// ANSI bright cyan override.
+    #[serde(default)]
+    pub bright_cyan: String,
+    /// ANSI bright white override.
+    #[serde(default)]
+    pub bright_white: String,
+}
+
+impl Default for TerminalPaletteOverrides {
+    fn default() -> Self {
+        Self {
+            black: String::new(),
+            red: String::new(),
+            green: String::new(),
+            yellow: String::new(),
+            blue: String::new(),
+            magenta: String::new(),
+            cyan: String::new(),
+            white: String::new(),
+            bright_black: String::new(),
+            bright_red: String::new(),
+            bright_green: String::new(),
+            bright_yellow: String::new(),
+            bright_blue: String::new(),
+            bright_magenta: String::new(),
+            bright_cyan: String::new(),
+            bright_white: String::new(),
+        }
+    }
+}
+
+/// Per-user terminal theme overrides layered on top of the selected theme.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct TerminalThemeOverrides {
+    /// Terminal background color override.
+    #[serde(default)]
+    pub background: String,
+    /// Terminal foreground color override.
+    #[serde(default)]
+    pub foreground: String,
+    /// Terminal cursor color override.
+    #[serde(default)]
+    pub cursor: String,
+    /// Terminal selection background override.
+    #[serde(default)]
+    pub selection_background: String,
+    /// Terminal selection foreground override.
+    #[serde(default)]
+    pub selection_foreground: String,
+    /// ANSI palette overrides.
+    #[serde(default)]
+    pub palette: TerminalPaletteOverrides,
+}
+
+impl Default for TerminalThemeOverrides {
+    fn default() -> Self {
+        Self {
+            background: String::new(),
+            foreground: String::new(),
+            cursor: String::new(),
+            selection_background: String::new(),
+            selection_foreground: String::new(),
+            palette: TerminalPaletteOverrides::default(),
+        }
+    }
+}
+
 /// Terminal rendering preferences.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TerminalSettings {
@@ -222,6 +334,9 @@ pub struct TerminalSettings {
     pub cursor_style: String,
     /// Line height multiplier (1.0 = natural font height).
     pub line_height: f32,
+    /// Per-user terminal theme overrides layered on top of the selected theme.
+    #[serde(default)]
+    pub theme_overrides: TerminalThemeOverrides,
 }
 
 fn default_terminal_font_family() -> &'static str {
@@ -250,6 +365,7 @@ impl Default for TerminalSettings {
             font_size: 13.0,
             cursor_style: "block".to_string(),
             line_height: 1.0,
+            theme_overrides: TerminalThemeOverrides::default(),
         }
     }
 }
@@ -812,6 +928,8 @@ mod tests {
     fn test_terminal_settings_default_font_family_is_platform_specific() {
         let settings = TerminalSettings::default();
         assert_eq!(settings.font_family, default_terminal_font_family());
+        assert!(settings.theme_overrides.background.is_empty());
+        assert!(settings.theme_overrides.palette.bright_white.is_empty());
     }
 
     #[test]

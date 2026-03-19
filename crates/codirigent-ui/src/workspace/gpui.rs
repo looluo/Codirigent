@@ -949,6 +949,28 @@ impl WorkspaceView {
             self.settings.open,
             "handle_settings_key called with settings closed"
         );
+        if self
+            .settings
+            .page
+            .as_ref()
+            .and_then(|page| page.focused_terminal_style_field)
+            .is_some()
+        {
+            let handled = match event.keystroke.key.as_str() {
+                "escape" | "enter" => {
+                    self.clear_terminal_style_field_focus();
+                    cx.notify();
+                    true
+                }
+                "backspace" => self.handle_terminal_style_field_backspace(cx),
+                _ => false,
+            };
+            if handled {
+                cx.stop_propagation();
+                return true;
+            }
+        }
+
         // Navigate Keyboard Shortcuts panel with keyboard when not recording.
         if self
             .settings
@@ -1535,6 +1557,9 @@ impl EntityInputHandler for WorkspaceView {
             return;
         }
         if self.settings.open {
+            if self.append_terminal_style_field_text(text, cx) {
+                return;
+            }
             return;
         }
 

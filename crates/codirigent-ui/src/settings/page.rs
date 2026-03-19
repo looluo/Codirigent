@@ -4,7 +4,144 @@
 //! user and project settings, tracks the active category, and manages
 //! dirty detection and reset.
 
-use codirigent_core::config::{ProjectConfig, UserSettings};
+use codirigent_core::config::{ProjectConfig, TerminalThemeOverrides, UserSettings};
+
+/// Editable terminal style fields exposed in the settings UI.
+#[allow(missing_docs)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TerminalStyleField {
+    Background,
+    Foreground,
+    Cursor,
+    SelectionBackground,
+    SelectionForeground,
+    Black,
+    Red,
+    Green,
+    Yellow,
+    Blue,
+    Magenta,
+    Cyan,
+    White,
+    BrightBlack,
+    BrightRed,
+    BrightGreen,
+    BrightYellow,
+    BrightBlue,
+    BrightMagenta,
+    BrightCyan,
+    BrightWhite,
+}
+
+impl TerminalStyleField {
+    /// Primary terminal surface colors.
+    pub const BASE: [Self; 5] = [
+        Self::Background,
+        Self::Foreground,
+        Self::Cursor,
+        Self::SelectionBackground,
+        Self::SelectionForeground,
+    ];
+
+    /// ANSI 16-color palette overrides.
+    pub const ANSI: [Self; 16] = [
+        Self::Black,
+        Self::Red,
+        Self::Green,
+        Self::Yellow,
+        Self::Blue,
+        Self::Magenta,
+        Self::Cyan,
+        Self::White,
+        Self::BrightBlack,
+        Self::BrightRed,
+        Self::BrightGreen,
+        Self::BrightYellow,
+        Self::BrightBlue,
+        Self::BrightMagenta,
+        Self::BrightCyan,
+        Self::BrightWhite,
+    ];
+
+    /// Stable field identifier for focus state and DOM IDs.
+    pub fn id(self) -> &'static str {
+        match self {
+            Self::Background => "background",
+            Self::Foreground => "foreground",
+            Self::Cursor => "cursor",
+            Self::SelectionBackground => "selection_background",
+            Self::SelectionForeground => "selection_foreground",
+            Self::Black => "palette_black",
+            Self::Red => "palette_red",
+            Self::Green => "palette_green",
+            Self::Yellow => "palette_yellow",
+            Self::Blue => "palette_blue",
+            Self::Magenta => "palette_magenta",
+            Self::Cyan => "palette_cyan",
+            Self::White => "palette_white",
+            Self::BrightBlack => "palette_bright_black",
+            Self::BrightRed => "palette_bright_red",
+            Self::BrightGreen => "palette_bright_green",
+            Self::BrightYellow => "palette_bright_yellow",
+            Self::BrightBlue => "palette_bright_blue",
+            Self::BrightMagenta => "palette_bright_magenta",
+            Self::BrightCyan => "palette_bright_cyan",
+            Self::BrightWhite => "palette_bright_white",
+        }
+    }
+
+    fn get<'a>(self, overrides: &'a TerminalThemeOverrides) -> &'a str {
+        match self {
+            Self::Background => &overrides.background,
+            Self::Foreground => &overrides.foreground,
+            Self::Cursor => &overrides.cursor,
+            Self::SelectionBackground => &overrides.selection_background,
+            Self::SelectionForeground => &overrides.selection_foreground,
+            Self::Black => &overrides.palette.black,
+            Self::Red => &overrides.palette.red,
+            Self::Green => &overrides.palette.green,
+            Self::Yellow => &overrides.palette.yellow,
+            Self::Blue => &overrides.palette.blue,
+            Self::Magenta => &overrides.palette.magenta,
+            Self::Cyan => &overrides.palette.cyan,
+            Self::White => &overrides.palette.white,
+            Self::BrightBlack => &overrides.palette.bright_black,
+            Self::BrightRed => &overrides.palette.bright_red,
+            Self::BrightGreen => &overrides.palette.bright_green,
+            Self::BrightYellow => &overrides.palette.bright_yellow,
+            Self::BrightBlue => &overrides.palette.bright_blue,
+            Self::BrightMagenta => &overrides.palette.bright_magenta,
+            Self::BrightCyan => &overrides.palette.bright_cyan,
+            Self::BrightWhite => &overrides.palette.bright_white,
+        }
+    }
+
+    fn get_mut<'a>(self, overrides: &'a mut TerminalThemeOverrides) -> &'a mut String {
+        match self {
+            Self::Background => &mut overrides.background,
+            Self::Foreground => &mut overrides.foreground,
+            Self::Cursor => &mut overrides.cursor,
+            Self::SelectionBackground => &mut overrides.selection_background,
+            Self::SelectionForeground => &mut overrides.selection_foreground,
+            Self::Black => &mut overrides.palette.black,
+            Self::Red => &mut overrides.palette.red,
+            Self::Green => &mut overrides.palette.green,
+            Self::Yellow => &mut overrides.palette.yellow,
+            Self::Blue => &mut overrides.palette.blue,
+            Self::Magenta => &mut overrides.palette.magenta,
+            Self::Cyan => &mut overrides.palette.cyan,
+            Self::White => &mut overrides.palette.white,
+            Self::BrightBlack => &mut overrides.palette.bright_black,
+            Self::BrightRed => &mut overrides.palette.bright_red,
+            Self::BrightGreen => &mut overrides.palette.bright_green,
+            Self::BrightYellow => &mut overrides.palette.bright_yellow,
+            Self::BrightBlue => &mut overrides.palette.bright_blue,
+            Self::BrightMagenta => &mut overrides.palette.bright_magenta,
+            Self::BrightCyan => &mut overrides.palette.bright_cyan,
+            Self::BrightWhite => &mut overrides.palette.bright_white,
+        }
+    }
+}
 
 /// Settings category for the sidebar navigation.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -76,6 +213,8 @@ pub struct SettingsPage {
     pub recording_shortcut: Option<String>,
     /// Which shortcut row currently has keyboard focus (action name).
     pub focused_shortcut_row: Option<String>,
+    /// Which terminal style field currently has keyboard focus.
+    pub focused_terminal_style_field: Option<TerminalStyleField>,
     /// Which dropdown is currently open (by ID string).
     pub open_dropdown: Option<String>,
     /// Click position (window coordinates) where the dropdown was triggered.
@@ -90,6 +229,8 @@ pub struct SettingsPage {
     pub detected_shells: Vec<String>,
     /// Monospace fonts detected on the system.
     pub detected_fonts: Vec<String>,
+    /// In-progress terminal style editor draft values.
+    pub terminal_style_draft: TerminalThemeOverrides,
     /// Pre-sorted list of keybinding action names for the Keyboard Shortcuts panel.
     /// Rebuilt whenever `user_settings.keybindings` changes.
     pub sorted_shortcut_keys: Vec<String>,
@@ -107,6 +248,7 @@ impl SettingsPage {
         let mut sorted_shortcut_keys: Vec<String> =
             user_settings.keybindings.keys().cloned().collect();
         sorted_shortcut_keys.sort();
+        let terminal_style_draft = user_settings.terminal.theme_overrides.clone();
         Self {
             active_category: SettingsCategory::General,
             original_user: user_settings.clone(),
@@ -115,6 +257,7 @@ impl SettingsPage {
             project_config,
             recording_shortcut: None,
             focused_shortcut_row: None,
+            focused_terminal_style_field: None,
             open_dropdown: None,
             dropdown_click_pos: (0.0, 0.0),
             user_save_pending: false,
@@ -122,6 +265,7 @@ impl SettingsPage {
             detected_editors,
             detected_shells,
             detected_fonts,
+            terminal_style_draft,
             sorted_shortcut_keys,
         }
     }
@@ -169,6 +313,8 @@ impl SettingsPage {
             }
             SettingsCategory::Terminal => {
                 self.user_settings.terminal = defaults.terminal;
+                self.terminal_style_draft = self.user_settings.terminal.theme_overrides.clone();
+                self.focused_terminal_style_field = None;
             }
             SettingsCategory::KeyboardShortcuts => {
                 self.user_settings.keybindings = defaults.keybindings;
@@ -206,6 +352,27 @@ impl SettingsPage {
     pub fn mark_project_saved(&mut self) {
         self.original_project = self.project_config.clone();
         self.project_save_pending = false;
+    }
+
+    /// Return the current draft value for a terminal style field.
+    pub fn terminal_style_draft_value(&self, field: TerminalStyleField) -> &str {
+        field.get(&self.terminal_style_draft)
+    }
+
+    /// Update the draft value for a terminal style field.
+    pub fn set_terminal_style_draft_value(&mut self, field: TerminalStyleField, value: String) {
+        *field.get_mut(&mut self.terminal_style_draft) = value;
+    }
+
+    /// Commit the current draft value into the live user settings snapshot.
+    pub fn commit_terminal_style_field(&mut self, field: TerminalStyleField) {
+        let value = field.get(&self.terminal_style_draft).to_string();
+        *field.get_mut(&mut self.user_settings.terminal.theme_overrides) = value;
+    }
+
+    /// Reset terminal style drafts from the current user settings snapshot.
+    pub fn sync_terminal_style_draft_from_user_settings(&mut self) {
+        self.terminal_style_draft = self.user_settings.terminal.theme_overrides.clone();
     }
 }
 
@@ -246,6 +413,7 @@ mod tests {
             vec![],
         );
         assert!(page.focused_shortcut_row.is_none());
+        assert!(page.focused_terminal_style_field.is_none());
     }
 
     #[test]
@@ -261,6 +429,30 @@ mod tests {
         assert!(!page.is_user_dirty());
         assert!(!page.is_project_dirty());
         assert!(page.recording_shortcut.is_none());
+        assert!(page.terminal_style_draft.background.is_empty());
+    }
+
+    #[test]
+    fn test_terminal_style_draft_round_trips_into_user_settings() {
+        let mut page = SettingsPage::new(
+            UserSettings::default(),
+            ProjectConfig::default(),
+            vec![],
+            vec![],
+            vec![],
+        );
+
+        page.set_terminal_style_draft_value(TerminalStyleField::Background, "#123456".to_string());
+        page.commit_terminal_style_field(TerminalStyleField::Background);
+
+        assert_eq!(
+            page.terminal_style_draft_value(TerminalStyleField::Background),
+            "#123456"
+        );
+        assert_eq!(
+            page.user_settings.terminal.theme_overrides.background,
+            "#123456"
+        );
     }
 
     #[test]

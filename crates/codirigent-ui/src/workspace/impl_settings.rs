@@ -3,8 +3,8 @@
 use super::gpui::WorkspaceView;
 use super::types::{ShellPickerOption, ShellPickerSection, SHELL_PICKER_AUTO_DETECT_LABEL};
 use crate::app::OpenSettings;
-use crate::settings::SettingsPage;
-use crate::theme::CodirigentTheme;
+use crate::settings::{SettingsPage, TerminalStyleField};
+use crate::theme::{CodirigentTheme, Rgba};
 use crate::theme_manager::ThemeManager;
 use codirigent_core::config_service::ConfigService;
 use gpui::{Context, Window};
@@ -20,6 +20,12 @@ struct LoadedSettingsSnapshot {
     project_dir: Option<PathBuf>,
     theme_manager: ThemeManager,
 }
+
+const HEX_SHORT_RGB_LEN: usize = 3;
+const HEX_SHORT_RGBA_LEN: usize = 4;
+const HEX_LONG_RGB_LEN: usize = 6;
+const HEX_LONG_RGBA_LEN: usize = 8;
+const OPAQUE_ALPHA: u8 = u8::MAX;
 
 fn shell_picker_display_label(shell: &str) -> String {
     if shell.is_empty() {
@@ -301,6 +307,101 @@ fn resolve_terminal_font_family(requested: &str, detected_fonts: &[String]) -> S
     platform_default.to_string()
 }
 
+pub(super) fn parse_terminal_override_rgba(value: &str) -> Option<Rgba> {
+    let hex = value.trim();
+    if hex.is_empty() {
+        return None;
+    }
+
+    let hex = hex.trim_start_matches('#');
+    let (r, g, b, a) = match hex.len() {
+        HEX_SHORT_RGB_LEN => (
+            parse_hex_nibble(&hex[0..1])?,
+            parse_hex_nibble(&hex[1..2])?,
+            parse_hex_nibble(&hex[2..3])?,
+            OPAQUE_ALPHA,
+        ),
+        HEX_SHORT_RGBA_LEN => (
+            parse_hex_nibble(&hex[0..1])?,
+            parse_hex_nibble(&hex[1..2])?,
+            parse_hex_nibble(&hex[2..3])?,
+            parse_hex_nibble(&hex[3..4])?,
+        ),
+        HEX_LONG_RGB_LEN => (
+            u8::from_str_radix(&hex[0..2], 16).ok()?,
+            u8::from_str_radix(&hex[2..4], 16).ok()?,
+            u8::from_str_radix(&hex[4..6], 16).ok()?,
+            OPAQUE_ALPHA,
+        ),
+        HEX_LONG_RGBA_LEN => (
+            u8::from_str_radix(&hex[0..2], 16).ok()?,
+            u8::from_str_radix(&hex[2..4], 16).ok()?,
+            u8::from_str_radix(&hex[4..6], 16).ok()?,
+            u8::from_str_radix(&hex[6..8], 16).ok()?,
+        ),
+        _ => return None,
+    };
+
+    Some(Rgba::new(r, g, b, a))
+}
+
+fn parse_hex_nibble(value: &str) -> Option<u8> {
+    let nibble = u8::from_str_radix(value, 16).ok()?;
+    Some((nibble << 4) | nibble)
+}
+
+fn terminal_override_is_valid(value: &str) -> bool {
+    value.trim().is_empty() || parse_terminal_override_rgba(value).is_some()
+}
+
+fn apply_terminal_theme_overrides(
+    theme: &mut CodirigentTheme,
+    overrides: &codirigent_core::config::TerminalThemeOverrides,
+) {
+    if let Some(color) = parse_terminal_override_rgba(&overrides.background) {
+        theme.terminal_background = color;
+    }
+    if let Some(color) = parse_terminal_override_rgba(&overrides.foreground) {
+        theme.terminal_foreground = color;
+    }
+    if let Some(color) = parse_terminal_override_rgba(&overrides.cursor) {
+        theme.terminal_cursor = color;
+        theme.cursor = color.to_hsla();
+    }
+    if let Some(color) = parse_terminal_override_rgba(&overrides.selection_background) {
+        theme.terminal_selection_bg = color;
+    }
+    if let Some(color) = parse_terminal_override_rgba(&overrides.selection_foreground) {
+        theme.terminal_selection_fg = color;
+    }
+
+    let palette = &overrides.palette;
+    let palette_overrides = [
+        &palette.black,
+        &palette.red,
+        &palette.green,
+        &palette.yellow,
+        &palette.blue,
+        &palette.magenta,
+        &palette.cyan,
+        &palette.white,
+        &palette.bright_black,
+        &palette.bright_red,
+        &palette.bright_green,
+        &palette.bright_yellow,
+        &palette.bright_blue,
+        &palette.bright_magenta,
+        &palette.bright_cyan,
+        &palette.bright_white,
+    ];
+
+    for (index, value) in palette_overrides.iter().enumerate() {
+        if let Some(color) = parse_terminal_override_rgba(value) {
+            theme.ansi.colors[index] = color;
+        }
+    }
+}
+
 fn load_settings_snapshot(
     config_service: &codirigent_core::config_service::DefaultConfigService,
     project_dir: Option<PathBuf>,
@@ -369,6 +470,7 @@ impl WorkspaceView {
         if !user_settings.terminal.font_family.is_empty() {
             theme.terminal_font_family = user_settings.terminal.font_family.clone();
         }
+        apply_terminal_theme_overrides(theme, &user_settings.terminal.theme_overrides);
     }
 
     fn apply_runtime_theme(&mut self, theme: CodirigentTheme) {
@@ -502,6 +604,87 @@ impl WorkspaceView {
             detected_shells,
             detected_fonts,
         )
+    }
+
+    pub(super) fn clear_terminal_style_field_focus(&mut self) {
+        if let Some(page) = self.settings.page.as_mut() {
+            page.focused_terminal_style_field = None;
+        }
+    }
+
+    pub(super) fn set_terminal_style_field_focus(&mut self, field: TerminalStyleField) {
+        if let Some(page) = self.settings.page.as_mut() {
+            page.focused_terminal_style_field = Some(field);
+            page.recording_shortcut = None;
+            page.focused_shortcut_row = None;
+            page.open_dropdown = None;
+        }
+    }
+
+    pub(super) fn handle_terminal_style_field_backspace(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some((field, next_value)) = self.settings.page.as_ref().and_then(|page| {
+            let field = page.focused_terminal_style_field?;
+            let mut next = page.terminal_style_draft_value(field).to_string();
+            next.pop();
+            Some((field, next))
+        }) else {
+            return false;
+        };
+
+        self.update_terminal_style_field_value(field, next_value, cx);
+        true
+    }
+
+    pub(super) fn append_terminal_style_field_text(
+        &mut self,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some((field, next_value)) = self.settings.page.as_ref().and_then(|page| {
+            let field = page.focused_terminal_style_field?;
+            let mut next = page.terminal_style_draft_value(field).to_string();
+            next.push_str(text);
+            Some((field, next))
+        }) else {
+            return false;
+        };
+
+        self.update_terminal_style_field_value(field, next_value, cx);
+        true
+    }
+
+    pub(super) fn reset_terminal_style_field(
+        &mut self,
+        field: TerminalStyleField,
+        cx: &mut Context<Self>,
+    ) {
+        self.update_terminal_style_field_value(field, String::new(), cx);
+    }
+
+    fn update_terminal_style_field_value(
+        &mut self,
+        field: TerminalStyleField,
+        value: String,
+        cx: &mut Context<Self>,
+    ) {
+        let mut user_settings = None;
+
+        if let Some(page) = self.settings.page.as_mut() {
+            page.set_terminal_style_draft_value(field, value.clone());
+            if terminal_override_is_valid(&value) {
+                page.commit_terminal_style_field(field);
+                page.user_save_pending = true;
+                user_settings = Some(page.user_settings.clone());
+            }
+        }
+
+        if let Some(user_settings) = user_settings {
+            let requested_id = self.settings.active_theme_id.clone();
+            self.resolve_and_apply_theme_id(&requested_id, &user_settings);
+            self.maybe_schedule_settings_save(cx);
+        }
+
+        cx.notify();
     }
 
     fn schedule_user_settings_snapshot_save(
@@ -735,6 +918,9 @@ impl WorkspaceView {
                         let dropdown_click_pos = existing_page.dropdown_click_pos;
                         let recording_shortcut = existing_page.recording_shortcut.clone();
                         let focused_shortcut_row = existing_page.focused_shortcut_row.clone();
+                        let focused_terminal_style_field =
+                            existing_page.focused_terminal_style_field;
+                        let terminal_style_draft = existing_page.terminal_style_draft.clone();
 
                         let mut page = this.build_settings_page();
                         page.set_category(active_category);
@@ -742,6 +928,8 @@ impl WorkspaceView {
                         page.dropdown_click_pos = dropdown_click_pos;
                         page.recording_shortcut = recording_shortcut;
                         page.focused_shortcut_row = focused_shortcut_row;
+                        page.focused_terminal_style_field = focused_terminal_style_field;
+                        page.terminal_style_draft = terminal_style_draft;
                         // Validate the preserved recording state is still pointing to a known
                         // action.  If the action was removed (e.g. by a downgrade), drop the
                         // stale state.
@@ -1133,6 +1321,50 @@ mod tests {
         WorkspaceView::apply_theme_runtime_overrides(&mut theme, &user_settings);
 
         assert_eq!(theme.terminal_font_family, original_font_family);
+    }
+
+    #[test]
+    fn apply_theme_runtime_overrides_applies_terminal_theme_overrides() {
+        let mut theme = CodirigentTheme::dark();
+        let mut user_settings = codirigent_core::config::UserSettings::default();
+        user_settings.terminal.theme_overrides.background = "#112233".to_string();
+        user_settings.terminal.theme_overrides.cursor = "#abcdef".to_string();
+        user_settings.terminal.theme_overrides.palette.bright_blue = "#445566".to_string();
+
+        WorkspaceView::apply_theme_runtime_overrides(&mut theme, &user_settings);
+
+        assert_eq!(theme.terminal_background, Rgba::rgb(0x11, 0x22, 0x33));
+        assert_eq!(theme.terminal_cursor, Rgba::rgb(0xab, 0xcd, 0xef));
+        assert_eq!(theme.cursor, Rgba::rgb(0xab, 0xcd, 0xef).to_hsla());
+        assert_eq!(theme.ansi.colors[12], Rgba::rgb(0x44, 0x55, 0x66));
+    }
+
+    #[test]
+    fn apply_theme_runtime_overrides_ignores_invalid_terminal_theme_overrides() {
+        let mut theme = CodirigentTheme::dark();
+        let original_background = theme.terminal_background;
+        let original_palette = theme.ansi.colors[1];
+        let mut user_settings = codirigent_core::config::UserSettings::default();
+        user_settings.terminal.theme_overrides.background = "#gggggg".to_string();
+        user_settings.terminal.theme_overrides.palette.red = "wat".to_string();
+
+        WorkspaceView::apply_theme_runtime_overrides(&mut theme, &user_settings);
+
+        assert_eq!(theme.terminal_background, original_background);
+        assert_eq!(theme.ansi.colors[1], original_palette);
+    }
+
+    #[test]
+    fn parse_terminal_override_rgba_supports_short_and_alpha_hex() {
+        assert_eq!(
+            parse_terminal_override_rgba("#abc"),
+            Some(Rgba::rgb(0xaa, 0xbb, 0xcc))
+        );
+        assert_eq!(
+            parse_terminal_override_rgba("#11223344"),
+            Some(Rgba::new(0x11, 0x22, 0x33, 0x44))
+        );
+        assert_eq!(parse_terminal_override_rgba("#12"), None);
     }
 
     #[test]
