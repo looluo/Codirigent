@@ -12,7 +12,7 @@ use gpui::{Context, Window};
 use tracing::info;
 
 impl WorkspaceView {
-    /// Handle NewSession action (Cmd+N).
+    /// Handle NewSession action.
     pub(super) fn handle_new_session(
         &mut self,
         _action: &NewSession,
@@ -23,7 +23,7 @@ impl WorkspaceView {
         self.create_session(cx);
     }
 
-    /// Handle CloseSession action (Cmd+W).
+    /// Handle CloseSession action.
     pub(super) fn handle_close_session(
         &mut self,
         _action: &CloseSession,
@@ -34,7 +34,7 @@ impl WorkspaceView {
         self.close_focused_session(cx);
     }
 
-    /// Handle SplitHorizontal action (Cmd+D).
+    /// Handle SplitHorizontal action.
     pub(super) fn handle_split_horizontal(
         &mut self,
         _action: &SplitHorizontal,
@@ -49,7 +49,7 @@ impl WorkspaceView {
         }
     }
 
-    /// Handle SplitVertical action (Cmd+Shift+D).
+    /// Handle SplitVertical action.
     pub(super) fn handle_split_vertical(
         &mut self,
         _action: &SplitVertical,
@@ -64,7 +64,7 @@ impl WorkspaceView {
         }
     }
 
-    /// Handle ClosePane action (Cmd+Shift+W).
+    /// Handle ClosePane action.
     pub(super) fn handle_close_pane(
         &mut self,
         _action: &ClosePane,
@@ -89,7 +89,7 @@ impl WorkspaceView {
         }
     }
 
-    /// Handle NextLayout action (Cmd+\).
+    /// Handle NextLayout action.
     pub(super) fn handle_next_layout(
         &mut self,
         _action: &NextLayout,
@@ -100,7 +100,7 @@ impl WorkspaceView {
         self.next_layout(cx);
     }
 
-    /// Handle ToggleSidebar action (Cmd+B).
+    /// Handle ToggleSidebar action.
     pub(super) fn handle_toggle_sidebar(
         &mut self,
         _action: &ToggleSidebar,
@@ -111,7 +111,7 @@ impl WorkspaceView {
         self.toggle_sidebar(cx);
     }
 
-    /// Handle ToggleTaskBoard action (Ctrl+T / Cmd+T).
+    /// Handle ToggleTaskBoard action.
     pub(super) fn handle_toggle_task_board(
         &mut self,
         _action: &ToggleTaskBoard,
@@ -122,7 +122,7 @@ impl WorkspaceView {
         self.toggle_task_board(cx);
     }
 
-    /// Handle QuickSwitch action (Ctrl+K / Cmd+K).
+    /// Handle QuickSwitch action.
     ///
     /// This is a placeholder — no dedicated session-picker UI exists yet.
     /// Toggles the sidebar as a stand-in until a real session picker is built.
@@ -136,7 +136,7 @@ impl WorkspaceView {
         self.toggle_sidebar(cx);
     }
 
-    /// Handle SearchTerminal action (Cmd+F / Ctrl+F).
+    /// Handle SearchTerminal action.
     pub(super) fn handle_search_terminal(
         &mut self,
         _action: &SearchTerminal,

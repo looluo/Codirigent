@@ -15,6 +15,7 @@ use tracing::warn;
 
 struct LoadedSettingsSnapshot {
     user_settings: codirigent_core::config::UserSettings,
+    user_settings_changed: bool,
     project_config: codirigent_core::config::ProjectConfig,
     project_dir: Option<PathBuf>,
     theme_manager: ThemeManager,
@@ -225,6 +226,60 @@ fn normalize_keybinding_display(binding: &str) -> String {
         .unwrap_or_else(|_| binding.to_string())
 }
 
+fn migrate_legacy_terminal_conflicting_keybindings(
+    keybindings: &mut std::collections::HashMap<String, String>,
+) -> bool {
+    #[cfg(target_os = "macos")]
+    let m = "Cmd";
+    #[cfg(not(target_os = "macos"))]
+    let m = "Ctrl";
+
+    let migrations = [
+        ("new_session", format!("{m}+N"), format!("{m}+Shift+N")),
+        ("close_session", format!("{m}+W"), format!("{m}+Alt+W")),
+        ("toggle_layout", format!("{m}+\\\\"), format!("{m}+Shift+L")),
+        ("toggle_sidebar", format!("{m}+B"), format!("{m}+Shift+E")),
+        (
+            "toggle_task_board",
+            format!("{m}+T"),
+            format!("{m}+Shift+T"),
+        ),
+        ("search_terminal", format!("{m}+F"), format!("{m}+Shift+F")),
+        (
+            "split_horizontal",
+            format!("{m}+D"),
+            format!("{m}+Alt+Shift+H"),
+        ),
+        (
+            "split_vertical",
+            format!("{m}+Shift+D"),
+            format!("{m}+Alt+Shift+V"),
+        ),
+        (
+            "close_pane",
+            format!("{m}+Shift+W"),
+            format!("{m}+Alt+Shift+W"),
+        ),
+        ("quick_switch", format!("{m}+K"), format!("{m}+Shift+K")),
+    ];
+
+    let mut changed = false;
+    for (action, old_binding, new_binding) in migrations {
+        let old_display = normalize_keybinding_display(&old_binding);
+        let new_display = normalize_keybinding_display(&new_binding);
+        let Some(current) = keybindings.get_mut(action) else {
+            continue;
+        };
+
+        if normalize_keybinding_display(current) == old_display && *current != new_display {
+            *current = new_display;
+            changed = true;
+        }
+    }
+
+    changed
+}
+
 fn contains_font_family(fonts: &[String], target: &str) -> bool {
     fonts.iter().any(|font| font.eq_ignore_ascii_case(target))
 }
@@ -250,7 +305,9 @@ fn load_settings_snapshot(
     config_service: &codirigent_core::config_service::DefaultConfigService,
     project_dir: Option<PathBuf>,
 ) -> LoadedSettingsSnapshot {
-    let user_settings = config_service.load_user_settings().unwrap_or_default();
+    let mut user_settings = config_service.load_user_settings().unwrap_or_default();
+    let user_settings_changed =
+        migrate_legacy_terminal_conflicting_keybindings(&mut user_settings.keybindings);
     let project_config = project_dir
         .as_ref()
         .and_then(|dir| config_service.load_project_config(dir).ok())
@@ -259,6 +316,7 @@ fn load_settings_snapshot(
 
     LoadedSettingsSnapshot {
         user_settings,
+        user_settings_changed,
         project_config,
         project_dir,
         theme_manager,
@@ -656,6 +714,13 @@ impl WorkspaceView {
                     .resolve_and_apply_theme_id(&user_settings.appearance.theme, &user_settings);
                 user_settings.appearance.theme = resolved_theme_id;
                 this.settings.cached_user_settings = user_settings.clone();
+                if loaded.user_settings_changed {
+                    this.schedule_user_settings_snapshot_save(
+                        user_settings.clone(),
+                        Duration::ZERO,
+                        cx,
+                    );
+                }
                 this.settings.cached_project_config = loaded.project_config.clone();
                 this.settings.current_working_dir = loaded.project_dir;
                 this.notification_handle
@@ -789,7 +854,7 @@ mod tests {
     #[test]
     fn test_keybindings_to_gpui_list_new_session() {
         let mut map = std::collections::HashMap::new();
-        map.insert("new_session".to_string(), "Ctrl+N".to_string());
+        map.insert("new_session".to_string(), "Ctrl+Shift+N".to_string());
         let list = keybindings_to_gpui_list(&map);
         assert_eq!(list.len(), 1);
     }
@@ -797,7 +862,7 @@ mod tests {
     #[test]
     fn test_keybindings_to_gpui_list_skips_unknown_action() {
         let mut map = std::collections::HashMap::new();
-        map.insert("unknown_action_xyz".to_string(), "Ctrl+N".to_string());
+        map.insert("unknown_action_xyz".to_string(), "Ctrl+Shift+N".to_string());
         let list = keybindings_to_gpui_list(&map);
         assert_eq!(list.len(), 0);
     }
@@ -805,7 +870,7 @@ mod tests {
     #[test]
     fn test_keybindings_to_gpui_list_includes_toggle_task_board() {
         let mut map = std::collections::HashMap::new();
-        map.insert("toggle_task_board".to_string(), "Ctrl+B".to_string());
+        map.insert("toggle_task_board".to_string(), "Ctrl+Shift+T".to_string());
         let list = keybindings_to_gpui_list(&map);
         assert_eq!(list.len(), 1);
     }
@@ -814,7 +879,7 @@ mod tests {
     fn test_keybindings_to_gpui_list_includes_quick_switch() {
         // quick_switch is a live-reload binding that must appear in the list.
         let mut map = std::collections::HashMap::new();
-        map.insert("quick_switch".to_string(), "Ctrl+K".to_string());
+        map.insert("quick_switch".to_string(), "Ctrl+Shift+K".to_string());
         let list = keybindings_to_gpui_list(&map);
         assert_eq!(list.len(), 1);
     }
@@ -842,9 +907,12 @@ mod tests {
         map.insert("quit".to_string(), "Ctrl+Q".to_string());
         map.insert("paste".to_string(), "Ctrl+V".to_string());
         map.insert("copy".to_string(), "Ctrl+C".to_string());
-        map.insert("split_horizontal".to_string(), "Ctrl+D".to_string());
-        map.insert("split_vertical".to_string(), "Ctrl+Shift+D".to_string());
-        map.insert("close_pane".to_string(), "Ctrl+Shift+W".to_string());
+        map.insert(
+            "split_horizontal".to_string(),
+            "Ctrl+Alt+Shift+H".to_string(),
+        );
+        map.insert("split_vertical".to_string(), "Ctrl+Alt+Shift+V".to_string());
+        map.insert("close_pane".to_string(), "Ctrl+Alt+Shift+W".to_string());
         let list = keybindings_to_gpui_list(&map);
         assert_eq!(list.len(), 7);
     }
@@ -981,6 +1049,57 @@ mod tests {
              UserSettings::default_keybindings live-reload list ({live_reload_count} entries) \
              are out of sync — add the missing action to both tables"
         );
+    }
+
+    #[test]
+    fn migrate_legacy_terminal_conflicting_keybindings_updates_old_defaults() {
+        let mut keybindings = std::collections::HashMap::from([
+            (
+                "toggle_sidebar".to_string(),
+                normalize_keybinding_display("Ctrl+B"),
+            ),
+            (
+                "search_terminal".to_string(),
+                normalize_keybinding_display("Ctrl+F"),
+            ),
+        ]);
+
+        let changed = migrate_legacy_terminal_conflicting_keybindings(&mut keybindings);
+
+        assert!(changed);
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(
+                keybindings.get("toggle_sidebar"),
+                Some(&"Cmd+Shift+E".to_string())
+            );
+            assert_eq!(
+                keybindings.get("search_terminal"),
+                Some(&"Cmd+Shift+F".to_string())
+            );
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(
+                keybindings.get("toggle_sidebar"),
+                Some(&"Ctrl+Shift+E".to_string())
+            );
+            assert_eq!(
+                keybindings.get("search_terminal"),
+                Some(&"Ctrl+Shift+F".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn migrate_legacy_terminal_conflicting_keybindings_preserves_custom_bindings() {
+        let mut keybindings =
+            std::collections::HashMap::from([("toggle_sidebar".to_string(), "F12".to_string())]);
+
+        let changed = migrate_legacy_terminal_conflicting_keybindings(&mut keybindings);
+
+        assert!(!changed);
+        assert_eq!(keybindings.get("toggle_sidebar"), Some(&"F12".to_string()));
     }
 
     #[test]

@@ -342,20 +342,20 @@ impl UserSettings {
         bindings.insert("switch_session_7".to_string(), format!("{m}+7"));
         bindings.insert("switch_session_8".to_string(), format!("{m}+8"));
         bindings.insert("switch_session_9".to_string(), format!("{m}+9"));
-        bindings.insert("new_session".to_string(), format!("{m}+N"));
-        bindings.insert("close_session".to_string(), format!("{m}+W"));
-        bindings.insert("toggle_layout".to_string(), format!("{m}+\\"));
-        bindings.insert("toggle_sidebar".to_string(), format!("{m}+B"));
-        bindings.insert("toggle_task_board".to_string(), format!("{m}+T"));
+        bindings.insert("new_session".to_string(), format!("{m}+Shift+N"));
+        bindings.insert("close_session".to_string(), format!("{m}+Alt+W"));
+        bindings.insert("toggle_layout".to_string(), format!("{m}+Shift+L"));
+        bindings.insert("toggle_sidebar".to_string(), format!("{m}+Shift+E"));
+        bindings.insert("toggle_task_board".to_string(), format!("{m}+Shift+T"));
         bindings.insert("open_settings".to_string(), format!("{m}+,"));
         bindings.insert("quit".to_string(), format!("{m}+Q"));
         bindings.insert("paste".to_string(), format!("{m}+V"));
         bindings.insert("copy".to_string(), format!("{m}+C"));
-        bindings.insert("search_terminal".to_string(), format!("{m}+F"));
-        bindings.insert("split_horizontal".to_string(), format!("{m}+D"));
-        bindings.insert("split_vertical".to_string(), format!("{m}+Shift+D"));
-        bindings.insert("close_pane".to_string(), format!("{m}+Shift+W"));
-        bindings.insert("quick_switch".to_string(), format!("{m}+K"));
+        bindings.insert("search_terminal".to_string(), format!("{m}+Shift+F"));
+        bindings.insert("split_horizontal".to_string(), format!("{m}+Alt+Shift+H"));
+        bindings.insert("split_vertical".to_string(), format!("{m}+Alt+Shift+V"));
+        bindings.insert("close_pane".to_string(), format!("{m}+Alt+Shift+W"));
+        bindings.insert("quick_switch".to_string(), format!("{m}+Shift+K"));
         bindings
     }
 }
@@ -828,22 +828,56 @@ mod tests {
         let bindings = UserSettings::default_keybindings();
         #[cfg(target_os = "macos")]
         {
-            assert_eq!(bindings.get("new_session"), Some(&"Cmd+N".to_string()));
-            assert_eq!(bindings.get("close_session"), Some(&"Cmd+W".to_string()));
-            assert_eq!(bindings.get("toggle_sidebar"), Some(&"Cmd+B".to_string()));
+            assert_eq!(
+                bindings.get("new_session"),
+                Some(&"Cmd+Shift+N".to_string())
+            );
+            assert_eq!(
+                bindings.get("close_session"),
+                Some(&"Cmd+Alt+W".to_string())
+            );
+            assert_eq!(
+                bindings.get("toggle_sidebar"),
+                Some(&"Cmd+Shift+E".to_string())
+            );
             assert_eq!(
                 bindings.get("toggle_task_board"),
-                Some(&"Cmd+T".to_string())
+                Some(&"Cmd+Shift+T".to_string())
+            );
+            assert_eq!(
+                bindings.get("toggle_layout"),
+                Some(&"Cmd+Shift+L".to_string())
+            );
+            assert_eq!(
+                bindings.get("search_terminal"),
+                Some(&"Cmd+Shift+F".to_string())
             );
         }
         #[cfg(not(target_os = "macos"))]
         {
-            assert_eq!(bindings.get("new_session"), Some(&"Ctrl+N".to_string()));
-            assert_eq!(bindings.get("close_session"), Some(&"Ctrl+W".to_string()));
-            assert_eq!(bindings.get("toggle_sidebar"), Some(&"Ctrl+B".to_string()));
+            assert_eq!(
+                bindings.get("new_session"),
+                Some(&"Ctrl+Shift+N".to_string())
+            );
+            assert_eq!(
+                bindings.get("close_session"),
+                Some(&"Ctrl+Alt+W".to_string())
+            );
+            assert_eq!(
+                bindings.get("toggle_sidebar"),
+                Some(&"Ctrl+Shift+E".to_string())
+            );
             assert_eq!(
                 bindings.get("toggle_task_board"),
-                Some(&"Ctrl+T".to_string())
+                Some(&"Ctrl+Shift+T".to_string())
+            );
+            assert_eq!(
+                bindings.get("toggle_layout"),
+                Some(&"Ctrl+Shift+L".to_string())
+            );
+            assert_eq!(
+                bindings.get("search_terminal"),
+                Some(&"Ctrl+Shift+F".to_string())
             );
         }
         assert!(bindings.contains_key("quick_switch"));
