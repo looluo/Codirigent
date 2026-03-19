@@ -261,15 +261,49 @@ fn merge_codex_notify(settings: &mut TomlValue, command: &str) -> Result<bool> {
 
     match notify_value {
         TomlValue::Array(arr) => {
-            if arr.iter().any(|value| value.as_str() == Some(command)) {
+            let mut normalized = Vec::with_capacity(arr.len().max(1));
+            let mut inserted_codirigent = false;
+            let mut modified = false;
+
+            for value in arr.iter() {
+                match value.as_str() {
+                    Some(existing) if existing == command => {
+                        if inserted_codirigent {
+                            modified = true;
+                            continue;
+                        }
+                        normalized.push(TomlValue::String(command.to_owned()));
+                        inserted_codirigent = true;
+                    }
+                    Some(existing) if existing.contains(HOOK_MARKER) => {
+                        if !inserted_codirigent {
+                            normalized.push(TomlValue::String(command.to_owned()));
+                            inserted_codirigent = true;
+                        }
+                        modified = true;
+                    }
+                    _ => normalized.push(value.clone()),
+                }
+            }
+
+            if !inserted_codirigent {
+                normalized.push(TomlValue::String(command.to_owned()));
+                modified = true;
+            }
+
+            if !modified && normalized.len() == arr.len() {
                 return Ok(false);
             }
-            arr.push(TomlValue::String(command.to_owned()));
+
+            *arr = normalized;
             Ok(true)
         }
         TomlValue::String(existing) => {
             if existing == command {
                 Ok(false)
+            } else if existing.contains(HOOK_MARKER) {
+                *existing = command.to_owned();
+                Ok(true)
             } else {
                 *notify_value = TomlValue::Array(vec![
                     TomlValue::String(existing.clone()),
@@ -654,6 +688,14 @@ mod tests {
                 .len(),
             2
         );
+        assert_eq!(
+            settings["notify"]
+                .as_array()
+                .expect("hook installer test should succeed")[0]
+                .as_str()
+                .expect("hook installer test should succeed"),
+            "/usr/local/bin/codirigent-hook"
+        );
     }
 
     #[test]
@@ -675,6 +717,51 @@ mod tests {
         );
         assert_eq!(
             notify[1]
+                .as_str()
+                .expect("hook installer test should succeed"),
+            CMD
+        );
+    }
+
+    #[test]
+    fn codex_config_replaces_stale_codirigent_paths_in_notify_array() {
+        let mut settings: TomlValue = toml::from_str(
+            r#"
+            notify = [
+                "/Volumes/Codirigent 3/Codirigent.app/Contents/MacOS/codirigent-hook",
+                "/Applications/Codirigent.app/Contents/MacOS/codirigent-hook",
+                "notify-send"
+            ]
+            "#,
+        )
+        .expect("hook installer test should succeed");
+        let modified =
+            merge_codex_notify(&mut settings, CMD).expect("hook installer test should succeed");
+
+        assert!(modified);
+        assert_eq!(
+            settings["notify"]
+                .as_array()
+                .expect("hook installer test should succeed"),
+            &vec![
+                TomlValue::String(CMD.to_string()),
+                TomlValue::String("notify-send".to_string())
+            ]
+        );
+    }
+
+    #[test]
+    fn codex_config_upgrades_legacy_string_notify_in_place() {
+        let mut settings: TomlValue = toml::from_str(
+            r#"notify = "/Volumes/Codirigent 3/Codirigent.app/Contents/MacOS/codirigent-hook""#,
+        )
+        .expect("hook installer test should succeed");
+        let modified =
+            merge_codex_notify(&mut settings, CMD).expect("hook installer test should succeed");
+
+        assert!(modified);
+        assert_eq!(
+            settings["notify"]
                 .as_str()
                 .expect("hook installer test should succeed"),
             CMD

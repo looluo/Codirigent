@@ -604,6 +604,9 @@ impl TerminalView {
     /// Scroll to an absolute scrollback offset.
     pub fn scroll_to_offset(&mut self, target: usize) {
         let target = target.min(self.history_size);
+        if target == self.display_offset {
+            return;
+        }
         if let Some(snapshot) = self.runtime.scroll_to_offset(target) {
             let _ = self.apply_snapshot(snapshot);
         }
@@ -1048,9 +1051,9 @@ impl TerminalView {
             .min(track_height);
         let max_thumb_top = (track_height - thumb_height).max(0.0);
         let thumb_top = if self.history_size == 0 || max_thumb_top == 0.0 {
-            0.0
+            max_thumb_top
         } else {
-            max_thumb_top * (self.display_offset as f32 / self.history_size as f32)
+            max_thumb_top * (1.0 - (self.display_offset as f32 / self.history_size as f32))
         };
 
         (thumb_height, thumb_top)
@@ -1068,17 +1071,17 @@ impl TerminalView {
         }
 
         if drag_offset.is_none() {
-            ((pointer_y.clamp(0.0, track_height) / track_height) * self.history_size as f32).round()
-                as usize
+            let fraction = (pointer_y.clamp(0.0, track_height) / track_height).clamp(0.0, 1.0);
+            ((1.0 - fraction) * self.history_size as f32).round() as usize
         } else {
             let (thumb_height, _) = self.scrollbar_thumb_metrics(track_height);
             let max_thumb_top = (track_height - thumb_height).max(0.0);
             let thumb_top = (pointer_y - drag_offset.unwrap_or(0.0)).clamp(0.0, max_thumb_top);
 
             if max_thumb_top == 0.0 {
-                self.history_size
+                0
             } else {
-                ((thumb_top / max_thumb_top) * self.history_size as f32).round() as usize
+                ((1.0 - (thumb_top / max_thumb_top)) * self.history_size as f32).round() as usize
             }
         }
     }
@@ -1108,6 +1111,9 @@ impl TerminalView {
         self.search.generation = self.search.generation.saturating_add(1);
         if self.search.query.is_empty() {
             self.clear_search_matches();
+        } else {
+            self.search.matches.clear();
+            self.search.current_match = None;
         }
     }
 
@@ -1119,6 +1125,8 @@ impl TerminalView {
 
         self.search.query.push_str(text);
         self.search.generation = self.search.generation.saturating_add(1);
+        self.search.matches.clear();
+        self.search.current_match = None;
     }
 
     /// Remove the last search character.
@@ -1127,6 +1135,9 @@ impl TerminalView {
             self.search.generation = self.search.generation.saturating_add(1);
             if self.search.query.is_empty() {
                 self.clear_search_matches();
+            } else {
+                self.search.matches.clear();
+                self.search.current_match = None;
             }
         }
     }
@@ -1738,6 +1749,47 @@ mod tests {
 
         view.cycle_search_focus_control(true);
         assert_eq!(view.search_focus_control(), SearchFocusControl::Close);
+    }
+
+    #[test]
+    fn test_search_query_edits_clear_stale_matches() {
+        let mut view = create_test_view();
+        view.open_search();
+        view.set_search_matches(vec![SearchMatch {
+            grid_line: 0,
+            start_col: 0,
+            end_grid_line: 0,
+            end_col: 1,
+        }]);
+
+        view.append_search_text("a");
+
+        assert!(view.search().matches.is_empty());
+        assert_eq!(view.search().current_match, None);
+    }
+
+    #[test]
+    fn test_scrollbar_live_view_renders_at_bottom() {
+        let mut view = create_test_view();
+        view.history_size = 100;
+        view.display_offset = 0;
+
+        let (_, thumb_top) = view.scrollbar_thumb_metrics(200.0);
+
+        assert!(thumb_top > 0.0);
+    }
+
+    #[test]
+    fn test_scrollbar_pointer_mapping_uses_bottom_as_live_view() {
+        let mut view = create_test_view();
+        view.history_size = 100;
+        view.display_offset = 0;
+
+        let top_target = view.scrollbar_offset_for_pointer(0.0, 200.0, None);
+        let bottom_target = view.scrollbar_offset_for_pointer(200.0, 200.0, None);
+
+        assert_eq!(top_target, 100);
+        assert_eq!(bottom_target, 0);
     }
 
     #[test]

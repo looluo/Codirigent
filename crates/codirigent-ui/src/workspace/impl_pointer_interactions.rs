@@ -55,8 +55,10 @@ impl WorkspaceView {
                     drag.track_height,
                     terminal_view.scrollbar_drag_offset(),
                 );
-                terminal_view.scroll_to_offset(target);
-                cx.notify();
+                if target != terminal_view.display_offset() {
+                    terminal_view.scroll_to_offset(target);
+                    cx.notify();
+                }
             }
             return;
         }

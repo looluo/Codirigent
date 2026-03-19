@@ -82,7 +82,9 @@ impl WorkspaceView {
                             track_height,
                             None,
                         );
-                        terminal_view.scroll_to_offset(target);
+                        if target != terminal_view.display_offset() {
+                            terminal_view.scroll_to_offset(target);
+                        }
                         window.focus(&this.focus_handle(cx));
                         this.select_session_with_cx(session_id, cx);
                         cx.notify();

@@ -339,7 +339,27 @@ impl WorkspaceView {
         cx: &mut Context<Self>,
     ) {
         match control {
-            SearchFocusControl::Input => self.navigate_terminal_search(session_id, forward, cx),
+            SearchFocusControl::Input => {
+                let action = self.terminals.get(&session_id).map(|terminal_view| {
+                    if terminal_view.search_query().is_empty() {
+                        SearchInputAction::None
+                    } else if terminal_view.search().matches.is_empty() {
+                        SearchInputAction::RunSearch
+                    } else {
+                        SearchInputAction::Navigate
+                    }
+                });
+
+                match action {
+                    Some(SearchInputAction::RunSearch) => {
+                        self.schedule_terminal_search_with_delay(session_id, None, cx);
+                    }
+                    Some(SearchInputAction::Navigate) => {
+                        self.navigate_terminal_search(session_id, forward, cx);
+                    }
+                    Some(SearchInputAction::None) | None => {}
+                }
+            }
             SearchFocusControl::Previous => self.navigate_terminal_search(session_id, false, cx),
             SearchFocusControl::Next => self.navigate_terminal_search(session_id, true, cx),
             SearchFocusControl::Close => self.close_terminal_search(session_id, cx),
@@ -349,6 +369,15 @@ impl WorkspaceView {
     pub(super) fn schedule_terminal_search(
         &mut self,
         session_id: SessionId,
+        cx: &mut Context<Self>,
+    ) {
+        self.schedule_terminal_search_with_delay(session_id, Some(Duration::from_millis(150)), cx);
+    }
+
+    fn schedule_terminal_search_with_delay(
+        &mut self,
+        session_id: SessionId,
+        delay: Option<Duration>,
         cx: &mut Context<Self>,
     ) {
         let Some(terminal_view) = self.terminals.get(&session_id) else {
@@ -368,9 +397,27 @@ impl WorkspaceView {
         }
 
         cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
-            cx.background_executor()
-                .timer(Duration::from_millis(150))
-                .await;
+            if let Some(delay) = delay {
+                cx.background_executor().timer(delay).await;
+            }
+
+            let search_inputs = match this.update(cx, |this, _cx| {
+                let Some(terminal_view) = this.terminals.get(&session_id) else {
+                    return None;
+                };
+                if !terminal_view.search().active
+                    || terminal_view.search_generation() != generation
+                    || terminal_view.search_query() != query
+                {
+                    return None;
+                }
+
+                Some((runtime.clone(), search_query.clone()))
+            }) {
+                Ok(Some(search_inputs)) => search_inputs,
+                Ok(None) | Err(_) => return,
+            };
+            let (runtime, search_query) = search_inputs;
 
             let matches = cx
                 .background_executor()
@@ -444,4 +491,10 @@ impl WorkspaceView {
             cx.notify();
         }
     }
+}
+
+enum SearchInputAction {
+    None,
+    RunSearch,
+    Navigate,
 }

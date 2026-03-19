@@ -29,6 +29,7 @@ struct TerminalRuntime {
     theme: CodirigentTheme,
     generation: u64,
     cached_rows: Option<Vec<CachedTerminalRow>>,
+    cached_search_snapshot: Option<Arc<terminal_search::SearchSnapshot>>,
 }
 
 #[derive(Clone)]
@@ -48,6 +49,7 @@ impl TerminalRuntimeHandle {
             theme,
             generation: 0,
             cached_rows: None,
+            cached_search_snapshot: None,
         };
         let snapshot = runtime.snapshot_full();
         (
@@ -104,8 +106,10 @@ impl TerminalRuntimeHandle {
     }
 
     pub(crate) fn search(&self, query: &str) -> Vec<SearchMatch> {
-        self.with_runtime(|runtime| terminal_search::search(runtime.terminal.term(), query))
-            .unwrap_or_default()
+        let snapshot = self
+            .with_runtime_mut(TerminalRuntime::cached_search_snapshot)
+            .unwrap_or_default();
+        terminal_search::search_snapshot(&snapshot, query)
     }
 
     pub(crate) fn match_still_matches(&self, query: &str, search_match: &SearchMatch) -> bool {
@@ -136,15 +140,31 @@ impl TerminalRuntimeHandle {
 }
 
 impl TerminalRuntime {
+    fn invalidate_search_snapshot(&mut self) {
+        self.cached_search_snapshot = None;
+    }
+
+    fn cached_search_snapshot(&mut self) -> Arc<terminal_search::SearchSnapshot> {
+        if let Some(snapshot) = &self.cached_search_snapshot {
+            return Arc::clone(snapshot);
+        }
+
+        let snapshot = Arc::new(terminal_search::snapshot(self.terminal.term()));
+        self.cached_search_snapshot = Some(Arc::clone(&snapshot));
+        snapshot
+    }
+
     fn apply_output(&mut self, data: &[u8]) -> TerminalRenderSnapshot {
         self.terminal.process_output(data);
         self.generation += 1;
+        self.invalidate_search_snapshot();
         self.snapshot_from_damage()
     }
 
     fn resize_with_cells(&mut self, size: TerminalSize) -> TerminalRenderSnapshot {
         self.terminal.resize_with_cells(size);
         self.generation += 1;
+        self.invalidate_search_snapshot();
         self.snapshot_full()
     }
 
@@ -163,6 +183,7 @@ impl TerminalRuntime {
     fn clear(&mut self) -> TerminalRenderSnapshot {
         self.terminal.clear();
         self.generation += 1;
+        self.invalidate_search_snapshot();
         self.snapshot_full()
     }
 
@@ -443,5 +464,35 @@ mod tests {
             runtime.get_selected_text(&selection),
             Some("hello".to_string())
         );
+    }
+
+    #[test]
+    fn runtime_search_reuses_cached_snapshot_until_content_changes() {
+        let runtime = create_runtime();
+        let _ = runtime.apply_output(b"alpha beta gamma");
+
+        assert!(!runtime
+            .with_runtime(|runtime| runtime.cached_search_snapshot.is_some())
+            .unwrap_or(false));
+
+        let first = runtime.search("alpha");
+        assert_eq!(first.len(), 1);
+        assert!(runtime
+            .with_runtime(|runtime| runtime.cached_search_snapshot.is_some())
+            .unwrap_or(false));
+
+        let second = runtime.search("beta");
+        assert_eq!(second.len(), 1);
+        assert!(runtime
+            .with_runtime(|runtime| runtime.cached_search_snapshot.is_some())
+            .unwrap_or(false));
+
+        let _ = runtime.apply_output(b"\ndelta");
+        assert!(!runtime
+            .with_runtime(|runtime| runtime.cached_search_snapshot.is_some())
+            .unwrap_or(false));
+
+        let third = runtime.search("delta");
+        assert_eq!(third.len(), 1);
     }
 }
