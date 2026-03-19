@@ -26,30 +26,14 @@ enum DropdownEntry {
 fn build_theme_dropdown_entries(
     theme_manager: &crate::theme_manager::ThemeManager,
 ) -> Vec<DropdownEntry> {
-    let sections = build_theme_picker_sections(theme_manager);
-    let mut entries = Vec::new();
-
-    for (section_index, section) in sections.into_iter().enumerate() {
-        if section_index > 0 {
-            entries.push(DropdownEntry::Separator);
-        }
-
-        entries.push(DropdownEntry::Section {
-            label: section.title.to_string(),
-        });
-
-        entries.extend(
-            section
-                .options
-                .into_iter()
-                .map(|option| DropdownEntry::Option {
-                    value: option.id,
-                    label: option.label,
-                }),
-        );
-    }
-
-    entries
+    build_theme_picker_sections(theme_manager)
+        .into_iter()
+        .flat_map(|section| section.options)
+        .map(|option| DropdownEntry::Option {
+            value: option.id,
+            label: option.label,
+        })
+        .collect()
 }
 
 impl super::gpui::WorkspaceView {
