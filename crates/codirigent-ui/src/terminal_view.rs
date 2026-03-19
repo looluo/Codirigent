@@ -219,6 +219,35 @@ impl Default for ScrollbarState {
     }
 }
 
+/// Keyboard-focused control within the terminal search overlay.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SearchFocusControl {
+    /// Search query input.
+    #[default]
+    Input,
+    /// Previous match button.
+    Previous,
+    /// Next match button.
+    Next,
+    /// Close search button.
+    Close,
+}
+
+impl SearchFocusControl {
+    fn cycle(self, reverse: bool) -> Self {
+        match (self, reverse) {
+            (Self::Input, false) => Self::Previous,
+            (Self::Previous, false) => Self::Next,
+            (Self::Next, false) => Self::Close,
+            (Self::Close, false) => Self::Input,
+            (Self::Input, true) => Self::Close,
+            (Self::Previous, true) => Self::Input,
+            (Self::Next, true) => Self::Previous,
+            (Self::Close, true) => Self::Next,
+        }
+    }
+}
+
 /// Terminal search overlay state.
 #[derive(Debug, Clone, Default)]
 pub struct SearchState {
@@ -232,6 +261,8 @@ pub struct SearchState {
     pub current_match: Option<usize>,
     /// Monotonic debounce generation.
     pub generation: u64,
+    /// Keyboard-focused control inside the search overlay.
+    pub focus_control: SearchFocusControl,
 }
 
 /// Terminal view component.
@@ -1060,6 +1091,7 @@ impl TerminalView {
     /// Open search for this terminal.
     pub fn open_search(&mut self) {
         self.search.active = true;
+        self.search.focus_control = SearchFocusControl::Input;
         if self.search.current_match.is_none() && !self.search.matches.is_empty() {
             self.search.current_match = Some(0);
         }
@@ -1107,6 +1139,21 @@ impl TerminalView {
     /// Current search query text.
     pub fn search_query(&self) -> &str {
         &self.search.query
+    }
+
+    /// Keyboard-focused control for the search overlay.
+    pub fn search_focus_control(&self) -> SearchFocusControl {
+        self.search.focus_control
+    }
+
+    /// Update the keyboard-focused control for the search overlay.
+    pub fn set_search_focus_control(&mut self, control: SearchFocusControl) {
+        self.search.focus_control = control;
+    }
+
+    /// Move keyboard focus to the next or previous search control.
+    pub fn cycle_search_focus_control(&mut self, reverse: bool) {
+        self.search.focus_control = self.search.focus_control.cycle(reverse);
     }
 
     /// Apply search results for the current query.
@@ -1663,6 +1710,34 @@ mod tests {
         assert!(view.is_focused());
         view.set_focused(false);
         assert!(!view.is_focused());
+    }
+
+    #[test]
+    fn test_open_search_focuses_input() {
+        let mut view = create_test_view();
+        view.open_search();
+        assert_eq!(view.search_focus_control(), SearchFocusControl::Input);
+    }
+
+    #[test]
+    fn test_cycle_search_focus_control_wraps() {
+        let mut view = create_test_view();
+        view.open_search();
+
+        view.cycle_search_focus_control(false);
+        assert_eq!(view.search_focus_control(), SearchFocusControl::Previous);
+
+        view.cycle_search_focus_control(false);
+        assert_eq!(view.search_focus_control(), SearchFocusControl::Next);
+
+        view.cycle_search_focus_control(false);
+        assert_eq!(view.search_focus_control(), SearchFocusControl::Close);
+
+        view.cycle_search_focus_control(false);
+        assert_eq!(view.search_focus_control(), SearchFocusControl::Input);
+
+        view.cycle_search_focus_control(true);
+        assert_eq!(view.search_focus_control(), SearchFocusControl::Close);
     }
 
     #[test]

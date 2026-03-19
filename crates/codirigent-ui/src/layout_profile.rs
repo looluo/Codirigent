@@ -238,6 +238,11 @@ impl LayoutProfileManager {
         }
     }
 
+    /// Clear the active profile selection.
+    pub fn clear_active(&mut self) {
+        self.active_profile = None;
+    }
+
     /// Get the currently active profile.
     ///
     /// # Returns
@@ -279,13 +284,12 @@ impl LayoutProfileManager {
             return None;
         }
 
-        let current_idx = self
+        let next_idx = self
             .active_profile
             .as_ref()
             .and_then(|id| self.profiles.iter().position(|p| &p.id == id))
+            .map(|current_idx| (current_idx + 1) % self.profiles.len())
             .unwrap_or(0);
-
-        let next_idx = (current_idx + 1) % self.profiles.len();
         self.active_profile = Some(self.profiles[next_idx].id.clone());
         self.active()
     }
@@ -535,6 +539,15 @@ mod tests {
         let second = manager.active().unwrap().id.clone();
         assert_ne!(first, second);
         assert_eq!(second, "1x4");
+    }
+
+    #[test]
+    fn test_next_profile_from_no_active_selects_first_profile() {
+        let mut manager = LayoutProfileManager::with_defaults();
+        manager.clear_active();
+
+        let next = manager.next_profile().unwrap();
+        assert_eq!(next.id, "2x2");
     }
 
     #[test]

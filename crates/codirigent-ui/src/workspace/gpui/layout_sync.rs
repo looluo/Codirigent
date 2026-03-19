@@ -5,13 +5,66 @@ use crate::workspace::types::{
     CachedCellDims, TerminalResizeSignature, CELL_BORDER_WIDTH, HEADER_HEIGHT,
     TERMINAL_CONTENT_PADDING,
 };
-use codirigent_core::{CodirigentEvent, EventBus, SessionId, SessionManager};
+use codirigent_core::{CodirigentEvent, EventBus, LayoutMode, SessionId, SessionManager};
 use gpui::{Context, Window};
 use std::hash::{Hash, Hasher};
 use std::time::{Duration, Instant};
 use tracing::warn;
 
 impl WorkspaceView {
+    fn current_layout_mode_for_shortcuts(&self) -> LayoutMode {
+        if let Some(split_state) = self.workspace.layout_state().as_split_tree() {
+            LayoutMode::SplitTree {
+                root: split_state.tree().clone(),
+            }
+        } else {
+            self.workspace.layout_profile().to_mode()
+        }
+    }
+
+    fn sync_active_top_bar_profile_to_workspace(&mut self) {
+        let layout_mode = self.current_layout_mode_for_shortcuts();
+        if let Some(profile_id) = self
+            .top_bar
+            .profile_manager
+            .list_profiles()
+            .iter()
+            .find(|profile| profile.layout == layout_mode)
+            .map(|profile| profile.id.clone())
+        {
+            self.top_bar.set_active_profile_id(&profile_id);
+        } else {
+            self.top_bar.clear_active_profile();
+        }
+    }
+
+    fn apply_layout_mode_from_profile(&mut self, layout_mode: LayoutMode) {
+        match layout_mode {
+            LayoutMode::Grid { rows, cols } => {
+                let profile = match (rows, cols) {
+                    (2, 2) => crate::layout::LayoutProfile::Grid2x2,
+                    (4, 1) => crate::layout::LayoutProfile::Stack1x4,
+                    (2, 3) => crate::layout::LayoutProfile::Grid2x3,
+                    (3, 3) => crate::layout::LayoutProfile::Grid3x3,
+                    _ => crate::layout::LayoutProfile::Custom { rows, cols },
+                };
+                self.workspace.set_layout(profile);
+            }
+            LayoutMode::Single => {
+                self.workspace
+                    .set_layout(crate::layout::LayoutProfile::Single);
+            }
+            LayoutMode::SplitTree { root } => {
+                self.workspace.set_split_tree(root);
+            }
+            LayoutMode::Custom { .. } => {}
+        }
+
+        self.mark_layout_cache_dirty();
+        self.sync_layout_derived_state();
+        self.sync_active_top_bar_profile_to_workspace();
+    }
+
     /// Returns true when a computed target size is a transient collapse that
     /// should be ignored to avoid 1-column/1-row PTY resizes.
     fn should_skip_collapsed_resize(
@@ -58,11 +111,18 @@ impl WorkspaceView {
 
     /// Cycle to next layout.
     pub fn next_layout(&mut self, cx: &mut Context<Self>) {
-        self.workspace.next_layout();
-        self.mark_layout_cache_dirty();
-        self.sync_layout_derived_state();
+        self.sync_active_top_bar_profile_to_workspace();
+        if let Some(layout_mode) = self
+            .top_bar
+            .profile_manager
+            .next_profile()
+            .map(|profile| profile.layout.clone())
+        {
+            self.apply_layout_mode_from_profile(layout_mode);
+        }
+
         self.event_bus.publish(CodirigentEvent::LayoutChanged {
-            mode: self.workspace.layout_profile().to_mode(),
+            mode: self.current_layout_mode_for_shortcuts(),
         });
         cx.notify();
     }

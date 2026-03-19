@@ -1062,7 +1062,7 @@ impl super::gpui::WorkspaceView {
             let is_recording = recording.as_deref() == Some(action.as_str());
             let is_focused = focused_row.as_deref() == Some(action.as_str());
             let display = if is_recording {
-                "Press a key...".to_string()
+                "Press a shortcut...".to_string()
             } else {
                 binding.clone()
             };
@@ -1090,7 +1090,7 @@ impl super::gpui::WorkspaceView {
                     .cursor_pointer()
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |this, _, _, cx| {
+                        cx.listener(move |this, _, window, cx| {
                             if let Some(page) = this.settings.page.as_mut() {
                                 if page.recording_shortcut.as_deref() == Some(&action_name) {
                                     page.recording_shortcut = None;
@@ -1100,6 +1100,8 @@ impl super::gpui::WorkspaceView {
                                     page.focused_shortcut_row = Some(action_name.clone());
                                 }
                             }
+                            window.focus(&this.focus_handle(cx));
+                            cx.stop_propagation();
                             cx.notify();
                         }),
                     )

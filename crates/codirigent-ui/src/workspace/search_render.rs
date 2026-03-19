@@ -1,4 +1,5 @@
 use super::gpui::WorkspaceView;
+use crate::terminal_view::SearchFocusControl;
 use crate::theme::CodirigentTheme;
 use codirigent_core::SessionId;
 use gpui::{
@@ -40,21 +41,58 @@ impl WorkspaceView {
         };
 
         let key = event.keystroke.key.to_lowercase();
+        let focused_control = self
+            .terminals
+            .get(&session_id)
+            .map(|terminal_view| terminal_view.search_focus_control())
+            .unwrap_or(SearchFocusControl::Input);
+
         match key.as_str() {
             "escape" => {
                 self.close_terminal_search(session_id, cx);
                 return true;
             }
+            "tab" => {
+                if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
+                    terminal_view.cycle_search_focus_control(event.keystroke.modifiers.shift);
+                }
+                cx.notify();
+                return true;
+            }
+            "left" => {
+                if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
+                    terminal_view.cycle_search_focus_control(true);
+                }
+                cx.notify();
+                return true;
+            }
+            "right" => {
+                if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
+                    terminal_view.cycle_search_focus_control(false);
+                }
+                cx.notify();
+                return true;
+            }
             "enter" | "down" => {
-                self.navigate_terminal_search(session_id, !event.keystroke.modifiers.shift, cx);
+                self.activate_terminal_search_control(
+                    session_id,
+                    focused_control,
+                    !event.keystroke.modifiers.shift,
+                    cx,
+                );
                 return true;
             }
             "up" => {
-                self.navigate_terminal_search(session_id, false, cx);
+                self.activate_terminal_search_control(session_id, focused_control, false, cx);
+                return true;
+            }
+            "space" | " " if focused_control != SearchFocusControl::Input => {
+                self.activate_terminal_search_control(session_id, focused_control, true, cx);
                 return true;
             }
             "backspace" => {
                 if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
+                    terminal_view.set_search_focus_control(SearchFocusControl::Input);
                     terminal_view.pop_search_char();
                     if terminal_view.search_query().is_empty() {
                         terminal_view.clear_search_matches();
@@ -73,9 +111,16 @@ impl WorkspaceView {
             || event.keystroke.modifiers.alt
             || event.keystroke.modifiers.platform
             || event.keystroke.modifiers.function
-            || Self::keystroke_is_text_input(event)
         {
             return true;
+        }
+
+        if Self::keystroke_is_text_input(event) {
+            if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
+                terminal_view.set_search_focus_control(SearchFocusControl::Input);
+            }
+            cx.notify();
+            return false;
         }
 
         true
@@ -103,6 +148,7 @@ impl WorkspaceView {
         let total = search.matches.len();
         let current = search.current_match.map(|index| index + 1).unwrap_or(0);
         let query = search.query.clone();
+        let focused_control = search.focus_control;
 
         let input_display = if query.is_empty() {
             div()
@@ -114,15 +160,21 @@ impl WorkspaceView {
             div()
                 .text_sm()
                 .text_color(fg)
-                .child(format!("{}|", query))
+                .child(if focused_control == SearchFocusControl::Input {
+                    format!("{}|", query)
+                } else {
+                    query.clone()
+                })
                 .into_any_element()
         };
 
         let button = |label: &'static str,
+                      control: SearchFocusControl,
                       session_id: SessionId,
                       forward: Option<bool>,
                       cx: &mut Context<Self>| {
             let hover_bg = accent.opacity(0.12);
+            let is_focused = focused_control == control;
             let mut button = div()
                 .id(SharedString::from(format!(
                     "terminal-search-button-{}-{label}",
@@ -132,7 +184,12 @@ impl WorkspaceView {
                 .h(px(28.0))
                 .rounded_md()
                 .border_1()
-                .border_color(border_color)
+                .border_color(if is_focused { accent } else { border_color })
+                .bg(if is_focused {
+                    accent.opacity(0.12)
+                } else {
+                    gpui::Hsla::transparent_black()
+                })
                 .flex()
                 .items_center()
                 .justify_center()
@@ -144,8 +201,12 @@ impl WorkspaceView {
                     MouseButton::Left,
                     cx.listener(move |this, _: &MouseDownEvent, window, cx| {
                         this.select_session_with_cx(session_id, cx);
+                        if let Some(terminal_view) = this.terminals.get_mut(&session_id) {
+                            terminal_view.set_search_focus_control(control);
+                        }
                         window.focus(&this.focus_handle(cx));
                         cx.stop_propagation();
+                        cx.notify();
                     }),
                 )
                 .child(label);
@@ -208,10 +269,27 @@ impl WorkspaceView {
                         .px_2()
                         .bg(input_bg)
                         .border_1()
-                        .border_color(accent.opacity(0.5))
+                        .border_color(if focused_control == SearchFocusControl::Input {
+                            accent
+                        } else {
+                            border_color
+                        })
                         .rounded_md()
                         .flex()
                         .items_center()
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _: &MouseDownEvent, window, cx| {
+                                this.select_session_with_cx(session_id, cx);
+                                if let Some(terminal_view) = this.terminals.get_mut(&session_id) {
+                                    terminal_view
+                                        .set_search_focus_control(SearchFocusControl::Input);
+                                }
+                                window.focus(&this.focus_handle(cx));
+                                cx.stop_propagation();
+                                cx.notify();
+                            }),
+                        )
                         .child(input_display),
                 )
                 .child(
@@ -220,9 +298,21 @@ impl WorkspaceView {
                         .text_color(if total == 0 { muted } else { fg })
                         .child(format!("{current} of {total}")),
                 )
-                .child(button("Prev", session_id, Some(false), cx))
-                .child(button("Next", session_id, Some(true), cx))
-                .child(button("X", session_id, None, cx))
+                .child(button(
+                    "Prev",
+                    SearchFocusControl::Previous,
+                    session_id,
+                    Some(false),
+                    cx,
+                ))
+                .child(button(
+                    "Next",
+                    SearchFocusControl::Next,
+                    session_id,
+                    Some(true),
+                    cx,
+                ))
+                .child(button("X", SearchFocusControl::Close, session_id, None, cx))
                 .into_any_element(),
         )
     }
@@ -238,6 +328,21 @@ impl WorkspaceView {
         if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
             terminal_view.close_search();
             cx.notify();
+        }
+    }
+
+    fn activate_terminal_search_control(
+        &mut self,
+        session_id: SessionId,
+        control: SearchFocusControl,
+        forward: bool,
+        cx: &mut Context<Self>,
+    ) {
+        match control {
+            SearchFocusControl::Input => self.navigate_terminal_search(session_id, forward, cx),
+            SearchFocusControl::Previous => self.navigate_terminal_search(session_id, false, cx),
+            SearchFocusControl::Next => self.navigate_terminal_search(session_id, true, cx),
+            SearchFocusControl::Close => self.close_terminal_search(session_id, cx),
         }
     }
 
