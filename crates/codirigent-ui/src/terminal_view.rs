@@ -35,6 +35,7 @@
 //! ```
 
 use std::sync::Arc;
+use std::time::Instant;
 
 /// Ratio of font_size used as a conservative initial cell width estimate
 /// before real font metrics arrive from `compute_cell_dimensions`.
@@ -50,6 +51,7 @@ const MIN_CELL_WIDTH_PX: f32 = 7.0;
 use crate::terminal::Terminal;
 use crate::terminal::TerminalSize;
 use crate::terminal_runtime::{TerminalRenderSnapshot, TerminalRuntimeHandle};
+use crate::terminal_search::SearchMatch;
 use crate::theme::{CodirigentTheme, Rgba};
 use alacritty_terminal::term::TermMode;
 use codirigent_core::SessionId;
@@ -193,6 +195,45 @@ impl Selection {
     }
 }
 
+/// Scrollbar interaction state for a terminal pane.
+#[derive(Debug, Clone)]
+pub struct ScrollbarState {
+    /// Current scrollbar opacity.
+    pub opacity: f32,
+    /// Whether the pointer is over the scrollbar.
+    pub hovered: bool,
+    /// Thumb drag offset from the thumb top in pixels.
+    pub dragging: Option<f32>,
+    /// Last time scroll activity occurred.
+    pub last_scroll_activity: Instant,
+}
+
+impl Default for ScrollbarState {
+    fn default() -> Self {
+        Self {
+            opacity: 0.0,
+            hovered: false,
+            dragging: None,
+            last_scroll_activity: Instant::now(),
+        }
+    }
+}
+
+/// Terminal search overlay state.
+#[derive(Debug, Clone, Default)]
+pub struct SearchState {
+    /// Whether the search overlay is currently open.
+    pub active: bool,
+    /// Current search query.
+    pub query: String,
+    /// Cached matches for the current query.
+    pub matches: Vec<SearchMatch>,
+    /// Focused match index.
+    pub current_match: Option<usize>,
+    /// Monotonic debounce generation.
+    pub generation: u64,
+}
+
 /// Terminal view component.
 ///
 /// Renders terminal content to the screen, handling cells, cursor,
@@ -224,6 +265,8 @@ pub struct TerminalView {
     cols: u16,
     /// Cached terminal mode flags from the latest runtime snapshot.
     mode: TermMode,
+    /// Cached scrollback history size from the latest runtime snapshot.
+    history_size: usize,
     /// Cached viewport display offset from the latest runtime snapshot.
     display_offset: usize,
     /// Generation of the latest applied runtime snapshot.
@@ -252,6 +295,10 @@ pub struct TerminalView {
     /// Updated alongside row caches in `ensure_row_caches()` so the render
     /// pass never calls `renderable_content()` for cursor/IME positioning.
     cached_cursor_viewport_pos: Option<(f32, f32)>,
+    /// Scrollbar interaction state.
+    scrollbar: ScrollbarState,
+    /// Search overlay state.
+    search: SearchState,
 }
 
 impl TerminalView {
@@ -287,6 +334,7 @@ impl TerminalView {
             rows: 0,
             cols: 0,
             mode: TermMode::empty(),
+            history_size: 0,
             display_offset: 0,
             snapshot_generation: 0,
             cached_content: None,
@@ -300,6 +348,8 @@ impl TerminalView {
             cached_terminal_bg,
             cached_terminal_fg,
             cached_cursor_viewport_pos: None,
+            scrollbar: ScrollbarState::default(),
+            search: SearchState::default(),
         };
         let _ = view.apply_snapshot(snapshot);
         view
@@ -325,14 +375,20 @@ impl TerminalView {
             || self.cols != snapshot.cols
             || self.cached_rows.len() != snapshot.cached_rows.len();
 
+        let display_offset_changed = self.display_offset != snapshot.display_offset;
         self.rows = snapshot.rows;
         self.cols = snapshot.cols;
         self.mode = snapshot.mode;
+        self.history_size = snapshot.history_size;
         self.display_offset = snapshot.display_offset;
         self.snapshot_generation = snapshot.generation;
         self.cached_rows = snapshot.cached_rows;
         self.cached_content = None;
         self.refresh_cursor_cache(snapshot.cursor_viewport_cell);
+
+        if display_offset_changed {
+            self.note_scroll_activity();
+        }
 
         if requires_full_shaped_rebuild {
             self.cached_shaped_font_family = None;
@@ -469,6 +525,11 @@ impl TerminalView {
         self.rows
     }
 
+    /// Get the total number of scrollback lines currently retained.
+    pub fn total_scrollback_lines(&self) -> usize {
+        self.history_size
+    }
+
     /// Get the current terminal column count.
     pub fn cols(&self) -> u16 {
         self.cols
@@ -507,6 +568,14 @@ impl TerminalView {
     /// Scroll to the bottom (most recent output).
     pub fn scroll_to_bottom(&mut self) {
         let _ = self.scroll_to_bottom_if_needed();
+    }
+
+    /// Scroll to an absolute scrollback offset.
+    pub fn scroll_to_offset(&mut self, target: usize) {
+        let target = target.min(self.history_size);
+        if let Some(snapshot) = self.runtime.scroll_to_offset(target) {
+            let _ = self.apply_snapshot(snapshot);
+        }
     }
 
     /// Scroll to the bottom only when the viewport is currently in scrollback.
@@ -876,6 +945,265 @@ impl TerminalView {
         }
 
         rects
+    }
+
+    /// Get scrollbar interaction state.
+    pub fn scrollbar(&self) -> &ScrollbarState {
+        &self.scrollbar
+    }
+
+    /// Mark recent scrollbar activity and show it immediately.
+    pub fn note_scroll_activity(&mut self) {
+        self.scrollbar.opacity = 1.0;
+        self.scrollbar.last_scroll_activity = Instant::now();
+    }
+
+    /// Update scrollbar hover state.
+    pub fn set_scrollbar_hovered(&mut self, hovered: bool) {
+        self.scrollbar.hovered = hovered;
+        if hovered {
+            self.note_scroll_activity();
+        }
+    }
+
+    /// Begin thumb dragging.
+    pub fn start_scrollbar_drag(&mut self, thumb_offset: f32) {
+        self.scrollbar.dragging = Some(thumb_offset.max(0.0));
+        self.note_scroll_activity();
+    }
+
+    /// End thumb dragging.
+    pub fn stop_scrollbar_drag(&mut self) {
+        self.scrollbar.dragging = None;
+    }
+
+    /// Current thumb drag offset, if any.
+    pub fn scrollbar_drag_offset(&self) -> Option<f32> {
+        self.scrollbar.dragging
+    }
+
+    /// Update the scrollbar opacity when inactivity has elapsed.
+    pub fn fade_scrollbar_if_idle(&mut self, now: Instant) -> bool {
+        if self.scrollbar.hovered || self.scrollbar.dragging.is_some() {
+            if self.scrollbar.opacity != 1.0 {
+                self.scrollbar.opacity = 1.0;
+                return true;
+            }
+            return false;
+        }
+
+        if now
+            .duration_since(self.scrollbar.last_scroll_activity)
+            .as_millis()
+            >= 1500
+            && self.scrollbar.opacity != 0.0
+        {
+            self.scrollbar.opacity = 0.0;
+            return true;
+        }
+
+        false
+    }
+
+    /// Compute scrollbar thumb height and top offset for a given track height.
+    pub fn scrollbar_thumb_metrics(&self, track_height: f32) -> (f32, f32) {
+        if track_height <= 0.0 {
+            return (0.0, 0.0);
+        }
+
+        let total_lines = (self.history_size + self.rows as usize).max(1) as f32;
+        let thumb_height = (track_height * (self.rows as f32 / total_lines))
+            .max(30.0)
+            .min(track_height);
+        let max_thumb_top = (track_height - thumb_height).max(0.0);
+        let thumb_top = if self.history_size == 0 || max_thumb_top == 0.0 {
+            0.0
+        } else {
+            max_thumb_top * (self.display_offset as f32 / self.history_size as f32)
+        };
+
+        (thumb_height, thumb_top)
+    }
+
+    /// Convert a track-relative Y position into a scrollback offset.
+    pub fn scrollbar_offset_for_pointer(
+        &self,
+        pointer_y: f32,
+        track_height: f32,
+        drag_offset: Option<f32>,
+    ) -> usize {
+        if self.history_size == 0 || track_height <= 0.0 {
+            return 0;
+        }
+
+        if drag_offset.is_none() {
+            ((pointer_y.clamp(0.0, track_height) / track_height) * self.history_size as f32).round()
+                as usize
+        } else {
+            let (thumb_height, _) = self.scrollbar_thumb_metrics(track_height);
+            let max_thumb_top = (track_height - thumb_height).max(0.0);
+            let thumb_top = (pointer_y - drag_offset.unwrap_or(0.0)).clamp(0.0, max_thumb_top);
+
+            if max_thumb_top == 0.0 {
+                self.history_size
+            } else {
+                ((thumb_top / max_thumb_top) * self.history_size as f32).round() as usize
+            }
+        }
+    }
+
+    /// Get search overlay state.
+    pub fn search(&self) -> &SearchState {
+        &self.search
+    }
+
+    /// Open search for this terminal.
+    pub fn open_search(&mut self) {
+        self.search.active = true;
+        if self.search.current_match.is_none() && !self.search.matches.is_empty() {
+            self.search.current_match = Some(0);
+        }
+    }
+
+    /// Close search and clear its matches.
+    pub fn close_search(&mut self) {
+        self.search = SearchState::default();
+    }
+
+    /// Replace the current search query.
+    pub fn set_search_query(&mut self, query: String) {
+        self.search.query = query;
+        self.search.generation = self.search.generation.saturating_add(1);
+        if self.search.query.is_empty() {
+            self.clear_search_matches();
+        }
+    }
+
+    /// Append committed text to the search query.
+    pub fn append_search_text(&mut self, text: &str) {
+        if text.is_empty() {
+            return;
+        }
+
+        self.search.query.push_str(text);
+        self.search.generation = self.search.generation.saturating_add(1);
+    }
+
+    /// Remove the last search character.
+    pub fn pop_search_char(&mut self) {
+        if self.search.query.pop().is_some() {
+            self.search.generation = self.search.generation.saturating_add(1);
+            if self.search.query.is_empty() {
+                self.clear_search_matches();
+            }
+        }
+    }
+
+    /// Current search debounce generation.
+    pub fn search_generation(&self) -> u64 {
+        self.search.generation
+    }
+
+    /// Current search query text.
+    pub fn search_query(&self) -> &str {
+        &self.search.query
+    }
+
+    /// Apply search results for the current query.
+    pub fn set_search_matches(&mut self, matches: Vec<SearchMatch>) {
+        self.search.matches = matches;
+        self.search.current_match = if self.search.matches.is_empty() {
+            None
+        } else {
+            Some(0)
+        };
+    }
+
+    /// Clear cached search matches.
+    pub fn clear_search_matches(&mut self) {
+        self.search.matches.clear();
+        self.search.current_match = None;
+    }
+
+    /// Update the active search match index.
+    pub fn set_current_search_match(&mut self, index: Option<usize>) {
+        self.search.current_match = index;
+    }
+
+    /// Search highlight rects for the current viewport.
+    pub(crate) fn search_highlight_rects_hsla(&self) -> Vec<(usize, usize, usize, gpui::Hsla)> {
+        if !self.search.active || self.search.matches.is_empty() {
+            return Vec::new();
+        }
+
+        let viewport_start_line = -(self.display_offset as i32);
+        let viewport_end_line = viewport_start_line + self.rows as i32 - 1;
+        let cols = self.cols as usize;
+        let inactive: gpui::Hsla = self.theme.primary.into();
+        let active: gpui::Hsla = self.theme.orange.into();
+        let mut rects = Vec::new();
+
+        for (index, search_match) in self.search.matches.iter().enumerate() {
+            let visible_start = search_match.grid_line.max(viewport_start_line);
+            let visible_end = search_match.end_grid_line.min(viewport_end_line);
+            if visible_start > visible_end {
+                continue;
+            }
+
+            let color = if self.search.current_match == Some(index) {
+                active.opacity(0.45)
+            } else {
+                inactive.opacity(0.28)
+            };
+
+            for line in visible_start..=visible_end {
+                let row = (line + self.display_offset as i32) as usize;
+                let start = if line == search_match.grid_line {
+                    search_match.start_col.min(cols)
+                } else {
+                    0
+                };
+                let end = if line == search_match.end_grid_line {
+                    search_match.end_col.min(cols)
+                } else {
+                    cols
+                };
+                if start < end {
+                    rects.push((row, start, end, color));
+                }
+            }
+        }
+
+        rects
+    }
+
+    /// Proportional scrollbar marker positions for current search matches.
+    pub fn search_marker_fractions(&self) -> Vec<f32> {
+        if !self.search.active || self.search.matches.is_empty() {
+            return Vec::new();
+        }
+
+        let total_lines = (self.history_size + self.rows as usize).max(1) as f32;
+        self.search
+            .matches
+            .iter()
+            .map(|search_match| {
+                ((self.history_size as i32 + search_match.grid_line) as f32 / total_lines)
+                    .clamp(0.0, 1.0)
+            })
+            .collect()
+    }
+
+    /// Scroll the viewport so the focused match is centered when possible.
+    pub fn scroll_to_search_match(&mut self, index: usize) {
+        let Some(search_match) = self.search.matches.get(index) else {
+            return;
+        };
+
+        let center_row = self.rows as i32 / 2;
+        let target = (center_row - search_match.grid_line).max(0) as usize;
+        self.scroll_to_offset(target.min(self.history_size));
+        self.search.current_match = Some(index);
     }
 
     fn selection_range_for_viewport_row(&self, row: usize) -> Option<(usize, usize)> {
@@ -1646,6 +1974,7 @@ mod tests {
             rows: 2,
             cols: 2,
             mode: TermMode::empty(),
+            history_size: 0,
             display_offset: 0,
             cached_rows: Vec::new(),
             dirty_rows: None,

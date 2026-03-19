@@ -149,8 +149,8 @@ fn keybindings_to_gpui_list(
     use crate::app::{
         ClosePane, CloseSession, Copy, FocusSession1, FocusSession2, FocusSession3, FocusSession4,
         FocusSession5, FocusSession6, FocusSession7, FocusSession8, FocusSession9, NewSession,
-        NextLayout, OpenSettings, Paste, QuickSwitch, Quit, SplitHorizontal, SplitVertical,
-        ToggleSidebar, ToggleTaskBoard,
+        NextLayout, OpenSettings, Paste, QuickSwitch, Quit, SearchTerminal, SplitHorizontal,
+        SplitVertical, ToggleSidebar, ToggleTaskBoard,
     };
     use crate::keybindings::KeybindingManager;
 
@@ -174,6 +174,7 @@ fn keybindings_to_gpui_list(
                 "quit" => gpui::KeyBinding::new(&gpui_str, Quit, None),
                 "paste" => gpui::KeyBinding::new(&gpui_str, Paste, None),
                 "copy" => gpui::KeyBinding::new(&gpui_str, Copy, None),
+                "search_terminal" => gpui::KeyBinding::new(&gpui_str, SearchTerminal, None),
                 "split_horizontal" => gpui::KeyBinding::new(&gpui_str, SplitHorizontal, None),
                 "split_vertical" => gpui::KeyBinding::new(&gpui_str, SplitVertical, None),
                 "close_pane" => gpui::KeyBinding::new(&gpui_str, ClosePane, None),
@@ -222,6 +223,27 @@ fn normalize_keybinding_display(binding: &str) -> String {
     KeybindingManager::parse_binding(binding)
         .map(|b| KeybindingManager::format_binding(&b))
         .unwrap_or_else(|_| binding.to_string())
+}
+
+fn contains_font_family(fonts: &[String], target: &str) -> bool {
+    fonts.iter().any(|font| font.eq_ignore_ascii_case(target))
+}
+
+fn resolve_terminal_font_family(requested: &str, detected_fonts: &[String]) -> String {
+    if !requested.is_empty() && contains_font_family(detected_fonts, requested) {
+        return requested.to_string();
+    }
+
+    let platform_default = crate::theme::default_terminal_font_family();
+    if contains_font_family(detected_fonts, platform_default) {
+        return platform_default.to_string();
+    }
+
+    if let Some(font) = detected_fonts.first() {
+        return font.clone();
+    }
+
+    platform_default.to_string()
 }
 
 fn load_settings_snapshot(
@@ -297,6 +319,39 @@ impl WorkspaceView {
         for terminal_view in self.terminals_mut().values_mut() {
             terminal_view.set_theme(theme.clone());
         }
+    }
+
+    pub(super) fn sanitize_terminal_font_family(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(detected_fonts) = self.cache.monospace_fonts.clone() else {
+            return;
+        };
+
+        let requested_font = self
+            .settings
+            .cached_user_settings
+            .terminal
+            .font_family
+            .clone();
+        let resolved_font = resolve_terminal_font_family(&requested_font, &detected_fonts);
+        if requested_font == resolved_font {
+            return;
+        }
+
+        self.settings.cached_user_settings.terminal.font_family = resolved_font.clone();
+        if let Some(page) = self.settings.page.as_mut() {
+            page.user_settings.terminal.font_family = resolved_font.clone();
+        }
+
+        self.apply_terminal_font_family(window, resolved_font);
+        self.schedule_user_settings_snapshot_save(
+            self.settings.cached_user_settings.clone(),
+            Duration::ZERO,
+            cx,
+        );
     }
 
     pub(super) fn resolve_and_apply_theme_id(
@@ -380,11 +435,7 @@ impl WorkspaceView {
         let mut seen_shells = HashSet::new();
         detected_shells.retain(|shell| seen_shells.insert(shell.clone()));
 
-        let mut detected_fonts = self.cache.monospace_fonts.clone().unwrap_or_default();
-        let current_font = &user_settings.terminal.font_family;
-        if !current_font.is_empty() && !detected_fonts.iter().any(|f| f == current_font) {
-            detected_fonts.insert(0, current_font.clone());
-        }
+        let detected_fonts = self.cache.monospace_fonts.clone().unwrap_or_default();
 
         SettingsPage::new(
             user_settings,
@@ -963,6 +1014,34 @@ mod tests {
         WorkspaceView::apply_theme_runtime_overrides(&mut theme, &user_settings);
 
         assert_eq!(theme.terminal_font_family, original_font_family);
+    }
+
+    #[test]
+    fn resolve_terminal_font_family_keeps_installed_requested_font() {
+        let fonts = vec!["Consolas".to_string(), "Cascadia Code".to_string()];
+
+        let resolved = resolve_terminal_font_family("Cascadia Code", &fonts);
+
+        assert_eq!(resolved, "Cascadia Code");
+    }
+
+    #[test]
+    fn resolve_terminal_font_family_falls_back_to_platform_default() {
+        let platform_default = crate::theme::default_terminal_font_family().to_string();
+        let fonts = vec![platform_default.clone(), "Cascadia Code".to_string()];
+
+        let resolved = resolve_terminal_font_family("JetBrains Mono", &fonts);
+
+        assert_eq!(resolved, platform_default);
+    }
+
+    #[test]
+    fn resolve_terminal_font_family_falls_back_to_first_detected_font() {
+        let fonts = vec!["Cascadia Code".to_string(), "Fira Code".to_string()];
+
+        let resolved = resolve_terminal_font_family("JetBrains Mono", &fonts);
+
+        assert_eq!(resolved, "Cascadia Code");
     }
 
     #[test]

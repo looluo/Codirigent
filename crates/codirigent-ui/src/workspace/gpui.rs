@@ -236,7 +236,7 @@ impl WorkspaceView {
         None
     }
 
-    fn keystroke_is_text_input(event: &KeyDownEvent) -> bool {
+    pub(super) fn keystroke_is_text_input(event: &KeyDownEvent) -> bool {
         if event.keystroke.modifiers.control
             || event.keystroke.modifiers.alt
             || event.keystroke.modifiers.platform
@@ -1080,6 +1080,11 @@ impl WorkspaceView {
             return;
         }
 
+        if self.handle_terminal_search_key_down(event, cx) {
+            cx.stop_propagation();
+            return;
+        }
+
         // Don't send platform-modifier shortcuts to PTY (handled as GPUI actions).
         // GPUI's `secondary-<key>` bindings map to Cmd on macOS and Ctrl on
         // Windows/Linux, so the action system handles all modifier shortcuts correctly.
@@ -1521,6 +1526,14 @@ impl EntityInputHandler for WorkspaceView {
             // Modal text fields are handled via key events; do not leak input to PTY.
             return;
         }
+        if let Some(session_id) = self.focused_search_session_id() {
+            if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
+                terminal_view.append_search_text(text);
+            }
+            self.schedule_terminal_search(session_id, cx);
+            cx.notify();
+            return;
+        }
         if self.settings.open {
             return;
         }
@@ -1556,6 +1569,14 @@ impl EntityInputHandler for WorkspaceView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.focused_search_session_id().is_some() {
+            self.ime_marked_range = None;
+            self.ime_preedit_text = None;
+            if !text.is_empty() {
+                cx.notify();
+            }
+            return;
+        }
         if self.has_blocking_modal() || self.settings.open {
             let had_ime_overlay =
                 self.ime_marked_range.is_some() || self.ime_preedit_text.is_some();
@@ -1613,6 +1634,7 @@ impl Render for WorkspaceView {
         if self.cache.monospace_fonts.is_none() {
             self.cache.monospace_fonts = Some(detect_monospace_fonts(window.text_system()));
         }
+        self.sanitize_terminal_font_family(window, cx);
 
         let rem = REM_BASE * (self.workspace.theme().font_size_base / FONT_SIZE_BASE_DEFAULT);
         window.set_rem_size(gpui::px(rem));
@@ -1730,6 +1752,7 @@ impl Render for WorkspaceView {
             .on_action(cx.listener(Self::handle_close_pane))
             .on_action(cx.listener(Self::handle_paste))
             .on_action(cx.listener(Self::handle_copy))
+            .on_action(cx.listener(Self::handle_search_terminal))
             .on_action(cx.listener(Self::handle_open_settings))
             // Handle keyboard input for PTY
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {

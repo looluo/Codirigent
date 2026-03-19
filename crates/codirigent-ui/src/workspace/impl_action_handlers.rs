@@ -135,6 +135,16 @@ impl WorkspaceView {
         info!("QuickSwitch action triggered (toggling sidebar as placeholder)");
         self.toggle_sidebar(cx);
     }
+
+    /// Handle SearchTerminal action (Cmd+F / Ctrl+F).
+    pub(super) fn handle_search_terminal(
+        &mut self,
+        _action: &SearchTerminal,
+        _window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        self.open_terminal_search(cx);
+    }
 }
 
 /// Generate FocusSession handler methods for WorkspaceView.

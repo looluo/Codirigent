@@ -174,7 +174,7 @@ impl WorkspaceView {
         self.cleanup_stale_proposals();
         self.schedule_background_git_refresh(cx);
 
-        if self.update_clipboard_preview(cx) {
+        if self.update_clipboard_preview(cx) || self.update_terminal_scrollbar_fades() {
             cx.notify();
         }
 

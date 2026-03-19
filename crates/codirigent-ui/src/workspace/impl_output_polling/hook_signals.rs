@@ -134,6 +134,7 @@ fn should_apply_hook_signal(
 fn resolve_hook_cli_session_id(
     signal_file_id: &str,
     explicit_cli_session_id: Option<&str>,
+    codirigent_session_uuid: Option<&str>,
     session_id: SessionId,
     allow_filename_backfill: bool,
 ) -> Option<String> {
@@ -158,7 +159,10 @@ fn resolve_hook_cli_session_id(
     }
 
     let fallback = signal_file_id.trim();
-    if fallback.is_empty() || fallback == session_id.0.to_string() {
+    if fallback.is_empty()
+        || fallback == session_id.0.to_string()
+        || codirigent_session_uuid.is_some_and(|uuid| uuid == fallback)
+    {
         return None;
     }
     if !is_safe_cli_session_id(fallback) {
@@ -243,11 +247,7 @@ fn resolve_session_by_uuid(
     match matches.len() {
         1 => Some(matches[0].id),
         n if n > 1 => {
-            warn!(
-                session_uuid,
-                count = n,
-                "Ambiguous session_uuid match"
-            );
+            warn!(session_uuid, count = n, "Ambiguous session_uuid match");
             None
         }
         _ => None,
@@ -433,12 +433,9 @@ impl WorkspaceView {
             }
         } else {
             // For Codex/Gemini: prefer UUID-based matching, fall back to legacy integer ID.
-            match resolve_session_by_uuid(
-                &routing_sessions,
-                codirigent_session_uuid.as_deref(),
-            )
-            .or(session_id)
-            .or_else(|| parse_legacy_hook_session_id(codirigent_session_id.as_deref()))
+            match resolve_session_by_uuid(&routing_sessions, codirigent_session_uuid.as_deref())
+                .or(session_id)
+                .or_else(|| parse_legacy_hook_session_id(codirigent_session_id.as_deref()))
             {
                 Some(session_id) => session_id,
                 None => return,
@@ -457,6 +454,7 @@ impl WorkspaceView {
         let resolved_cli_session_id = resolve_hook_cli_session_id(
             &signal_file_id,
             cli_session_id.as_deref(),
+            codirigent_session_uuid.as_deref(),
             resolved_session_id,
             cli_type_name != CLI_TYPE_CLAUDE,
         );
@@ -805,7 +803,7 @@ mod tests {
     #[test]
     fn numeric_signal_file_id_is_not_treated_as_codex_session_id() {
         assert_eq!(
-            resolve_hook_cli_session_id("3", None, SessionId(3), true),
+            resolve_hook_cli_session_id("3", None, None, SessionId(3), true),
             None
         );
     }
@@ -813,7 +811,7 @@ mod tests {
     #[test]
     fn non_numeric_signal_file_id_can_backfill_cli_session_id() {
         assert_eq!(
-            resolve_hook_cli_session_id("codex-uuid", None, SessionId(3), true),
+            resolve_hook_cli_session_id("codex-uuid", None, None, SessionId(3), true),
             Some("codex-uuid".to_string())
         );
     }
@@ -821,7 +819,7 @@ mod tests {
     #[test]
     fn explicit_cli_session_id_wins_over_signal_file_id() {
         assert_eq!(
-            resolve_hook_cli_session_id("3", Some("real-codex-id"), SessionId(3), true),
+            resolve_hook_cli_session_id("3", Some("real-codex-id"), None, SessionId(3), true),
             Some("real-codex-id".to_string())
         );
     }
@@ -829,11 +827,11 @@ mod tests {
     #[test]
     fn unsafe_hook_cli_session_id_is_rejected() {
         assert_eq!(
-            resolve_hook_cli_session_id("3", Some("bad;id"), SessionId(3), true),
+            resolve_hook_cli_session_id("3", Some("bad;id"), None, SessionId(3), true),
             None
         );
         assert_eq!(
-            resolve_hook_cli_session_id("bad;id", None, SessionId(3), true),
+            resolve_hook_cli_session_id("bad;id", None, None, SessionId(3), true),
             None
         );
     }
@@ -841,8 +839,36 @@ mod tests {
     #[test]
     fn claude_signal_does_not_backfill_cli_session_id_from_filename() {
         assert_eq!(
-            resolve_hook_cli_session_id("claude-session-id", None, SessionId(3), false),
+            resolve_hook_cli_session_id("claude-session-id", None, None, SessionId(3), false),
             None
+        );
+    }
+
+    #[test]
+    fn codex_signal_filename_matching_codirigent_uuid_is_not_backfilled_as_cli_session_id() {
+        assert_eq!(
+            resolve_hook_cli_session_id(
+                "session-uuid-123",
+                None,
+                Some("session-uuid-123"),
+                SessionId(3),
+                true,
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn codex_signal_filename_differs_from_codirigent_uuid_can_backfill_cli_session_id() {
+        assert_eq!(
+            resolve_hook_cli_session_id(
+                "codex-cli-456",
+                None,
+                Some("session-uuid-123"),
+                SessionId(3),
+                true,
+            ),
+            Some("codex-cli-456".to_string())
         );
     }
 

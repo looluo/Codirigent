@@ -54,6 +54,7 @@ mod actions_impl {
             ClosePane,
             Paste,
             Copy,
+            SearchTerminal,
             OpenSettings,
             Quit,
         ]
@@ -83,6 +84,7 @@ pub(crate) fn default_gpui_keybindings() -> Vec<KeyBinding> {
         KeyBinding::new("secondary-k", QuickSwitch, None),
         KeyBinding::new("secondary-v", Paste, None),
         KeyBinding::new("secondary-c", Copy, None),
+        KeyBinding::new("secondary-f", SearchTerminal, None),
         KeyBinding::new("secondary-d", SplitHorizontal, None),
         KeyBinding::new("secondary-shift-d", SplitVertical, None),
         KeyBinding::new("secondary-shift-w", ClosePane, None),
@@ -581,6 +583,10 @@ impl CodirigentApp {
 
         cx.on_action(|_: &ToggleTaskBoard, _cx| {
             info!("ToggleTaskBoard action triggered (global fallback)");
+        });
+
+        cx.on_action(|_: &SearchTerminal, _cx| {
+            info!("SearchTerminal action triggered (global fallback)");
         });
 
         cx.on_action(|_: &QuickSwitch, _cx| {

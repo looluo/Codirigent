@@ -224,10 +224,29 @@ pub struct TerminalSettings {
     pub line_height: f32,
 }
 
+fn default_terminal_font_family() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "Consolas"
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "Menlo"
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        "DejaVu Sans Mono"
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        "monospace"
+    }
+}
+
 impl Default for TerminalSettings {
     fn default() -> Self {
         Self {
-            font_family: "JetBrains Mono".to_string(),
+            font_family: default_terminal_font_family().to_string(),
             font_size: 13.0,
             cursor_style: "block".to_string(),
             line_height: 1.0,
@@ -332,6 +351,7 @@ impl UserSettings {
         bindings.insert("quit".to_string(), format!("{m}+Q"));
         bindings.insert("paste".to_string(), format!("{m}+V"));
         bindings.insert("copy".to_string(), format!("{m}+C"));
+        bindings.insert("search_terminal".to_string(), format!("{m}+F"));
         bindings.insert("split_horizontal".to_string(), format!("{m}+D"));
         bindings.insert("split_vertical".to_string(), format!("{m}+Shift+D"));
         bindings.insert("close_pane".to_string(), format!("{m}+Shift+W"));
@@ -786,6 +806,12 @@ mod tests {
         assert_eq!(settings.appearance.theme, "dark");
         assert!(settings.notifications.desktop);
         assert!(!settings.keybindings.is_empty());
+    }
+
+    #[test]
+    fn test_terminal_settings_default_font_family_is_platform_specific() {
+        let settings = TerminalSettings::default();
+        assert_eq!(settings.font_family, default_terminal_font_family());
     }
 
     #[test]

@@ -1,9 +1,10 @@
 use crate::clipboard;
 use crate::terminal::{Terminal, TerminalSize};
 use crate::terminal_colors::{convert_color, dim_color};
+use crate::terminal_search::{self, SearchMatch};
 use crate::terminal_view::{CachedTerminalRow, Selection, TextRunSegment};
 use crate::theme::{CodirigentTheme, Rgba};
-use alacritty_terminal::grid::Scroll;
+use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags as CellFlags;
 use alacritty_terminal::term::TermMode;
@@ -16,6 +17,7 @@ pub(crate) struct TerminalRenderSnapshot {
     pub(crate) rows: u16,
     pub(crate) cols: u16,
     pub(crate) mode: TermMode,
+    pub(crate) history_size: usize,
     pub(crate) display_offset: usize,
     pub(crate) cached_rows: Vec<CachedTerminalRow>,
     pub(crate) dirty_rows: Option<Vec<usize>>,
@@ -76,6 +78,10 @@ impl TerminalRuntimeHandle {
         self.with_runtime_mut(|runtime| runtime.scroll_display(Scroll::Bottom))
     }
 
+    pub(crate) fn scroll_to_offset(&self, target: usize) -> Option<TerminalRenderSnapshot> {
+        self.with_runtime_mut(|runtime| runtime.scroll_to_offset(target))
+    }
+
     pub(crate) fn clear(&self) -> Option<TerminalRenderSnapshot> {
         self.with_runtime_mut(TerminalRuntime::clear)
     }
@@ -95,6 +101,18 @@ impl TerminalRuntimeHandle {
             }
         })
         .flatten()
+    }
+
+    pub(crate) fn search(&self, query: &str) -> Vec<SearchMatch> {
+        self.with_runtime(|runtime| terminal_search::search(runtime.terminal.term(), query))
+            .unwrap_or_default()
+    }
+
+    pub(crate) fn match_still_matches(&self, query: &str, search_match: &SearchMatch) -> bool {
+        self.with_runtime(|runtime| {
+            terminal_search::match_still_matches(runtime.terminal.term(), query, search_match)
+        })
+        .unwrap_or(false)
     }
 
     #[cfg(test)]
@@ -134,6 +152,12 @@ impl TerminalRuntime {
         self.terminal.term_mut().scroll_display(scroll);
         self.generation += 1;
         self.snapshot_full()
+    }
+
+    fn scroll_to_offset(&mut self, target: usize) -> TerminalRenderSnapshot {
+        let current = self.terminal.term().grid().display_offset();
+        let delta = target as i32 - current as i32;
+        self.scroll_display(Scroll::Delta(delta))
     }
 
     fn clear(&mut self) -> TerminalRenderSnapshot {
@@ -215,8 +239,10 @@ impl TerminalRuntime {
         let rows = self.terminal.rows();
         let cols = self.terminal.cols();
         let mode = self.terminal.mode();
-        let content = self.terminal.term().renderable_content();
+        let term = self.terminal.term();
+        let content = term.renderable_content();
         let display_offset = content.display_offset;
+        let history_size = term.topmost_line().0.unsigned_abs() as usize;
         let viewport_line = content.cursor.point.line.0 + display_offset as i32;
         let cursor_viewport_cell = if viewport_line >= 0 && (viewport_line as usize) < rows as usize
         {
@@ -231,6 +257,7 @@ impl TerminalRuntime {
             rows,
             cols,
             mode,
+            history_size,
             display_offset,
             cached_rows: self.cached_rows.clone().unwrap_or_default(),
             dirty_rows,

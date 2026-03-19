@@ -187,6 +187,8 @@ pub enum Action {
     Copy,
     /// Paste from clipboard.
     Paste,
+    /// Search inside the active terminal.
+    SearchTerminal,
     /// Copy entire session output.
     CopySessionOutput,
 
@@ -546,6 +548,7 @@ impl KeybindingManager {
             "broadcast" => Some(Action::Broadcast),
             "copy" => Some(Action::Copy),
             "paste" => Some(Action::Paste),
+            "search_terminal" => Some(Action::SearchTerminal),
             "copy_session_output" => Some(Action::CopySessionOutput),
             "quit" => Some(Action::Quit),
             "open_settings" => Some(Action::OpenSettings),
@@ -590,6 +593,7 @@ impl KeybindingManager {
             Action::CommandPalette => "command_palette".to_string(),
             Action::Copy => "copy".to_string(),
             Action::Paste => "paste".to_string(),
+            Action::SearchTerminal => "search_terminal".to_string(),
             Action::CopySessionOutput => "copy_session_output".to_string(),
             Action::Quit => "quit".to_string(),
             Action::OpenSettings => "open_settings".to_string(),

@@ -125,6 +125,8 @@ pub mod terminal_colors;
 #[cfg(all(feature = "gpui-full", feature = "terminal"))]
 pub(crate) mod terminal_runtime;
 #[cfg(all(feature = "gpui-full", feature = "terminal"))]
+pub(crate) mod terminal_search;
+#[cfg(all(feature = "gpui-full", feature = "terminal"))]
 pub mod terminal_view;
 
 // Re-export commonly used items

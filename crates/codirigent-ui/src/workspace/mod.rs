@@ -93,6 +93,12 @@ pub(crate) mod render;
 mod terminal_render;
 
 #[cfg(feature = "gpui-full")]
+mod scrollbar_render;
+
+#[cfg(feature = "gpui-full")]
+mod search_render;
+
+#[cfg(feature = "gpui-full")]
 mod drawer_render;
 
 #[cfg(feature = "gpui-full")]
