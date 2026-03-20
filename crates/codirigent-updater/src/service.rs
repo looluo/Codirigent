@@ -534,6 +534,8 @@ async fn do_check(
     let check_result = checker::check_for_update(version, client).await;
     // Reload after the async check so we merge onto the latest on-disk state
     // and never clobber staged updates written by another task in the meantime.
+    // This still assumes a single app instance: we do not take an inter-process
+    // file lock around load/save, so a separate process could still race here.
     let mut persistent = state::load_state().unwrap_or_default();
 
     match check_result {

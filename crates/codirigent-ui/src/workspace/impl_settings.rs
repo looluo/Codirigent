@@ -44,27 +44,9 @@ fn terminal_style_values_from_theme(
     theme: &crate::theme::CodirigentTheme,
 ) -> codirigent_core::config::TerminalThemeOverrides {
     let mut values = codirigent_core::config::TerminalThemeOverrides::default();
-    values.background = rgba_to_hex(theme.terminal_background);
-    values.foreground = rgba_to_hex(theme.terminal_foreground);
-    values.cursor = rgba_to_hex(theme.terminal_cursor);
-    values.selection_background = rgba_to_hex(theme.terminal_selection_bg);
-    values.selection_foreground = rgba_to_hex(theme.terminal_selection_fg);
-    values.palette.black = rgba_to_hex(theme.ansi.colors[0]);
-    values.palette.red = rgba_to_hex(theme.ansi.colors[1]);
-    values.palette.green = rgba_to_hex(theme.ansi.colors[2]);
-    values.palette.yellow = rgba_to_hex(theme.ansi.colors[3]);
-    values.palette.blue = rgba_to_hex(theme.ansi.colors[4]);
-    values.palette.magenta = rgba_to_hex(theme.ansi.colors[5]);
-    values.palette.cyan = rgba_to_hex(theme.ansi.colors[6]);
-    values.palette.white = rgba_to_hex(theme.ansi.colors[7]);
-    values.palette.bright_black = rgba_to_hex(theme.ansi.colors[8]);
-    values.palette.bright_red = rgba_to_hex(theme.ansi.colors[9]);
-    values.palette.bright_green = rgba_to_hex(theme.ansi.colors[10]);
-    values.palette.bright_yellow = rgba_to_hex(theme.ansi.colors[11]);
-    values.palette.bright_blue = rgba_to_hex(theme.ansi.colors[12]);
-    values.palette.bright_magenta = rgba_to_hex(theme.ansi.colors[13]);
-    values.palette.bright_cyan = rgba_to_hex(theme.ansi.colors[14]);
-    values.palette.bright_white = rgba_to_hex(theme.ansi.colors[15]);
+    for field in TerminalStyleField::ALL {
+        *field.get_mut(&mut values) = rgba_to_hex(field.theme_color(theme));
+    }
     values
 }
 
@@ -72,27 +54,9 @@ fn apply_terminal_style_values_to_theme(
     theme: &mut Theme,
     values: &codirigent_core::config::TerminalThemeOverrides,
 ) {
-    theme.colors.terminal.background = values.background.clone();
-    theme.colors.terminal.foreground = values.foreground.clone();
-    theme.colors.terminal.cursor = values.cursor.clone();
-    theme.colors.terminal.selection_background = values.selection_background.clone();
-    theme.colors.terminal.selection_foreground = values.selection_foreground.clone();
-    theme.colors.terminal.palette.black = values.palette.black.clone();
-    theme.colors.terminal.palette.red = values.palette.red.clone();
-    theme.colors.terminal.palette.green = values.palette.green.clone();
-    theme.colors.terminal.palette.yellow = values.palette.yellow.clone();
-    theme.colors.terminal.palette.blue = values.palette.blue.clone();
-    theme.colors.terminal.palette.magenta = values.palette.magenta.clone();
-    theme.colors.terminal.palette.cyan = values.palette.cyan.clone();
-    theme.colors.terminal.palette.white = values.palette.white.clone();
-    theme.colors.terminal.palette.bright_black = values.palette.bright_black.clone();
-    theme.colors.terminal.palette.bright_red = values.palette.bright_red.clone();
-    theme.colors.terminal.palette.bright_green = values.palette.bright_green.clone();
-    theme.colors.terminal.palette.bright_yellow = values.palette.bright_yellow.clone();
-    theme.colors.terminal.palette.bright_blue = values.palette.bright_blue.clone();
-    theme.colors.terminal.palette.bright_magenta = values.palette.bright_magenta.clone();
-    theme.colors.terminal.palette.bright_cyan = values.palette.bright_cyan.clone();
-    theme.colors.terminal.palette.bright_white = values.palette.bright_white.clone();
+    for field in TerminalStyleField::ALL {
+        field.set_theme_config_value(theme, field.get(values).to_string());
+    }
 }
 
 fn shell_picker_display_label(shell: &str) -> String {
@@ -311,7 +275,7 @@ fn migrate_legacy_terminal_conflicting_keybindings(
     let migrations = [
         ("new_session", format!("{m}+N"), format!("{m}+Shift+N")),
         ("close_session", format!("{m}+W"), format!("{m}+Alt+W")),
-        ("toggle_layout", format!("{m}+\\\\"), format!("{m}+Shift+L")),
+        ("toggle_layout", format!("{m}+\\"), format!("{m}+Shift+L")),
         ("toggle_sidebar", format!("{m}+B"), format!("{m}+Shift+E")),
         (
             "toggle_task_board",
@@ -339,13 +303,15 @@ fn migrate_legacy_terminal_conflicting_keybindings(
 
     let mut changed = false;
     for (action, old_binding, new_binding) in migrations {
-        let old_display = normalize_keybinding_display(&old_binding);
         let new_display = normalize_keybinding_display(&new_binding);
         let Some(current) = keybindings.get_mut(action) else {
             continue;
         };
 
-        if normalize_keybinding_display(current) == old_display && *current != new_display {
+        let normalized_current = normalize_keybinding_display(current);
+        let matches_old_binding = normalized_current == normalize_keybinding_display(&old_binding)
+            || normalized_current == old_binding;
+        if matches_old_binding && *current != new_display {
             *current = new_display;
             changed = true;
         }
@@ -1430,6 +1396,31 @@ mod tests {
 
         assert!(!changed);
         assert_eq!(keybindings.get("toggle_sidebar"), Some(&"F12".to_string()));
+    }
+
+    #[test]
+    fn migrate_legacy_terminal_conflicting_keybindings_updates_single_backslash_layout_binding() {
+        #[cfg(target_os = "macos")]
+        let old_binding = "Cmd+\\".to_string();
+        #[cfg(not(target_os = "macos"))]
+        let old_binding = "Ctrl+\\".to_string();
+
+        let mut keybindings =
+            std::collections::HashMap::from([("toggle_layout".to_string(), old_binding)]);
+
+        let changed = migrate_legacy_terminal_conflicting_keybindings(&mut keybindings);
+
+        assert!(changed);
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            keybindings.get("toggle_layout"),
+            Some(&"Cmd+Shift+L".to_string())
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(
+            keybindings.get("toggle_layout"),
+            Some(&"Ctrl+Shift+L".to_string())
+        );
     }
 
     #[test]

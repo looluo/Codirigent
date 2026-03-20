@@ -345,11 +345,11 @@ impl WorkspaceView {
                         if this.selection.drag.as_ref().is_some_and(|d| d.active) {
                             return;
                         }
-                        let (ox, oy) = origin_for_down.get();
+                        let metrics = origin_for_down.get();
                         let mouse_x: f32 = event.position.x.into();
                         let mouse_y: f32 = event.position.y.into();
-                        let rel_x = mouse_x - ox;
-                        let rel_y = mouse_y - oy;
+                        let rel_x = mouse_x - metrics.origin_x;
+                        let rel_y = mouse_y - metrics.origin_y;
 
                         if let Some(tv) = this.terminals_mut().get_mut(&session_id) {
                             let cell_pos: Option<(usize, usize)> = tv.pixel_to_cell(rel_x, rel_y);
@@ -376,11 +376,11 @@ impl WorkspaceView {
                             return;
                         }
 
-                        let (ox, oy) = origin_for_move.get();
+                        let metrics = origin_for_move.get();
                         let mouse_x: f32 = event.position.x.into();
                         let mouse_y: f32 = event.position.y.into();
-                        let rel_x = mouse_x - ox;
-                        let rel_y = mouse_y - oy;
+                        let rel_x = mouse_x - metrics.origin_x;
+                        let rel_y = mouse_y - metrics.origin_y;
 
                         if let Some(tv) = this.terminals_mut().get_mut(&session_id) {
                             let (row, col, scroll_dir) = tv.pixel_to_cell_clamped(rel_x, rel_y);

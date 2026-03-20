@@ -465,18 +465,20 @@ impl WorkspaceView {
         forward: bool,
         cx: &mut Context<Self>,
     ) {
-        let Some(terminal_view) = self.terminals.get(&session_id) else {
-            return;
+        let (total, query, runtime, current) = {
+            let Some(terminal_view) = self.terminals.get(&session_id) else {
+                return;
+            };
+            (
+                terminal_view.search().matches.len(),
+                terminal_view.search_query().to_string(),
+                terminal_view.runtime_handle(),
+                terminal_view.search().current_match,
+            )
         };
-        let total = terminal_view.search().matches.len();
         if total == 0 {
             return;
         }
-
-        let query = terminal_view.search_query().to_string();
-        let runtime = terminal_view.runtime_handle();
-        let current = terminal_view.search().current_match;
-        let matches = terminal_view.search().matches.clone();
 
         let base = match current {
             Some(index) => index,
@@ -490,8 +492,15 @@ impl WorkspaceView {
             } else {
                 (base + total - (offset % total)) % total
             };
-            let search_match = &matches[index];
-            if runtime.match_still_matches(&query, search_match) {
+            let Some(search_match) = self
+                .terminals
+                .get(&session_id)
+                .and_then(|terminal_view| terminal_view.search().matches.get(index))
+                .cloned()
+            else {
+                continue;
+            };
+            if runtime.match_still_matches(&query, &search_match) {
                 if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
                     terminal_view.scroll_to_search_match(index);
                 }

@@ -15,6 +15,13 @@ use gpui::{div, px, Entity, FocusHandle, IntoElement, ParentElement, Styled};
 use std::cell::Cell;
 use std::rc::Rc;
 
+#[derive(Clone, Copy, Default)]
+pub(super) struct TerminalCanvasMetrics {
+    pub(super) origin_x: f32,
+    pub(super) origin_y: f32,
+    pub(super) content_height: f32,
+}
+
 impl WorkspaceView {
     pub(super) fn render_terminal_content(
         &mut self,
@@ -22,9 +29,10 @@ impl WorkspaceView {
         theme: &CodirigentTheme,
         ime_context: Option<(Entity<WorkspaceView>, FocusHandle, bool, bool)>,
         window: &mut gpui::Window,
-    ) -> (gpui::AnyElement, Rc<Cell<(f32, f32)>>) {
+    ) -> (gpui::AnyElement, Rc<Cell<TerminalCanvasMetrics>>) {
         // Shared cell for canvas origin (updated during prepaint)
-        let canvas_origin: Rc<Cell<(f32, f32)>> = Rc::new(Cell::new((0.0, 0.0)));
+        let canvas_metrics: Rc<Cell<TerminalCanvasMetrics>> =
+            Rc::new(Cell::new(TerminalCanvasMetrics::default()));
 
         // IME pre-edit text should only be shown in the focused terminal pane.
         let ime_preedit_text = if matches!(ime_context.as_ref(), Some((_, _, true, true))) {
@@ -53,7 +61,7 @@ impl WorkspaceView {
                             .child(icons::terminal()),
                     )
                     .into_any_element(),
-                canvas_origin,
+                canvas_metrics,
             );
         };
 
@@ -123,7 +131,7 @@ impl WorkspaceView {
         };
 
         // Clone Rc for capture into the canvas prepaint closure
-        let canvas_origin_for_prepaint = Rc::clone(&canvas_origin);
+        let canvas_metrics_for_prepaint = Rc::clone(&canvas_metrics);
 
         // Capture IME context for paint closure
         let ime_context_for_paint = ime_context.clone();
@@ -138,9 +146,16 @@ impl WorkspaceView {
                 let padding = super::types::TERMINAL_CONTENT_PADDING;
                 let ox = origin_x + padding;
                 let oy = origin_y + padding;
+                let content_height: f32 = bounds.size.height.into();
+                let content_height = (content_height - (padding * 2.0)).max(0.0);
 
-                // Store origin for mouse coordinate translation
-                canvas_origin_for_prepaint.set((ox, oy));
+                // Store origin and actual rendered content height for
+                // mouse coordinate translation and scrollbar geometry.
+                canvas_metrics_for_prepaint.set(TerminalCanvasMetrics {
+                    origin_x: ox,
+                    origin_y: oy,
+                    content_height,
+                });
 
                 (
                     ox,
@@ -344,6 +359,6 @@ impl WorkspaceView {
             .child(terminal_canvas)
             .into_any_element();
 
-        (element, canvas_origin)
+        (element, canvas_metrics)
     }
 }

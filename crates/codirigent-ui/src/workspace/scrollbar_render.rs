@@ -1,4 +1,5 @@
 use super::gpui::WorkspaceView;
+use super::terminal_render::TerminalCanvasMetrics;
 use super::types::TERMINAL_CONTENT_PADDING;
 use crate::theme::CodirigentTheme;
 use codirigent_core::SessionId;
@@ -15,11 +16,11 @@ impl WorkspaceView {
         &mut self,
         session_id: SessionId,
         theme: &CodirigentTheme,
-        canvas_origin: Rc<Cell<(f32, f32)>>,
+        canvas_metrics: Rc<Cell<TerminalCanvasMetrics>>,
         cx: &mut Context<Self>,
     ) -> Option<gpui::AnyElement> {
         let terminal_view = self.terminals.get(&session_id)?;
-        let track_height = terminal_view.rows() as f32 * terminal_view.cell_height();
+        let track_height = canvas_metrics.get().content_height;
         if track_height <= 0.0 {
             return None;
         }
@@ -42,8 +43,8 @@ impl WorkspaceView {
         let marker_bg: gpui::Hsla = theme.orange.into();
         let marker_fractions = terminal_view.search_marker_fractions();
 
-        let origin_for_track = Rc::clone(&canvas_origin);
-        let origin_for_thumb = Rc::clone(&canvas_origin);
+        let metrics_for_track = Rc::clone(&canvas_metrics);
+        let metrics_for_thumb = Rc::clone(&canvas_metrics);
 
         let mut track = div()
             .id(SharedString::from(format!(
@@ -73,7 +74,7 @@ impl WorkspaceView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                    let (_, origin_y) = origin_for_track.get();
+                    let origin_y = metrics_for_track.get().origin_y;
                     let pointer_y: f32 = event.position.y.into();
                     let relative_y = pointer_y - origin_y;
                     if let Some(terminal_view) = this.terminals.get_mut(&session_id) {
@@ -125,7 +126,7 @@ impl WorkspaceView {
             .on_mouse_down(
                 MouseButton::Left,
                 cx.listener(move |this, event: &MouseDownEvent, window, cx| {
-                    let (_, origin_y) = origin_for_thumb.get();
+                    let origin_y = metrics_for_thumb.get().origin_y;
                     let pointer_y: f32 = event.position.y.into();
                     let relative_y = pointer_y - origin_y;
 

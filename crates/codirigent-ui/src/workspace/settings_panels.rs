@@ -5,6 +5,7 @@
 //! running app (theme, terminal cursor, grid gap, etc.) immediately.
 
 use gpui::*;
+use std::collections::HashSet;
 use std::sync::Arc;
 
 use crate::settings::controls::{setting_row, setting_toggle, settings_section_header};
@@ -16,7 +17,7 @@ use super::settings_theme_picker::{build_theme_picker_sections, theme_picker_dis
 use super::types::DROPDOWN_TRIGGER_HEIGHT;
 
 const SETTINGS_DROPDOWN_MAX_HEIGHT: f32 = 280.0;
-const TERMINAL_COLOR_PICKER_SWATCHES: &[&str] = &[
+const TERMINAL_COLOR_PICKER_FALLBACK_SWATCHES: &[&str] = &[
     "#0f172a", "#1e293b", "#334155", "#475569", "#64748b", "#94a3b8", "#cbd5e1", "#f8fafc",
     "#7f1d1d", "#b91c1c", "#dc2626", "#f97316", "#f59e0b", "#eab308", "#65a30d", "#16a34a",
     "#059669", "#0891b2", "#0284c7", "#2563eb", "#4f46e5", "#7c3aed", "#c026d3", "#db2777",
@@ -136,33 +137,35 @@ fn terminal_style_field_description(field: TerminalStyleField) -> &'static str {
     }
 }
 
-fn terminal_style_field_theme_color(
-    theme: &crate::theme::CodirigentTheme,
-    field: TerminalStyleField,
-) -> crate::theme::Rgba {
-    match field {
-        TerminalStyleField::Background => theme.terminal_background,
-        TerminalStyleField::Foreground => theme.terminal_foreground,
-        TerminalStyleField::Cursor => theme.terminal_cursor,
-        TerminalStyleField::SelectionBackground => theme.terminal_selection_bg,
-        TerminalStyleField::SelectionForeground => theme.terminal_selection_fg,
-        TerminalStyleField::Black => theme.ansi.colors[0],
-        TerminalStyleField::Red => theme.ansi.colors[1],
-        TerminalStyleField::Green => theme.ansi.colors[2],
-        TerminalStyleField::Yellow => theme.ansi.colors[3],
-        TerminalStyleField::Blue => theme.ansi.colors[4],
-        TerminalStyleField::Magenta => theme.ansi.colors[5],
-        TerminalStyleField::Cyan => theme.ansi.colors[6],
-        TerminalStyleField::White => theme.ansi.colors[7],
-        TerminalStyleField::BrightBlack => theme.ansi.colors[8],
-        TerminalStyleField::BrightRed => theme.ansi.colors[9],
-        TerminalStyleField::BrightGreen => theme.ansi.colors[10],
-        TerminalStyleField::BrightYellow => theme.ansi.colors[11],
-        TerminalStyleField::BrightBlue => theme.ansi.colors[12],
-        TerminalStyleField::BrightMagenta => theme.ansi.colors[13],
-        TerminalStyleField::BrightCyan => theme.ansi.colors[14],
-        TerminalStyleField::BrightWhite => theme.ansi.colors[15],
+fn rgba_to_hex(color: crate::theme::Rgba) -> String {
+    if color.a == u8::MAX {
+        format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b)
+    } else {
+        format!(
+            "#{:02x}{:02x}{:02x}{:02x}",
+            color.r, color.g, color.b, color.a
+        )
     }
+}
+
+fn terminal_color_picker_swatches(theme: &crate::theme::CodirigentTheme) -> Vec<String> {
+    let mut swatches = Vec::new();
+    let mut seen = HashSet::new();
+    let mut push = |value: String| {
+        if seen.insert(value.clone()) {
+            swatches.push(value);
+        }
+    };
+
+    for field in TerminalStyleField::ALL {
+        push(rgba_to_hex(field.theme_color(theme)));
+    }
+
+    for value in TERMINAL_COLOR_PICKER_FALLBACK_SWATCHES {
+        push((*value).to_string());
+    }
+
+    swatches
 }
 
 fn terminal_style_picker_dropdown_id(field: TerminalStyleField) -> String {
@@ -1789,9 +1792,10 @@ impl super::gpui::WorkspaceView {
         let has_error = !value.trim().is_empty()
             && super::impl_settings::parse_terminal_override_rgba(&value).is_none();
         let preview = super::impl_settings::parse_terminal_override_rgba(&value)
-            .unwrap_or_else(|| terminal_style_field_theme_color(theme, field));
+            .unwrap_or_else(|| field.theme_color(theme));
         let preview_hsla: Hsla = preview.into();
         let picker_id = terminal_style_picker_dropdown_id(field);
+        let picker_swatches = terminal_color_picker_swatches(theme);
         let display = if value.trim().is_empty() {
             "#RRGGBB".to_string()
         } else {
@@ -1909,8 +1913,8 @@ impl super::gpui::WorkspaceView {
 
         if is_picker_open {
             let mut swatch_grid = div().flex().flex_wrap().gap_1();
-            for swatch in TERMINAL_COLOR_PICKER_SWATCHES {
-                let swatch_value = (*swatch).to_string();
+            for swatch in picker_swatches {
+                let swatch_value = swatch.clone();
                 let swatch_color =
                     super::impl_settings::parse_terminal_override_rgba(&swatch_value)
                         .unwrap_or(preview);
@@ -1920,7 +1924,7 @@ impl super::gpui::WorkspaceView {
                         .id(SharedString::from(format!(
                             "term-style-{}-swatch-{}",
                             field.id(),
-                            swatch.replace('#', "")
+                            swatch_value.replace('#', "")
                         )))
                         .w(px(18.0))
                         .h(px(18.0))

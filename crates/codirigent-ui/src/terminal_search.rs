@@ -26,6 +26,8 @@ pub(crate) struct SearchSnapshot {
 #[derive(Debug, Clone, Default)]
 struct SearchBlock {
     cells: Vec<SearchCell>,
+    lowered: Vec<char>,
+    lowered_to_cell: Vec<usize>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -57,6 +59,8 @@ pub(crate) fn snapshot<T>(term: &Term<T>) -> SearchSnapshot {
 
     let mut blocks = Vec::new();
     let mut cells = Vec::new();
+    let mut lowered = Vec::new();
+    let mut lowered_to_cell = Vec::new();
     let last_column = Column(cols - 1);
     let top = term.topmost_line().0;
     let bottom = term.bottommost_line().0;
@@ -71,13 +75,19 @@ pub(crate) fn snapshot<T>(term: &Term<T>) -> SearchSnapshot {
 
             let width = cell_width(cell.flags);
             let (end_grid_line, end_col) = exclusive_end_from_cell(grid_line, col, width, cols);
-            cells.push(SearchCell {
+            let cell_index = cells.len();
+            let search_cell = SearchCell {
                 ch: cell.c,
                 grid_line,
                 start_col: col,
                 end_grid_line,
                 end_col,
-            });
+            };
+            for ch in search_cell.ch.to_lowercase() {
+                lowered.push(ch);
+                lowered_to_cell.push(cell_index);
+            }
+            cells.push(search_cell);
         }
 
         if !term.grid()[line][last_column]
@@ -87,12 +97,18 @@ pub(crate) fn snapshot<T>(term: &Term<T>) -> SearchSnapshot {
         {
             blocks.push(SearchBlock {
                 cells: std::mem::take(&mut cells),
+                lowered: std::mem::take(&mut lowered),
+                lowered_to_cell: std::mem::take(&mut lowered_to_cell),
             });
         }
     }
 
     if !cells.is_empty() {
-        blocks.push(SearchBlock { cells });
+        blocks.push(SearchBlock {
+            cells,
+            lowered,
+            lowered_to_cell,
+        });
     }
 
     SearchSnapshot { blocks }
@@ -151,31 +167,14 @@ fn extract_match_text<T>(term: &Term<T>, search_match: &SearchMatch) -> String {
 }
 
 fn search_block(block: &SearchBlock, query_chars: &[char]) -> Vec<SearchMatch> {
-    if block.cells.len() < query_chars.len() {
-        return Vec::new();
-    }
-
-    let mut lowered = Vec::new();
-    let mut lowered_to_cell = Vec::new();
-    for (index, cell) in block.cells.iter().enumerate() {
-        for ch in cell.ch.to_lowercase() {
-            lowered.push(ch);
-            lowered_to_cell.push(index);
-        }
-    }
-
-    if lowered.len() < query_chars.len() {
+    if block.lowered.len() < query_chars.len() {
         return Vec::new();
     }
 
     let mut matches = Vec::new();
-    for start in 0..=lowered.len() - query_chars.len() {
-        if lowered[start..start + query_chars.len()] != *query_chars {
-            continue;
-        }
-
-        let start_cell = block.cells[lowered_to_cell[start]];
-        let end_cell = block.cells[lowered_to_cell[start + query_chars.len() - 1]];
+    for start in find_match_starts(&block.lowered, query_chars) {
+        let start_cell = block.cells[block.lowered_to_cell[start]];
+        let end_cell = block.cells[block.lowered_to_cell[start + query_chars.len() - 1]];
         matches.push(SearchMatch {
             grid_line: start_cell.grid_line,
             start_col: start_cell.start_col,
@@ -187,6 +186,48 @@ fn search_block(block: &SearchBlock, query_chars: &[char]) -> Vec<SearchMatch> {
     matches
 }
 
+fn find_match_starts(haystack: &[char], needle: &[char]) -> Vec<usize> {
+    if needle.is_empty() || haystack.len() < needle.len() {
+        return Vec::new();
+    }
+
+    let mut lps = vec![0usize; needle.len()];
+    let mut prefix_len = 0usize;
+    let mut index = 1usize;
+    while index < needle.len() {
+        if needle[index] == needle[prefix_len] {
+            prefix_len += 1;
+            lps[index] = prefix_len;
+            index += 1;
+        } else if prefix_len != 0 {
+            prefix_len = lps[prefix_len - 1];
+        } else {
+            lps[index] = 0;
+            index += 1;
+        }
+    }
+
+    let mut starts = Vec::new();
+    let mut haystack_index = 0usize;
+    let mut needle_index = 0usize;
+    while haystack_index < haystack.len() {
+        if haystack[haystack_index] == needle[needle_index] {
+            haystack_index += 1;
+            needle_index += 1;
+            if needle_index == needle.len() {
+                starts.push(haystack_index - needle_index);
+                needle_index = lps[needle_index - 1];
+            }
+        } else if needle_index != 0 {
+            needle_index = lps[needle_index - 1];
+        } else {
+            haystack_index += 1;
+        }
+    }
+
+    starts
+}
+
 fn exclusive_end_from_cell(
     grid_line: i32,
     start_col: usize,
@@ -195,10 +236,9 @@ fn exclusive_end_from_cell(
 ) -> (i32, usize) {
     let mut line = grid_line;
     let mut col = start_col + width;
-
-    while col > cols {
-        line += 1;
-        col -= cols;
+    if col > cols {
+        line += (col / cols) as i32;
+        col %= cols;
     }
 
     if col == cols {
@@ -293,5 +333,13 @@ mod tests {
         assert_eq!(matches[0].start_col, 2);
         assert_eq!(matches[0].end_grid_line, 1);
         assert_eq!(matches[0].end_col, 0);
+    }
+
+    #[test]
+    fn finds_overlapping_match_starts() {
+        let haystack: Vec<char> = "ababa".chars().collect();
+        let needle: Vec<char> = "aba".chars().collect();
+
+        assert_eq!(find_match_starts(&haystack, &needle), vec![0, 2]);
     }
 }

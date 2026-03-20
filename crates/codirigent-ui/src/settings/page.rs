@@ -4,6 +4,8 @@
 //! user and project settings, tracks the active category, and manages
 //! dirty detection and reset.
 
+use crate::theme::{CodirigentTheme, Rgba};
+use crate::theme_config::Theme;
 use codirigent_core::config::{ProjectConfig, TerminalThemeOverrides, UserSettings};
 
 /// Editable terminal style fields exposed in the settings UI.
@@ -63,6 +65,31 @@ impl TerminalStyleField {
         Self::BrightWhite,
     ];
 
+    /// All terminal style fields in stable display order.
+    pub const ALL: [Self; 21] = [
+        Self::Background,
+        Self::Foreground,
+        Self::Cursor,
+        Self::SelectionBackground,
+        Self::SelectionForeground,
+        Self::Black,
+        Self::Red,
+        Self::Green,
+        Self::Yellow,
+        Self::Blue,
+        Self::Magenta,
+        Self::Cyan,
+        Self::White,
+        Self::BrightBlack,
+        Self::BrightRed,
+        Self::BrightGreen,
+        Self::BrightYellow,
+        Self::BrightBlue,
+        Self::BrightMagenta,
+        Self::BrightCyan,
+        Self::BrightWhite,
+    ];
+
     /// Stable field identifier for focus state and DOM IDs.
     pub fn id(self) -> &'static str {
         match self {
@@ -90,7 +117,7 @@ impl TerminalStyleField {
         }
     }
 
-    fn get<'a>(self, overrides: &'a TerminalThemeOverrides) -> &'a str {
+    pub(crate) fn get<'a>(self, overrides: &'a TerminalThemeOverrides) -> &'a str {
         match self {
             Self::Background => &overrides.background,
             Self::Foreground => &overrides.foreground,
@@ -116,7 +143,7 @@ impl TerminalStyleField {
         }
     }
 
-    fn get_mut<'a>(self, overrides: &'a mut TerminalThemeOverrides) -> &'a mut String {
+    pub(crate) fn get_mut<'a>(self, overrides: &'a mut TerminalThemeOverrides) -> &'a mut String {
         match self {
             Self::Background => &mut overrides.background,
             Self::Foreground => &mut overrides.foreground,
@@ -139,6 +166,60 @@ impl TerminalStyleField {
             Self::BrightMagenta => &mut overrides.palette.bright_magenta,
             Self::BrightCyan => &mut overrides.palette.bright_cyan,
             Self::BrightWhite => &mut overrides.palette.bright_white,
+        }
+    }
+
+    /// Read the effective runtime theme color for this field.
+    pub fn theme_color(self, theme: &CodirigentTheme) -> Rgba {
+        match self {
+            Self::Background => theme.terminal_background,
+            Self::Foreground => theme.terminal_foreground,
+            Self::Cursor => theme.terminal_cursor,
+            Self::SelectionBackground => theme.terminal_selection_bg,
+            Self::SelectionForeground => theme.terminal_selection_fg,
+            Self::Black => theme.ansi.colors[0],
+            Self::Red => theme.ansi.colors[1],
+            Self::Green => theme.ansi.colors[2],
+            Self::Yellow => theme.ansi.colors[3],
+            Self::Blue => theme.ansi.colors[4],
+            Self::Magenta => theme.ansi.colors[5],
+            Self::Cyan => theme.ansi.colors[6],
+            Self::White => theme.ansi.colors[7],
+            Self::BrightBlack => theme.ansi.colors[8],
+            Self::BrightRed => theme.ansi.colors[9],
+            Self::BrightGreen => theme.ansi.colors[10],
+            Self::BrightYellow => theme.ansi.colors[11],
+            Self::BrightBlue => theme.ansi.colors[12],
+            Self::BrightMagenta => theme.ansi.colors[13],
+            Self::BrightCyan => theme.ansi.colors[14],
+            Self::BrightWhite => theme.ansi.colors[15],
+        }
+    }
+
+    /// Apply this field to the serializable theme config.
+    pub fn set_theme_config_value(self, theme: &mut Theme, value: String) {
+        match self {
+            Self::Background => theme.colors.terminal.background = value,
+            Self::Foreground => theme.colors.terminal.foreground = value,
+            Self::Cursor => theme.colors.terminal.cursor = value,
+            Self::SelectionBackground => theme.colors.terminal.selection_background = value,
+            Self::SelectionForeground => theme.colors.terminal.selection_foreground = value,
+            Self::Black => theme.colors.terminal.palette.black = value,
+            Self::Red => theme.colors.terminal.palette.red = value,
+            Self::Green => theme.colors.terminal.palette.green = value,
+            Self::Yellow => theme.colors.terminal.palette.yellow = value,
+            Self::Blue => theme.colors.terminal.palette.blue = value,
+            Self::Magenta => theme.colors.terminal.palette.magenta = value,
+            Self::Cyan => theme.colors.terminal.palette.cyan = value,
+            Self::White => theme.colors.terminal.palette.white = value,
+            Self::BrightBlack => theme.colors.terminal.palette.bright_black = value,
+            Self::BrightRed => theme.colors.terminal.palette.bright_red = value,
+            Self::BrightGreen => theme.colors.terminal.palette.bright_green = value,
+            Self::BrightYellow => theme.colors.terminal.palette.bright_yellow = value,
+            Self::BrightBlue => theme.colors.terminal.palette.bright_blue = value,
+            Self::BrightMagenta => theme.colors.terminal.palette.bright_magenta = value,
+            Self::BrightCyan => theme.colors.terminal.palette.bright_cyan = value,
+            Self::BrightWhite => theme.colors.terminal.palette.bright_white = value,
         }
     }
 }

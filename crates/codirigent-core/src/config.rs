@@ -212,7 +212,7 @@ impl Default for GeneralSettings {
 // ============================================================================
 
 /// Optional ANSI palette overrides layered on top of the selected theme.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct TerminalPaletteOverrides {
     /// ANSI black override.
     #[serde(default)]
@@ -264,31 +264,8 @@ pub struct TerminalPaletteOverrides {
     pub bright_white: String,
 }
 
-impl Default for TerminalPaletteOverrides {
-    fn default() -> Self {
-        Self {
-            black: String::new(),
-            red: String::new(),
-            green: String::new(),
-            yellow: String::new(),
-            blue: String::new(),
-            magenta: String::new(),
-            cyan: String::new(),
-            white: String::new(),
-            bright_black: String::new(),
-            bright_red: String::new(),
-            bright_green: String::new(),
-            bright_yellow: String::new(),
-            bright_blue: String::new(),
-            bright_magenta: String::new(),
-            bright_cyan: String::new(),
-            bright_white: String::new(),
-        }
-    }
-}
-
 /// Per-user terminal theme overrides layered on top of the selected theme.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
 pub struct TerminalThemeOverrides {
     /// Terminal background color override.
     #[serde(default)]
@@ -308,19 +285,6 @@ pub struct TerminalThemeOverrides {
     /// ANSI palette overrides.
     #[serde(default)]
     pub palette: TerminalPaletteOverrides,
-}
-
-impl Default for TerminalThemeOverrides {
-    fn default() -> Self {
-        Self {
-            background: String::new(),
-            foreground: String::new(),
-            cursor: String::new(),
-            selection_background: String::new(),
-            selection_foreground: String::new(),
-            palette: TerminalPaletteOverrides::default(),
-        }
-    }
 }
 
 /// Terminal rendering preferences.

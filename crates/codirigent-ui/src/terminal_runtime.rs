@@ -171,12 +171,15 @@ impl TerminalRuntime {
     fn scroll_display(&mut self, scroll: Scroll) -> TerminalRenderSnapshot {
         self.terminal.term_mut().scroll_display(scroll);
         self.generation += 1;
+        // Scrolling changes the viewport, not the underlying terminal content,
+        // so the cached search snapshot remains valid.
         self.snapshot_full()
     }
 
     fn scroll_to_offset(&mut self, target: usize) -> TerminalRenderSnapshot {
         let current = self.terminal.term().grid().display_offset();
-        let delta = target as i32 - current as i32;
+        let delta =
+            ((target as i64) - (current as i64)).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
         self.scroll_display(Scroll::Delta(delta))
     }
 
@@ -494,5 +497,16 @@ mod tests {
 
         let third = runtime.search("delta");
         assert_eq!(third.len(), 1);
+    }
+
+    #[test]
+    fn runtime_scroll_to_offset_clamps_large_deltas() {
+        let runtime = create_runtime();
+
+        let snapshot = runtime
+            .scroll_to_offset(usize::MAX)
+            .expect("runtime scroll snapshot");
+
+        assert_eq!(snapshot.display_offset, snapshot.history_size);
     }
 }
