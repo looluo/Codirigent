@@ -129,7 +129,13 @@ mod tests {
                 .iter()
                 .map(|option| option.label.as_str())
                 .collect::<Vec<_>>(),
-            vec!["Aurora", "Light"]
+            vec![
+                "Aurora",
+                "Catppuccin Latte",
+                "GitHub Light",
+                "Light",
+                "Solarized Light",
+            ]
         );
     }
 

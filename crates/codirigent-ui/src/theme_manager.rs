@@ -29,6 +29,9 @@ pub const DEFAULT_THEME_ID: &str = "dark";
 const BUILTIN_THEME_IDS: &[&str] = &[
     "dark",
     "light",
+    "catppuccin-latte",
+    "github-light",
+    "solarized-light",
     "catppuccin-mocha",
     "tokyo-night",
     "one-dark",
@@ -418,6 +421,24 @@ fn builtin_themes() -> Vec<Theme> {
         Theme::dark(),
         Theme::light(),
         Theme::from_runtime(
+            "catppuccin-latte",
+            "Catppuccin Latte",
+            false,
+            &CodirigentTheme::catppuccin_latte(),
+        ),
+        Theme::from_runtime(
+            "github-light",
+            "GitHub Light",
+            false,
+            &CodirigentTheme::github_light(),
+        ),
+        Theme::from_runtime(
+            "solarized-light",
+            "Solarized Light",
+            false,
+            &CodirigentTheme::solarized_light(),
+        ),
+        Theme::from_runtime(
             "catppuccin-mocha",
             "Catppuccin Mocha",
             true,
@@ -462,9 +483,12 @@ mod tests {
     #[test]
     fn test_with_defaults() {
         let manager = ThemeManager::with_defaults();
-        assert_eq!(manager.len(), 7);
+        assert_eq!(manager.len(), 10);
         assert!(manager.get("dark").is_some());
         assert!(manager.get("light").is_some());
+        assert!(manager.get("catppuccin-latte").is_some());
+        assert!(manager.get("github-light").is_some());
+        assert!(manager.get("solarized-light").is_some());
         assert!(manager.get("catppuccin-mocha").is_some());
         assert!(manager.get("tokyo-night").is_some());
     }
@@ -472,7 +496,7 @@ mod tests {
     #[test]
     fn test_default_trait() {
         let manager = ThemeManager::default();
-        assert_eq!(manager.len(), 7);
+        assert_eq!(manager.len(), 10);
     }
 
     #[test]
@@ -529,16 +553,19 @@ mod tests {
     fn test_list() {
         let manager = ThemeManager::with_defaults();
         let themes = manager.list();
-        assert_eq!(themes.len(), 7);
+        assert_eq!(themes.len(), 10);
     }
 
     #[test]
     fn test_list_ids() {
         let manager = ThemeManager::with_defaults();
         let ids = manager.list_ids();
-        assert_eq!(ids.len(), 7);
+        assert_eq!(ids.len(), 10);
         assert!(ids.contains(&"dark"));
         assert!(ids.contains(&"light"));
+        assert!(ids.contains(&"catppuccin-latte"));
+        assert!(ids.contains(&"github-light"));
+        assert!(ids.contains(&"solarized-light"));
         assert!(ids.contains(&"catppuccin-mocha"));
         assert!(ids.contains(&"tokyo-night"));
     }
@@ -547,7 +574,7 @@ mod tests {
     fn test_len_is_empty() {
         let manager = ThemeManager::with_defaults();
         assert!(!manager.is_empty());
-        assert_eq!(manager.len(), 7);
+        assert_eq!(manager.len(), 10);
     }
 
     #[test]
@@ -557,7 +584,7 @@ mod tests {
         custom.id = "custom".to_string();
         custom.name = "Custom Theme".to_string();
         manager.add_theme(custom);
-        assert_eq!(manager.len(), 8);
+        assert_eq!(manager.len(), 11);
         assert!(manager.get("custom").is_some());
     }
 
@@ -637,8 +664,8 @@ mod tests {
     fn test_light_themes() {
         let manager = ThemeManager::with_defaults();
         let light_themes = manager.light_themes();
-        assert_eq!(light_themes.len(), 1);
-        assert!(!light_themes[0].is_dark);
+        assert_eq!(light_themes.len(), 4);
+        assert!(light_themes.iter().all(|theme| !theme.is_dark));
     }
 
     #[test]
@@ -651,7 +678,7 @@ mod tests {
 
         let loaded = manager.load_theme_json(&json).unwrap();
         assert_eq!(loaded.id, "json_test");
-        assert_eq!(manager.len(), 8);
+        assert_eq!(manager.len(), 11);
     }
 
     #[test]
@@ -710,7 +737,7 @@ mod tests {
         let mut manager = ThemeManager::with_defaults();
         let loaded = manager.load_custom_themes(dir.path()).unwrap();
         assert_eq!(loaded, 0);
-        assert_eq!(manager.len(), 7); // Only built-in themes
+        assert_eq!(manager.len(), 10); // Only built-in themes
     }
 
     #[test]
@@ -727,7 +754,7 @@ mod tests {
 
         let manager = ThemeManager::with_user_themes(dir.path());
 
-        assert_eq!(manager.len(), 8);
+        assert_eq!(manager.len(), 11);
         assert!(manager.get("aurora").is_some());
     }
 
