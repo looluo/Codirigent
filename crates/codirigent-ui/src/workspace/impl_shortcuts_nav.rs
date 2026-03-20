@@ -39,6 +39,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            codirigent_core::config::TerminalThemeOverrides::default(),
         )
     }
 

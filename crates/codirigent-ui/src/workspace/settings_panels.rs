@@ -16,6 +16,11 @@ use super::settings_theme_picker::{build_theme_picker_sections, theme_picker_dis
 use super::types::DROPDOWN_TRIGGER_HEIGHT;
 
 const SETTINGS_DROPDOWN_MAX_HEIGHT: f32 = 280.0;
+const TERMINAL_COLOR_PICKER_SWATCHES: &[&str] = &[
+    "#0f172a", "#1e293b", "#334155", "#475569", "#64748b", "#94a3b8", "#cbd5e1", "#f8fafc",
+    "#7f1d1d", "#b91c1c", "#dc2626", "#f97316", "#f59e0b", "#eab308", "#65a30d", "#16a34a",
+    "#059669", "#0891b2", "#0284c7", "#2563eb", "#4f46e5", "#7c3aed", "#c026d3", "#db2777",
+];
 
 #[derive(Clone)]
 enum DropdownEntry {
@@ -158,6 +163,10 @@ fn terminal_style_field_theme_color(
         TerminalStyleField::BrightCyan => theme.ansi.colors[14],
         TerminalStyleField::BrightWhite => theme.ansi.colors[15],
     }
+}
+
+fn terminal_style_picker_dropdown_id(field: TerminalStyleField) -> String {
+    format!("term-style-picker-{}", field.id())
 }
 
 impl super::gpui::WorkspaceView {
@@ -997,11 +1006,33 @@ impl super::gpui::WorkspaceView {
         let cursor_style = page.user_settings.terminal.cursor_style.clone();
         let line_height = page.user_settings.terminal.line_height;
         let font_options: Vec<&str> = page.detected_fonts.iter().map(|s| s.as_str()).collect();
+        let theme_name = theme_picker_display_label(
+            &self.settings.theme_manager,
+            &page.user_settings.appearance.theme,
+        );
         let theme = self.workspace.theme();
         let mut container = div()
             .flex()
             .flex_col()
             .gap_1()
+            .child(settings_section_header("Theme Editor", theme, true))
+            .child(
+                div()
+                    .px_2()
+                    .pb_2()
+                    .text_sm()
+                    .text_color(theme.muted)
+                    .child(format!(
+                        "Editing terminal colors updates a custom theme derived from {}.",
+                        theme_name
+                    )),
+            )
+            .child(setting_row(
+                "Preview",
+                "Live mock terminal preview using the current theme and terminal color edits.",
+                theme,
+                self.render_terminal_theme_preview(),
+            ))
             .child(settings_section_header("Font", theme, true))
             .child(setting_row(
                 "Font family",
@@ -1148,6 +1179,112 @@ impl super::gpui::WorkspaceView {
         }
 
         container.into_any_element()
+    }
+
+    fn render_terminal_theme_preview(&self) -> impl IntoElement {
+        let theme = self.workspace.theme();
+        let fg: Hsla = theme.terminal_foreground.into();
+        let bg: Hsla = theme.terminal_background.into();
+        let header_bg: Hsla = theme.header_background.into();
+        let selection_bg: Hsla = theme.terminal_selection_bg.into();
+        let selection_fg: Hsla = theme.terminal_selection_fg.into();
+        let cursor: Hsla = theme.terminal_cursor.into();
+        let border: Hsla = theme.border.into();
+        let muted: Hsla = theme.muted.into();
+        let ansi = theme.ansi.colors;
+
+        let ansi_hsla = |index: usize| -> Hsla { ansi[index].into() };
+
+        div()
+            .min_w(px(320.0))
+            .bg(bg)
+            .border_1()
+            .border_color(border)
+            .rounded_md()
+            .overflow_hidden()
+            .child(
+                div()
+                    .px_3()
+                    .py_2()
+                    .bg(header_bg)
+                    .text_xs()
+                    .text_color(muted)
+                    .child("codirigent preview terminal"),
+            )
+            .child(
+                div()
+                    .px_3()
+                    .py_3()
+                    .flex()
+                    .flex_col()
+                    .gap_1()
+                    .font_family(theme.terminal_font_family.clone())
+                    .text_size(px((theme.terminal_font_size - 1.0).max(11.0)))
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap_0()
+                            .child("$ ")
+                            .child(div().text_color(ansi_hsla(10)).child("cargo test"))
+                            .child(" ")
+                            .child(div().text_color(cursor).child("▉")),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap_0()
+                            .text_color(ansi_hsla(12))
+                            .child("Compiling ")
+                            .child(div().text_color(fg).child("codirigent-ui"))
+                            .child(" v0.1.0"),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap_0()
+                            .child(div().text_color(ansi_hsla(9)).child("error"))
+                            .child(div().text_color(fg).child(": preview mismatch on line 42")),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap_0()
+                            .child(div().text_color(ansi_hsla(11)).child("warning"))
+                            .child(div().text_color(fg).child(": using fallback palette")),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap_1()
+                            .text_color(fg)
+                            .child("Selected ")
+                            .child(
+                                div()
+                                    .bg(selection_bg)
+                                    .text_color(selection_fg)
+                                    .px_1()
+                                    .child("terminal text"),
+                            ),
+                    )
+                    .child(
+                        div()
+                            .flex()
+                            .flex_row()
+                            .gap_1()
+                            .children((0..16).map(|index| {
+                                div()
+                                    .w(px(10.0))
+                                    .h(px(10.0))
+                                    .rounded_sm()
+                                    .bg(ansi_hsla(index))
+                            })),
+                    ),
+            )
     }
 
     // ── Keyboard Shortcuts ───────────────────────────────────────────
@@ -1633,53 +1770,69 @@ impl super::gpui::WorkspaceView {
         let border: Hsla = theme.border.into();
         let accent: Hsla = theme.primary.into();
         let error: Hsla = crate::sidebar::Color::from_hex("#ef4444").into();
-
-        let (value, is_focused) = self
+        let (value, base_value, is_focused, is_picker_open, click_pos) = self
             .settings
             .page
             .as_ref()
             .map(|page| {
+                let picker_id = terminal_style_picker_dropdown_id(field);
                 (
                     page.terminal_style_draft_value(field).to_string(),
+                    page.terminal_style_base_value(field).to_string(),
                     page.focused_terminal_style_field == Some(field),
+                    page.open_dropdown.as_deref() == Some(picker_id.as_str()),
+                    page.dropdown_click_pos,
                 )
             })
-            .unwrap_or_default();
+            .unwrap_or_else(|| (String::new(), String::new(), false, false, (0.0, 0.0)));
 
         let has_error = !value.trim().is_empty()
             && super::impl_settings::parse_terminal_override_rgba(&value).is_none();
         let preview = super::impl_settings::parse_terminal_override_rgba(&value)
             .unwrap_or_else(|| terminal_style_field_theme_color(theme, field));
         let preview_hsla: Hsla = preview.into();
-
-        let mut display = if value.trim().is_empty() {
-            "Theme default".to_string()
+        let picker_id = terminal_style_picker_dropdown_id(field);
+        let display = if value.trim().is_empty() {
+            "#RRGGBB".to_string()
         } else {
             value.clone()
         };
-        if is_focused {
-            display.push_str(" |");
-        }
 
-        let reset_color = if value.trim().is_empty() {
-            muted.opacity(0.7)
-        } else {
-            accent
-        };
-
-        div()
+        let mut container = div()
             .flex()
             .flex_row()
             .items_center()
             .gap_2()
             .child(
                 div()
+                    .id(SharedString::from(format!(
+                        "term-style-{}-swatch",
+                        field.id()
+                    )))
                     .w(px(14.0))
                     .h(px(14.0))
                     .rounded_sm()
                     .bg(preview_hsla)
                     .border_1()
-                    .border_color(border),
+                    .border_color(if is_picker_open { accent } else { border })
+                    .cursor_pointer()
+                    .on_mouse_down(
+                        MouseButton::Left,
+                        cx.listener({
+                            let picker_id = picker_id.clone();
+                            move |this, event: &MouseDownEvent, window, cx| {
+                                this.set_terminal_style_field_focus(field);
+                                if let Some(page) = this.settings.page.as_mut() {
+                                    page.open_dropdown = Some(picker_id.clone());
+                                    page.dropdown_click_pos =
+                                        (event.position.x / px(1.0), event.position.y / px(1.0));
+                                }
+                                window.focus(&this.focus_handle(cx));
+                                cx.stop_propagation();
+                                cx.notify();
+                            }
+                        }),
+                    ),
             )
             .child(
                 div()
@@ -1702,16 +1855,28 @@ impl super::gpui::WorkspaceView {
                     .cursor_pointer()
                     .on_mouse_down(
                         MouseButton::Left,
-                        cx.listener(move |this, _, window, cx| {
-                            this.set_terminal_style_field_focus(field);
-                            window.focus(&this.focus_handle(cx));
-                            cx.stop_propagation();
-                            cx.notify();
+                        cx.listener({
+                            let picker_id = picker_id.clone();
+                            move |this, event: &MouseDownEvent, window, cx| {
+                                this.set_terminal_style_field_focus(field);
+                                if let Some(page) = this.settings.page.as_mut() {
+                                    page.open_dropdown = Some(picker_id.clone());
+                                    page.dropdown_click_pos =
+                                        (event.position.x / px(1.0), event.position.y / px(1.0));
+                                }
+                                window.focus(&this.focus_handle(cx));
+                                cx.stop_propagation();
+                                cx.notify();
+                            }
                         }),
                     )
                     .child(
                         div()
-                            .text_color(if value.trim().is_empty() { muted } else { fg })
+                            .text_color(if value.trim().is_empty() || has_error {
+                                muted
+                            } else {
+                                fg
+                            })
                             .child(display),
                     ),
             )
@@ -1721,7 +1886,7 @@ impl super::gpui::WorkspaceView {
                         "term-style-{}-reset",
                         field.id()
                     )))
-                    .text_color(reset_color)
+                    .text_color(accent)
                     .px_2()
                     .py_1()
                     .rounded_md()
@@ -1732,12 +1897,145 @@ impl super::gpui::WorkspaceView {
                         cx.listener(move |this, _, window, cx| {
                             this.set_terminal_style_field_focus(field);
                             this.reset_terminal_style_field(field, cx);
+                            if let Some(page) = this.settings.page.as_mut() {
+                                page.open_dropdown = None;
+                            }
                             window.focus(&this.focus_handle(cx));
                             cx.stop_propagation();
                         }),
                     )
                     .child("Use theme"),
+            );
+
+        if is_picker_open {
+            let mut swatch_grid = div().flex().flex_wrap().gap_1();
+            for swatch in TERMINAL_COLOR_PICKER_SWATCHES {
+                let swatch_value = (*swatch).to_string();
+                let swatch_color =
+                    super::impl_settings::parse_terminal_override_rgba(&swatch_value)
+                        .unwrap_or(preview);
+                let swatch_hsla: Hsla = swatch_color.into();
+                swatch_grid = swatch_grid.child(
+                    div()
+                        .id(SharedString::from(format!(
+                            "term-style-{}-swatch-{}",
+                            field.id(),
+                            swatch.replace('#', "")
+                        )))
+                        .w(px(18.0))
+                        .h(px(18.0))
+                        .rounded_sm()
+                        .bg(swatch_hsla)
+                        .border_1()
+                        .border_color(border)
+                        .cursor_pointer()
+                        .hover(|style| style.border_color(accent))
+                        .on_mouse_down(
+                            MouseButton::Left,
+                            cx.listener(move |this, _, window, cx| {
+                                this.set_terminal_style_field_focus(field);
+                                this.update_terminal_style_field_value(
+                                    field,
+                                    swatch_value.clone(),
+                                    cx,
+                                );
+                                if let Some(page) = this.settings.page.as_mut() {
+                                    page.open_dropdown = None;
+                                }
+                                window.focus(&this.focus_handle(cx));
+                                cx.stop_propagation();
+                            }),
+                        ),
+                );
+            }
+
+            let picker_panel = div()
+                .min_w(px(240.0))
+                .bg(panel_bg)
+                .border_1()
+                .border_color(border)
+                .rounded_md()
+                .shadow_md()
+                .p_3()
+                .flex()
+                .flex_col()
+                .gap_2()
+                .child(
+                    div()
+                        .text_sm()
+                        .font_weight(FontWeight::SEMIBOLD)
+                        .text_color(fg)
+                        .child(terminal_style_field_label(field)),
+                )
+                .child(
+                    div()
+                        .text_xs()
+                        .text_color(muted)
+                        .child("Pick a swatch or type a hex value in the field."),
+                )
+                .child(
+                    div()
+                        .flex()
+                        .flex_row()
+                        .items_center()
+                        .gap_2()
+                        .child(
+                            div()
+                                .w(px(28.0))
+                                .h(px(28.0))
+                                .rounded_md()
+                                .bg(preview_hsla)
+                                .border_1()
+                                .border_color(border),
+                        )
+                        .child(
+                            div()
+                                .flex()
+                                .flex_col()
+                                .child(div().text_color(fg).child(value.clone()))
+                                .child(
+                                    div()
+                                        .text_xs()
+                                        .text_color(muted)
+                                        .child(format!("Theme value: {}", base_value)),
+                                ),
+                        ),
+                )
+                .child(swatch_grid);
+
+            let backdrop = div()
+                .id(SharedString::from(format!("{}-backdrop", picker_id)))
+                .occlude()
+                .absolute()
+                .inset_0()
+                .on_mouse_down(
+                    MouseButton::Left,
+                    cx.listener(move |this, _, _, cx| {
+                        if let Some(page) = this.settings.page.as_mut() {
+                            page.open_dropdown = None;
+                        }
+                        cx.notify();
+                    }),
+                );
+
+            let overlay = deferred(
+                anchored()
+                    .anchor(Corner::TopLeft)
+                    .position(point(
+                        px(click_pos.0),
+                        px(click_pos.1 + DROPDOWN_TRIGGER_HEIGHT),
+                    ))
+                    .snap_to_window_with_margin(px(8.0))
+                    .child(div().occlude().child(picker_panel)),
             )
+            .with_priority(1);
+
+            container = container
+                .child(deferred(backdrop).with_priority(0))
+                .child(overlay);
+        }
+
+        container
     }
 
     /// Build an interactive number stepper with - and + buttons.

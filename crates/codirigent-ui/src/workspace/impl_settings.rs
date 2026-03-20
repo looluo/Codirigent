@@ -5,10 +5,12 @@ use super::types::{ShellPickerOption, ShellPickerSection, SHELL_PICKER_AUTO_DETE
 use crate::app::OpenSettings;
 use crate::settings::{SettingsPage, TerminalStyleField};
 use crate::theme::{CodirigentTheme, Rgba};
+use crate::theme_config::Theme;
 use crate::theme_manager::ThemeManager;
 use codirigent_core::config_service::ConfigService;
 use gpui::{Context, Window};
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 use tracing::warn;
@@ -26,6 +28,72 @@ const HEX_SHORT_RGBA_LEN: usize = 4;
 const HEX_LONG_RGB_LEN: usize = 6;
 const HEX_LONG_RGBA_LEN: usize = 8;
 const OPAQUE_ALPHA: u8 = u8::MAX;
+
+fn rgba_to_hex(color: Rgba) -> String {
+    if color.a == u8::MAX {
+        format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b)
+    } else {
+        format!(
+            "#{:02x}{:02x}{:02x}{:02x}",
+            color.r, color.g, color.b, color.a
+        )
+    }
+}
+
+fn terminal_style_values_from_theme(
+    theme: &crate::theme::CodirigentTheme,
+) -> codirigent_core::config::TerminalThemeOverrides {
+    let mut values = codirigent_core::config::TerminalThemeOverrides::default();
+    values.background = rgba_to_hex(theme.terminal_background);
+    values.foreground = rgba_to_hex(theme.terminal_foreground);
+    values.cursor = rgba_to_hex(theme.terminal_cursor);
+    values.selection_background = rgba_to_hex(theme.terminal_selection_bg);
+    values.selection_foreground = rgba_to_hex(theme.terminal_selection_fg);
+    values.palette.black = rgba_to_hex(theme.ansi.colors[0]);
+    values.palette.red = rgba_to_hex(theme.ansi.colors[1]);
+    values.palette.green = rgba_to_hex(theme.ansi.colors[2]);
+    values.palette.yellow = rgba_to_hex(theme.ansi.colors[3]);
+    values.palette.blue = rgba_to_hex(theme.ansi.colors[4]);
+    values.palette.magenta = rgba_to_hex(theme.ansi.colors[5]);
+    values.palette.cyan = rgba_to_hex(theme.ansi.colors[6]);
+    values.palette.white = rgba_to_hex(theme.ansi.colors[7]);
+    values.palette.bright_black = rgba_to_hex(theme.ansi.colors[8]);
+    values.palette.bright_red = rgba_to_hex(theme.ansi.colors[9]);
+    values.palette.bright_green = rgba_to_hex(theme.ansi.colors[10]);
+    values.palette.bright_yellow = rgba_to_hex(theme.ansi.colors[11]);
+    values.palette.bright_blue = rgba_to_hex(theme.ansi.colors[12]);
+    values.palette.bright_magenta = rgba_to_hex(theme.ansi.colors[13]);
+    values.palette.bright_cyan = rgba_to_hex(theme.ansi.colors[14]);
+    values.palette.bright_white = rgba_to_hex(theme.ansi.colors[15]);
+    values
+}
+
+fn apply_terminal_style_values_to_theme(
+    theme: &mut Theme,
+    values: &codirigent_core::config::TerminalThemeOverrides,
+) {
+    theme.colors.terminal.background = values.background.clone();
+    theme.colors.terminal.foreground = values.foreground.clone();
+    theme.colors.terminal.cursor = values.cursor.clone();
+    theme.colors.terminal.selection_background = values.selection_background.clone();
+    theme.colors.terminal.selection_foreground = values.selection_foreground.clone();
+    theme.colors.terminal.palette.black = values.palette.black.clone();
+    theme.colors.terminal.palette.red = values.palette.red.clone();
+    theme.colors.terminal.palette.green = values.palette.green.clone();
+    theme.colors.terminal.palette.yellow = values.palette.yellow.clone();
+    theme.colors.terminal.palette.blue = values.palette.blue.clone();
+    theme.colors.terminal.palette.magenta = values.palette.magenta.clone();
+    theme.colors.terminal.palette.cyan = values.palette.cyan.clone();
+    theme.colors.terminal.palette.white = values.palette.white.clone();
+    theme.colors.terminal.palette.bright_black = values.palette.bright_black.clone();
+    theme.colors.terminal.palette.bright_red = values.palette.bright_red.clone();
+    theme.colors.terminal.palette.bright_green = values.palette.bright_green.clone();
+    theme.colors.terminal.palette.bright_yellow = values.palette.bright_yellow.clone();
+    theme.colors.terminal.palette.bright_blue = values.palette.bright_blue.clone();
+    theme.colors.terminal.palette.bright_magenta = values.palette.bright_magenta.clone();
+    theme.colors.terminal.palette.bright_cyan = values.palette.bright_cyan.clone();
+    theme.colors.terminal.palette.bright_white = values.palette.bright_white.clone();
+}
 
 fn shell_picker_display_label(shell: &str) -> String {
     if shell.is_empty() {
@@ -570,6 +638,7 @@ impl WorkspaceView {
         user_settings.appearance.grid_gap = theme.grid_gap as u32;
         user_settings.terminal.font_size = theme.terminal_font_size;
         user_settings.terminal.line_height = theme.terminal_line_height;
+        let terminal_style_values = terminal_style_values_from_theme(theme);
 
         let mut detected = self
             .cache
@@ -603,6 +672,7 @@ impl WorkspaceView {
             detected,
             detected_shells,
             detected_fonts,
+            terminal_style_values,
         )
     }
 
@@ -658,33 +728,105 @@ impl WorkspaceView {
         field: TerminalStyleField,
         cx: &mut Context<Self>,
     ) {
-        self.update_terminal_style_field_value(field, String::new(), cx);
+        let Some(next_value) = self.settings.page.as_mut().map(|page| {
+            page.reset_terminal_style_field_to_base(field);
+            page.terminal_style_draft_value(field).to_string()
+        }) else {
+            return;
+        };
+        self.update_terminal_style_field_value(field, next_value, cx);
     }
 
-    fn update_terminal_style_field_value(
+    pub(super) fn update_terminal_style_field_value(
         &mut self,
         field: TerminalStyleField,
         value: String,
         cx: &mut Context<Self>,
     ) {
-        let mut user_settings = None;
+        let mut theme_persist_input = None;
 
         if let Some(page) = self.settings.page.as_mut() {
             page.set_terminal_style_draft_value(field, value.clone());
             if terminal_override_is_valid(&value) {
-                page.commit_terminal_style_field(field);
-                page.user_save_pending = true;
-                user_settings = Some(page.user_settings.clone());
+                theme_persist_input = Some((
+                    page.user_settings.appearance.theme.clone(),
+                    page.terminal_style_draft.clone(),
+                ));
             }
         }
 
-        if let Some(user_settings) = user_settings {
-            let requested_id = self.settings.active_theme_id.clone();
-            self.resolve_and_apply_theme_id(&requested_id, &user_settings);
-            self.maybe_schedule_settings_save(cx);
+        if let Some((active_theme_id, terminal_style_draft)) = theme_persist_input {
+            let custom_theme_id =
+                self.persist_terminal_style_theme(&active_theme_id, &terminal_style_draft);
+            if let Some(custom_theme_id) = custom_theme_id {
+                if let Some(page) = self.settings.page.as_mut() {
+                    page.user_settings.appearance.theme = custom_theme_id.clone();
+                    page.user_settings.terminal.theme_overrides =
+                        codirigent_core::config::TerminalThemeOverrides::default();
+                    page.user_save_pending = true;
+                    let user_settings = page.user_settings.clone();
+                    self.settings.cached_user_settings = user_settings.clone();
+                    self.resolve_and_apply_theme_id(&custom_theme_id, &user_settings);
+                    self.maybe_schedule_settings_save(cx);
+                }
+            }
         }
 
         cx.notify();
+    }
+
+    fn persist_terminal_style_theme(
+        &mut self,
+        active_theme_id: &str,
+        terminal_style_draft: &codirigent_core::config::TerminalThemeOverrides,
+    ) -> Option<String> {
+        let config_service = self.settings.config_service.clone()?;
+        let active_theme = self
+            .settings
+            .theme_manager
+            .get(active_theme_id)
+            .cloned()
+            .or_else(|| {
+                self.settings
+                    .theme_manager
+                    .runtime_theme(active_theme_id)
+                    .ok()
+                    .map(|theme| {
+                        Theme::from_runtime(active_theme_id, active_theme_id, true, &theme)
+                    })
+            })?;
+
+        let is_custom = !self.settings.theme_manager.is_builtin(active_theme_id);
+        let custom_id = if is_custom {
+            active_theme.id.clone()
+        } else {
+            format!("{}-custom", active_theme.id)
+        };
+        let custom_name = if is_custom {
+            active_theme.name.clone()
+        } else {
+            format!("{} Custom", active_theme.name)
+        };
+
+        let mut custom_theme = active_theme;
+        custom_theme.id = custom_id.clone();
+        custom_theme.name = custom_name;
+        apply_terminal_style_values_to_theme(&mut custom_theme, terminal_style_draft);
+
+        let theme_dir = ThemeManager::custom_theme_dir(config_service.user_config_dir());
+        if fs::create_dir_all(&theme_dir).is_err() {
+            return None;
+        }
+        let theme_json = custom_theme.to_json().ok()?;
+        let path = theme_dir.join(format!("{}.json", custom_id));
+        if fs::write(path, theme_json).is_err() {
+            return None;
+        }
+
+        self.settings.theme_manager.add_theme(custom_theme);
+        let _ = self.settings.theme_manager.set_active(&custom_id);
+        self.settings.active_theme_id = custom_id.clone();
+        Some(custom_id)
     }
 
     fn schedule_user_settings_snapshot_save(

@@ -377,6 +377,11 @@ impl ThemeManager {
         self.themes.values().filter(|t| !t.is_dark).collect()
     }
 
+    /// Returns whether a theme ID refers to a built-in theme.
+    pub fn is_builtin(&self, id: &str) -> bool {
+        BUILTIN_THEME_IDS.contains(&id)
+    }
+
     /// Convert a registered theme into the runtime theme model.
     pub fn runtime_theme(&self, id: &str) -> Result<CodirigentTheme> {
         let theme = self

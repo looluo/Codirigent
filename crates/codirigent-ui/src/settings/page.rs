@@ -229,6 +229,8 @@ pub struct SettingsPage {
     pub detected_shells: Vec<String>,
     /// Monospace fonts detected on the system.
     pub detected_fonts: Vec<String>,
+    /// Theme colors captured when the terminal editor was opened/reset.
+    pub terminal_style_base: TerminalThemeOverrides,
     /// In-progress terminal style editor draft values.
     pub terminal_style_draft: TerminalThemeOverrides,
     /// Pre-sorted list of keybinding action names for the Keyboard Shortcuts panel.
@@ -244,11 +246,13 @@ impl SettingsPage {
         detected_editors: Vec<String>,
         detected_shells: Vec<String>,
         detected_fonts: Vec<String>,
+        terminal_style_values: TerminalThemeOverrides,
     ) -> Self {
         let mut sorted_shortcut_keys: Vec<String> =
             user_settings.keybindings.keys().cloned().collect();
         sorted_shortcut_keys.sort();
-        let terminal_style_draft = user_settings.terminal.theme_overrides.clone();
+        let terminal_style_base = terminal_style_values.clone();
+        let terminal_style_draft = terminal_style_values;
         Self {
             active_category: SettingsCategory::General,
             original_user: user_settings.clone(),
@@ -265,6 +269,7 @@ impl SettingsPage {
             detected_editors,
             detected_shells,
             detected_fonts,
+            terminal_style_base,
             terminal_style_draft,
             sorted_shortcut_keys,
         }
@@ -313,7 +318,7 @@ impl SettingsPage {
             }
             SettingsCategory::Terminal => {
                 self.user_settings.terminal = defaults.terminal;
-                self.terminal_style_draft = self.user_settings.terminal.theme_overrides.clone();
+                self.terminal_style_draft = self.terminal_style_base.clone();
                 self.focused_terminal_style_field = None;
             }
             SettingsCategory::KeyboardShortcuts => {
@@ -359,20 +364,20 @@ impl SettingsPage {
         field.get(&self.terminal_style_draft)
     }
 
+    /// Return the base theme value for a terminal style field.
+    pub fn terminal_style_base_value(&self, field: TerminalStyleField) -> &str {
+        field.get(&self.terminal_style_base)
+    }
+
     /// Update the draft value for a terminal style field.
     pub fn set_terminal_style_draft_value(&mut self, field: TerminalStyleField, value: String) {
         *field.get_mut(&mut self.terminal_style_draft) = value;
     }
 
-    /// Commit the current draft value into the live user settings snapshot.
-    pub fn commit_terminal_style_field(&mut self, field: TerminalStyleField) {
-        let value = field.get(&self.terminal_style_draft).to_string();
-        *field.get_mut(&mut self.user_settings.terminal.theme_overrides) = value;
-    }
-
-    /// Reset terminal style drafts from the current user settings snapshot.
-    pub fn sync_terminal_style_draft_from_user_settings(&mut self) {
-        self.terminal_style_draft = self.user_settings.terminal.theme_overrides.clone();
+    /// Reset one field back to the base theme value captured for the editor.
+    pub fn reset_terminal_style_field_to_base(&mut self, field: TerminalStyleField) {
+        let value = field.get(&self.terminal_style_base).to_string();
+        *field.get_mut(&mut self.terminal_style_draft) = value;
     }
 }
 
@@ -411,6 +416,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            TerminalThemeOverrides::default(),
         );
         assert!(page.focused_shortcut_row.is_none());
         assert!(page.focused_terminal_style_field.is_none());
@@ -424,6 +430,7 @@ mod tests {
             vec!["code".to_string()],
             vec!["bash".to_string(), "zsh".to_string()],
             vec!["Menlo".to_string(), "Courier New".to_string()],
+            TerminalThemeOverrides::default(),
         );
         assert_eq!(page.active_category(), SettingsCategory::General);
         assert!(!page.is_user_dirty());
@@ -433,25 +440,43 @@ mod tests {
     }
 
     #[test]
-    fn test_terminal_style_draft_round_trips_into_user_settings() {
+    fn test_terminal_style_draft_tracks_editor_value() {
         let mut page = SettingsPage::new(
             UserSettings::default(),
             ProjectConfig::default(),
             vec![],
             vec![],
             vec![],
+            TerminalThemeOverrides::default(),
         );
 
         page.set_terminal_style_draft_value(TerminalStyleField::Background, "#123456".to_string());
-        page.commit_terminal_style_field(TerminalStyleField::Background);
 
         assert_eq!(
             page.terminal_style_draft_value(TerminalStyleField::Background),
             "#123456"
         );
+    }
+
+    #[test]
+    fn test_reset_terminal_style_field_to_base() {
+        let mut base = TerminalThemeOverrides::default();
+        base.background = "#111111".to_string();
+        let mut page = SettingsPage::new(
+            UserSettings::default(),
+            ProjectConfig::default(),
+            vec![],
+            vec![],
+            vec![],
+            base,
+        );
+
+        page.set_terminal_style_draft_value(TerminalStyleField::Background, "#123456".to_string());
+        page.reset_terminal_style_field_to_base(TerminalStyleField::Background);
+
         assert_eq!(
-            page.user_settings.terminal.theme_overrides.background,
-            "#123456"
+            page.terminal_style_draft_value(TerminalStyleField::Background),
+            "#111111"
         );
     }
 
@@ -463,6 +488,7 @@ mod tests {
             vec!["code".to_string()],
             vec!["bash".to_string(), "zsh".to_string()],
             vec!["Menlo".to_string(), "Courier New".to_string()],
+            TerminalThemeOverrides::default(),
         );
         page.set_category(SettingsCategory::Terminal);
         assert_eq!(page.active_category(), SettingsCategory::Terminal);

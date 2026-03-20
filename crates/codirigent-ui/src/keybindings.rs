@@ -1000,9 +1000,9 @@ mod tests {
     fn test_keybinding_manager_default() {
         let manager = KeybindingManager::default();
         #[cfg(target_os = "macos")]
-        let key = "Cmd+N";
+        let key = "Cmd+Shift+N";
         #[cfg(not(target_os = "macos"))]
-        let key = "Ctrl+N";
+        let key = "Ctrl+Shift+N";
         let binding = KeybindingManager::parse_binding(key).unwrap();
         assert_eq!(manager.get_action(&binding), Some(&Action::NewSession));
     }
@@ -1012,9 +1012,9 @@ mod tests {
         let manager = KeybindingManager::with_defaults();
         let cloned = manager.clone();
         #[cfg(target_os = "macos")]
-        let key = "Cmd+N";
+        let key = "Cmd+Shift+N";
         #[cfg(not(target_os = "macos"))]
-        let key = "Ctrl+N";
+        let key = "Ctrl+Shift+N";
         let binding = KeybindingManager::parse_binding(key).unwrap();
         assert_eq!(cloned.get_action(&binding), Some(&Action::NewSession));
     }
