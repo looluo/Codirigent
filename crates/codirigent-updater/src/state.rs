@@ -23,8 +23,28 @@ pub struct UpdatePersistentState {
     /// Timestamp of the most recent successful check against the GitHub API.
     pub last_check_timestamp: Option<DateTime<Utc>>,
 
+    /// A discovered update that has not been downloaded yet.
+    pub available_update: Option<AvailableUpdateState>,
+
     /// A downloaded update that is ready to apply on next restart.
     pub staged_update: Option<StagedUpdateState>,
+}
+
+/// Metadata for an available update that should be restored on restart.
+#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AvailableUpdateState {
+    /// Semantic version string of the available release.
+    pub version: String,
+
+    /// URL to the GitHub release page.
+    pub release_url: String,
+
+    /// Direct download URL for the platform artifact.
+    pub asset_url: String,
+
+    /// Direct download URL for checksums-sha256.txt.
+    pub checksum_url: String,
 }
 
 /// Metadata for a staged (downloaded) update artifact.
@@ -147,6 +167,12 @@ mod tests {
         let state = UpdatePersistentState {
             last_known_version: Some("0.2.0".to_string()),
             last_check_timestamp: Some(Utc.with_ymd_and_hms(2026, 3, 15, 10, 30, 0).unwrap()),
+            available_update: Some(AvailableUpdateState {
+                version: "0.2.0".to_string(),
+                release_url: "https://github.com/oso95/Codirigent/releases/tag/v0.2.0".to_string(),
+                asset_url: "https://example.com/codirigent-v0.2.0.dmg".to_string(),
+                checksum_url: "https://example.com/checksums-sha256.txt".to_string(),
+            }),
             staged_update: Some(StagedUpdateState {
                 version: "0.2.0".to_string(),
                 artifact_path: PathBuf::from("/tmp/codirigent-0.2.0.dmg"),
@@ -168,6 +194,12 @@ mod tests {
         let state = UpdatePersistentState {
             last_known_version: Some("1.0.0".to_string()),
             last_check_timestamp: Some(Utc::now()),
+            available_update: Some(AvailableUpdateState {
+                version: "1.1.0".to_string(),
+                release_url: "https://example.com/release".to_string(),
+                asset_url: "https://example.com/app.dmg".to_string(),
+                checksum_url: "https://example.com/checksums.txt".to_string(),
+            }),
             staged_update: None,
         };
 
@@ -229,6 +261,7 @@ mod tests {
         let state: UpdatePersistentState = serde_json::from_str(json).expect("partial parse");
         assert_eq!(state.last_known_version, Some("0.1.0".to_string()));
         assert_eq!(state.last_check_timestamp, None);
+        assert_eq!(state.available_update, None);
         assert_eq!(state.staged_update, None);
     }
 

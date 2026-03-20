@@ -484,10 +484,7 @@ impl WorkspaceView {
             env!("CARGO_PKG_VERSION"),
             event_bus.clone(),
         ) {
-            Ok(svc) => {
-                svc.start_background_check();
-                Some(Arc::new(svc))
-            }
+            Ok(svc) => Some(Arc::new(svc)),
             Err(e) => {
                 tracing::warn!("Failed to initialize update service: {}", e);
                 None
@@ -496,6 +493,10 @@ impl WorkspaceView {
 
         // Subscribe to EventBus for update events
         let update_event_rx = Some(event_bus.subscribe());
+
+        if let Some(svc) = &update_service {
+            svc.start_background_check();
+        }
 
         let (storage, task_manager) = Self::init_task_manager(event_bus.clone());
         let (file_tree, file_tree_model, project_root) = Self::init_file_tree();
