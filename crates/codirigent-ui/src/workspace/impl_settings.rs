@@ -329,7 +329,7 @@ fn resolve_terminal_font_family(requested: &str, detected_fonts: &[String]) -> S
         return requested.to_string();
     }
 
-    let platform_default = crate::theme::default_terminal_font_family();
+    let platform_default = codirigent_core::config::default_terminal_font_family();
     if contains_font_family(detected_fonts, platform_default) {
         return platform_default.to_string();
     }
@@ -440,9 +440,18 @@ fn load_settings_snapshot(
     config_service: &codirigent_core::config_service::DefaultConfigService,
     project_dir: Option<PathBuf>,
 ) -> LoadedSettingsSnapshot {
+    const TERMINAL_SAFE_KEYBINDINGS_MIGRATION_VERSION: u32 = 1;
+
     let mut user_settings = config_service.load_user_settings().unwrap_or_default();
-    let user_settings_changed =
-        migrate_legacy_terminal_conflicting_keybindings(&mut user_settings.keybindings);
+    let mut user_settings_changed = false;
+    if user_settings.migrations.terminal_safe_keybindings_version
+        < TERMINAL_SAFE_KEYBINDINGS_MIGRATION_VERSION
+    {
+        let _ = migrate_legacy_terminal_conflicting_keybindings(&mut user_settings.keybindings);
+        user_settings.migrations.terminal_safe_keybindings_version =
+            TERMINAL_SAFE_KEYBINDINGS_MIGRATION_VERSION;
+        user_settings_changed = true;
+    }
     let project_config = project_dir
         .as_ref()
         .and_then(|dir| config_service.load_project_config(dir).ok())
@@ -722,9 +731,12 @@ impl WorkspaceView {
         }
 
         if let Some((active_theme_id, terminal_style_draft)) = theme_persist_input {
-            let custom_theme_id =
-                self.persist_terminal_style_theme(&active_theme_id, &terminal_style_draft);
-            if let Some(custom_theme_id) = custom_theme_id {
+            if let Some(custom_theme) =
+                self.build_terminal_style_custom_theme(&active_theme_id, &terminal_style_draft)
+            {
+                let custom_theme_id = custom_theme.id.clone();
+                self.apply_custom_terminal_style_theme(&custom_theme);
+                self.schedule_terminal_style_theme_save(custom_theme, cx);
                 if let Some(page) = self.settings.page.as_mut() {
                     page.user_settings.appearance.theme = custom_theme_id.clone();
                     page.user_settings.terminal.theme_overrides =
@@ -741,12 +753,11 @@ impl WorkspaceView {
         cx.notify();
     }
 
-    fn persist_terminal_style_theme(
-        &mut self,
+    fn build_terminal_style_custom_theme(
+        &self,
         active_theme_id: &str,
         terminal_style_draft: &codirigent_core::config::TerminalThemeOverrides,
-    ) -> Option<String> {
-        let config_service = self.settings.config_service.clone()?;
+    ) -> Option<Theme> {
         let active_theme = self
             .settings
             .theme_manager
@@ -778,21 +789,71 @@ impl WorkspaceView {
         custom_theme.id = custom_id.clone();
         custom_theme.name = custom_name;
         apply_terminal_style_values_to_theme(&mut custom_theme, terminal_style_draft);
+        Some(custom_theme)
+    }
 
-        let theme_dir = ThemeManager::custom_theme_dir(config_service.user_config_dir());
-        if fs::create_dir_all(&theme_dir).is_err() {
-            return None;
-        }
-        let theme_json = custom_theme.to_json().ok()?;
-        let path = theme_dir.join(format!("{}.json", custom_id));
-        if fs::write(path, theme_json).is_err() {
-            return None;
-        }
+    fn apply_custom_terminal_style_theme(&mut self, custom_theme: &Theme) {
+        self.settings.theme_manager.add_theme(custom_theme.clone());
+        let _ = self.settings.theme_manager.set_active(&custom_theme.id);
+        self.settings.active_theme_id = custom_theme.id.clone();
+    }
 
-        self.settings.theme_manager.add_theme(custom_theme);
-        let _ = self.settings.theme_manager.set_active(&custom_id);
-        self.settings.active_theme_id = custom_id.clone();
-        Some(custom_id)
+    fn schedule_terminal_style_theme_save(&mut self, custom_theme: Theme, cx: &mut Context<Self>) {
+        let Some(config_service) = self.settings.config_service.clone() else {
+            return;
+        };
+
+        self.settings.theme_save_generation = self.settings.theme_save_generation.wrapping_add(1);
+        let generation = self.settings.theme_save_generation;
+        self.settings.theme_save_task = None;
+        self.settings.theme_save_task =
+            Some(cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(250))
+                    .await;
+
+                let should_run = this
+                    .update(cx, |this, _cx| {
+                        this.settings.theme_save_generation == generation
+                    })
+                    .ok()
+                    .unwrap_or(false);
+                if !should_run {
+                    return;
+                }
+
+                let theme_dir = ThemeManager::custom_theme_dir(config_service.user_config_dir());
+                let theme_json = match custom_theme.to_json() {
+                    Ok(theme_json) => theme_json,
+                    Err(e) => {
+                        let _ = this.update(cx, |this, _cx| {
+                            if this.settings.theme_save_generation == generation {
+                                this.settings.theme_save_task = None;
+                            }
+                            warn!("Failed to serialize custom terminal theme: {}", e);
+                        });
+                        return;
+                    }
+                };
+                let path = theme_dir.join(format!("{}.json", custom_theme.id));
+                let result = cx
+                    .background_executor()
+                    .spawn(async move {
+                        fs::create_dir_all(&theme_dir)?;
+                        fs::write(path, theme_json)?;
+                        std::io::Result::Ok(())
+                    })
+                    .await;
+
+                let _ = this.update(cx, |this, _cx| {
+                    if this.settings.theme_save_generation == generation {
+                        this.settings.theme_save_task = None;
+                    }
+                    if let Err(e) = result {
+                        warn!("Failed to persist custom terminal theme: {}", e);
+                    }
+                });
+            }));
     }
 
     fn schedule_user_settings_snapshot_save(
@@ -1424,6 +1485,28 @@ mod tests {
     }
 
     #[test]
+    fn load_settings_snapshot_only_runs_terminal_safe_keybinding_migration_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_service =
+            codirigent_core::config_service::DefaultConfigService::with_base_dir(temp.path())
+                .unwrap();
+        let mut settings = codirigent_core::config::UserSettings::default();
+        settings.migrations.terminal_safe_keybindings_version = 1;
+        settings
+            .keybindings
+            .insert("toggle_sidebar".to_string(), "Ctrl+B".to_string());
+        config_service.save_user_settings(&settings).unwrap();
+
+        let snapshot = load_settings_snapshot(&config_service, None);
+
+        assert!(!snapshot.user_settings_changed);
+        assert_eq!(
+            snapshot.user_settings.keybindings.get("toggle_sidebar"),
+            Some(&"Ctrl+B".to_string())
+        );
+    }
+
+    #[test]
     fn apply_theme_runtime_overrides_preserves_user_preferences() {
         let mut theme = CodirigentTheme::dark();
         let mut user_settings = codirigent_core::config::UserSettings::default();
@@ -1511,7 +1594,7 @@ mod tests {
 
     #[test]
     fn resolve_terminal_font_family_falls_back_to_platform_default() {
-        let platform_default = crate::theme::default_terminal_font_family().to_string();
+        let platform_default = codirigent_core::config::default_terminal_font_family().to_string();
         let fonts = vec![platform_default.clone(), "Cascadia Code".to_string()];
 
         let resolved = resolve_terminal_font_family("JetBrains Mono", &fonts);

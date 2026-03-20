@@ -59,14 +59,14 @@ impl WorkspaceView {
                 cx.notify();
                 return true;
             }
-            "left" => {
+            "left" if focused_control != SearchFocusControl::Input => {
                 if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
                     terminal_view.cycle_search_focus_control(true);
                 }
                 cx.notify();
                 return true;
             }
-            "right" => {
+            "right" if focused_control != SearchFocusControl::Input => {
                 if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
                     terminal_view.cycle_search_focus_control(false);
                 }

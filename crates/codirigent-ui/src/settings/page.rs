@@ -9,29 +9,49 @@ use crate::theme_config::Theme;
 use codirigent_core::config::{ProjectConfig, TerminalThemeOverrides, UserSettings};
 
 /// Editable terminal style fields exposed in the settings UI.
-#[allow(missing_docs)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TerminalStyleField {
+    /// Terminal background color.
     Background,
+    /// Default terminal foreground/text color.
     Foreground,
+    /// Terminal cursor color.
     Cursor,
+    /// Terminal selection background color.
     SelectionBackground,
+    /// Terminal selection foreground color.
     SelectionForeground,
+    /// ANSI black palette slot.
     Black,
+    /// ANSI red palette slot.
     Red,
+    /// ANSI green palette slot.
     Green,
+    /// ANSI yellow palette slot.
     Yellow,
+    /// ANSI blue palette slot.
     Blue,
+    /// ANSI magenta palette slot.
     Magenta,
+    /// ANSI cyan palette slot.
     Cyan,
+    /// ANSI white palette slot.
     White,
+    /// ANSI bright black palette slot.
     BrightBlack,
+    /// ANSI bright red palette slot.
     BrightRed,
+    /// ANSI bright green palette slot.
     BrightGreen,
+    /// ANSI bright yellow palette slot.
     BrightYellow,
+    /// ANSI bright blue palette slot.
     BrightBlue,
+    /// ANSI bright magenta palette slot.
     BrightMagenta,
+    /// ANSI bright cyan palette slot.
     BrightCyan,
+    /// ANSI bright white palette slot.
     BrightWhite,
 }
 

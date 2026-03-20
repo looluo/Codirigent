@@ -207,6 +207,14 @@ impl Default for GeneralSettings {
     }
 }
 
+/// Internal user-settings migration markers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct UserSettingsMigrations {
+    /// Version of the terminal-safe keybinding migration already applied.
+    #[serde(default)]
+    pub terminal_safe_keybindings_version: u32,
+}
+
 // ============================================================================
 // Terminal Settings
 // ============================================================================
@@ -303,7 +311,8 @@ pub struct TerminalSettings {
     pub theme_overrides: TerminalThemeOverrides,
 }
 
-fn default_terminal_font_family() -> &'static str {
+/// Default monospace terminal font family for the current platform.
+pub fn default_terminal_font_family() -> &'static str {
     #[cfg(target_os = "windows")]
     {
         "Consolas"
@@ -385,6 +394,9 @@ pub struct UserSettings {
     /// User-saved custom layout profiles.
     #[serde(default)]
     pub saved_layouts: Vec<SavedLayout>,
+    /// Internal migration markers for one-time settings rewrites.
+    #[serde(default)]
+    pub migrations: UserSettingsMigrations,
 }
 
 impl Default for UserSettings {
@@ -397,6 +409,7 @@ impl Default for UserSettings {
             modules: ModuleSettings::default(),
             keybindings: Self::default_keybindings(),
             saved_layouts: Vec::new(),
+            migrations: UserSettingsMigrations::default(),
         }
     }
 }
