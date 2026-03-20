@@ -126,10 +126,12 @@ impl super::gpui::WorkspaceView {
         let bg: Hsla = theme.background.into();
         let panel_bg: Hsla = theme.panel_background.into();
         let fg: Hsla = theme.foreground.into();
+        let muted: Hsla = theme.muted.into();
         let primary: Hsla = theme.primary.into();
         let border: Hsla = theme.border.into();
         let active_cat = page.active_category();
         let base_font_size = theme.font_size_base;
+        let version_label = format!("v{}", env!("CARGO_PKG_VERSION"));
 
         // Category sidebar
         let mut sidebar = div()
@@ -200,6 +202,16 @@ impl super::gpui::WorkspaceView {
                     .child(div().text_color(text_color).child(label)),
             );
         }
+
+        sidebar = sidebar.child(div().flex_1()).child(
+            div()
+                .px_3()
+                .pt_2()
+                .pb_1()
+                .text_size(px(base_font_size - 1.0))
+                .text_color(muted)
+                .child(version_label),
+        );
 
         let content_child = self.render_settings_content(cx);
 
