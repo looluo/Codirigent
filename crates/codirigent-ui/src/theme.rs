@@ -563,6 +563,406 @@ impl CodirigentTheme {
         }
     }
 
+    /// Create the Catppuccin Mocha theme.
+    pub fn catppuccin_mocha() -> Self {
+        let mut theme = Self::dark();
+        theme.background = hex("#11111b");
+        theme.panel_background = hex("#181825");
+        theme.header_background = hex("#181825");
+        theme.sidebar_background = hex("#181825");
+        theme.icon_rail_background = hex("#181825");
+        theme.drawer_background = hex("#1e1e2e");
+        theme.border = hex("#313244");
+        theme.hover = hex("#1e1e2e");
+        theme.active = hex("#313244");
+        theme.selection = Hsla {
+            a: 0.24,
+            ..hex("#89b4fa")
+        };
+        theme.foreground = hex("#cdd6f4");
+        theme.text_secondary = hex("#a6adc8");
+        theme.muted = hex("#6c7086");
+        theme.primary = hex("#89b4fa");
+        theme.secondary = hex("#74c7ec");
+        theme.purple = hex("#cba6f7");
+        theme.orange = hex("#fab387");
+        theme.selected_ring = hex("#89b4fa");
+        theme.broadcast_accent = hex("#f38ba8");
+        theme.ai_summary_background = Hsla {
+            a: 0.08,
+            ..hex("#89b4fa")
+        };
+        theme.ai_summary_text = hex("#b4befe");
+        theme.input_required_background = Hsla {
+            a: 0.16,
+            ..hex("#f38ba8")
+        };
+        theme.input_required_accent = hex("#f38ba8");
+        theme.session_idle = hex("#6c7086");
+        theme.session_working = hex("#fab387");
+        theme.session_needs_attention = hex("#f38ba8");
+        theme.session_response_ready = hex("#a6e3a1");
+        theme.session_error = hex("#f38ba8");
+        theme.priority_high = hex("#f38ba8");
+        theme.priority_medium = hex("#fab387");
+        theme.priority_low = hex("#89b4fa");
+        theme.session_colors = [
+            hex("#89b4fa"),
+            hex("#74c7ec"),
+            hex("#cba6f7"),
+            hex("#fab387"),
+            hex("#f38ba8"),
+            hex("#a6e3a1"),
+        ];
+        theme.cursor = hex("#f5e0dc");
+        theme.ansi = AnsiColors {
+            colors: [
+                Rgba::rgb(0x45, 0x47, 0x5a),
+                Rgba::rgb(0xf3, 0x8b, 0xa8),
+                Rgba::rgb(0xa6, 0xe3, 0xa1),
+                Rgba::rgb(0xf9, 0xe2, 0xaf),
+                Rgba::rgb(0x89, 0xb4, 0xfa),
+                Rgba::rgb(0xf5, 0xc2, 0xe7),
+                Rgba::rgb(0x94, 0xe2, 0xd5),
+                Rgba::rgb(0xba, 0xc2, 0xde),
+                Rgba::rgb(0x58, 0x5b, 0x70),
+                Rgba::rgb(0xf3, 0x8b, 0xa8),
+                Rgba::rgb(0xa6, 0xe3, 0xa1),
+                Rgba::rgb(0xf9, 0xe2, 0xaf),
+                Rgba::rgb(0x89, 0xb4, 0xfa),
+                Rgba::rgb(0xf5, 0xc2, 0xe7),
+                Rgba::rgb(0x94, 0xe2, 0xd5),
+                Rgba::rgb(0xa6, 0xad, 0xc8),
+            ],
+        };
+        theme.terminal_background = Rgba::rgb(0x1e, 0x1e, 0x2e);
+        theme.terminal_foreground = Rgba::rgb(0xcd, 0xd6, 0xf4);
+        theme.terminal_cursor = Rgba::rgb(0xf5, 0xe0, 0xdc);
+        theme.terminal_selection_bg = Rgba::new(0x58, 0x5b, 0x70, 0xcc);
+        theme.terminal_selection_fg = Rgba::rgb(0xcd, 0xd6, 0xf4);
+        theme
+    }
+
+    /// Create the Tokyo Night theme.
+    pub fn tokyo_night() -> Self {
+        let mut theme = Self::dark();
+        theme.background = hex("#16161e");
+        theme.panel_background = hex("#1a1b26");
+        theme.header_background = hex("#1f2335");
+        theme.sidebar_background = hex("#1a1b26");
+        theme.icon_rail_background = hex("#1a1b26");
+        theme.drawer_background = hex("#1f2335");
+        theme.border = hex("#292e42");
+        theme.hover = hex("#24283b");
+        theme.active = hex("#2f3549");
+        theme.selection = Hsla {
+            a: 0.24,
+            ..hex("#7aa2f7")
+        };
+        theme.foreground = hex("#c0caf5");
+        theme.text_secondary = hex("#9aa5ce");
+        theme.muted = hex("#565f89");
+        theme.primary = hex("#7aa2f7");
+        theme.secondary = hex("#7dcfff");
+        theme.purple = hex("#bb9af7");
+        theme.orange = hex("#ff9e64");
+        theme.selected_ring = hex("#7aa2f7");
+        theme.broadcast_accent = hex("#f7768e");
+        theme.ai_summary_background = Hsla {
+            a: 0.08,
+            ..hex("#7aa2f7")
+        };
+        theme.ai_summary_text = hex("#c0caf5");
+        theme.input_required_background = Hsla {
+            a: 0.14,
+            ..hex("#f7768e")
+        };
+        theme.input_required_accent = hex("#f7768e");
+        theme.session_idle = hex("#565f89");
+        theme.session_working = hex("#ff9e64");
+        theme.session_needs_attention = hex("#f7768e");
+        theme.session_response_ready = hex("#9ece6a");
+        theme.session_error = hex("#f7768e");
+        theme.priority_high = hex("#f7768e");
+        theme.priority_medium = hex("#ff9e64");
+        theme.priority_low = hex("#7aa2f7");
+        theme.session_colors = [
+            hex("#7aa2f7"),
+            hex("#7dcfff"),
+            hex("#bb9af7"),
+            hex("#ff9e64"),
+            hex("#f7768e"),
+            hex("#9ece6a"),
+        ];
+        theme.cursor = hex("#c0caf5");
+        theme.ansi = AnsiColors {
+            colors: [
+                Rgba::rgb(0x15, 0x16, 0x1e),
+                Rgba::rgb(0xf7, 0x76, 0x8e),
+                Rgba::rgb(0x9e, 0xce, 0x6a),
+                Rgba::rgb(0xe0, 0xaf, 0x68),
+                Rgba::rgb(0x7a, 0xa2, 0xf7),
+                Rgba::rgb(0xbb, 0x9a, 0xf7),
+                Rgba::rgb(0x7d, 0xcf, 0xff),
+                Rgba::rgb(0xa9, 0xb1, 0xd6),
+                Rgba::rgb(0x41, 0x48, 0x68),
+                Rgba::rgb(0xf7, 0x76, 0x8e),
+                Rgba::rgb(0x9e, 0xce, 0x6a),
+                Rgba::rgb(0xe0, 0xaf, 0x68),
+                Rgba::rgb(0x7a, 0xa2, 0xf7),
+                Rgba::rgb(0xbb, 0x9a, 0xf7),
+                Rgba::rgb(0x7d, 0xcf, 0xff),
+                Rgba::rgb(0xc0, 0xca, 0xf5),
+            ],
+        };
+        theme.terminal_background = Rgba::rgb(0x1a, 0x1b, 0x26);
+        theme.terminal_foreground = Rgba::rgb(0xc0, 0xca, 0xf5);
+        theme.terminal_cursor = Rgba::rgb(0xc0, 0xca, 0xf5);
+        theme.terminal_selection_bg = Rgba::new(0x28, 0x34, 0x57, 0xcc);
+        theme.terminal_selection_fg = Rgba::rgb(0xc0, 0xca, 0xf5);
+        theme
+    }
+
+    /// Create the One Dark theme.
+    pub fn one_dark() -> Self {
+        let mut theme = Self::dark();
+        theme.background = hex("#21252b");
+        theme.panel_background = hex("#282c34");
+        theme.header_background = hex("#1f2329");
+        theme.sidebar_background = hex("#21252b");
+        theme.icon_rail_background = hex("#21252b");
+        theme.drawer_background = hex("#282c34");
+        theme.border = hex("#3b4048");
+        theme.hover = hex("#2c313a");
+        theme.active = hex("#333842");
+        theme.selection = Hsla {
+            a: 0.22,
+            ..hex("#61afef")
+        };
+        theme.foreground = hex("#abb2bf");
+        theme.text_secondary = hex("#828997");
+        theme.muted = hex("#5c6370");
+        theme.primary = hex("#61afef");
+        theme.secondary = hex("#56b6c2");
+        theme.purple = hex("#c678dd");
+        theme.orange = hex("#d19a66");
+        theme.selected_ring = hex("#61afef");
+        theme.broadcast_accent = hex("#e06c75");
+        theme.ai_summary_background = Hsla {
+            a: 0.08,
+            ..hex("#61afef")
+        };
+        theme.ai_summary_text = hex("#cdd6f4");
+        theme.input_required_background = Hsla {
+            a: 0.14,
+            ..hex("#e06c75")
+        };
+        theme.input_required_accent = hex("#e06c75");
+        theme.session_idle = hex("#5c6370");
+        theme.session_working = hex("#d19a66");
+        theme.session_needs_attention = hex("#e06c75");
+        theme.session_response_ready = hex("#98c379");
+        theme.session_error = hex("#e06c75");
+        theme.priority_high = hex("#e06c75");
+        theme.priority_medium = hex("#d19a66");
+        theme.priority_low = hex("#61afef");
+        theme.session_colors = [
+            hex("#61afef"),
+            hex("#56b6c2"),
+            hex("#c678dd"),
+            hex("#d19a66"),
+            hex("#e06c75"),
+            hex("#98c379"),
+        ];
+        theme.cursor = hex("#61afef");
+        theme.ansi = AnsiColors {
+            colors: [
+                Rgba::rgb(0x28, 0x2c, 0x34),
+                Rgba::rgb(0xe0, 0x6c, 0x75),
+                Rgba::rgb(0x98, 0xc3, 0x79),
+                Rgba::rgb(0xe5, 0xc0, 0x7b),
+                Rgba::rgb(0x61, 0xaf, 0xef),
+                Rgba::rgb(0xc6, 0x78, 0xdd),
+                Rgba::rgb(0x56, 0xb6, 0xc2),
+                Rgba::rgb(0xdc, 0xdf, 0xe4),
+                Rgba::rgb(0x5c, 0x63, 0x70),
+                Rgba::rgb(0xe0, 0x6c, 0x75),
+                Rgba::rgb(0x98, 0xc3, 0x79),
+                Rgba::rgb(0xe5, 0xc0, 0x7b),
+                Rgba::rgb(0x61, 0xaf, 0xef),
+                Rgba::rgb(0xc6, 0x78, 0xdd),
+                Rgba::rgb(0x56, 0xb6, 0xc2),
+                Rgba::rgb(0xff, 0xff, 0xff),
+            ],
+        };
+        theme.terminal_background = Rgba::rgb(0x28, 0x2c, 0x34);
+        theme.terminal_foreground = Rgba::rgb(0xab, 0xb2, 0xbf);
+        theme.terminal_cursor = Rgba::rgb(0x52, 0x8b, 0xff);
+        theme.terminal_selection_bg = Rgba::new(0x3e, 0x44, 0x51, 0xcc);
+        theme.terminal_selection_fg = Rgba::rgb(0xab, 0xb2, 0xbf);
+        theme
+    }
+
+    /// Create the Gruvbox Dark theme.
+    pub fn gruvbox_dark() -> Self {
+        let mut theme = Self::dark();
+        theme.background = hex("#1d2021");
+        theme.panel_background = hex("#282828");
+        theme.header_background = hex("#32302f");
+        theme.sidebar_background = hex("#282828");
+        theme.icon_rail_background = hex("#282828");
+        theme.drawer_background = hex("#32302f");
+        theme.border = hex("#504945");
+        theme.hover = hex("#3c3836");
+        theme.active = hex("#504945");
+        theme.selection = Hsla {
+            a: 0.22,
+            ..hex("#83a598")
+        };
+        theme.foreground = hex("#ebdbb2");
+        theme.text_secondary = hex("#d5c4a1");
+        theme.muted = hex("#928374");
+        theme.primary = hex("#83a598");
+        theme.secondary = hex("#8ec07c");
+        theme.purple = hex("#d3869b");
+        theme.orange = hex("#fe8019");
+        theme.selected_ring = hex("#83a598");
+        theme.broadcast_accent = hex("#fb4934");
+        theme.ai_summary_background = Hsla {
+            a: 0.08,
+            ..hex("#83a598")
+        };
+        theme.ai_summary_text = hex("#ebdbb2");
+        theme.input_required_background = Hsla {
+            a: 0.14,
+            ..hex("#fb4934")
+        };
+        theme.input_required_accent = hex("#fb4934");
+        theme.session_idle = hex("#928374");
+        theme.session_working = hex("#fabd2f");
+        theme.session_needs_attention = hex("#fb4934");
+        theme.session_response_ready = hex("#b8bb26");
+        theme.session_error = hex("#fb4934");
+        theme.priority_high = hex("#fb4934");
+        theme.priority_medium = hex("#fe8019");
+        theme.priority_low = hex("#83a598");
+        theme.session_colors = [
+            hex("#83a598"),
+            hex("#8ec07c"),
+            hex("#d3869b"),
+            hex("#fe8019"),
+            hex("#fb4934"),
+            hex("#b8bb26"),
+        ];
+        theme.cursor = hex("#fabd2f");
+        theme.ansi = AnsiColors {
+            colors: [
+                Rgba::rgb(0x28, 0x28, 0x28),
+                Rgba::rgb(0xcc, 0x24, 0x1d),
+                Rgba::rgb(0x98, 0x97, 0x1a),
+                Rgba::rgb(0xd7, 0x99, 0x21),
+                Rgba::rgb(0x45, 0x85, 0x88),
+                Rgba::rgb(0xb1, 0x62, 0x86),
+                Rgba::rgb(0x68, 0x9d, 0x6a),
+                Rgba::rgb(0xa8, 0x99, 0x84),
+                Rgba::rgb(0x92, 0x83, 0x74),
+                Rgba::rgb(0xfb, 0x49, 0x34),
+                Rgba::rgb(0xb8, 0xbb, 0x26),
+                Rgba::rgb(0xfa, 0xbd, 0x2f),
+                Rgba::rgb(0x83, 0xa5, 0x98),
+                Rgba::rgb(0xd3, 0x86, 0x9b),
+                Rgba::rgb(0x8e, 0xc0, 0x7c),
+                Rgba::rgb(0xeb, 0xdb, 0xb2),
+            ],
+        };
+        theme.terminal_background = Rgba::rgb(0x28, 0x28, 0x28);
+        theme.terminal_foreground = Rgba::rgb(0xeb, 0xdb, 0xb2);
+        theme.terminal_cursor = Rgba::rgb(0xfa, 0xbd, 0x2f);
+        theme.terminal_selection_bg = Rgba::new(0x50, 0x49, 0x45, 0xcc);
+        theme.terminal_selection_fg = Rgba::rgb(0xeb, 0xdb, 0xb2);
+        theme
+    }
+
+    /// Create the Solarized Dark theme.
+    pub fn solarized_dark() -> Self {
+        let mut theme = Self::dark();
+        theme.background = hex("#002b36");
+        theme.panel_background = hex("#073642");
+        theme.header_background = hex("#00212b");
+        theme.sidebar_background = hex("#073642");
+        theme.icon_rail_background = hex("#073642");
+        theme.drawer_background = hex("#0b3c49");
+        theme.border = hex("#0f4b59");
+        theme.hover = hex("#0b3c49");
+        theme.active = hex("#135564");
+        theme.selection = Hsla {
+            a: 0.2,
+            ..hex("#268bd2")
+        };
+        theme.foreground = hex("#839496");
+        theme.text_secondary = hex("#93a1a1");
+        theme.muted = hex("#586e75");
+        theme.primary = hex("#268bd2");
+        theme.secondary = hex("#2aa198");
+        theme.purple = hex("#6c71c4");
+        theme.orange = hex("#cb4b16");
+        theme.selected_ring = hex("#268bd2");
+        theme.broadcast_accent = hex("#dc322f");
+        theme.ai_summary_background = Hsla {
+            a: 0.08,
+            ..hex("#268bd2")
+        };
+        theme.ai_summary_text = hex("#93a1a1");
+        theme.input_required_background = Hsla {
+            a: 0.14,
+            ..hex("#dc322f")
+        };
+        theme.input_required_accent = hex("#dc322f");
+        theme.session_idle = hex("#586e75");
+        theme.session_working = hex("#b58900");
+        theme.session_needs_attention = hex("#dc322f");
+        theme.session_response_ready = hex("#859900");
+        theme.session_error = hex("#dc322f");
+        theme.priority_high = hex("#dc322f");
+        theme.priority_medium = hex("#cb4b16");
+        theme.priority_low = hex("#268bd2");
+        theme.session_colors = [
+            hex("#268bd2"),
+            hex("#2aa198"),
+            hex("#6c71c4"),
+            hex("#cb4b16"),
+            hex("#dc322f"),
+            hex("#859900"),
+        ];
+        theme.cursor = hex("#93a1a1");
+        theme.ansi = AnsiColors {
+            colors: [
+                Rgba::rgb(0x07, 0x36, 0x42),
+                Rgba::rgb(0xdc, 0x32, 0x2f),
+                Rgba::rgb(0x85, 0x99, 0x00),
+                Rgba::rgb(0xb5, 0x89, 0x00),
+                Rgba::rgb(0x26, 0x8b, 0xd2),
+                Rgba::rgb(0xd3, 0x36, 0x82),
+                Rgba::rgb(0x2a, 0xa1, 0x98),
+                Rgba::rgb(0xee, 0xe8, 0xd5),
+                Rgba::rgb(0x00, 0x2b, 0x36),
+                Rgba::rgb(0xcb, 0x4b, 0x16),
+                Rgba::rgb(0x58, 0x6e, 0x75),
+                Rgba::rgb(0x65, 0x7b, 0x83),
+                Rgba::rgb(0x83, 0x94, 0x96),
+                Rgba::rgb(0x6c, 0x71, 0xc4),
+                Rgba::rgb(0x93, 0xa1, 0xa1),
+                Rgba::rgb(0xfd, 0xf6, 0xe3),
+            ],
+        };
+        theme.terminal_background = Rgba::rgb(0x00, 0x2b, 0x36);
+        theme.terminal_foreground = Rgba::rgb(0x83, 0x94, 0x96);
+        theme.terminal_cursor = Rgba::rgb(0x93, 0xa1, 0xa1);
+        theme.terminal_selection_bg = Rgba::new(0x07, 0x36, 0x42, 0xcc);
+        theme.terminal_selection_fg = Rgba::rgb(0x93, 0xa1, 0xa1);
+        theme
+    }
+
     /// Get the color for a given session status.
     ///
     /// Returns the appropriate status indicator color based on the session's

@@ -95,7 +95,6 @@ pub mod smart_clipboard;
 pub mod status_bar;
 pub mod task_board;
 pub mod terminal_header;
-pub(crate) mod terminal_theme_presets;
 pub mod theme;
 pub mod theme_config;
 pub mod theme_manager;

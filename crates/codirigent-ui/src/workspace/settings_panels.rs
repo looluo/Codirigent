@@ -10,10 +10,6 @@ use std::sync::Arc;
 use crate::settings::controls::{setting_row, setting_toggle, settings_section_header};
 use crate::settings::SettingsCategory;
 use crate::settings::TerminalStyleField;
-use crate::terminal_theme_presets::{
-    terminal_theme_preset_description, terminal_theme_preset_label, terminal_theme_presets,
-    TERMINAL_THEME_DEFAULT_PRESET_ID,
-};
 use crate::terminal_view::CursorShape;
 
 use super::settings_theme_picker::{build_theme_picker_sections, theme_picker_display_label};
@@ -39,24 +35,6 @@ fn build_theme_dropdown_entries(
             label: option.label,
         })
         .collect()
-}
-
-fn build_terminal_theme_preset_entries() -> Vec<DropdownEntry> {
-    let mut entries = vec![DropdownEntry::Option {
-        value: TERMINAL_THEME_DEFAULT_PRESET_ID.to_string(),
-        label: terminal_theme_preset_label(TERMINAL_THEME_DEFAULT_PRESET_ID).to_string(),
-    }];
-
-    entries.extend(
-        terminal_theme_presets()
-            .iter()
-            .map(|preset| DropdownEntry::Option {
-                value: preset.id.to_string(),
-                label: preset.name.to_string(),
-            }),
-    );
-
-    entries
 }
 
 fn terminal_style_field_label(field: TerminalStyleField) -> &'static str {
@@ -87,14 +65,69 @@ fn terminal_style_field_label(field: TerminalStyleField) -> &'static str {
 
 fn terminal_style_field_description(field: TerminalStyleField) -> &'static str {
     match field {
-        TerminalStyleField::Background
-        | TerminalStyleField::Foreground
-        | TerminalStyleField::Cursor
-        | TerminalStyleField::SelectionBackground
-        | TerminalStyleField::SelectionForeground => {
-            "Hex override (#RGB, #RGBA, #RRGGBB, #RRGGBBAA). Empty = theme."
+        TerminalStyleField::Background => {
+            "Terminal background color. Hex override (#RGB, #RGBA, #RRGGBB, #RRGGBBAA). Empty = theme."
         }
-        _ => "ANSI palette hex override. Empty = theme.",
+        TerminalStyleField::Foreground => {
+            "Default terminal text color for plain output that does not request a specific ANSI color."
+        }
+        TerminalStyleField::Cursor => {
+            "Terminal cursor color. Empty = theme."
+        }
+        TerminalStyleField::SelectionBackground => {
+            "Background color used when text is selected in the terminal."
+        }
+        TerminalStyleField::SelectionForeground => {
+            "Text color used for selected terminal text."
+        }
+        TerminalStyleField::Black => {
+            "Base black used for dark text, borders, and some dim CLI output."
+        }
+        TerminalStyleField::Red => {
+            "ANSI red. Commonly used for errors, failed commands, and git deletions."
+        }
+        TerminalStyleField::Green => {
+            "ANSI green. Commonly used for success, completed steps, and git additions."
+        }
+        TerminalStyleField::Yellow => {
+            "ANSI yellow. Commonly used for warnings, prompts, and caution states."
+        }
+        TerminalStyleField::Blue => {
+            "ANSI blue. Commonly used for links, paths, headings, and command hints."
+        }
+        TerminalStyleField::Magenta => {
+            "ANSI magenta. Often used for accents, categories, or secondary highlights."
+        }
+        TerminalStyleField::Cyan => {
+            "ANSI cyan. Often used for info messages, metadata, or highlighted values."
+        }
+        TerminalStyleField::White => {
+            "Base light text used by tools that explicitly request ANSI white."
+        }
+        TerminalStyleField::BrightBlack => {
+            "Bright black, usually used for dim text, comments, and subtle separators."
+        }
+        TerminalStyleField::BrightRed => {
+            "Bright red for stronger error emphasis and urgent highlights."
+        }
+        TerminalStyleField::BrightGreen => {
+            "Bright green for stronger success emphasis and positive status output."
+        }
+        TerminalStyleField::BrightYellow => {
+            "Bright yellow for stronger warnings and attention-grabbing prompts."
+        }
+        TerminalStyleField::BrightBlue => {
+            "Bright blue for stronger links, headings, and highlighted commands."
+        }
+        TerminalStyleField::BrightMagenta => {
+            "Bright magenta for vivid accents and standout labels."
+        }
+        TerminalStyleField::BrightCyan => {
+            "Bright cyan for vivid info text and highlighted values."
+        }
+        TerminalStyleField::BrightWhite => {
+            "Bright white for the brightest text and high-contrast highlights."
+        }
     }
 }
 
@@ -963,14 +996,8 @@ impl super::gpui::WorkspaceView {
         let font_size = page.user_settings.terminal.font_size;
         let cursor_style = page.user_settings.terminal.cursor_style.clone();
         let line_height = page.user_settings.terminal.line_height;
-        let terminal_theme_preset = page.user_settings.terminal.theme_preset.clone();
         let font_options: Vec<&str> = page.detected_fonts.iter().map(|s| s.as_str()).collect();
         let theme = self.workspace.theme();
-        let terminal_theme_preset_entries = build_terminal_theme_preset_entries();
-        let selected_terminal_theme_preset_label =
-            terminal_theme_preset_label(&terminal_theme_preset).to_string();
-        let selected_terminal_theme_preset_description =
-            terminal_theme_preset_description(&terminal_theme_preset).to_string();
         let mut container = div()
             .flex()
             .flex_col()
@@ -1094,37 +1121,6 @@ impl super::gpui::WorkspaceView {
                         cx.notify();
                     },
                 ),
-            ))
-            .child(settings_section_header("Theme", theme, false))
-            .child(setting_row(
-                "Terminal palette",
-                "Pick a ready-made terminal look. Advanced colors below can fine-tune it.",
-                theme,
-                self.render_dropdown_control_with_entries(
-                    "dd-terminal-theme-preset",
-                    &terminal_theme_preset_entries,
-                    &terminal_theme_preset,
-                    &selected_terminal_theme_preset_label,
-                    cx,
-                    |this, val, _, _| {
-                        let mut user_settings = None;
-                        if let Some(page) = this.settings.page.as_mut() {
-                            page.user_settings.terminal.theme_preset = val;
-                            page.user_save_pending = true;
-                            user_settings = Some(page.user_settings.clone());
-                        }
-                        if let Some(user_settings) = user_settings {
-                            let requested_id = this.settings.active_theme_id.clone();
-                            this.resolve_and_apply_theme_id(&requested_id, &user_settings);
-                        }
-                    },
-                ),
-            ))
-            .child(setting_row(
-                "Preview",
-                &selected_terminal_theme_preset_description,
-                theme,
-                self.render_terminal_theme_preview(),
             ))
             .child(settings_section_header("Advanced Colors", theme, false));
 
@@ -1742,36 +1738,6 @@ impl super::gpui::WorkspaceView {
                     )
                     .child("Use theme"),
             )
-    }
-
-    fn render_terminal_theme_preview(&self) -> impl IntoElement {
-        let theme = self.workspace.theme();
-        let border: Hsla = theme.border.into();
-        let swatches = [
-            theme.terminal_background,
-            theme.terminal_foreground,
-            theme.terminal_cursor,
-            theme.ansi.colors[1],
-            theme.ansi.colors[2],
-            theme.ansi.colors[4],
-            theme.ansi.colors[5],
-            theme.ansi.colors[6],
-        ];
-
-        let mut row = div().flex().flex_row().items_center().gap_2();
-        for color in swatches {
-            row = row.child(
-                div()
-                    .w(px(18.0))
-                    .h(px(18.0))
-                    .rounded_sm()
-                    .bg(gpui::Hsla::from(color))
-                    .border_1()
-                    .border_color(border),
-            );
-        }
-
-        row
     }
 
     /// Build an interactive number stepper with - and + buttons.
