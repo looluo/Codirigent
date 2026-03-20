@@ -151,20 +151,34 @@ impl WorkspaceView {
         let focused_control = search.focus_control;
 
         let input_display = if query.is_empty() {
+            if focused_control == SearchFocusControl::Input {
+                div()
+                    .flex()
+                    .items_center()
+                    .gap_2()
+                    .child(div().w(px(8.0)).h(px(16.0)).rounded_sm().bg(accent))
+                    .child(div().text_sm().text_color(muted).child("Type to search"))
+                    .into_any_element()
+            } else {
+                div()
+                    .text_sm()
+                    .text_color(muted)
+                    .child("Find in terminal")
+                    .into_any_element()
+            }
+        } else if focused_control == SearchFocusControl::Input {
             div()
-                .text_sm()
-                .text_color(muted)
-                .child("Find in terminal")
+                .flex()
+                .items_center()
+                .gap_1()
+                .child(div().text_sm().text_color(fg).child(query.clone()))
+                .child(div().w(px(8.0)).h(px(16.0)).rounded_sm().bg(accent))
                 .into_any_element()
         } else {
             div()
                 .text_sm()
                 .text_color(fg)
-                .child(if focused_control == SearchFocusControl::Input {
-                    format!("{}|", query)
-                } else {
-                    query.clone()
-                })
+                .child(query.clone())
                 .into_any_element()
         };
 
