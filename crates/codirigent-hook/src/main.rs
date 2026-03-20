@@ -282,11 +282,16 @@ fn map_codex_status(event_type: Option<&str>) -> &'static str {
     let event_type = event_type.unwrap_or("").to_ascii_lowercase();
 
     if event_type == "agent-turn-complete"
+        || event_type == "task_complete"
         || event_type == "response.completed"
         || event_type == "response.done"
         || event_type == "turn_complete"
     {
         return "response_ready";
+    }
+
+    if event_type == "task_started" {
+        return "working";
     }
 
     if event_type.contains("permission")
@@ -451,12 +456,14 @@ mod tests {
             map_codex_status(Some("agent-turn-complete")),
             "response_ready"
         );
+        assert_eq!(map_codex_status(Some("task_complete")), "response_ready");
     }
 
     #[test]
     fn map_codex_status_start_events_are_working() {
         assert_eq!(map_codex_status(Some("agent-turn-start")), "working");
         assert_eq!(map_codex_status(Some("turn_start")), "working");
+        assert_eq!(map_codex_status(Some("task_started")), "working");
     }
 
     #[test]
