@@ -326,6 +326,9 @@ impl Default for TerminalThemeOverrides {
 /// Terminal rendering preferences.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct TerminalSettings {
+    /// Selected terminal color preset layered on top of the active app theme.
+    #[serde(default = "default_terminal_theme_preset")]
+    pub theme_preset: String,
     /// Font family for terminal rendering.
     pub font_family: String,
     /// Font size in points.
@@ -337,6 +340,10 @@ pub struct TerminalSettings {
     /// Per-user terminal theme overrides layered on top of the selected theme.
     #[serde(default)]
     pub theme_overrides: TerminalThemeOverrides,
+}
+
+fn default_terminal_theme_preset() -> String {
+    "theme-default".to_string()
 }
 
 fn default_terminal_font_family() -> &'static str {
@@ -361,6 +368,7 @@ fn default_terminal_font_family() -> &'static str {
 impl Default for TerminalSettings {
     fn default() -> Self {
         Self {
+            theme_preset: default_terminal_theme_preset(),
             font_family: default_terminal_font_family().to_string(),
             font_size: 13.0,
             cursor_style: "block".to_string(),
@@ -927,6 +935,7 @@ mod tests {
     #[test]
     fn test_terminal_settings_default_font_family_is_platform_specific() {
         let settings = TerminalSettings::default();
+        assert_eq!(settings.theme_preset, "theme-default");
         assert_eq!(settings.font_family, default_terminal_font_family());
         assert!(settings.theme_overrides.background.is_empty());
         assert!(settings.theme_overrides.palette.bright_white.is_empty());

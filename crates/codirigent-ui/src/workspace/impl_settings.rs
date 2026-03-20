@@ -4,6 +4,9 @@ use super::gpui::WorkspaceView;
 use super::types::{ShellPickerOption, ShellPickerSection, SHELL_PICKER_AUTO_DETECT_LABEL};
 use crate::app::OpenSettings;
 use crate::settings::{SettingsPage, TerminalStyleField};
+use crate::terminal_theme_presets::{
+    apply_terminal_theme_preset, TERMINAL_THEME_DEFAULT_PRESET_ID,
+};
 use crate::theme::{CodirigentTheme, Rgba};
 use crate::theme_manager::ThemeManager;
 use codirigent_core::config_service::ConfigService;
@@ -469,6 +472,9 @@ impl WorkspaceView {
         theme.terminal_line_height = user_settings.terminal.line_height;
         if !user_settings.terminal.font_family.is_empty() {
             theme.terminal_font_family = user_settings.terminal.font_family.clone();
+        }
+        if user_settings.terminal.theme_preset != TERMINAL_THEME_DEFAULT_PRESET_ID {
+            apply_terminal_theme_preset(theme, &user_settings.terminal.theme_preset);
         }
         apply_terminal_theme_overrides(theme, &user_settings.terminal.theme_overrides);
     }
@@ -1337,6 +1343,20 @@ mod tests {
         assert_eq!(theme.terminal_cursor, Rgba::rgb(0xab, 0xcd, 0xef));
         assert_eq!(theme.cursor, Rgba::rgb(0xab, 0xcd, 0xef).to_hsla());
         assert_eq!(theme.ansi.colors[12], Rgba::rgb(0x44, 0x55, 0x66));
+    }
+
+    #[test]
+    fn apply_theme_runtime_overrides_applies_terminal_theme_preset_before_overrides() {
+        let mut theme = CodirigentTheme::dark();
+        let mut user_settings = codirigent_core::config::UserSettings::default();
+        user_settings.terminal.theme_preset = "tokyo-night".to_string();
+        user_settings.terminal.theme_overrides.cursor = "#abcdef".to_string();
+
+        WorkspaceView::apply_theme_runtime_overrides(&mut theme, &user_settings);
+
+        assert_eq!(theme.terminal_background, Rgba::rgb(0x1a, 0x1b, 0x26));
+        assert_eq!(theme.ansi.colors[4], Rgba::rgb(0x7a, 0xa2, 0xf7));
+        assert_eq!(theme.terminal_cursor, Rgba::rgb(0xab, 0xcd, 0xef));
     }
 
     #[test]
