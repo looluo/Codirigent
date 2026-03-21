@@ -37,7 +37,11 @@ pub fn install_shutdown_guard(hwnd: isize) {
     }
 
     let prev = unsafe {
-        SetWindowLongPtrW(hwnd, GWLP_WNDPROC, shutdown_guard_wndproc as *const () as isize)
+        SetWindowLongPtrW(
+            hwnd,
+            GWLP_WNDPROC,
+            shutdown_guard_wndproc as *const () as isize,
+        )
     };
     if prev == 0 {
         warn!("Failed to subclass window for shutdown guard");

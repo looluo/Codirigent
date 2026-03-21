@@ -52,6 +52,25 @@ jobs:
           cache-targets: "false"
           save-if: ${{ github.ref == 'refs/heads/main' }}
 
+      - name: Set workspace version from tag
+        shell: bash
+        run: |
+          export VERSION="${GITHUB_REF_NAME#v}"
+          python3 -c "
+          import os, re, pathlib
+          v = os.environ['VERSION']
+          p = pathlib.Path('Cargo.toml')
+          txt = p.read_text()
+          txt = re.sub(
+              r'(\[workspace\.package\]\s*\nversion\s*=\s*)\"[^\"]*\"',
+              rf'\1\"{v}\"',
+              txt,
+              count=1,
+          )
+          p.write_text(txt)
+          "
+          cargo generate-lockfile
+
       - name: Build binaries
         run: |
           cargo build --profile dist --features gpui-full --target ${{ matrix.target }} -p codirigent
