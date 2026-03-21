@@ -137,7 +137,7 @@ impl TerminalStyleField {
         }
     }
 
-    pub(crate) fn get<'a>(self, overrides: &'a TerminalThemeOverrides) -> &'a str {
+    pub(crate) fn get(self, overrides: &TerminalThemeOverrides) -> &str {
         match self {
             Self::Background => &overrides.background,
             Self::Foreground => &overrides.foreground,
@@ -163,7 +163,7 @@ impl TerminalStyleField {
         }
     }
 
-    pub(crate) fn get_mut<'a>(self, overrides: &'a mut TerminalThemeOverrides) -> &'a mut String {
+    pub(crate) fn get_mut(self, overrides: &mut TerminalThemeOverrides) -> &mut String {
         match self {
             Self::Background => &mut overrides.background,
             Self::Foreground => &mut overrides.foreground,
@@ -561,8 +561,10 @@ mod tests {
 
     #[test]
     fn test_reset_terminal_style_field_to_base() {
-        let mut base = TerminalThemeOverrides::default();
-        base.background = "#111111".to_string();
+        let base = TerminalThemeOverrides {
+            background: "#111111".to_string(),
+            ..TerminalThemeOverrides::default()
+        };
         let mut page = SettingsPage::new(
             UserSettings::default(),
             ProjectConfig::default(),
@@ -603,6 +605,7 @@ mod tests {
             vec!["code".to_string()],
             vec!["bash".to_string(), "zsh".to_string()],
             vec!["Menlo".to_string(), "Courier New".to_string()],
+            TerminalThemeOverrides::default(),
         );
         page.set_category(SettingsCategory::Sessions);
         assert_eq!(page.active_category(), SettingsCategory::General);
@@ -619,6 +622,7 @@ mod tests {
             vec!["code".to_string()],
             vec!["bash".to_string(), "zsh".to_string()],
             vec!["Menlo".to_string(), "Courier New".to_string()],
+            TerminalThemeOverrides::default(),
         );
         assert!(!page.is_user_dirty());
         page.user_settings.general.editor_command = "vim".to_string();
@@ -633,6 +637,7 @@ mod tests {
             vec!["code".to_string()],
             vec!["bash".to_string(), "zsh".to_string()],
             vec!["Menlo".to_string(), "Courier New".to_string()],
+            TerminalThemeOverrides::default(),
         );
         assert!(!page.is_project_dirty());
         page.project_config.sessions.max_concurrent = 16;
@@ -647,6 +652,7 @@ mod tests {
             vec!["code".to_string()],
             vec!["bash".to_string(), "zsh".to_string()],
             vec!["Menlo".to_string(), "Courier New".to_string()],
+            TerminalThemeOverrides::default(),
         );
         page.user_settings.general.editor_command = "vim".to_string();
         assert!(page.is_user_dirty());
@@ -664,6 +670,7 @@ mod tests {
             vec!["code".to_string()],
             vec!["bash".to_string(), "zsh".to_string()],
             vec!["Menlo".to_string(), "Courier New".to_string()],
+            TerminalThemeOverrides::default(),
         );
         page.project_config.sessions.max_concurrent = 16;
         page.set_category(SettingsCategory::Sessions);
@@ -680,6 +687,7 @@ mod tests {
             vec!["code".to_string()],
             vec!["bash".to_string(), "zsh".to_string()],
             vec!["Menlo".to_string(), "Courier New".to_string()],
+            TerminalThemeOverrides::default(),
         );
         page.user_settings.general.editor_command = "vim".to_string();
         page.user_save_pending = true;
@@ -696,6 +704,7 @@ mod tests {
             vec![],
             vec![],
             vec![],
+            TerminalThemeOverrides::default(),
         );
         // Mutate notification fields
         page.user_settings.notifications.desktop = false;

@@ -1,0 +1,102 @@
+{
+  "id": "light",
+  "name": "Light",
+  "is_dark": false,
+  "colors": {
+    "background": {
+      "app": "#f5f5f7",
+      "panel": "#ffffff",
+      "header": "#e8e8ec",
+      "sidebar": "#f0f0f4",
+      "icon_rail": "#f0f0f4",
+      "drawer": "#ffffff"
+    },
+    "foreground": {
+      "primary": "#1a1a1c",
+      "secondary": "#666666",
+      "muted": "#999999"
+    },
+    "border": {
+      "default": "#d0d0d8",
+      "focused": "#4f46e5"
+    },
+    "interaction": {
+      "hover": "#e8e8ec",
+      "active": "#d8d8e0",
+      "selection": "#4f46e533"
+    },
+    "accent": {
+      "primary": "#4f46e5",
+      "secondary": "#6366f1",
+      "purple": "#8b6fd9",
+      "orange": "#d98a0b",
+      "selected_ring": "#4f46e5",
+      "broadcast": "#e11d48",
+      "ai_summary_background": "#4f46e514",
+      "ai_summary_text": "#3730a3",
+      "input_required_background": "#e11d481a",
+      "input_required_accent": "#e11d48"
+    },
+    "status": {
+      "idle": "#71717a",
+      "working": "#d97706",
+      "needs_attention": "#e11d48",
+      "response_ready": "#16a34a",
+      "error": "#dc2626"
+    },
+    "priority": {
+      "high": "#dc2626",
+      "medium": "#d98a0b",
+      "low": "#6366f1"
+    },
+    "session_groups": [
+      "#4f46e5",
+      "#6366f1",
+      "#8b6fd9",
+      "#d98a0b",
+      "#e11d48",
+      "#059669"
+    ],
+    "terminal": {
+      "background": "#f5f5f7",
+      "foreground": "#1a1a1c",
+      "cursor": "#4f46e5",
+      "selection_background": "#4f46e533",
+      "selection_foreground": "#1a1a1c",
+      "palette": {
+        "black": "#000000",
+        "red": "#cc0000",
+        "green": "#00cc00",
+        "yellow": "#cccc00",
+        "blue": "#0000cc",
+        "magenta": "#cc00cc",
+        "cyan": "#00cccc",
+        "white": "#cccccc",
+        "bright_black": "#808080",
+        "bright_red": "#ff0000",
+        "bright_green": "#00ff00",
+        "bright_yellow": "#ffff00",
+        "bright_blue": "#0000ff",
+        "bright_magenta": "#ff00ff",
+        "bright_cyan": "#00ffff",
+        "bright_white": "#ffffff"
+      }
+    }
+  },
+  "typography": {
+    "ui_font_family": "Inter",
+    "terminal_font_family": "Menlo",
+    "base_font_size": 13.0,
+    "terminal_font_size": 13.0,
+    "line_height": 1.0
+  },
+  "spacing": {
+    "xs": 2.0,
+    "sm": 4.0,
+    "md": 8.0,
+    "lg": 16.0,
+    "xl": 24.0,
+    "grid_gap": 4.0,
+    "border_radius": 4.0
+  }
+}

@@ -9,16 +9,64 @@ const DEFAULT_UI_FONT_FAMILY: &str = "Inter";
 const DEFAULT_BORDER_RADIUS: f32 = 4.0;
 const DEFAULT_EXTRA_SMALL_SPACING: f32 = 2.0;
 const EXTRA_LARGE_SPACING_MULTIPLIER: f32 = 1.5;
+const BUILTIN_THEME_JSONS: &[(&str, &str)] = &[
+    ("dark", include_str!("builtin_themes/dark.json")),
+    ("light", include_str!("builtin_themes/light.json")),
+    (
+        "catppuccin-latte",
+        include_str!("builtin_themes/catppuccin-latte.json"),
+    ),
+    (
+        "github-light",
+        include_str!("builtin_themes/github-light.json"),
+    ),
+    (
+        "solarized-light",
+        include_str!("builtin_themes/solarized-light.json"),
+    ),
+    (
+        "catppuccin-mocha",
+        include_str!("builtin_themes/catppuccin-mocha.json"),
+    ),
+    (
+        "tokyo-night",
+        include_str!("builtin_themes/tokyo-night.json"),
+    ),
+    ("one-dark", include_str!("builtin_themes/one-dark.json")),
+    (
+        "gruvbox-dark",
+        include_str!("builtin_themes/gruvbox-dark.json"),
+    ),
+    (
+        "solarized-dark",
+        include_str!("builtin_themes/solarized-dark.json"),
+    ),
+];
+
+pub(crate) fn builtin_themes() -> Vec<Theme> {
+    BUILTIN_THEME_JSONS
+        .iter()
+        .map(|(_, json)| Theme::from_json(json).expect("builtin theme JSON must be valid"))
+        .collect()
+}
+
+fn builtin_theme(id: &str) -> Theme {
+    let json = BUILTIN_THEME_JSONS
+        .iter()
+        .find_map(|(theme_id, json)| (*theme_id == id).then_some(*json))
+        .expect("builtin theme ID must exist");
+    Theme::from_json(json).expect("builtin theme JSON must be valid")
+}
 
 impl Theme {
     /// Create the built-in dark theme definition.
     pub fn dark() -> Self {
-        Self::from_runtime("dark", "Dark", true, &CodirigentTheme::dark())
+        builtin_theme("dark")
     }
 
     /// Create the built-in light theme definition.
     pub fn light() -> Self {
-        Self::from_runtime("light", "Light", false, &CodirigentTheme::light())
+        builtin_theme("light")
     }
 
     /// Build a serializable theme from the runtime theme model.
@@ -222,5 +270,14 @@ mod tests {
     fn hsla_to_rgba_handles_gray_without_saturation() {
         let rgba = hsla_to_rgba(Hsla::new(0.0, 0.0, 0.5, 1.0));
         assert_eq!(rgba, Rgba::rgb(128, 128, 128));
+    }
+
+    #[test]
+    fn builtin_theme_registry_loads_all_checked_in_themes() {
+        let ids: Vec<String> = builtin_themes().into_iter().map(|theme| theme.id).collect();
+        assert!(ids.contains(&"dark".to_string()));
+        assert!(ids.contains(&"light".to_string()));
+        assert!(ids.contains(&"tokyo-night".to_string()));
+        assert!(ids.contains(&"solarized-dark".to_string()));
     }
 }

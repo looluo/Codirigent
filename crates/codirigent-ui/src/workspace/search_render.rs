@@ -416,9 +416,7 @@ impl WorkspaceView {
             }
 
             let search_inputs = match this.update(cx, |this, _cx| {
-                let Some(terminal_view) = this.terminals.get(&session_id) else {
-                    return None;
-                };
+                let terminal_view = this.terminals.get(&session_id)?;
                 if !terminal_view.search().active
                     || terminal_view.search_generation() != generation
                     || terminal_view.search_query() != query

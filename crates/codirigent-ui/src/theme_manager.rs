@@ -18,7 +18,7 @@
 //! ```
 
 use crate::theme::CodirigentTheme;
-use crate::theme_config::Theme;
+use crate::theme_config::{builtin_themes, Theme};
 use anyhow::Result;
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -419,56 +419,6 @@ impl Default for ThemeManager {
     fn default() -> Self {
         Self::with_defaults()
     }
-}
-
-fn builtin_themes() -> Vec<Theme> {
-    vec![
-        Theme::dark(),
-        Theme::light(),
-        Theme::from_runtime(
-            "catppuccin-latte",
-            "Catppuccin Latte",
-            false,
-            &CodirigentTheme::catppuccin_latte(),
-        ),
-        Theme::from_runtime(
-            "github-light",
-            "GitHub Light",
-            false,
-            &CodirigentTheme::github_light(),
-        ),
-        Theme::from_runtime(
-            "solarized-light",
-            "Solarized Light",
-            false,
-            &CodirigentTheme::solarized_light(),
-        ),
-        Theme::from_runtime(
-            "catppuccin-mocha",
-            "Catppuccin Mocha",
-            true,
-            &CodirigentTheme::catppuccin_mocha(),
-        ),
-        Theme::from_runtime(
-            "tokyo-night",
-            "Tokyo Night",
-            true,
-            &CodirigentTheme::tokyo_night(),
-        ),
-        Theme::from_runtime("one-dark", "One Dark", true, &CodirigentTheme::one_dark()),
-        Theme::from_runtime(
-            "gruvbox-dark",
-            "Gruvbox Dark",
-            true,
-            &CodirigentTheme::gruvbox_dark(),
-        ),
-        Theme::from_runtime(
-            "solarized-dark",
-            "Solarized Dark",
-            true,
-            &CodirigentTheme::solarized_dark(),
-        ),
-    ]
 }
 
 #[cfg(test)]

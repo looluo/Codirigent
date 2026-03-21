@@ -1410,14 +1410,24 @@ mod tests {
 
     #[test]
     fn migrate_legacy_terminal_conflicting_keybindings_updates_old_defaults() {
+        #[cfg(target_os = "macos")]
+        let toggle_sidebar_old = "Cmd+B";
+        #[cfg(not(target_os = "macos"))]
+        let toggle_sidebar_old = "Ctrl+B";
+
+        #[cfg(target_os = "macos")]
+        let search_terminal_old = "Cmd+F";
+        #[cfg(not(target_os = "macos"))]
+        let search_terminal_old = "Ctrl+F";
+
         let mut keybindings = std::collections::HashMap::from([
             (
                 "toggle_sidebar".to_string(),
-                normalize_keybinding_display("Ctrl+B"),
+                normalize_keybinding_display(toggle_sidebar_old),
             ),
             (
                 "search_terminal".to_string(),
-                normalize_keybinding_display("Ctrl+F"),
+                normalize_keybinding_display(search_terminal_old),
             ),
         ]);
 
@@ -1487,9 +1497,9 @@ mod tests {
     #[test]
     fn load_settings_snapshot_only_runs_terminal_safe_keybinding_migration_once() {
         let temp = tempfile::tempdir().unwrap();
-        let config_service =
-            codirigent_core::config_service::DefaultConfigService::with_base_dir(temp.path())
-                .unwrap();
+        let config_service = codirigent_core::config_service::DefaultConfigService::with_config_dir(
+            temp.path().to_path_buf(),
+        );
         let mut settings = codirigent_core::config::UserSettings::default();
         settings.migrations.terminal_safe_keybindings_version = 1;
         settings
@@ -1634,6 +1644,9 @@ mod tests {
 
         assert_eq!(snapshot.user_settings.appearance.theme, "aurora");
         assert!(snapshot.theme_manager.get("aurora").is_some());
-        assert_eq!(snapshot.theme_manager.len(), 3);
+        assert_eq!(
+            snapshot.theme_manager.len(),
+            crate::theme_config::builtin_themes().len() + 1
+        );
     }
 }

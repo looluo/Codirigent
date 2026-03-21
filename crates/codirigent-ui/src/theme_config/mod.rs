@@ -20,6 +20,7 @@ const DEFAULT_EXTRA_LARGE_SPACING: f32 = 24.0;
 const DEFAULT_GRID_GAP: f32 = 4.0;
 const DEFAULT_BORDER_RADIUS: f32 = 4.0;
 
+pub(crate) use builtins::builtin_themes;
 pub use conversion::ThemeConversionError;
 pub use schema::{
     HexColor, TerminalColors, TerminalPalette, Theme, ThemeAccentColors, ThemeBackgroundColors,
