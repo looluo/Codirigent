@@ -41,8 +41,21 @@ impl WorkspaceView {
             .and_then(|mut readers| {
                 let cached = readers.cached_status.get(&session_id)?;
                 if cached.seen_at.elapsed() > cached.ttl {
-                    readers.cached_status.remove(&session_id);
-                    return None;
+                    // Hook-sourced resting states (Idle, ResponseReady) represent
+                    // a stable "waiting for user input" condition that should
+                    // persist until a new hook event arrives.  Evicting them
+                    // causes the detector's Working status (from the shell's
+                    // CommandExecuted state) to take over, producing a false
+                    // yellow indicator on long-idle Claude Code sessions.
+                    let is_resting_hook = cached.source == CliStatusSource::Hook
+                        && matches!(
+                            cached.status,
+                            SessionStatus::Idle | SessionStatus::ResponseReady
+                        );
+                    if !is_resting_hook {
+                        readers.cached_status.remove(&session_id);
+                        return None;
+                    }
                 }
                 let source = match cached.source {
                     CliStatusSource::Hook => HintSource::HookSignal,
