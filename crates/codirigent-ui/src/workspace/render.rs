@@ -81,10 +81,13 @@ impl WorkspaceView {
         #[cfg(target_os = "windows")]
         {
             use raw_window_handle::HasWindowHandle;
-            let raw_handle = window.window_handle().ok().map(|h| match h.as_raw() {
-                raw_window_handle::RawWindowHandle::Win32(win32) => win32.hwnd.get(),
-                _ => 0,
-            });
+            let raw_handle =
+                HasWindowHandle::window_handle(window)
+                    .ok()
+                    .map(|h| match h.as_raw() {
+                        raw_window_handle::RawWindowHandle::Win32(win32) => win32.hwnd.get(),
+                        _ => 0,
+                    });
             if let Some(hwnd) = raw_handle {
                 bar = bar.on_mouse_down(gpui::MouseButton::Left, move |_event, _window, _cx| {
                     crate::platform_drag::begin_title_bar_drag(hwnd);

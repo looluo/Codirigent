@@ -569,7 +569,7 @@ impl CodirigentApp {
         #[cfg(target_os = "windows")]
         {
             use raw_window_handle::HasWindowHandle;
-            if let Ok(handle) = window.window_handle() {
+            if let Ok(handle) = HasWindowHandle::window_handle(window) {
                 if let raw_window_handle::RawWindowHandle::Win32(win32) = handle.as_raw() {
                     crate::platform::shutdown_guard::install_for_window(win32.hwnd.get());
                 }
