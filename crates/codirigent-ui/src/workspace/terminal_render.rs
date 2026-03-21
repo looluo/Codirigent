@@ -15,6 +15,13 @@ use gpui::{div, px, Entity, FocusHandle, IntoElement, ParentElement, Styled};
 use std::cell::Cell;
 use std::rc::Rc;
 
+#[derive(Clone, Copy, Default)]
+pub(super) struct TerminalCanvasMetrics {
+    pub(super) origin_x: f32,
+    pub(super) origin_y: f32,
+    pub(super) content_height: f32,
+}
+
 impl WorkspaceView {
     pub(super) fn render_terminal_content(
         &mut self,
@@ -22,9 +29,10 @@ impl WorkspaceView {
         theme: &CodirigentTheme,
         ime_context: Option<(Entity<WorkspaceView>, FocusHandle, bool, bool)>,
         window: &mut gpui::Window,
-    ) -> (gpui::AnyElement, Rc<Cell<(f32, f32)>>) {
+    ) -> (gpui::AnyElement, Rc<Cell<TerminalCanvasMetrics>>) {
         // Shared cell for canvas origin (updated during prepaint)
-        let canvas_origin: Rc<Cell<(f32, f32)>> = Rc::new(Cell::new((0.0, 0.0)));
+        let canvas_metrics: Rc<Cell<TerminalCanvasMetrics>> =
+            Rc::new(Cell::new(TerminalCanvasMetrics::default()));
 
         // IME pre-edit text should only be shown in the focused terminal pane.
         let ime_preedit_text = if matches!(ime_context.as_ref(), Some((_, _, true, true))) {
@@ -53,7 +61,7 @@ impl WorkspaceView {
                             .child(icons::terminal()),
                     )
                     .into_any_element(),
-                canvas_origin,
+                canvas_metrics,
             );
         };
 
@@ -69,6 +77,7 @@ impl WorkspaceView {
         let cached_rows = terminal_view.render_rows();
         let shaped_rows = terminal_view.shaped_rows(window.text_system());
         let selection_rects = terminal_view.selection_rects_hsla();
+        let search_rects = terminal_view.search_highlight_rects_hsla();
 
         // Both read from cache — pure field access, no terminal state touch.
         let cursor_rect = terminal_view.cursor_rect();
@@ -122,7 +131,7 @@ impl WorkspaceView {
         };
 
         // Clone Rc for capture into the canvas prepaint closure
-        let canvas_origin_for_prepaint = Rc::clone(&canvas_origin);
+        let canvas_metrics_for_prepaint = Rc::clone(&canvas_metrics);
 
         // Capture IME context for paint closure
         let ime_context_for_paint = ime_context.clone();
@@ -137,9 +146,16 @@ impl WorkspaceView {
                 let padding = super::types::TERMINAL_CONTENT_PADDING;
                 let ox = origin_x + padding;
                 let oy = origin_y + padding;
+                let content_height: f32 = bounds.size.height.into();
+                let content_height = (content_height - (padding * 2.0)).max(0.0);
 
-                // Store origin for mouse coordinate translation
-                canvas_origin_for_prepaint.set((ox, oy));
+                // Store origin and actual rendered content height for
+                // mouse coordinate translation and scrollbar geometry.
+                canvas_metrics_for_prepaint.set(TerminalCanvasMetrics {
+                    origin_x: ox,
+                    origin_y: oy,
+                    content_height,
+                });
 
                 (
                     ox,
@@ -147,6 +163,7 @@ impl WorkspaceView {
                     cached_rows,
                     shaped_rows,
                     selection_rects,
+                    search_rects,
                     ime_preedit,
                     cursor_data,
                     cell_width,
@@ -164,6 +181,7 @@ impl WorkspaceView {
                     cached_rows,
                     shaped_rows,
                     selection_rects,
+                    search_rects,
                     ime_preedit,
                     cursor_data,
                     cell_w,
@@ -221,7 +239,25 @@ impl WorkspaceView {
                     window.paint_quad(gpui::fill(rect_bounds, *bg_color));
                 }
 
-                // 3. Paint shaped text runs
+                // 3. Paint search highlights.
+                for (rect_row, start_col, end_col, bg_color) in &search_rects {
+                    let rect_x = ox + *start_col as f32 * cell_w;
+                    let rect_y = oy + *rect_row as f32 * cell_h;
+                    let rect_w = (*end_col - *start_col) as f32 * cell_w;
+                    let rect_bounds = gpui::Bounds {
+                        origin: gpui::Point {
+                            x: px(rect_x),
+                            y: px(rect_y),
+                        },
+                        size: gpui::Size {
+                            width: px(rect_w),
+                            height: px(cell_h),
+                        },
+                    };
+                    window.paint_quad(gpui::fill(rect_bounds, *bg_color));
+                }
+
+                // 4. Paint shaped text runs
                 for row in &shaped_rows {
                     for (line_row, start_col, shaped_line) in row.iter() {
                         let text_x = ox + *start_col as f32 * cell_w;
@@ -234,7 +270,7 @@ impl WorkspaceView {
                     }
                 }
 
-                // 4. Paint IME pre-edit text at the cursor position.
+                // 5. Paint IME pre-edit text at the cursor position.
                 if let Some((preedit_x, preedit_y, preedit_line)) = &ime_preedit {
                     let preedit_origin = gpui::Point {
                         x: px(ox + *preedit_x),
@@ -243,7 +279,7 @@ impl WorkspaceView {
                     let _ = preedit_line.paint(preedit_origin, px(cell_h), window, cx);
                 }
 
-                // 5. Paint cursor
+                // 6. Paint cursor
                 if let Some((cursor, cursor_color)) = &cursor_data {
                     let cx_pos = ox + cursor.x;
                     let cy_pos = oy + cursor.y;
@@ -323,6 +359,6 @@ impl WorkspaceView {
             .child(terminal_canvas)
             .into_any_element();
 
-        (element, canvas_origin)
+        (element, canvas_metrics)
     }
 }

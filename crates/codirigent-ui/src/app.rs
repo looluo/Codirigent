@@ -54,6 +54,7 @@ mod actions_impl {
             ClosePane,
             Paste,
             Copy,
+            SearchTerminal,
             OpenSettings,
             Quit,
         ]
@@ -71,21 +72,22 @@ pub use actions_impl::*;
 /// last-registered-wins gives a consistent snapshot on every save.
 pub(crate) fn default_gpui_keybindings() -> Vec<KeyBinding> {
     vec![
-        KeyBinding::new("secondary-n", NewSession, None),
-        KeyBinding::new("secondary-w", CloseSession, None),
+        KeyBinding::new("secondary-shift-n", NewSession, None),
+        KeyBinding::new("secondary-alt-w", CloseSession, None),
         KeyBinding::new("secondary-q", Quit, None),
-        KeyBinding::new("secondary-\\", NextLayout, None),
-        // Ctrl+B / Cmd+B — toggle sidebar (repo drawer)
-        KeyBinding::new("secondary-b", ToggleSidebar, None),
-        // Ctrl+T / Cmd+T — toggle task board
-        KeyBinding::new("secondary-t", ToggleTaskBoard, None),
-        // Ctrl+K / Cmd+K — quick switch
-        KeyBinding::new("secondary-k", QuickSwitch, None),
+        KeyBinding::new("secondary-shift-l", NextLayout, None),
+        // Ctrl/Cmd+Shift+E — toggle sidebar (repo drawer)
+        KeyBinding::new("secondary-shift-e", ToggleSidebar, None),
+        // Ctrl/Cmd+Shift+T — toggle task board
+        KeyBinding::new("secondary-shift-t", ToggleTaskBoard, None),
+        // Ctrl/Cmd+Shift+K — quick switch
+        KeyBinding::new("secondary-shift-k", QuickSwitch, None),
         KeyBinding::new("secondary-v", Paste, None),
         KeyBinding::new("secondary-c", Copy, None),
-        KeyBinding::new("secondary-d", SplitHorizontal, None),
-        KeyBinding::new("secondary-shift-d", SplitVertical, None),
-        KeyBinding::new("secondary-shift-w", ClosePane, None),
+        KeyBinding::new("secondary-shift-f", SearchTerminal, None),
+        KeyBinding::new("secondary-alt-shift-h", SplitHorizontal, None),
+        KeyBinding::new("secondary-alt-shift-v", SplitVertical, None),
+        KeyBinding::new("secondary-alt-shift-w", ClosePane, None),
         KeyBinding::new("secondary-,", OpenSettings, None),
         KeyBinding::new("secondary-1", FocusSession1, None),
         KeyBinding::new("secondary-2", FocusSession2, None),
@@ -583,6 +585,10 @@ impl CodirigentApp {
             info!("ToggleTaskBoard action triggered (global fallback)");
         });
 
+        cx.on_action(|_: &SearchTerminal, _cx| {
+            info!("SearchTerminal action triggered (global fallback)");
+        });
+
         cx.on_action(|_: &QuickSwitch, _cx| {
             info!("QuickSwitch action triggered (global fallback)");
         });
@@ -671,9 +677,9 @@ mod tests {
         // "secondary-" is GPUI's platform-aware modifier token (Cmd on macOS, Ctrl elsewhere).
         // Verify that representative binding strings are parseable by GPUI's keystroke parser.
         use gpui::Keystroke;
-        assert!(Keystroke::parse("secondary-n").is_ok());
-        assert!(Keystroke::parse("secondary-shift-d").is_ok());
+        assert!(Keystroke::parse("secondary-shift-n").is_ok());
+        assert!(Keystroke::parse("secondary-alt-shift-h").is_ok());
         assert!(Keystroke::parse("secondary-,").is_ok());
-        assert!(Keystroke::parse("secondary-\\").is_ok());
+        assert!(Keystroke::parse("secondary-shift-l").is_ok());
     }
 }

@@ -1,0 +1,102 @@
+{
+  "id": "tokyo-night",
+  "name": "Tokyo Night",
+  "is_dark": true,
+  "colors": {
+    "background": {
+      "app": "#16161e",
+      "panel": "#1a1b26",
+      "header": "#1f2335",
+      "sidebar": "#1a1b26",
+      "icon_rail": "#1a1b26",
+      "drawer": "#1f2335"
+    },
+    "foreground": {
+      "primary": "#c0caf5",
+      "secondary": "#9aa5ce",
+      "muted": "#565f89"
+    },
+    "border": {
+      "default": "#292e42",
+      "focused": "#7aa2f7"
+    },
+    "interaction": {
+      "hover": "#24283b",
+      "active": "#2f3549",
+      "selection": "#7aa2f73d"
+    },
+    "accent": {
+      "primary": "#7aa2f7",
+      "secondary": "#7dcfff",
+      "purple": "#bb9af7",
+      "orange": "#ff9e64",
+      "selected_ring": "#7aa2f7",
+      "broadcast": "#f7768e",
+      "ai_summary_background": "#7aa2f714",
+      "ai_summary_text": "#c0caf5",
+      "input_required_background": "#f7768e24",
+      "input_required_accent": "#f7768e"
+    },
+    "status": {
+      "idle": "#565f89",
+      "working": "#ff9e64",
+      "needs_attention": "#f7768e",
+      "response_ready": "#9ece6a",
+      "error": "#f7768e"
+    },
+    "priority": {
+      "high": "#f7768e",
+      "medium": "#ff9e64",
+      "low": "#7aa2f7"
+    },
+    "session_groups": [
+      "#7aa2f7",
+      "#7dcfff",
+      "#bb9af7",
+      "#ff9e64",
+      "#f7768e",
+      "#9ece6a"
+    ],
+    "terminal": {
+      "background": "#1a1b26",
+      "foreground": "#c0caf5",
+      "cursor": "#c0caf5",
+      "selection_background": "#283457cc",
+      "selection_foreground": "#c0caf5",
+      "palette": {
+        "black": "#15161e",
+        "red": "#f7768e",
+        "green": "#9ece6a",
+        "yellow": "#e0af68",
+        "blue": "#7aa2f7",
+        "magenta": "#bb9af7",
+        "cyan": "#7dcfff",
+        "white": "#a9b1d6",
+        "bright_black": "#414868",
+        "bright_red": "#f7768e",
+        "bright_green": "#9ece6a",
+        "bright_yellow": "#e0af68",
+        "bright_blue": "#7aa2f7",
+        "bright_magenta": "#bb9af7",
+        "bright_cyan": "#7dcfff",
+        "bright_white": "#c0caf5"
+      }
+    }
+  },
+  "typography": {
+    "ui_font_family": "Inter",
+    "terminal_font_family": "",
+    "base_font_size": 13.0,
+    "terminal_font_size": 13.0,
+    "line_height": 1.0
+  },
+  "spacing": {
+    "xs": 2.0,
+    "sm": 4.0,
+    "md": 8.0,
+    "lg": 16.0,
+    "xl": 24.0,
+    "grid_gap": 4.0,
+    "border_radius": 4.0
+  }
+}

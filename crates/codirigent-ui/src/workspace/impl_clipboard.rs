@@ -20,6 +20,23 @@ enum PreparedClipboardPaste {
 }
 
 impl WorkspaceView {
+    fn paste_text_into_terminal_search(
+        &mut self,
+        session_id: codirigent_core::SessionId,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) {
+        if text.is_empty() {
+            return;
+        }
+
+        if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
+            terminal_view.append_search_text(text);
+        }
+        self.schedule_terminal_search(session_id, cx);
+        cx.notify();
+    }
+
     fn apply_prepared_clipboard_paste(
         &mut self,
         session_id: codirigent_core::SessionId,
@@ -106,6 +123,31 @@ impl WorkspaceView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(session_id) = self.focused_search_session_id() {
+            let clipboard = self.clipboard.smart_clipboard.clone();
+
+            cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+                let result = cx
+                    .background_executor()
+                    .spawn(async move { clipboard.read_content() })
+                    .await;
+
+                let _ = this.update(cx, |this, cx| match result {
+                    Ok(ClipboardContent::Text(text)) => {
+                        this.paste_text_into_terminal_search(session_id, &text, cx);
+                    }
+                    Ok(ClipboardContent::Empty)
+                    | Ok(ClipboardContent::Files(_))
+                    | Ok(ClipboardContent::Image(_)) => {}
+                    Err(e) => {
+                        warn!("Failed to read clipboard for terminal search paste: {}", e);
+                    }
+                });
+            })
+            .detach();
+            return;
+        }
+
         let Some(session_id) = self.workspace.focused_session_id() else {
             return;
         };
@@ -182,6 +224,21 @@ impl WorkspaceView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if let Some(session_id) = self.focused_search_session_id() {
+            let query = self
+                .terminals
+                .get(&session_id)
+                .map(|tv| tv.search_query().to_string())
+                .unwrap_or_default();
+            if !query.is_empty() {
+                if let Err(e) = self.clipboard.smart_clipboard.write_text(query) {
+                    warn!("Failed to copy terminal search query to clipboard: {}", e);
+                }
+            }
+            cx.notify();
+            return;
+        }
+
         let Some(session_id) = self.workspace.focused_session_id() else {
             return;
         };

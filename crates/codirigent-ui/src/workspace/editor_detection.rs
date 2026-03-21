@@ -156,10 +156,20 @@ pub(super) fn detect_installed_editors() -> Vec<String> {
         .collect()
 }
 
+/// Symbol and dingbat font families that pass monospace width checks but
+/// render pictographs instead of text glyphs.
+fn is_symbol_font(name: &str) -> bool {
+    let lower = name.to_lowercase();
+    lower.contains("wingding")
+        || lower.contains("webding")
+        || lower.contains("dingbat")
+        || lower.contains("emoji")
+}
+
 /// Detect installed monospace fonts by querying the GPUI text system.
 ///
 /// Enumerates all system fonts and filters for monospace by comparing
-/// the advance width of 'm' vs 'i' ??in a monospace font these are equal.
+/// the advance width of 'm' vs 'i' — in a monospace font these are equal.
 #[cfg(target_os = "windows")]
 pub(super) fn detect_monospace_fonts(text_system: &gpui::TextSystem) -> Vec<String> {
     let all_names: Vec<String> = text_system
@@ -196,7 +206,7 @@ pub(super) fn detect_monospace_fonts(text_system: &gpui::TextSystem) -> Vec<Stri
             .iter()
             .filter(|name| {
                 let lower = name.to_lowercase();
-                lower.contains("mono") || lower.contains("code")
+                (lower.contains("mono") || lower.contains("code")) && !is_symbol_font(name)
             })
             .cloned()
             .collect();
@@ -222,6 +232,10 @@ pub(super) fn detect_monospace_fonts(text_system: &gpui::TextSystem) -> Vec<Stri
     for name in &all_names {
         // Skip internal/system fonts (names starting with '.')
         if name.starts_with('.') {
+            continue;
+        }
+
+        if is_symbol_font(name) {
             continue;
         }
 
@@ -327,6 +341,20 @@ mod tests {
         assert!(is_terminal_editor("/usr/local/bin/nvim"));
         assert!(is_terminal_editor("/usr/local/bin/nano"));
         assert!(!is_terminal_editor("/usr/local/bin/code"));
+    }
+
+    #[test]
+    fn test_is_symbol_font() {
+        assert!(is_symbol_font("Wingdings"));
+        assert!(is_symbol_font("Wingdings 2"));
+        assert!(is_symbol_font("Webdings"));
+        assert!(is_symbol_font("Apple Color Emoji"));
+        assert!(is_symbol_font("Noto Color Emoji"));
+        assert!(is_symbol_font("Zapf Dingbats"));
+        assert!(!is_symbol_font("JetBrains Mono"));
+        assert!(!is_symbol_font("Menlo"));
+        assert!(!is_symbol_font("Consolas"));
+        assert!(!is_symbol_font("Fira Code"));
     }
 
     #[cfg(unix)]

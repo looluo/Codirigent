@@ -142,16 +142,22 @@ impl TopBar {
         if let Some(id) = matching_id {
             self.profile_manager.set_active(&id);
         } else {
-            // No matching profile — deactivate all
-            // Use an impossible ID so nothing matches
-            self.profile_manager.set_active("__none__");
+            self.profile_manager.clear_active();
         }
         self.refresh_tabs();
     }
 
     /// Set the active profile by its manager ID and refresh tabs.
     pub fn set_active_profile_id(&mut self, id: &str) {
-        self.profile_manager.set_active(id);
+        if !self.profile_manager.set_active(id) {
+            self.profile_manager.clear_active();
+        }
+        self.refresh_tabs();
+    }
+
+    /// Clear the active profile selection and refresh tabs.
+    pub fn clear_active_profile(&mut self) {
+        self.profile_manager.clear_active();
         self.refresh_tabs();
     }
 
@@ -379,6 +385,13 @@ mod tests {
         assert_eq!(bar.tabs().len(), 4);
         bar.remove_tab(3); // Remove the user-saved tab
         assert_eq!(bar.tabs().len(), 3);
+    }
+
+    #[test]
+    fn invalid_active_profile_id_clears_active_tab() {
+        let mut bar = TopBar::new();
+        bar.set_active_profile_id("does-not-exist");
+        assert!(bar.tabs().iter().all(|tab| !tab.is_active));
     }
 
     #[test]

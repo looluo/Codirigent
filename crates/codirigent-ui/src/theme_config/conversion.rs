@@ -138,7 +138,11 @@ impl TryFrom<&Theme> for CodirigentTheme {
             font_size_large: theme.typography.base_font_size + UI_FONT_SIZE_DELTA,
             terminal_font_size: theme.typography.terminal_font_size,
             terminal_line_height: theme.typography.line_height,
-            terminal_font_family: theme.typography.terminal_font_family.clone(),
+            terminal_font_family: if theme.typography.terminal_font_family.is_empty() {
+                codirigent_core::config::default_terminal_font_family().to_string()
+            } else {
+                theme.typography.terminal_font_family.clone()
+            },
             spacing_base: theme.spacing.md,
             spacing_small: theme.spacing.sm,
             spacing_large: theme.spacing.lg,

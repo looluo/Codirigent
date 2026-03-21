@@ -18,6 +18,10 @@ pub(super) struct SettingsState {
     pub(super) load_task: Option<gpui::Task<()>>,
     /// Debounced background save task for settings persistence.
     pub(super) save_task: Option<gpui::Task<()>>,
+    /// Debounced background save task for custom terminal theme files.
+    pub(super) theme_save_task: Option<gpui::Task<()>>,
+    /// Monotonic generation for debounced terminal theme persistence.
+    pub(super) theme_save_generation: u64,
     /// Cached user settings loaded in the background at startup.
     pub(super) cached_user_settings: UserSettings,
     /// Cached project config for the current working directory.
@@ -44,6 +48,8 @@ impl SettingsState {
             config_service: DefaultConfigService::new().ok(),
             load_task: None,
             save_task: None,
+            theme_save_task: None,
+            theme_save_generation: 0,
             cached_user_settings: UserSettings::default(),
             cached_project_config: ProjectConfig::default(),
             theme_manager,

@@ -151,6 +151,7 @@ pub struct EffectiveConfig {
 ///
 /// Emitted when a configuration file is modified and reloaded.
 #[derive(Debug, Clone)]
+#[allow(clippy::large_enum_variant)]
 pub enum ConfigChange {
     /// Project configuration was changed.
     ProjectConfigChanged(ProjectConfig),

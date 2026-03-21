@@ -187,6 +187,8 @@ pub enum Action {
     Copy,
     /// Paste from clipboard.
     Paste,
+    /// Search inside the active terminal.
+    SearchTerminal,
     /// Copy entire session output.
     CopySessionOutput,
 
@@ -236,9 +238,9 @@ impl KeybindingManager {
     /// let manager = KeybindingManager::with_defaults();
     /// // Platform modifier key: Cmd on macOS, Ctrl elsewhere.
     /// #[cfg(target_os = "macos")]
-    /// let binding = KeybindingManager::parse_binding("Cmd+N").unwrap();
+    /// let binding = KeybindingManager::parse_binding("Cmd+Shift+N").unwrap();
     /// #[cfg(not(target_os = "macos"))]
-    /// let binding = KeybindingManager::parse_binding("Ctrl+N").unwrap();
+    /// let binding = KeybindingManager::parse_binding("Ctrl+Shift+N").unwrap();
     /// assert_eq!(manager.get_action(&binding), Some(&Action::NewSession));
     /// ```
     pub fn with_defaults() -> Self {
@@ -258,15 +260,15 @@ impl KeybindingManager {
         }
 
         // Session management
-        if let Ok(binding) = Self::parse_binding(&format!("{m}+N")) {
+        if let Ok(binding) = Self::parse_binding(&format!("{m}+Shift+N")) {
             manager.set_binding(binding, Action::NewSession);
         }
-        if let Ok(binding) = Self::parse_binding(&format!("{m}+W")) {
+        if let Ok(binding) = Self::parse_binding(&format!("{m}+Alt+W")) {
             manager.set_binding(binding, Action::CloseSession);
         }
 
         // Navigation
-        if let Ok(binding) = Self::parse_binding(&format!("{m}+K")) {
+        if let Ok(binding) = Self::parse_binding(&format!("{m}+Shift+K")) {
             manager.set_binding(binding, Action::QuickSwitch);
         }
         if let Ok(binding) = Self::parse_binding(&format!("{m}+Shift+P")) {
@@ -280,17 +282,20 @@ impl KeybindingManager {
         }
 
         // Layout
-        if let Ok(binding) = Self::parse_binding(&format!("{m}+\\")) {
+        if let Ok(binding) = Self::parse_binding(&format!("{m}+Shift+L")) {
             manager.set_binding(binding, Action::ToggleLayout);
         }
-        if let Ok(binding) = Self::parse_binding(&format!("{m}+B")) {
+        if let Ok(binding) = Self::parse_binding(&format!("{m}+Shift+E")) {
             manager.set_binding(binding, Action::ToggleSidebar);
         }
         if let Ok(binding) = Self::parse_binding(&format!("{m}+Shift+B")) {
             manager.set_binding(binding, Action::Broadcast);
         }
-        if let Ok(binding) = Self::parse_binding(&format!("{m}+T")) {
+        if let Ok(binding) = Self::parse_binding(&format!("{m}+Shift+T")) {
             manager.set_binding(binding, Action::ToggleTaskBoard);
+        }
+        if let Ok(binding) = Self::parse_binding(&format!("{m}+Shift+F")) {
+            manager.set_binding(binding, Action::SearchTerminal);
         }
 
         // Clipboard
@@ -327,7 +332,7 @@ impl KeybindingManager {
     /// use std::collections::HashMap;
     ///
     /// let mut config = HashMap::new();
-    /// config.insert("new_session".to_string(), "Ctrl+N".to_string());
+    /// config.insert("new_session".to_string(), "Ctrl+Shift+N".to_string());
     /// let manager = KeybindingManager::from_config(&config);
     /// ```
     pub fn from_config(config: &HashMap<String, String>) -> Self {
@@ -546,6 +551,7 @@ impl KeybindingManager {
             "broadcast" => Some(Action::Broadcast),
             "copy" => Some(Action::Copy),
             "paste" => Some(Action::Paste),
+            "search_terminal" => Some(Action::SearchTerminal),
             "copy_session_output" => Some(Action::CopySessionOutput),
             "quit" => Some(Action::Quit),
             "open_settings" => Some(Action::OpenSettings),
@@ -590,6 +596,7 @@ impl KeybindingManager {
             Action::CommandPalette => "command_palette".to_string(),
             Action::Copy => "copy".to_string(),
             Action::Paste => "paste".to_string(),
+            Action::SearchTerminal => "search_terminal".to_string(),
             Action::CopySessionOutput => "copy_session_output".to_string(),
             Action::Quit => "quit".to_string(),
             Action::OpenSettings => "open_settings".to_string(),
@@ -836,9 +843,9 @@ mod tests {
 
         // Check some default bindings (platform modifier: Cmd on macOS, Ctrl elsewhere)
         #[cfg(target_os = "macos")]
-        let (new_key, close_key) = ("Cmd+N", "Cmd+W");
+        let (new_key, close_key) = ("Cmd+Shift+N", "Cmd+Alt+W");
         #[cfg(not(target_os = "macos"))]
-        let (new_key, close_key) = ("Ctrl+N", "Ctrl+W");
+        let (new_key, close_key) = ("Ctrl+Shift+N", "Ctrl+Alt+W");
 
         let binding = KeybindingManager::parse_binding(new_key).unwrap();
         assert_eq!(manager.get_action(&binding), Some(&Action::NewSession));
@@ -851,9 +858,9 @@ mod tests {
     fn test_default_bindings() {
         let manager = KeybindingManager::with_defaults();
         #[cfg(target_os = "macos")]
-        let key = "Cmd+N";
+        let key = "Cmd+Shift+N";
         #[cfg(not(target_os = "macos"))]
-        let key = "Ctrl+N";
+        let key = "Ctrl+Shift+N";
         let binding = KeybindingManager::parse_binding(key).unwrap();
         assert_eq!(manager.get_action(&binding), Some(&Action::NewSession));
     }
@@ -908,10 +915,10 @@ mod tests {
     #[test]
     fn test_from_config() {
         let mut config = HashMap::new();
-        config.insert("new_session".to_string(), "Ctrl+N".to_string());
+        config.insert("new_session".to_string(), "Ctrl+Shift+N".to_string());
         let manager = KeybindingManager::from_config(&config);
 
-        let binding = KeybindingManager::parse_binding("Ctrl+N").unwrap();
+        let binding = KeybindingManager::parse_binding("Ctrl+Shift+N").unwrap();
         assert_eq!(manager.get_action(&binding), Some(&Action::NewSession));
     }
 
@@ -922,9 +929,9 @@ mod tests {
         let manager = KeybindingManager::from_config(&config);
         // Should still have defaults (platform modifier: Cmd on macOS, Ctrl elsewhere)
         #[cfg(target_os = "macos")]
-        let key = "Cmd+N";
+        let key = "Cmd+Shift+N";
         #[cfg(not(target_os = "macos"))]
-        let key = "Ctrl+N";
+        let key = "Ctrl+Shift+N";
         let binding = KeybindingManager::parse_binding(key).unwrap();
         assert_eq!(manager.get_action(&binding), Some(&Action::NewSession));
     }
@@ -993,9 +1000,9 @@ mod tests {
     fn test_keybinding_manager_default() {
         let manager = KeybindingManager::default();
         #[cfg(target_os = "macos")]
-        let key = "Cmd+N";
+        let key = "Cmd+Shift+N";
         #[cfg(not(target_os = "macos"))]
-        let key = "Ctrl+N";
+        let key = "Ctrl+Shift+N";
         let binding = KeybindingManager::parse_binding(key).unwrap();
         assert_eq!(manager.get_action(&binding), Some(&Action::NewSession));
     }
@@ -1005,9 +1012,9 @@ mod tests {
         let manager = KeybindingManager::with_defaults();
         let cloned = manager.clone();
         #[cfg(target_os = "macos")]
-        let key = "Cmd+N";
+        let key = "Cmd+Shift+N";
         #[cfg(not(target_os = "macos"))]
-        let key = "Ctrl+N";
+        let key = "Ctrl+Shift+N";
         let binding = KeybindingManager::parse_binding(key).unwrap();
         assert_eq!(cloned.get_action(&binding), Some(&Action::NewSession));
     }

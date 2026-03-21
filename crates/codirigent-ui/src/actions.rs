@@ -263,63 +263,6 @@ pub struct OpenCommandPalette;
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ReloadConfig;
 
-/// Keybinding configuration.
-#[derive(Debug, Clone)]
-pub struct KeyBinding {
-    /// Key identifier (e.g., "Ctrl+L", "Alt+1").
-    pub key: String,
-    /// Action name.
-    pub action: String,
-}
-
-impl KeyBinding {
-    /// Create a new keybinding.
-    pub fn new(key: impl Into<String>, action: impl Into<String>) -> Self {
-        Self {
-            key: key.into(),
-            action: action.into(),
-        }
-    }
-}
-
-/// Default keybindings for Codirigent.
-pub fn default_keybindings() -> Vec<KeyBinding> {
-    vec![
-        // Layout
-        KeyBinding::new("Ctrl+L", "next_layout"),
-        KeyBinding::new("Ctrl+Shift+L", "previous_layout"),
-        KeyBinding::new("Ctrl+B", "toggle_sidebar"),
-        // Focus by number
-        KeyBinding::new("Alt+1", "focus_session_1"),
-        KeyBinding::new("Alt+2", "focus_session_2"),
-        KeyBinding::new("Alt+3", "focus_session_3"),
-        KeyBinding::new("Alt+4", "focus_session_4"),
-        KeyBinding::new("Alt+5", "focus_session_5"),
-        KeyBinding::new("Alt+6", "focus_session_6"),
-        KeyBinding::new("Alt+7", "focus_session_7"),
-        KeyBinding::new("Alt+8", "focus_session_8"),
-        KeyBinding::new("Alt+9", "focus_session_9"),
-        // Focus navigation
-        KeyBinding::new("Ctrl+Tab", "focus_next"),
-        KeyBinding::new("Ctrl+Shift+Tab", "focus_previous"),
-        KeyBinding::new("Ctrl+Up", "focus_up"),
-        KeyBinding::new("Ctrl+Down", "focus_down"),
-        KeyBinding::new("Ctrl+Left", "focus_left"),
-        KeyBinding::new("Ctrl+Right", "focus_right"),
-        // Session management
-        KeyBinding::new("Ctrl+N", "create_session"),
-        KeyBinding::new("Ctrl+W", "close_session"),
-        // Pane splitting
-        KeyBinding::new("Ctrl+D", "split_horizontal"),
-        KeyBinding::new("Ctrl+Shift+D", "split_vertical"),
-        KeyBinding::new("Ctrl+Shift+W", "close_pane"),
-        // Application
-        KeyBinding::new("Ctrl+Q", "quit"),
-        KeyBinding::new("Ctrl+,", "open_settings"),
-        KeyBinding::new("Ctrl+Shift+P", "command_palette"),
-    ]
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -451,46 +394,5 @@ mod tests {
         assert_eq!(settings, OpenSettings);
         assert_eq!(palette, OpenCommandPalette);
         assert_eq!(reload, ReloadConfig);
-    }
-
-    #[test]
-    fn test_keybinding_new() {
-        let kb = KeyBinding::new("Ctrl+L", "next_layout");
-        assert_eq!(kb.key, "Ctrl+L");
-        assert_eq!(kb.action, "next_layout");
-    }
-
-    #[test]
-    fn test_default_keybindings() {
-        let bindings = default_keybindings();
-
-        // Should have layout bindings
-        assert!(bindings.iter().any(|b| b.action == "next_layout"));
-        assert!(bindings.iter().any(|b| b.action == "toggle_sidebar"));
-
-        // Should have session focus bindings
-        assert!(bindings.iter().any(|b| b.action == "focus_session_1"));
-        assert!(bindings.iter().any(|b| b.action == "focus_session_9"));
-
-        // Should have navigation bindings
-        assert!(bindings.iter().any(|b| b.action == "focus_next"));
-        assert!(bindings.iter().any(|b| b.action == "focus_up"));
-
-        // Should have pane splitting bindings
-        assert!(bindings.iter().any(|b| b.action == "split_horizontal"));
-        assert!(bindings.iter().any(|b| b.action == "split_vertical"));
-        assert!(bindings.iter().any(|b| b.action == "close_pane"));
-
-        // Should have app bindings
-        assert!(bindings.iter().any(|b| b.action == "quit"));
-        assert!(bindings.iter().any(|b| b.action == "create_session"));
-    }
-
-    #[test]
-    fn test_keybinding_clone() {
-        let kb = KeyBinding::new("Ctrl+Q", "quit");
-        let cloned = kb.clone();
-        assert_eq!(kb.key, cloned.key);
-        assert_eq!(kb.action, cloned.action);
     }
 }

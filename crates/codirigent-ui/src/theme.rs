@@ -9,7 +9,7 @@
 //! - [`Hsla`] - Hue-Saturation-Lightness-Alpha for UI elements (GPUI compatible)
 //! - [`Rgba`] - Red-Green-Blue-Alpha for terminal colors (alacritty_terminal compatible)
 
-use codirigent_core::SessionStatus;
+use codirigent_core::{config::default_terminal_font_family, SessionStatus};
 
 #[cfg(feature = "gpui-full")]
 use gpui::Hsla as GpuiHsla;
@@ -652,26 +652,6 @@ impl CodirigentTheme {
 impl Default for CodirigentTheme {
     fn default() -> Self {
         Self::dark()
-    }
-}
-
-/// Default monospace font family for terminals per platform.
-pub fn default_terminal_font_family() -> &'static str {
-    #[cfg(target_os = "windows")]
-    {
-        "Consolas"
-    }
-    #[cfg(target_os = "macos")]
-    {
-        "Menlo"
-    }
-    #[cfg(all(unix, not(target_os = "macos")))]
-    {
-        "DejaVu Sans Mono"
-    }
-    #[cfg(not(any(windows, unix)))]
-    {
-        "monospace"
     }
 }
 

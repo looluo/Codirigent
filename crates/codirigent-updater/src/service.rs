@@ -6,7 +6,7 @@
 
 use crate::checker::{self, UpdateInfo};
 use crate::downloader;
-use crate::state::{self, StagedUpdateState};
+use crate::state::{self, AvailableUpdateState, StagedUpdateState};
 use codirigent_core::{CodirigentEvent, EventBus};
 use serde::{Deserialize, Serialize};
 use std::path::PathBuf;
@@ -152,6 +152,7 @@ impl UpdateService {
                             warn!("Failed to remove old staged artifact: {e}");
                         }
                     }
+                    persistent.available_update = None;
                     persistent.staged_update = None;
                     persistent.last_known_version = Some(version.to_string());
                     if let Err(e) = state::save_state(&persistent) {
@@ -273,6 +274,21 @@ impl UpdateService {
                         }
                     }
                 }
+            }
+
+            let restored_update = restore_persisted_available_update(&version, &mut persistent);
+            if let Some(info) = restored_update {
+                *state.lock().unwrap_or_else(|p| p.into_inner()) =
+                    UpdateState::UpdateAvailable(info.clone());
+                event_bus.publish(CodirigentEvent::UpdateAvailable {
+                    version: info.version.to_string(),
+                    release_url: info.release_url.clone(),
+                });
+            }
+            // Always save after restore because stale/invalid cached update data
+            // may have been cleared even when there is nothing to publish.
+            if let Err(e) = state::save_state(&persistent) {
+                warn!("Failed to save restored available update state: {e}");
             }
 
             // 5. Check if enough time has elapsed since the last check.
@@ -401,6 +417,7 @@ impl UpdateService {
 
                     // Persist staged update for crash recovery.
                     let mut persistent = state::load_state().unwrap_or_default();
+                    persistent.available_update = None;
                     persistent.staged_update = Some(StagedUpdateState {
                         version: info.version.to_string(),
                         artifact_path,
@@ -512,21 +529,40 @@ async fn do_check(
 ) {
     info!("Checking for updates...");
     *state.lock().unwrap_or_else(|p| p.into_inner()) = UpdateState::Checking;
+    let checked_at = chrono::Utc::now();
 
-    match checker::check_for_update(version, client).await {
+    let check_result = checker::check_for_update(version, client).await;
+    // Reload after the async check so we merge onto the latest on-disk state
+    // and never clobber staged updates written by another task in the meantime.
+    // This still assumes a single app instance: we do not take an inter-process
+    // file lock around load/save, so a separate process could still race here.
+    let mut persistent = state::load_state().unwrap_or_default();
+
+    match check_result {
         Ok(Some(info)) => {
             info!(
                 new_version = %info.version,
                 "Update available"
             );
+            reconcile_persistent_state_after_check(
+                &mut persistent,
+                AvailableUpdatePersistence::Set(&info),
+                checked_at,
+            );
+            *state.lock().unwrap_or_else(|p| p.into_inner()) =
+                UpdateState::UpdateAvailable(info.clone());
             event_bus.publish(CodirigentEvent::UpdateAvailable {
                 version: info.version.to_string(),
                 release_url: info.release_url.clone(),
             });
-            *state.lock().unwrap_or_else(|p| p.into_inner()) = UpdateState::UpdateAvailable(info);
         }
         Ok(None) => {
             info!("Already up to date");
+            reconcile_persistent_state_after_check(
+                &mut persistent,
+                AvailableUpdatePersistence::Clear,
+                checked_at,
+            );
             *state.lock().unwrap_or_else(|p| p.into_inner()) = UpdateState::Idle;
         }
         Err(e) => {
@@ -534,16 +570,80 @@ async fn do_check(
             event_bus.publish(CodirigentEvent::UpdateFailed {
                 error: format!("Update check failed: {e:#}"),
             });
+            reconcile_persistent_state_after_check(
+                &mut persistent,
+                AvailableUpdatePersistence::KeepCurrent,
+                checked_at,
+            );
             *state.lock().unwrap_or_else(|p| p.into_inner()) = UpdateState::Idle;
         }
     }
 
-    // Save the last check timestamp regardless of result.
-    let mut persistent = state::load_state().unwrap_or_default();
-    persistent.last_check_timestamp = Some(chrono::Utc::now());
     if let Err(e) = state::save_state(&persistent) {
         warn!("Failed to save last_check_timestamp: {e}");
     }
+}
+
+fn restore_persisted_available_update(
+    current_version: &semver::Version,
+    persistent: &mut state::UpdatePersistentState,
+) -> Option<UpdateInfo> {
+    let available = persistent.available_update.clone()?;
+    let version = match available.version.parse::<semver::Version>() {
+        Ok(version) => version,
+        Err(e) => {
+            warn!(
+                version = %available.version,
+                "Invalid persisted available update version: {e}"
+            );
+            persistent.available_update = None;
+            return None;
+        }
+    };
+
+    if version <= *current_version {
+        persistent.available_update = None;
+        return None;
+    }
+
+    Some(UpdateInfo {
+        version,
+        release_url: available.release_url,
+        asset_url: available.asset_url,
+        checksum_url: available.checksum_url,
+    })
+}
+
+fn persist_available_update(persistent: &mut state::UpdatePersistentState, info: &UpdateInfo) {
+    persistent.available_update = Some(AvailableUpdateState {
+        version: info.version.to_string(),
+        release_url: info.release_url.clone(),
+        asset_url: info.asset_url.clone(),
+        checksum_url: info.checksum_url.clone(),
+    });
+}
+
+enum AvailableUpdatePersistence<'a> {
+    KeepCurrent,
+    Clear,
+    Set(&'a UpdateInfo),
+}
+
+fn reconcile_persistent_state_after_check(
+    persistent: &mut state::UpdatePersistentState,
+    available_update: AvailableUpdatePersistence<'_>,
+    checked_at: chrono::DateTime<chrono::Utc>,
+) {
+    match available_update {
+        AvailableUpdatePersistence::KeepCurrent => {}
+        AvailableUpdatePersistence::Clear => {
+            persistent.available_update = None;
+        }
+        AvailableUpdatePersistence::Set(info) => {
+            persist_available_update(persistent, info);
+        }
+    }
+    persistent.last_check_timestamp = Some(checked_at);
 }
 
 #[cfg(test)]
@@ -616,6 +716,177 @@ mod tests {
         let bus = Arc::new(TestEventBus::new());
         let result = UpdateService::new("not-a-version", bus);
         assert!(result.is_err());
+    }
+
+    #[test]
+    fn restore_persisted_available_update_keeps_newer_version() {
+        let mut persistent = state::UpdatePersistentState {
+            available_update: Some(AvailableUpdateState {
+                version: "0.2.0".to_string(),
+                release_url: "https://example.com/release".to_string(),
+                asset_url: "https://example.com/app.dmg".to_string(),
+                checksum_url: "https://example.com/checksums.txt".to_string(),
+            }),
+            ..Default::default()
+        };
+
+        let info = restore_persisted_available_update(&"0.1.0".parse().unwrap(), &mut persistent)
+            .expect("restored update");
+
+        assert_eq!(info.version, "0.2.0".parse().unwrap());
+        assert!(persistent.available_update.is_some());
+    }
+
+    #[test]
+    fn restore_persisted_available_update_clears_invalid_semver() {
+        let mut persistent = state::UpdatePersistentState {
+            available_update: Some(AvailableUpdateState {
+                version: "not-a-semver".to_string(),
+                release_url: "https://example.com/release".to_string(),
+                asset_url: "https://example.com/app.dmg".to_string(),
+                checksum_url: "https://example.com/checksums.txt".to_string(),
+            }),
+            ..Default::default()
+        };
+
+        let info = restore_persisted_available_update(&"0.1.0".parse().unwrap(), &mut persistent);
+
+        assert!(info.is_none());
+        assert!(persistent.available_update.is_none());
+    }
+
+    #[test]
+    fn restore_persisted_available_update_clears_stale_version() {
+        let mut persistent = state::UpdatePersistentState {
+            available_update: Some(AvailableUpdateState {
+                version: "0.1.0".to_string(),
+                release_url: "https://example.com/release".to_string(),
+                asset_url: "https://example.com/app.dmg".to_string(),
+                checksum_url: "https://example.com/checksums.txt".to_string(),
+            }),
+            ..Default::default()
+        };
+
+        let info = restore_persisted_available_update(&"0.1.0".parse().unwrap(), &mut persistent);
+
+        assert!(info.is_none());
+        assert!(persistent.available_update.is_none());
+    }
+
+    #[test]
+    fn persist_available_update_writes_all_fields() {
+        let mut persistent = state::UpdatePersistentState::default();
+        let info = UpdateInfo {
+            version: "0.2.0".parse().unwrap(),
+            release_url: "https://example.com/release".to_string(),
+            asset_url: "https://example.com/app.dmg".to_string(),
+            checksum_url: "https://example.com/checksums.txt".to_string(),
+        };
+
+        persist_available_update(&mut persistent, &info);
+
+        assert_eq!(
+            persistent.available_update,
+            Some(AvailableUpdateState {
+                version: "0.2.0".to_string(),
+                release_url: "https://example.com/release".to_string(),
+                asset_url: "https://example.com/app.dmg".to_string(),
+                checksum_url: "https://example.com/checksums.txt".to_string(),
+            })
+        );
+    }
+
+    #[test]
+    fn reconcile_persistent_state_after_check_clear_removes_available_update() {
+        let checked_at = chrono::Utc::now();
+        let mut persistent = state::UpdatePersistentState {
+            available_update: Some(AvailableUpdateState {
+                version: "0.2.0".to_string(),
+                release_url: "https://example.com/release".to_string(),
+                asset_url: "https://example.com/app.dmg".to_string(),
+                checksum_url: "https://example.com/checksums.txt".to_string(),
+            }),
+            ..Default::default()
+        };
+
+        reconcile_persistent_state_after_check(
+            &mut persistent,
+            AvailableUpdatePersistence::Clear,
+            checked_at,
+        );
+
+        assert!(persistent.available_update.is_none());
+        assert_eq!(persistent.last_check_timestamp, Some(checked_at));
+    }
+
+    #[test]
+    fn reconcile_persistent_state_after_check_keep_current_preserves_available_update() {
+        let checked_at = chrono::Utc::now();
+        let expected = AvailableUpdateState {
+            version: "0.2.0".to_string(),
+            release_url: "https://example.com/release".to_string(),
+            asset_url: "https://example.com/app.dmg".to_string(),
+            checksum_url: "https://example.com/checksums.txt".to_string(),
+        };
+        let mut persistent = state::UpdatePersistentState {
+            available_update: Some(expected.clone()),
+            ..Default::default()
+        };
+
+        reconcile_persistent_state_after_check(
+            &mut persistent,
+            AvailableUpdatePersistence::KeepCurrent,
+            checked_at,
+        );
+
+        assert_eq!(persistent.available_update, Some(expected));
+        assert_eq!(persistent.last_check_timestamp, Some(checked_at));
+    }
+
+    #[test]
+    fn reconcile_persistent_state_after_check_preserves_staged_update() {
+        let checked_at = chrono::Utc::now();
+        let mut persistent = state::UpdatePersistentState {
+            staged_update: Some(StagedUpdateState {
+                version: "0.3.0".to_string(),
+                artifact_path: PathBuf::from("/tmp/codirigent-0.3.0.dmg"),
+                release_url: "https://example.com/staged".to_string(),
+                expected_sha256: "abc123".to_string(),
+            }),
+            ..Default::default()
+        };
+        let info = UpdateInfo {
+            version: "0.2.0".parse().unwrap(),
+            release_url: "https://example.com/release".to_string(),
+            asset_url: "https://example.com/app.dmg".to_string(),
+            checksum_url: "https://example.com/checksums.txt".to_string(),
+        };
+
+        reconcile_persistent_state_after_check(
+            &mut persistent,
+            AvailableUpdatePersistence::Set(&info),
+            checked_at,
+        );
+
+        assert_eq!(
+            persistent.staged_update,
+            Some(StagedUpdateState {
+                version: "0.3.0".to_string(),
+                artifact_path: PathBuf::from("/tmp/codirigent-0.3.0.dmg"),
+                release_url: "https://example.com/staged".to_string(),
+                expected_sha256: "abc123".to_string(),
+            })
+        );
+        assert_eq!(persistent.last_check_timestamp, Some(checked_at));
+        assert_eq!(
+            persistent.available_update,
+            Some(AvailableUpdateState {
+                version: "0.2.0".to_string(),
+                release_url: "https://example.com/release".to_string(),
+                asset_url: "https://example.com/app.dmg".to_string(),
+                checksum_url: "https://example.com/checksums.txt".to_string(),
+            })
+        );
     }
 
     #[test]

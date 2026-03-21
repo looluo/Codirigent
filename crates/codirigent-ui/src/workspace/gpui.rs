@@ -236,7 +236,7 @@ impl WorkspaceView {
         None
     }
 
-    fn keystroke_is_text_input(event: &KeyDownEvent) -> bool {
+    pub(super) fn keystroke_is_text_input(event: &KeyDownEvent) -> bool {
         if event.keystroke.modifiers.control
             || event.keystroke.modifiers.alt
             || event.keystroke.modifiers.platform
@@ -484,10 +484,7 @@ impl WorkspaceView {
             env!("CARGO_PKG_VERSION"),
             event_bus.clone(),
         ) {
-            Ok(svc) => {
-                svc.start_background_check();
-                Some(Arc::new(svc))
-            }
+            Ok(svc) => Some(Arc::new(svc)),
             Err(e) => {
                 tracing::warn!("Failed to initialize update service: {}", e);
                 None
@@ -496,6 +493,10 @@ impl WorkspaceView {
 
         // Subscribe to EventBus for update events
         let update_event_rx = Some(event_bus.subscribe());
+
+        if let Some(svc) = &update_service {
+            svc.start_background_check();
+        }
 
         let (storage, task_manager) = Self::init_task_manager(event_bus.clone());
         let (file_tree, file_tree_model, project_root) = Self::init_file_tree();
@@ -949,6 +950,28 @@ impl WorkspaceView {
             self.settings.open,
             "handle_settings_key called with settings closed"
         );
+        if self
+            .settings
+            .page
+            .as_ref()
+            .and_then(|page| page.focused_terminal_style_field)
+            .is_some()
+        {
+            let handled = match event.keystroke.key.as_str() {
+                "escape" | "enter" => {
+                    self.clear_terminal_style_field_focus();
+                    cx.notify();
+                    true
+                }
+                "backspace" => self.handle_terminal_style_field_backspace(cx),
+                _ => false,
+            };
+            if handled {
+                cx.stop_propagation();
+                return true;
+            }
+        }
+
         // Navigate Keyboard Shortcuts panel with keyboard when not recording.
         if self
             .settings
@@ -1077,6 +1100,11 @@ impl WorkspaceView {
         }
 
         if self.settings.open && self.handle_settings_key(event, cx) {
+            return;
+        }
+
+        if self.handle_terminal_search_key_down(event, cx) {
+            cx.stop_propagation();
             return;
         }
 
@@ -1521,7 +1549,18 @@ impl EntityInputHandler for WorkspaceView {
             // Modal text fields are handled via key events; do not leak input to PTY.
             return;
         }
+        if let Some(session_id) = self.focused_search_session_id() {
+            if let Some(terminal_view) = self.terminals.get_mut(&session_id) {
+                terminal_view.append_search_text(text);
+            }
+            self.schedule_terminal_search(session_id, cx);
+            cx.notify();
+            return;
+        }
         if self.settings.open {
+            if self.append_terminal_style_field_text(text, cx) {
+                return;
+            }
             return;
         }
 
@@ -1556,6 +1595,14 @@ impl EntityInputHandler for WorkspaceView {
         _window: &mut Window,
         cx: &mut Context<Self>,
     ) {
+        if self.focused_search_session_id().is_some() {
+            self.ime_marked_range = None;
+            self.ime_preedit_text = None;
+            if !text.is_empty() {
+                cx.notify();
+            }
+            return;
+        }
         if self.has_blocking_modal() || self.settings.open {
             let had_ime_overlay =
                 self.ime_marked_range.is_some() || self.ime_preedit_text.is_some();
@@ -1612,6 +1659,7 @@ impl Render for WorkspaceView {
         // Lazily detect monospace fonts on first render (text system is available here)
         if self.cache.monospace_fonts.is_none() {
             self.cache.monospace_fonts = Some(detect_monospace_fonts(window.text_system()));
+            self.sanitize_terminal_font_family(window, cx);
         }
 
         let rem = REM_BASE * (self.workspace.theme().font_size_base / FONT_SIZE_BASE_DEFAULT);
@@ -1730,6 +1778,7 @@ impl Render for WorkspaceView {
             .on_action(cx.listener(Self::handle_close_pane))
             .on_action(cx.listener(Self::handle_paste))
             .on_action(cx.listener(Self::handle_copy))
+            .on_action(cx.listener(Self::handle_search_terminal))
             .on_action(cx.listener(Self::handle_open_settings))
             // Handle keyboard input for PTY
             .on_key_down(cx.listener(|this, event: &KeyDownEvent, window, cx| {

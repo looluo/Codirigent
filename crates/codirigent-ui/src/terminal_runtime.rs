@@ -1,9 +1,10 @@
 use crate::clipboard;
 use crate::terminal::{Terminal, TerminalSize};
 use crate::terminal_colors::{convert_color, dim_color};
+use crate::terminal_search::{self, SearchMatch};
 use crate::terminal_view::{CachedTerminalRow, Selection, TextRunSegment};
 use crate::theme::{CodirigentTheme, Rgba};
-use alacritty_terminal::grid::Scroll;
+use alacritty_terminal::grid::{Dimensions, Scroll};
 use alacritty_terminal::index::{Column, Line};
 use alacritty_terminal::term::cell::Flags as CellFlags;
 use alacritty_terminal::term::TermMode;
@@ -16,6 +17,7 @@ pub(crate) struct TerminalRenderSnapshot {
     pub(crate) rows: u16,
     pub(crate) cols: u16,
     pub(crate) mode: TermMode,
+    pub(crate) history_size: usize,
     pub(crate) display_offset: usize,
     pub(crate) cached_rows: Vec<CachedTerminalRow>,
     pub(crate) dirty_rows: Option<Vec<usize>>,
@@ -27,6 +29,7 @@ struct TerminalRuntime {
     theme: CodirigentTheme,
     generation: u64,
     cached_rows: Option<Vec<CachedTerminalRow>>,
+    cached_search_snapshot: Option<Arc<terminal_search::SearchSnapshot>>,
 }
 
 #[derive(Clone)]
@@ -46,6 +49,7 @@ impl TerminalRuntimeHandle {
             theme,
             generation: 0,
             cached_rows: None,
+            cached_search_snapshot: None,
         };
         let snapshot = runtime.snapshot_full();
         (
@@ -76,6 +80,10 @@ impl TerminalRuntimeHandle {
         self.with_runtime_mut(|runtime| runtime.scroll_display(Scroll::Bottom))
     }
 
+    pub(crate) fn scroll_to_offset(&self, target: usize) -> Option<TerminalRenderSnapshot> {
+        self.with_runtime_mut(|runtime| runtime.scroll_to_offset(target))
+    }
+
     pub(crate) fn clear(&self) -> Option<TerminalRenderSnapshot> {
         self.with_runtime_mut(TerminalRuntime::clear)
     }
@@ -95,6 +103,20 @@ impl TerminalRuntimeHandle {
             }
         })
         .flatten()
+    }
+
+    pub(crate) fn search(&self, query: &str) -> Vec<SearchMatch> {
+        let snapshot = self
+            .with_runtime_mut(TerminalRuntime::cached_search_snapshot)
+            .unwrap_or_default();
+        terminal_search::search_snapshot(&snapshot, query)
+    }
+
+    pub(crate) fn match_still_matches(&self, query: &str, search_match: &SearchMatch) -> bool {
+        self.with_runtime(|runtime| {
+            terminal_search::match_still_matches(runtime.terminal.term(), query, search_match)
+        })
+        .unwrap_or(false)
     }
 
     #[cfg(test)]
@@ -118,27 +140,53 @@ impl TerminalRuntimeHandle {
 }
 
 impl TerminalRuntime {
+    fn invalidate_search_snapshot(&mut self) {
+        self.cached_search_snapshot = None;
+    }
+
+    fn cached_search_snapshot(&mut self) -> Arc<terminal_search::SearchSnapshot> {
+        if let Some(snapshot) = &self.cached_search_snapshot {
+            return Arc::clone(snapshot);
+        }
+
+        let snapshot = Arc::new(terminal_search::snapshot(self.terminal.term()));
+        self.cached_search_snapshot = Some(Arc::clone(&snapshot));
+        snapshot
+    }
+
     fn apply_output(&mut self, data: &[u8]) -> TerminalRenderSnapshot {
         self.terminal.process_output(data);
         self.generation += 1;
+        self.invalidate_search_snapshot();
         self.snapshot_from_damage()
     }
 
     fn resize_with_cells(&mut self, size: TerminalSize) -> TerminalRenderSnapshot {
         self.terminal.resize_with_cells(size);
         self.generation += 1;
+        self.invalidate_search_snapshot();
         self.snapshot_full()
     }
 
     fn scroll_display(&mut self, scroll: Scroll) -> TerminalRenderSnapshot {
         self.terminal.term_mut().scroll_display(scroll);
         self.generation += 1;
+        // Scrolling changes the viewport, not the underlying terminal content,
+        // so the cached search snapshot remains valid.
         self.snapshot_full()
+    }
+
+    fn scroll_to_offset(&mut self, target: usize) -> TerminalRenderSnapshot {
+        let current = self.terminal.term().grid().display_offset();
+        let delta =
+            ((target as i64) - (current as i64)).clamp(i32::MIN as i64, i32::MAX as i64) as i32;
+        self.scroll_display(Scroll::Delta(delta))
     }
 
     fn clear(&mut self) -> TerminalRenderSnapshot {
         self.terminal.clear();
         self.generation += 1;
+        self.invalidate_search_snapshot();
         self.snapshot_full()
     }
 
@@ -215,8 +263,10 @@ impl TerminalRuntime {
         let rows = self.terminal.rows();
         let cols = self.terminal.cols();
         let mode = self.terminal.mode();
-        let content = self.terminal.term().renderable_content();
+        let term = self.terminal.term();
+        let content = term.renderable_content();
         let display_offset = content.display_offset;
+        let history_size = term.topmost_line().0.unsigned_abs() as usize;
         let viewport_line = content.cursor.point.line.0 + display_offset as i32;
         let cursor_viewport_cell = if viewport_line >= 0 && (viewport_line as usize) < rows as usize
         {
@@ -231,6 +281,7 @@ impl TerminalRuntime {
             rows,
             cols,
             mode,
+            history_size,
             display_offset,
             cached_rows: self.cached_rows.clone().unwrap_or_default(),
             dirty_rows,
@@ -416,5 +467,46 @@ mod tests {
             runtime.get_selected_text(&selection),
             Some("hello".to_string())
         );
+    }
+
+    #[test]
+    fn runtime_search_reuses_cached_snapshot_until_content_changes() {
+        let runtime = create_runtime();
+        let _ = runtime.apply_output(b"alpha beta gamma");
+
+        assert!(!runtime
+            .with_runtime(|runtime| runtime.cached_search_snapshot.is_some())
+            .unwrap_or(false));
+
+        let first = runtime.search("alpha");
+        assert_eq!(first.len(), 1);
+        assert!(runtime
+            .with_runtime(|runtime| runtime.cached_search_snapshot.is_some())
+            .unwrap_or(false));
+
+        let second = runtime.search("beta");
+        assert_eq!(second.len(), 1);
+        assert!(runtime
+            .with_runtime(|runtime| runtime.cached_search_snapshot.is_some())
+            .unwrap_or(false));
+
+        let _ = runtime.apply_output(b"\ndelta");
+        assert!(!runtime
+            .with_runtime(|runtime| runtime.cached_search_snapshot.is_some())
+            .unwrap_or(false));
+
+        let third = runtime.search("delta");
+        assert_eq!(third.len(), 1);
+    }
+
+    #[test]
+    fn runtime_scroll_to_offset_clamps_large_deltas() {
+        let runtime = create_runtime();
+
+        let snapshot = runtime
+            .scroll_to_offset(usize::MAX)
+            .expect("runtime scroll snapshot");
+
+        assert_eq!(snapshot.display_offset, snapshot.history_size);
     }
 }

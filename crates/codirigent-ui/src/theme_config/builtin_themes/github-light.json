@@ -1,0 +1,102 @@
+{
+  "id": "github-light",
+  "name": "GitHub Light",
+  "is_dark": false,
+  "colors": {
+    "background": {
+      "app": "#f6f8fa",
+      "panel": "#ffffff",
+      "header": "#f3f4f6",
+      "sidebar": "#f6f8fa",
+      "icon_rail": "#f6f8fa",
+      "drawer": "#ffffff"
+    },
+    "foreground": {
+      "primary": "#24292f",
+      "secondary": "#57606a",
+      "muted": "#6e7781"
+    },
+    "border": {
+      "default": "#d0d7de",
+      "focused": "#0969da"
+    },
+    "interaction": {
+      "hover": "#eef2f6",
+      "active": "#d8dee4",
+      "selection": "#0969da29"
+    },
+    "accent": {
+      "primary": "#0969da",
+      "secondary": "#1f883d",
+      "purple": "#8250df",
+      "orange": "#bc4c00",
+      "selected_ring": "#0969da",
+      "broadcast": "#cf222e",
+      "ai_summary_background": "#0969da14",
+      "ai_summary_text": "#0550ae",
+      "input_required_background": "#cf222e1f",
+      "input_required_accent": "#cf222e"
+    },
+    "status": {
+      "idle": "#6e7781",
+      "working": "#bc4c00",
+      "needs_attention": "#cf222e",
+      "response_ready": "#1a7f37",
+      "error": "#cf222e"
+    },
+    "priority": {
+      "high": "#cf222e",
+      "medium": "#bc4c00",
+      "low": "#0969da"
+    },
+    "session_groups": [
+      "#0969da",
+      "#1f883d",
+      "#8250df",
+      "#bc4c00",
+      "#cf222e",
+      "#1a7f37"
+    ],
+    "terminal": {
+      "background": "#ffffff",
+      "foreground": "#24292f",
+      "cursor": "#0969da",
+      "selection_background": "#d8dee4cc",
+      "selection_foreground": "#24292f",
+      "palette": {
+        "black": "#24292f",
+        "red": "#cf222e",
+        "green": "#1a7f37",
+        "yellow": "#9a6700",
+        "blue": "#0969da",
+        "magenta": "#8250df",
+        "cyan": "#0550ae",
+        "white": "#57606a",
+        "bright_black": "#6e7781",
+        "bright_red": "#a40e26",
+        "bright_green": "#1a7f37",
+        "bright_yellow": "#bf8700",
+        "bright_blue": "#218bff",
+        "bright_magenta": "#a475f9",
+        "bright_cyan": "#0969da",
+        "bright_white": "#24292f"
+      }
+    }
+  },
+  "typography": {
+    "ui_font_family": "Inter",
+    "terminal_font_family": "",
+    "base_font_size": 13.0,
+    "terminal_font_size": 13.0,
+    "line_height": 1.0
+  },
+  "spacing": {
+    "xs": 2.0,
+    "sm": 4.0,
+    "md": 8.0,
+    "lg": 16.0,
+    "xl": 24.0,
+    "grid_gap": 4.0,
+    "border_radius": 4.0
+  }
+}

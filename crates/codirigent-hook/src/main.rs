@@ -79,17 +79,25 @@ fn handle_payload(payload: HookPayload) {
         .filter(|id| is_safe_filename(id))
         .map(str::to_owned);
 
+    // Prefer the CLI's own session ID (e.g. Claude's UUID), then
+    // CODIRIGENT_SESSION_UUID (stable across restarts), then the legacy
+    // integer CODIRIGENT_SESSION_ID as a last resort.
     let filename_session_id = payload
         .session_id
         .as_deref()
         .filter(|id| is_safe_filename(id))
+        .or_else(|| {
+            codirigent_session_uuid
+                .as_deref()
+                .filter(|id| is_safe_filename(id))
+        })
         .or_else(|| {
             codirigent_session_id
                 .as_deref()
                 .filter(|id| is_safe_filename(id))
         })
         .unwrap_or_default()
-        .to_owned(); // owned String releases the borrow on codirigent_session_id
+        .to_owned();
     if filename_session_id.is_empty() {
         return;
     }
@@ -274,11 +282,16 @@ fn map_codex_status(event_type: Option<&str>) -> &'static str {
     let event_type = event_type.unwrap_or("").to_ascii_lowercase();
 
     if event_type == "agent-turn-complete"
+        || event_type == "task_complete"
         || event_type == "response.completed"
         || event_type == "response.done"
         || event_type == "turn_complete"
     {
         return "response_ready";
+    }
+
+    if event_type == "task_started" {
+        return "working";
     }
 
     if event_type.contains("permission")
@@ -443,12 +456,14 @@ mod tests {
             map_codex_status(Some("agent-turn-complete")),
             "response_ready"
         );
+        assert_eq!(map_codex_status(Some("task_complete")), "response_ready");
     }
 
     #[test]
     fn map_codex_status_start_events_are_working() {
         assert_eq!(map_codex_status(Some("agent-turn-start")), "working");
         assert_eq!(map_codex_status(Some("turn_start")), "working");
+        assert_eq!(map_codex_status(Some("task_started")), "working");
     }
 
     #[test]

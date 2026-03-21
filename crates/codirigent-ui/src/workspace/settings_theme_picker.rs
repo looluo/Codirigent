@@ -89,8 +89,8 @@ mod tests {
             &CodirigentTheme::dark(),
         ));
         manager.add_theme(Theme::from_runtime(
-            "tokyo-night",
-            "Tokyo Night",
+            "zenburn",
+            "Zenburn",
             true,
             &CodirigentTheme::dark(),
         ));
@@ -111,7 +111,16 @@ mod tests {
                 .iter()
                 .map(|option| option.label.as_str())
                 .collect::<Vec<_>>(),
-            vec!["Dark", "Night Owl", "Tokyo Night"]
+            vec![
+                "Catppuccin Mocha",
+                "Dark",
+                "Gruvbox Dark",
+                "Night Owl",
+                "One Dark",
+                "Solarized Dark",
+                "Tokyo Night",
+                "Zenburn",
+            ]
         );
         assert_eq!(sections[1].title, LIGHT_THEME_SECTION_TITLE);
         assert_eq!(
@@ -120,7 +129,13 @@ mod tests {
                 .iter()
                 .map(|option| option.label.as_str())
                 .collect::<Vec<_>>(),
-            vec!["Aurora", "Light"]
+            vec![
+                "Aurora",
+                "Catppuccin Latte",
+                "GitHub Light",
+                "Light",
+                "Solarized Light",
+            ]
         );
     }
 

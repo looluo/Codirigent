@@ -207,9 +207,93 @@ impl Default for GeneralSettings {
     }
 }
 
+/// Internal user-settings migration markers.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct UserSettingsMigrations {
+    /// Version of the terminal-safe keybinding migration already applied.
+    #[serde(default)]
+    pub terminal_safe_keybindings_version: u32,
+}
+
 // ============================================================================
 // Terminal Settings
 // ============================================================================
+
+/// Optional ANSI palette overrides layered on top of the selected theme.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TerminalPaletteOverrides {
+    /// ANSI black override.
+    #[serde(default)]
+    pub black: String,
+    /// ANSI red override.
+    #[serde(default)]
+    pub red: String,
+    /// ANSI green override.
+    #[serde(default)]
+    pub green: String,
+    /// ANSI yellow override.
+    #[serde(default)]
+    pub yellow: String,
+    /// ANSI blue override.
+    #[serde(default)]
+    pub blue: String,
+    /// ANSI magenta override.
+    #[serde(default)]
+    pub magenta: String,
+    /// ANSI cyan override.
+    #[serde(default)]
+    pub cyan: String,
+    /// ANSI white override.
+    #[serde(default)]
+    pub white: String,
+    /// ANSI bright black override.
+    #[serde(default)]
+    pub bright_black: String,
+    /// ANSI bright red override.
+    #[serde(default)]
+    pub bright_red: String,
+    /// ANSI bright green override.
+    #[serde(default)]
+    pub bright_green: String,
+    /// ANSI bright yellow override.
+    #[serde(default)]
+    pub bright_yellow: String,
+    /// ANSI bright blue override.
+    #[serde(default)]
+    pub bright_blue: String,
+    /// ANSI bright magenta override.
+    #[serde(default)]
+    pub bright_magenta: String,
+    /// ANSI bright cyan override.
+    #[serde(default)]
+    pub bright_cyan: String,
+    /// ANSI bright white override.
+    #[serde(default)]
+    pub bright_white: String,
+}
+
+/// Per-user terminal theme overrides layered on top of the selected theme.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq)]
+pub struct TerminalThemeOverrides {
+    /// Terminal background color override.
+    #[serde(default)]
+    pub background: String,
+    /// Terminal foreground color override.
+    #[serde(default)]
+    pub foreground: String,
+    /// Terminal cursor color override.
+    #[serde(default)]
+    pub cursor: String,
+    /// Terminal selection background override.
+    #[serde(default)]
+    pub selection_background: String,
+    /// Terminal selection foreground override.
+    #[serde(default)]
+    pub selection_foreground: String,
+    /// ANSI palette overrides.
+    #[serde(default)]
+    pub palette: TerminalPaletteOverrides,
+}
 
 /// Terminal rendering preferences.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -222,15 +306,39 @@ pub struct TerminalSettings {
     pub cursor_style: String,
     /// Line height multiplier (1.0 = natural font height).
     pub line_height: f32,
+    /// Per-user terminal theme overrides layered on top of the selected theme.
+    #[serde(default)]
+    pub theme_overrides: TerminalThemeOverrides,
+}
+
+/// Default monospace terminal font family for the current platform.
+pub fn default_terminal_font_family() -> &'static str {
+    #[cfg(target_os = "windows")]
+    {
+        "Consolas"
+    }
+    #[cfg(target_os = "macos")]
+    {
+        "Menlo"
+    }
+    #[cfg(all(unix, not(target_os = "macos")))]
+    {
+        "DejaVu Sans Mono"
+    }
+    #[cfg(not(any(windows, unix)))]
+    {
+        "monospace"
+    }
 }
 
 impl Default for TerminalSettings {
     fn default() -> Self {
         Self {
-            font_family: "JetBrains Mono".to_string(),
+            font_family: default_terminal_font_family().to_string(),
             font_size: 13.0,
             cursor_style: "block".to_string(),
             line_height: 1.0,
+            theme_overrides: TerminalThemeOverrides::default(),
         }
     }
 }
@@ -286,6 +394,9 @@ pub struct UserSettings {
     /// User-saved custom layout profiles.
     #[serde(default)]
     pub saved_layouts: Vec<SavedLayout>,
+    /// Internal migration markers for one-time settings rewrites.
+    #[serde(default)]
+    pub migrations: UserSettingsMigrations,
 }
 
 impl Default for UserSettings {
@@ -298,6 +409,7 @@ impl Default for UserSettings {
             modules: ModuleSettings::default(),
             keybindings: Self::default_keybindings(),
             saved_layouts: Vec::new(),
+            migrations: UserSettingsMigrations::default(),
         }
     }
 }
@@ -323,19 +435,20 @@ impl UserSettings {
         bindings.insert("switch_session_7".to_string(), format!("{m}+7"));
         bindings.insert("switch_session_8".to_string(), format!("{m}+8"));
         bindings.insert("switch_session_9".to_string(), format!("{m}+9"));
-        bindings.insert("new_session".to_string(), format!("{m}+N"));
-        bindings.insert("close_session".to_string(), format!("{m}+W"));
-        bindings.insert("toggle_layout".to_string(), format!("{m}+\\"));
-        bindings.insert("toggle_sidebar".to_string(), format!("{m}+B"));
-        bindings.insert("toggle_task_board".to_string(), format!("{m}+T"));
+        bindings.insert("new_session".to_string(), format!("{m}+Shift+N"));
+        bindings.insert("close_session".to_string(), format!("{m}+Alt+W"));
+        bindings.insert("toggle_layout".to_string(), format!("{m}+Shift+L"));
+        bindings.insert("toggle_sidebar".to_string(), format!("{m}+Shift+E"));
+        bindings.insert("toggle_task_board".to_string(), format!("{m}+Shift+T"));
         bindings.insert("open_settings".to_string(), format!("{m}+,"));
         bindings.insert("quit".to_string(), format!("{m}+Q"));
         bindings.insert("paste".to_string(), format!("{m}+V"));
         bindings.insert("copy".to_string(), format!("{m}+C"));
-        bindings.insert("split_horizontal".to_string(), format!("{m}+D"));
-        bindings.insert("split_vertical".to_string(), format!("{m}+Shift+D"));
-        bindings.insert("close_pane".to_string(), format!("{m}+Shift+W"));
-        bindings.insert("quick_switch".to_string(), format!("{m}+K"));
+        bindings.insert("search_terminal".to_string(), format!("{m}+Shift+F"));
+        bindings.insert("split_horizontal".to_string(), format!("{m}+Alt+Shift+H"));
+        bindings.insert("split_vertical".to_string(), format!("{m}+Alt+Shift+V"));
+        bindings.insert("close_pane".to_string(), format!("{m}+Alt+Shift+W"));
+        bindings.insert("quick_switch".to_string(), format!("{m}+Shift+K"));
         bindings
     }
 }
@@ -789,6 +902,14 @@ mod tests {
     }
 
     #[test]
+    fn test_terminal_settings_default_font_family_is_platform_specific() {
+        let settings = TerminalSettings::default();
+        assert_eq!(settings.font_family, default_terminal_font_family());
+        assert!(settings.theme_overrides.background.is_empty());
+        assert!(settings.theme_overrides.palette.bright_white.is_empty());
+    }
+
+    #[test]
     fn test_user_settings_serialization() {
         let settings = UserSettings::default();
         let json = serde_json::to_string_pretty(&settings).unwrap();
@@ -802,22 +923,56 @@ mod tests {
         let bindings = UserSettings::default_keybindings();
         #[cfg(target_os = "macos")]
         {
-            assert_eq!(bindings.get("new_session"), Some(&"Cmd+N".to_string()));
-            assert_eq!(bindings.get("close_session"), Some(&"Cmd+W".to_string()));
-            assert_eq!(bindings.get("toggle_sidebar"), Some(&"Cmd+B".to_string()));
+            assert_eq!(
+                bindings.get("new_session"),
+                Some(&"Cmd+Shift+N".to_string())
+            );
+            assert_eq!(
+                bindings.get("close_session"),
+                Some(&"Cmd+Alt+W".to_string())
+            );
+            assert_eq!(
+                bindings.get("toggle_sidebar"),
+                Some(&"Cmd+Shift+E".to_string())
+            );
             assert_eq!(
                 bindings.get("toggle_task_board"),
-                Some(&"Cmd+T".to_string())
+                Some(&"Cmd+Shift+T".to_string())
+            );
+            assert_eq!(
+                bindings.get("toggle_layout"),
+                Some(&"Cmd+Shift+L".to_string())
+            );
+            assert_eq!(
+                bindings.get("search_terminal"),
+                Some(&"Cmd+Shift+F".to_string())
             );
         }
         #[cfg(not(target_os = "macos"))]
         {
-            assert_eq!(bindings.get("new_session"), Some(&"Ctrl+N".to_string()));
-            assert_eq!(bindings.get("close_session"), Some(&"Ctrl+W".to_string()));
-            assert_eq!(bindings.get("toggle_sidebar"), Some(&"Ctrl+B".to_string()));
+            assert_eq!(
+                bindings.get("new_session"),
+                Some(&"Ctrl+Shift+N".to_string())
+            );
+            assert_eq!(
+                bindings.get("close_session"),
+                Some(&"Ctrl+Alt+W".to_string())
+            );
+            assert_eq!(
+                bindings.get("toggle_sidebar"),
+                Some(&"Ctrl+Shift+E".to_string())
+            );
             assert_eq!(
                 bindings.get("toggle_task_board"),
-                Some(&"Ctrl+T".to_string())
+                Some(&"Ctrl+Shift+T".to_string())
+            );
+            assert_eq!(
+                bindings.get("toggle_layout"),
+                Some(&"Ctrl+Shift+L".to_string())
+            );
+            assert_eq!(
+                bindings.get("search_terminal"),
+                Some(&"Ctrl+Shift+F".to_string())
             );
         }
         assert!(bindings.contains_key("quick_switch"));

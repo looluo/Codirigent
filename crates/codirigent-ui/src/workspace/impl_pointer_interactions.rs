@@ -47,6 +47,22 @@ impl WorkspaceView {
             return;
         }
 
+        if let Some(drag) = self.selection.terminal_scrollbar_drag {
+            if let Some(terminal_view) = self.terminals.get_mut(&drag.session_id) {
+                let track_y = pos.y - drag.track_top;
+                let target = terminal_view.scrollbar_offset_for_pointer(
+                    track_y,
+                    drag.track_height,
+                    terminal_view.scrollbar_drag_offset(),
+                );
+                if target != terminal_view.display_offset() {
+                    terminal_view.scroll_to_offset(target);
+                    cx.notify();
+                }
+            }
+            return;
+        }
+
         let Some(drag) = &mut self.selection.drag else {
             return;
         };
@@ -62,6 +78,14 @@ impl WorkspaceView {
     ) {
         if self.selection.split_resize.is_some() {
             self.finish_split_resize(cx);
+            cx.notify();
+            return;
+        }
+
+        if let Some(scrollbar_drag) = self.selection.terminal_scrollbar_drag.take() {
+            if let Some(terminal_view) = self.terminals.get_mut(&scrollbar_drag.session_id) {
+                terminal_view.stop_scrollbar_drag();
+            }
             cx.notify();
             return;
         }

@@ -329,6 +329,19 @@ pub(super) struct SelectionState {
     pub drag: Option<DragState>,
     /// Active split-divider resize gesture (None when not resizing).
     pub split_resize: Option<SplitResizeState>,
+    /// Active terminal scrollbar drag gesture (None when not dragging).
+    pub terminal_scrollbar_drag: Option<TerminalScrollbarDragState>,
+}
+
+/// Active terminal scrollbar drag state.
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub(super) struct TerminalScrollbarDragState {
+    /// Session owning the active scrollbar drag.
+    pub session_id: SessionId,
+    /// Screen-space Y coordinate where the track starts.
+    pub track_top: f32,
+    /// Height of the scrollbar track.
+    pub track_height: f32,
 }
 
 /// State for drag-and-drop session reordering.
@@ -449,6 +462,7 @@ impl SelectionState {
             last_click_position: None,
             drag: None,
             split_resize: None,
+            terminal_scrollbar_drag: None,
         }
     }
 }

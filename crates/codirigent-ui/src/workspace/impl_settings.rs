@@ -3,21 +3,60 @@
 use super::gpui::WorkspaceView;
 use super::types::{ShellPickerOption, ShellPickerSection, SHELL_PICKER_AUTO_DETECT_LABEL};
 use crate::app::OpenSettings;
-use crate::settings::SettingsPage;
-use crate::theme::CodirigentTheme;
+use crate::settings::{SettingsPage, TerminalStyleField};
+use crate::theme::{CodirigentTheme, Rgba};
+use crate::theme_config::Theme;
 use crate::theme_manager::ThemeManager;
 use codirigent_core::config_service::ConfigService;
 use gpui::{Context, Window};
 use std::collections::{HashMap, HashSet};
+use std::fs;
 use std::path::PathBuf;
 use std::time::Duration;
 use tracing::warn;
 
 struct LoadedSettingsSnapshot {
     user_settings: codirigent_core::config::UserSettings,
+    user_settings_changed: bool,
     project_config: codirigent_core::config::ProjectConfig,
     project_dir: Option<PathBuf>,
     theme_manager: ThemeManager,
+}
+
+const HEX_SHORT_RGB_LEN: usize = 3;
+const HEX_SHORT_RGBA_LEN: usize = 4;
+const HEX_LONG_RGB_LEN: usize = 6;
+const HEX_LONG_RGBA_LEN: usize = 8;
+const OPAQUE_ALPHA: u8 = u8::MAX;
+
+fn rgba_to_hex(color: Rgba) -> String {
+    if color.a == u8::MAX {
+        format!("#{:02x}{:02x}{:02x}", color.r, color.g, color.b)
+    } else {
+        format!(
+            "#{:02x}{:02x}{:02x}{:02x}",
+            color.r, color.g, color.b, color.a
+        )
+    }
+}
+
+fn terminal_style_values_from_theme(
+    theme: &crate::theme::CodirigentTheme,
+) -> codirigent_core::config::TerminalThemeOverrides {
+    let mut values = codirigent_core::config::TerminalThemeOverrides::default();
+    for field in TerminalStyleField::ALL {
+        *field.get_mut(&mut values) = rgba_to_hex(field.theme_color(theme));
+    }
+    values
+}
+
+fn apply_terminal_style_values_to_theme(
+    theme: &mut Theme,
+    values: &codirigent_core::config::TerminalThemeOverrides,
+) {
+    for field in TerminalStyleField::ALL {
+        field.set_theme_config_value(theme, field.get(values).to_string());
+    }
 }
 
 fn shell_picker_display_label(shell: &str) -> String {
@@ -149,8 +188,8 @@ fn keybindings_to_gpui_list(
     use crate::app::{
         ClosePane, CloseSession, Copy, FocusSession1, FocusSession2, FocusSession3, FocusSession4,
         FocusSession5, FocusSession6, FocusSession7, FocusSession8, FocusSession9, NewSession,
-        NextLayout, OpenSettings, Paste, QuickSwitch, Quit, SplitHorizontal, SplitVertical,
-        ToggleSidebar, ToggleTaskBoard,
+        NextLayout, OpenSettings, Paste, QuickSwitch, Quit, SearchTerminal, SplitHorizontal,
+        SplitVertical, ToggleSidebar, ToggleTaskBoard,
     };
     use crate::keybindings::KeybindingManager;
 
@@ -174,6 +213,7 @@ fn keybindings_to_gpui_list(
                 "quit" => gpui::KeyBinding::new(&gpui_str, Quit, None),
                 "paste" => gpui::KeyBinding::new(&gpui_str, Paste, None),
                 "copy" => gpui::KeyBinding::new(&gpui_str, Copy, None),
+                "search_terminal" => gpui::KeyBinding::new(&gpui_str, SearchTerminal, None),
                 "split_horizontal" => gpui::KeyBinding::new(&gpui_str, SplitHorizontal, None),
                 "split_vertical" => gpui::KeyBinding::new(&gpui_str, SplitVertical, None),
                 "close_pane" => gpui::KeyBinding::new(&gpui_str, ClosePane, None),
@@ -224,11 +264,194 @@ fn normalize_keybinding_display(binding: &str) -> String {
         .unwrap_or_else(|_| binding.to_string())
 }
 
+fn migrate_legacy_terminal_conflicting_keybindings(
+    keybindings: &mut std::collections::HashMap<String, String>,
+) -> bool {
+    #[cfg(target_os = "macos")]
+    let m = "Cmd";
+    #[cfg(not(target_os = "macos"))]
+    let m = "Ctrl";
+
+    let migrations = [
+        ("new_session", format!("{m}+N"), format!("{m}+Shift+N")),
+        ("close_session", format!("{m}+W"), format!("{m}+Alt+W")),
+        ("toggle_layout", format!("{m}+\\"), format!("{m}+Shift+L")),
+        ("toggle_sidebar", format!("{m}+B"), format!("{m}+Shift+E")),
+        (
+            "toggle_task_board",
+            format!("{m}+T"),
+            format!("{m}+Shift+T"),
+        ),
+        ("search_terminal", format!("{m}+F"), format!("{m}+Shift+F")),
+        (
+            "split_horizontal",
+            format!("{m}+D"),
+            format!("{m}+Alt+Shift+H"),
+        ),
+        (
+            "split_vertical",
+            format!("{m}+Shift+D"),
+            format!("{m}+Alt+Shift+V"),
+        ),
+        (
+            "close_pane",
+            format!("{m}+Shift+W"),
+            format!("{m}+Alt+Shift+W"),
+        ),
+        ("quick_switch", format!("{m}+K"), format!("{m}+Shift+K")),
+    ];
+
+    let mut changed = false;
+    for (action, old_binding, new_binding) in migrations {
+        let new_display = normalize_keybinding_display(&new_binding);
+        let Some(current) = keybindings.get_mut(action) else {
+            continue;
+        };
+
+        let normalized_current = normalize_keybinding_display(current);
+        let matches_old_binding = normalized_current == normalize_keybinding_display(&old_binding)
+            || normalized_current == old_binding;
+        if matches_old_binding && *current != new_display {
+            *current = new_display;
+            changed = true;
+        }
+    }
+
+    changed
+}
+
+fn contains_font_family(fonts: &[String], target: &str) -> bool {
+    fonts.iter().any(|font| font.eq_ignore_ascii_case(target))
+}
+
+fn resolve_terminal_font_family(requested: &str, detected_fonts: &[String]) -> String {
+    if !requested.is_empty() && contains_font_family(detected_fonts, requested) {
+        return requested.to_string();
+    }
+
+    let platform_default = codirigent_core::config::default_terminal_font_family();
+    if contains_font_family(detected_fonts, platform_default) {
+        return platform_default.to_string();
+    }
+
+    if let Some(font) = detected_fonts.first() {
+        return font.clone();
+    }
+
+    platform_default.to_string()
+}
+
+pub(super) fn parse_terminal_override_rgba(value: &str) -> Option<Rgba> {
+    let hex = value.trim();
+    if hex.is_empty() {
+        return None;
+    }
+
+    let hex = hex.trim_start_matches('#');
+    let (r, g, b, a) = match hex.len() {
+        HEX_SHORT_RGB_LEN => (
+            parse_hex_nibble(&hex[0..1])?,
+            parse_hex_nibble(&hex[1..2])?,
+            parse_hex_nibble(&hex[2..3])?,
+            OPAQUE_ALPHA,
+        ),
+        HEX_SHORT_RGBA_LEN => (
+            parse_hex_nibble(&hex[0..1])?,
+            parse_hex_nibble(&hex[1..2])?,
+            parse_hex_nibble(&hex[2..3])?,
+            parse_hex_nibble(&hex[3..4])?,
+        ),
+        HEX_LONG_RGB_LEN => (
+            u8::from_str_radix(&hex[0..2], 16).ok()?,
+            u8::from_str_radix(&hex[2..4], 16).ok()?,
+            u8::from_str_radix(&hex[4..6], 16).ok()?,
+            OPAQUE_ALPHA,
+        ),
+        HEX_LONG_RGBA_LEN => (
+            u8::from_str_radix(&hex[0..2], 16).ok()?,
+            u8::from_str_radix(&hex[2..4], 16).ok()?,
+            u8::from_str_radix(&hex[4..6], 16).ok()?,
+            u8::from_str_radix(&hex[6..8], 16).ok()?,
+        ),
+        _ => return None,
+    };
+
+    Some(Rgba::new(r, g, b, a))
+}
+
+fn parse_hex_nibble(value: &str) -> Option<u8> {
+    let nibble = u8::from_str_radix(value, 16).ok()?;
+    Some((nibble << 4) | nibble)
+}
+
+fn terminal_override_is_valid(value: &str) -> bool {
+    value.trim().is_empty() || parse_terminal_override_rgba(value).is_some()
+}
+
+fn apply_terminal_theme_overrides(
+    theme: &mut CodirigentTheme,
+    overrides: &codirigent_core::config::TerminalThemeOverrides,
+) {
+    if let Some(color) = parse_terminal_override_rgba(&overrides.background) {
+        theme.terminal_background = color;
+    }
+    if let Some(color) = parse_terminal_override_rgba(&overrides.foreground) {
+        theme.terminal_foreground = color;
+    }
+    if let Some(color) = parse_terminal_override_rgba(&overrides.cursor) {
+        theme.terminal_cursor = color;
+        theme.cursor = color.to_hsla();
+    }
+    if let Some(color) = parse_terminal_override_rgba(&overrides.selection_background) {
+        theme.terminal_selection_bg = color;
+    }
+    if let Some(color) = parse_terminal_override_rgba(&overrides.selection_foreground) {
+        theme.terminal_selection_fg = color;
+    }
+
+    let palette = &overrides.palette;
+    let palette_overrides = [
+        &palette.black,
+        &palette.red,
+        &palette.green,
+        &palette.yellow,
+        &palette.blue,
+        &palette.magenta,
+        &palette.cyan,
+        &palette.white,
+        &palette.bright_black,
+        &palette.bright_red,
+        &palette.bright_green,
+        &palette.bright_yellow,
+        &palette.bright_blue,
+        &palette.bright_magenta,
+        &palette.bright_cyan,
+        &palette.bright_white,
+    ];
+
+    for (index, value) in palette_overrides.iter().enumerate() {
+        if let Some(color) = parse_terminal_override_rgba(value) {
+            theme.ansi.colors[index] = color;
+        }
+    }
+}
+
 fn load_settings_snapshot(
     config_service: &codirigent_core::config_service::DefaultConfigService,
     project_dir: Option<PathBuf>,
 ) -> LoadedSettingsSnapshot {
-    let user_settings = config_service.load_user_settings().unwrap_or_default();
+    const TERMINAL_SAFE_KEYBINDINGS_MIGRATION_VERSION: u32 = 1;
+
+    let mut user_settings = config_service.load_user_settings().unwrap_or_default();
+    let mut user_settings_changed = false;
+    if user_settings.migrations.terminal_safe_keybindings_version
+        < TERMINAL_SAFE_KEYBINDINGS_MIGRATION_VERSION
+    {
+        let _ = migrate_legacy_terminal_conflicting_keybindings(&mut user_settings.keybindings);
+        user_settings.migrations.terminal_safe_keybindings_version =
+            TERMINAL_SAFE_KEYBINDINGS_MIGRATION_VERSION;
+        user_settings_changed = true;
+    }
     let project_config = project_dir
         .as_ref()
         .and_then(|dir| config_service.load_project_config(dir).ok())
@@ -237,6 +460,7 @@ fn load_settings_snapshot(
 
     LoadedSettingsSnapshot {
         user_settings,
+        user_settings_changed,
         project_config,
         project_dir,
         theme_manager,
@@ -289,6 +513,7 @@ impl WorkspaceView {
         if !user_settings.terminal.font_family.is_empty() {
             theme.terminal_font_family = user_settings.terminal.font_family.clone();
         }
+        apply_terminal_theme_overrides(theme, &user_settings.terminal.theme_overrides);
     }
 
     fn apply_runtime_theme(&mut self, theme: CodirigentTheme) {
@@ -297,6 +522,39 @@ impl WorkspaceView {
         for terminal_view in self.terminals_mut().values_mut() {
             terminal_view.set_theme(theme.clone());
         }
+    }
+
+    pub(super) fn sanitize_terminal_font_family(
+        &mut self,
+        window: &mut Window,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(detected_fonts) = self.cache.monospace_fonts.clone() else {
+            return;
+        };
+
+        let requested_font = self
+            .settings
+            .cached_user_settings
+            .terminal
+            .font_family
+            .clone();
+        let resolved_font = resolve_terminal_font_family(&requested_font, &detected_fonts);
+        if requested_font == resolved_font {
+            return;
+        }
+
+        self.settings.cached_user_settings.terminal.font_family = resolved_font.clone();
+        if let Some(page) = self.settings.page.as_mut() {
+            page.user_settings.terminal.font_family = resolved_font.clone();
+        }
+
+        self.apply_terminal_font_family(window, resolved_font);
+        self.schedule_user_settings_snapshot_save(
+            self.settings.cached_user_settings.clone(),
+            Duration::ZERO,
+            cx,
+        );
     }
 
     pub(super) fn resolve_and_apply_theme_id(
@@ -355,6 +613,7 @@ impl WorkspaceView {
         user_settings.appearance.grid_gap = theme.grid_gap as u32;
         user_settings.terminal.font_size = theme.terminal_font_size;
         user_settings.terminal.line_height = theme.terminal_line_height;
+        let terminal_style_values = terminal_style_values_from_theme(theme);
 
         let mut detected = self
             .cache
@@ -380,11 +639,7 @@ impl WorkspaceView {
         let mut seen_shells = HashSet::new();
         detected_shells.retain(|shell| seen_shells.insert(shell.clone()));
 
-        let mut detected_fonts = self.cache.monospace_fonts.clone().unwrap_or_default();
-        let current_font = &user_settings.terminal.font_family;
-        if !current_font.is_empty() && !detected_fonts.iter().any(|f| f == current_font) {
-            detected_fonts.insert(0, current_font.clone());
-        }
+        let detected_fonts = self.cache.monospace_fonts.clone().unwrap_or_default();
 
         SettingsPage::new(
             user_settings,
@@ -392,7 +647,213 @@ impl WorkspaceView {
             detected,
             detected_shells,
             detected_fonts,
+            terminal_style_values,
         )
+    }
+
+    pub(super) fn clear_terminal_style_field_focus(&mut self) {
+        if let Some(page) = self.settings.page.as_mut() {
+            page.focused_terminal_style_field = None;
+        }
+    }
+
+    pub(super) fn set_terminal_style_field_focus(&mut self, field: TerminalStyleField) {
+        if let Some(page) = self.settings.page.as_mut() {
+            page.focused_terminal_style_field = Some(field);
+            page.recording_shortcut = None;
+            page.focused_shortcut_row = None;
+            page.open_dropdown = None;
+        }
+    }
+
+    pub(super) fn handle_terminal_style_field_backspace(&mut self, cx: &mut Context<Self>) -> bool {
+        let Some((field, next_value)) = self.settings.page.as_ref().and_then(|page| {
+            let field = page.focused_terminal_style_field?;
+            let mut next = page.terminal_style_draft_value(field).to_string();
+            next.pop();
+            Some((field, next))
+        }) else {
+            return false;
+        };
+
+        self.update_terminal_style_field_value(field, next_value, cx);
+        true
+    }
+
+    pub(super) fn append_terminal_style_field_text(
+        &mut self,
+        text: &str,
+        cx: &mut Context<Self>,
+    ) -> bool {
+        let Some((field, next_value)) = self.settings.page.as_ref().and_then(|page| {
+            let field = page.focused_terminal_style_field?;
+            let mut next = page.terminal_style_draft_value(field).to_string();
+            next.push_str(text);
+            Some((field, next))
+        }) else {
+            return false;
+        };
+
+        self.update_terminal_style_field_value(field, next_value, cx);
+        true
+    }
+
+    pub(super) fn reset_terminal_style_field(
+        &mut self,
+        field: TerminalStyleField,
+        cx: &mut Context<Self>,
+    ) {
+        let Some(next_value) = self.settings.page.as_mut().map(|page| {
+            page.reset_terminal_style_field_to_base(field);
+            page.terminal_style_draft_value(field).to_string()
+        }) else {
+            return;
+        };
+        self.update_terminal_style_field_value(field, next_value, cx);
+    }
+
+    pub(super) fn update_terminal_style_field_value(
+        &mut self,
+        field: TerminalStyleField,
+        value: String,
+        cx: &mut Context<Self>,
+    ) {
+        let mut theme_persist_input = None;
+
+        if let Some(page) = self.settings.page.as_mut() {
+            page.set_terminal_style_draft_value(field, value.clone());
+            if terminal_override_is_valid(&value) {
+                theme_persist_input = Some((
+                    page.user_settings.appearance.theme.clone(),
+                    page.terminal_style_draft.clone(),
+                ));
+            }
+        }
+
+        if let Some((active_theme_id, terminal_style_draft)) = theme_persist_input {
+            if let Some(custom_theme) =
+                self.build_terminal_style_custom_theme(&active_theme_id, &terminal_style_draft)
+            {
+                let custom_theme_id = custom_theme.id.clone();
+                self.apply_custom_terminal_style_theme(&custom_theme);
+                self.schedule_terminal_style_theme_save(custom_theme, cx);
+                if let Some(page) = self.settings.page.as_mut() {
+                    page.user_settings.appearance.theme = custom_theme_id.clone();
+                    page.user_settings.terminal.theme_overrides =
+                        codirigent_core::config::TerminalThemeOverrides::default();
+                    page.user_save_pending = true;
+                    let user_settings = page.user_settings.clone();
+                    self.settings.cached_user_settings = user_settings.clone();
+                    self.resolve_and_apply_theme_id(&custom_theme_id, &user_settings);
+                    self.maybe_schedule_settings_save(cx);
+                }
+            }
+        }
+
+        cx.notify();
+    }
+
+    fn build_terminal_style_custom_theme(
+        &self,
+        active_theme_id: &str,
+        terminal_style_draft: &codirigent_core::config::TerminalThemeOverrides,
+    ) -> Option<Theme> {
+        let active_theme = self
+            .settings
+            .theme_manager
+            .get(active_theme_id)
+            .cloned()
+            .or_else(|| {
+                self.settings
+                    .theme_manager
+                    .runtime_theme(active_theme_id)
+                    .ok()
+                    .map(|theme| {
+                        Theme::from_runtime(active_theme_id, active_theme_id, true, &theme)
+                    })
+            })?;
+
+        let is_custom = !self.settings.theme_manager.is_builtin(active_theme_id);
+        let custom_id = if is_custom {
+            active_theme.id.clone()
+        } else {
+            format!("{}-custom", active_theme.id)
+        };
+        let custom_name = if is_custom {
+            active_theme.name.clone()
+        } else {
+            format!("{} Custom", active_theme.name)
+        };
+
+        let mut custom_theme = active_theme;
+        custom_theme.id = custom_id.clone();
+        custom_theme.name = custom_name;
+        apply_terminal_style_values_to_theme(&mut custom_theme, terminal_style_draft);
+        Some(custom_theme)
+    }
+
+    fn apply_custom_terminal_style_theme(&mut self, custom_theme: &Theme) {
+        self.settings.theme_manager.add_theme(custom_theme.clone());
+        let _ = self.settings.theme_manager.set_active(&custom_theme.id);
+        self.settings.active_theme_id = custom_theme.id.clone();
+    }
+
+    fn schedule_terminal_style_theme_save(&mut self, custom_theme: Theme, cx: &mut Context<Self>) {
+        let Some(config_service) = self.settings.config_service.clone() else {
+            return;
+        };
+
+        self.settings.theme_save_generation = self.settings.theme_save_generation.wrapping_add(1);
+        let generation = self.settings.theme_save_generation;
+        self.settings.theme_save_task = None;
+        self.settings.theme_save_task =
+            Some(cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
+                cx.background_executor()
+                    .timer(Duration::from_millis(250))
+                    .await;
+
+                let should_run = this
+                    .update(cx, |this, _cx| {
+                        this.settings.theme_save_generation == generation
+                    })
+                    .ok()
+                    .unwrap_or(false);
+                if !should_run {
+                    return;
+                }
+
+                let theme_dir = ThemeManager::custom_theme_dir(config_service.user_config_dir());
+                let theme_json = match custom_theme.to_json() {
+                    Ok(theme_json) => theme_json,
+                    Err(e) => {
+                        let _ = this.update(cx, |this, _cx| {
+                            if this.settings.theme_save_generation == generation {
+                                this.settings.theme_save_task = None;
+                            }
+                            warn!("Failed to serialize custom terminal theme: {}", e);
+                        });
+                        return;
+                    }
+                };
+                let path = theme_dir.join(format!("{}.json", custom_theme.id));
+                let result = cx
+                    .background_executor()
+                    .spawn(async move {
+                        fs::create_dir_all(&theme_dir)?;
+                        fs::write(path, theme_json)?;
+                        std::io::Result::Ok(())
+                    })
+                    .await;
+
+                let _ = this.update(cx, |this, _cx| {
+                    if this.settings.theme_save_generation == generation {
+                        this.settings.theme_save_task = None;
+                    }
+                    if let Err(e) = result {
+                        warn!("Failed to persist custom terminal theme: {}", e);
+                    }
+                });
+            }));
     }
 
     fn schedule_user_settings_snapshot_save(
@@ -605,6 +1066,13 @@ impl WorkspaceView {
                     .resolve_and_apply_theme_id(&user_settings.appearance.theme, &user_settings);
                 user_settings.appearance.theme = resolved_theme_id;
                 this.settings.cached_user_settings = user_settings.clone();
+                if loaded.user_settings_changed {
+                    this.schedule_user_settings_snapshot_save(
+                        user_settings.clone(),
+                        Duration::ZERO,
+                        cx,
+                    );
+                }
                 this.settings.cached_project_config = loaded.project_config.clone();
                 this.settings.current_working_dir = loaded.project_dir;
                 this.notification_handle
@@ -619,6 +1087,9 @@ impl WorkspaceView {
                         let dropdown_click_pos = existing_page.dropdown_click_pos;
                         let recording_shortcut = existing_page.recording_shortcut.clone();
                         let focused_shortcut_row = existing_page.focused_shortcut_row.clone();
+                        let focused_terminal_style_field =
+                            existing_page.focused_terminal_style_field;
+                        let terminal_style_draft = existing_page.terminal_style_draft.clone();
 
                         let mut page = this.build_settings_page();
                         page.set_category(active_category);
@@ -626,6 +1097,8 @@ impl WorkspaceView {
                         page.dropdown_click_pos = dropdown_click_pos;
                         page.recording_shortcut = recording_shortcut;
                         page.focused_shortcut_row = focused_shortcut_row;
+                        page.focused_terminal_style_field = focused_terminal_style_field;
+                        page.terminal_style_draft = terminal_style_draft;
                         // Validate the preserved recording state is still pointing to a known
                         // action.  If the action was removed (e.g. by a downgrade), drop the
                         // stale state.
@@ -738,7 +1211,7 @@ mod tests {
     #[test]
     fn test_keybindings_to_gpui_list_new_session() {
         let mut map = std::collections::HashMap::new();
-        map.insert("new_session".to_string(), "Ctrl+N".to_string());
+        map.insert("new_session".to_string(), "Ctrl+Shift+N".to_string());
         let list = keybindings_to_gpui_list(&map);
         assert_eq!(list.len(), 1);
     }
@@ -746,7 +1219,7 @@ mod tests {
     #[test]
     fn test_keybindings_to_gpui_list_skips_unknown_action() {
         let mut map = std::collections::HashMap::new();
-        map.insert("unknown_action_xyz".to_string(), "Ctrl+N".to_string());
+        map.insert("unknown_action_xyz".to_string(), "Ctrl+Shift+N".to_string());
         let list = keybindings_to_gpui_list(&map);
         assert_eq!(list.len(), 0);
     }
@@ -754,7 +1227,7 @@ mod tests {
     #[test]
     fn test_keybindings_to_gpui_list_includes_toggle_task_board() {
         let mut map = std::collections::HashMap::new();
-        map.insert("toggle_task_board".to_string(), "Ctrl+B".to_string());
+        map.insert("toggle_task_board".to_string(), "Ctrl+Shift+T".to_string());
         let list = keybindings_to_gpui_list(&map);
         assert_eq!(list.len(), 1);
     }
@@ -763,7 +1236,7 @@ mod tests {
     fn test_keybindings_to_gpui_list_includes_quick_switch() {
         // quick_switch is a live-reload binding that must appear in the list.
         let mut map = std::collections::HashMap::new();
-        map.insert("quick_switch".to_string(), "Ctrl+K".to_string());
+        map.insert("quick_switch".to_string(), "Ctrl+Shift+K".to_string());
         let list = keybindings_to_gpui_list(&map);
         assert_eq!(list.len(), 1);
     }
@@ -791,9 +1264,12 @@ mod tests {
         map.insert("quit".to_string(), "Ctrl+Q".to_string());
         map.insert("paste".to_string(), "Ctrl+V".to_string());
         map.insert("copy".to_string(), "Ctrl+C".to_string());
-        map.insert("split_horizontal".to_string(), "Ctrl+D".to_string());
-        map.insert("split_vertical".to_string(), "Ctrl+Shift+D".to_string());
-        map.insert("close_pane".to_string(), "Ctrl+Shift+W".to_string());
+        map.insert(
+            "split_horizontal".to_string(),
+            "Ctrl+Alt+Shift+H".to_string(),
+        );
+        map.insert("split_vertical".to_string(), "Ctrl+Alt+Shift+V".to_string());
+        map.insert("close_pane".to_string(), "Ctrl+Alt+Shift+W".to_string());
         let list = keybindings_to_gpui_list(&map);
         assert_eq!(list.len(), 7);
     }
@@ -933,6 +1409,114 @@ mod tests {
     }
 
     #[test]
+    fn migrate_legacy_terminal_conflicting_keybindings_updates_old_defaults() {
+        #[cfg(target_os = "macos")]
+        let toggle_sidebar_old = "Cmd+B";
+        #[cfg(not(target_os = "macos"))]
+        let toggle_sidebar_old = "Ctrl+B";
+
+        #[cfg(target_os = "macos")]
+        let search_terminal_old = "Cmd+F";
+        #[cfg(not(target_os = "macos"))]
+        let search_terminal_old = "Ctrl+F";
+
+        let mut keybindings = std::collections::HashMap::from([
+            (
+                "toggle_sidebar".to_string(),
+                normalize_keybinding_display(toggle_sidebar_old),
+            ),
+            (
+                "search_terminal".to_string(),
+                normalize_keybinding_display(search_terminal_old),
+            ),
+        ]);
+
+        let changed = migrate_legacy_terminal_conflicting_keybindings(&mut keybindings);
+
+        assert!(changed);
+        #[cfg(target_os = "macos")]
+        {
+            assert_eq!(
+                keybindings.get("toggle_sidebar"),
+                Some(&"Cmd+Shift+E".to_string())
+            );
+            assert_eq!(
+                keybindings.get("search_terminal"),
+                Some(&"Cmd+Shift+F".to_string())
+            );
+        }
+        #[cfg(not(target_os = "macos"))]
+        {
+            assert_eq!(
+                keybindings.get("toggle_sidebar"),
+                Some(&"Ctrl+Shift+E".to_string())
+            );
+            assert_eq!(
+                keybindings.get("search_terminal"),
+                Some(&"Ctrl+Shift+F".to_string())
+            );
+        }
+    }
+
+    #[test]
+    fn migrate_legacy_terminal_conflicting_keybindings_preserves_custom_bindings() {
+        let mut keybindings =
+            std::collections::HashMap::from([("toggle_sidebar".to_string(), "F12".to_string())]);
+
+        let changed = migrate_legacy_terminal_conflicting_keybindings(&mut keybindings);
+
+        assert!(!changed);
+        assert_eq!(keybindings.get("toggle_sidebar"), Some(&"F12".to_string()));
+    }
+
+    #[test]
+    fn migrate_legacy_terminal_conflicting_keybindings_updates_single_backslash_layout_binding() {
+        #[cfg(target_os = "macos")]
+        let old_binding = "Cmd+\\".to_string();
+        #[cfg(not(target_os = "macos"))]
+        let old_binding = "Ctrl+\\".to_string();
+
+        let mut keybindings =
+            std::collections::HashMap::from([("toggle_layout".to_string(), old_binding)]);
+
+        let changed = migrate_legacy_terminal_conflicting_keybindings(&mut keybindings);
+
+        assert!(changed);
+        #[cfg(target_os = "macos")]
+        assert_eq!(
+            keybindings.get("toggle_layout"),
+            Some(&"Cmd+Shift+L".to_string())
+        );
+        #[cfg(not(target_os = "macos"))]
+        assert_eq!(
+            keybindings.get("toggle_layout"),
+            Some(&"Ctrl+Shift+L".to_string())
+        );
+    }
+
+    #[test]
+    fn load_settings_snapshot_only_runs_terminal_safe_keybinding_migration_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let config_service = codirigent_core::config_service::DefaultConfigService::with_config_dir(
+            temp.path().to_path_buf(),
+        );
+        let mut settings = codirigent_core::config::UserSettings::default();
+        settings.migrations.terminal_safe_keybindings_version = 1;
+        settings
+            .keybindings
+            .insert("toggle_sidebar".to_string(), "Ctrl+B".to_string());
+        config_service.save_user_settings(&settings).unwrap();
+
+        let snapshot = load_settings_snapshot(&config_service, None);
+
+        assert!(!snapshot.user_settings_changed);
+        assert_eq!(
+            snapshot.user_settings.keybindings.get("toggle_sidebar"),
+            Some(&"Ctrl+B".to_string())
+        );
+    }
+
+    #[test]
     fn apply_theme_runtime_overrides_preserves_user_preferences() {
         let mut theme = CodirigentTheme::dark();
         let mut user_settings = codirigent_core::config::UserSettings::default();
@@ -966,6 +1550,78 @@ mod tests {
     }
 
     #[test]
+    fn apply_theme_runtime_overrides_applies_terminal_theme_overrides() {
+        let mut theme = CodirigentTheme::dark();
+        let mut user_settings = codirigent_core::config::UserSettings::default();
+        user_settings.terminal.theme_overrides.background = "#112233".to_string();
+        user_settings.terminal.theme_overrides.cursor = "#abcdef".to_string();
+        user_settings.terminal.theme_overrides.palette.bright_blue = "#445566".to_string();
+
+        WorkspaceView::apply_theme_runtime_overrides(&mut theme, &user_settings);
+
+        assert_eq!(theme.terminal_background, Rgba::rgb(0x11, 0x22, 0x33));
+        assert_eq!(theme.terminal_cursor, Rgba::rgb(0xab, 0xcd, 0xef));
+        assert_eq!(theme.cursor, Rgba::rgb(0xab, 0xcd, 0xef).to_hsla());
+        assert_eq!(theme.ansi.colors[12], Rgba::rgb(0x44, 0x55, 0x66));
+    }
+
+    #[test]
+    fn apply_theme_runtime_overrides_ignores_invalid_terminal_theme_overrides() {
+        let mut theme = CodirigentTheme::dark();
+        let original_background = theme.terminal_background;
+        let original_palette = theme.ansi.colors[1];
+        let mut user_settings = codirigent_core::config::UserSettings::default();
+        user_settings.terminal.theme_overrides.background = "#gggggg".to_string();
+        user_settings.terminal.theme_overrides.palette.red = "wat".to_string();
+
+        WorkspaceView::apply_theme_runtime_overrides(&mut theme, &user_settings);
+
+        assert_eq!(theme.terminal_background, original_background);
+        assert_eq!(theme.ansi.colors[1], original_palette);
+    }
+
+    #[test]
+    fn parse_terminal_override_rgba_supports_short_and_alpha_hex() {
+        assert_eq!(
+            parse_terminal_override_rgba("#abc"),
+            Some(Rgba::rgb(0xaa, 0xbb, 0xcc))
+        );
+        assert_eq!(
+            parse_terminal_override_rgba("#11223344"),
+            Some(Rgba::new(0x11, 0x22, 0x33, 0x44))
+        );
+        assert_eq!(parse_terminal_override_rgba("#12"), None);
+    }
+
+    #[test]
+    fn resolve_terminal_font_family_keeps_installed_requested_font() {
+        let fonts = vec!["Consolas".to_string(), "Cascadia Code".to_string()];
+
+        let resolved = resolve_terminal_font_family("Cascadia Code", &fonts);
+
+        assert_eq!(resolved, "Cascadia Code");
+    }
+
+    #[test]
+    fn resolve_terminal_font_family_falls_back_to_platform_default() {
+        let platform_default = codirigent_core::config::default_terminal_font_family().to_string();
+        let fonts = vec![platform_default.clone(), "Cascadia Code".to_string()];
+
+        let resolved = resolve_terminal_font_family("JetBrains Mono", &fonts);
+
+        assert_eq!(resolved, platform_default);
+    }
+
+    #[test]
+    fn resolve_terminal_font_family_falls_back_to_first_detected_font() {
+        let fonts = vec!["Cascadia Code".to_string(), "Fira Code".to_string()];
+
+        let resolved = resolve_terminal_font_family("JetBrains Mono", &fonts);
+
+        assert_eq!(resolved, "Cascadia Code");
+    }
+
+    #[test]
     fn load_settings_snapshot_loads_custom_themes_from_user_config_dir() {
         let dir = tempdir().unwrap();
         let config_service = DefaultConfigService::with_config_dir(dir.path().to_path_buf());
@@ -988,6 +1644,9 @@ mod tests {
 
         assert_eq!(snapshot.user_settings.appearance.theme, "aurora");
         assert!(snapshot.theme_manager.get("aurora").is_some());
-        assert_eq!(snapshot.theme_manager.len(), 3);
+        assert_eq!(
+            snapshot.theme_manager.len(),
+            crate::theme_config::builtin_themes().len() + 1
+        );
     }
 }

@@ -13,7 +13,8 @@ use crate::workspace::types::HEADER_HEIGHT;
 use codirigent_core::SessionId;
 use gpui::{
     div, px, Context, Focusable, InteractiveElement, IntoElement, MouseButton, MouseDownEvent,
-    MouseMoveEvent, MouseUpEvent, ParentElement, ScrollWheelEvent, SharedString, Styled, Window,
+    MouseMoveEvent, MouseUpEvent, ParentElement, ScrollWheelEvent, SharedString,
+    StatefulInteractiveElement, Styled, Window,
 };
 use std::rc::Rc;
 
@@ -230,10 +231,20 @@ impl WorkspaceView {
             Some((entity, fh, is_focused, input_enabled)),
             window,
         );
+        let scrollbar_overlay =
+            self.render_terminal_scrollbar(session_id, theme, Rc::clone(&canvas_origin), cx);
+        let search_overlay = self.render_terminal_search_overlay(session_id, theme, cx);
 
         // Clone canvas_origin for each mouse handler closure
         let origin_for_down = Rc::clone(&canvas_origin);
         let origin_for_move = Rc::clone(&canvas_origin);
+        let mut terminal_stack = div().relative().size_full().child(terminal_content);
+        if let Some(scrollbar_overlay) = scrollbar_overlay {
+            terminal_stack = terminal_stack.child(scrollbar_overlay);
+        }
+        if let Some(search_overlay) = search_overlay {
+            terminal_stack = terminal_stack.child(search_overlay);
+        }
 
         let mut outer = div()
             .id(SharedString::from(format!("session-cell-{}", session_id.0)))
@@ -289,7 +300,17 @@ impl WorkspaceView {
 
         outer.child(header).child(
             terminal_area
+                .relative()
                 .overflow_hidden()
+                .on_hover(cx.listener(move |this, hovered: &bool, _window, cx| {
+                    if !hovered {
+                        return;
+                    }
+                    if let Some(tv) = this.terminals_mut().get_mut(&session_id) {
+                        tv.note_scroll_activity();
+                        cx.notify();
+                    }
+                }))
                 .on_scroll_wheel(
                     cx.listener(move |this, event: &ScrollWheelEvent, _window, cx| {
                         if let Some(tv) = this.terminals_mut().get_mut(&session_id) {
@@ -324,11 +345,11 @@ impl WorkspaceView {
                         if this.selection.drag.as_ref().is_some_and(|d| d.active) {
                             return;
                         }
-                        let (ox, oy) = origin_for_down.get();
+                        let metrics = origin_for_down.get();
                         let mouse_x: f32 = event.position.x.into();
                         let mouse_y: f32 = event.position.y.into();
-                        let rel_x = mouse_x - ox;
-                        let rel_y = mouse_y - oy;
+                        let rel_x = mouse_x - metrics.origin_x;
+                        let rel_y = mouse_y - metrics.origin_y;
 
                         if let Some(tv) = this.terminals_mut().get_mut(&session_id) {
                             let cell_pos: Option<(usize, usize)> = tv.pixel_to_cell(rel_x, rel_y);
@@ -355,11 +376,11 @@ impl WorkspaceView {
                             return;
                         }
 
-                        let (ox, oy) = origin_for_move.get();
+                        let metrics = origin_for_move.get();
                         let mouse_x: f32 = event.position.x.into();
                         let mouse_y: f32 = event.position.y.into();
-                        let rel_x = mouse_x - ox;
-                        let rel_y = mouse_y - oy;
+                        let rel_x = mouse_x - metrics.origin_x;
+                        let rel_y = mouse_y - metrics.origin_y;
 
                         if let Some(tv) = this.terminals_mut().get_mut(&session_id) {
                             let (row, col, scroll_dir) = tv.pixel_to_cell_clamped(rel_x, rel_y);
@@ -397,7 +418,7 @@ impl WorkspaceView {
                         }
                     }),
                 )
-                .child(terminal_content),
+                .child(terminal_stack),
         )
     }
 }
