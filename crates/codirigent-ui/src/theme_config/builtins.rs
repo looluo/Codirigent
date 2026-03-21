@@ -139,7 +139,7 @@ impl Theme {
             },
             typography: ThemeTypography {
                 ui_font_family: DEFAULT_UI_FONT_FAMILY.to_string(),
-                terminal_font_family: theme.terminal_font_family.clone(),
+                terminal_font_family: String::new(),
                 base_font_size: theme.font_size_base,
                 terminal_font_size: theme.terminal_font_size,
                 line_height: theme.terminal_line_height,

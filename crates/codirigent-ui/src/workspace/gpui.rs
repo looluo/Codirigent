@@ -1659,8 +1659,8 @@ impl Render for WorkspaceView {
         // Lazily detect monospace fonts on first render (text system is available here)
         if self.cache.monospace_fonts.is_none() {
             self.cache.monospace_fonts = Some(detect_monospace_fonts(window.text_system()));
+            self.sanitize_terminal_font_family(window, cx);
         }
-        self.sanitize_terminal_font_family(window, cx);
 
         let rem = REM_BASE * (self.workspace.theme().font_size_base / FONT_SIZE_BASE_DEFAULT);
         window.set_rem_size(gpui::px(rem));

@@ -50,8 +50,7 @@ impl Default for ThemeTypography {
     fn default() -> Self {
         Self {
             ui_font_family: DEFAULT_UI_FONT_FAMILY.to_string(),
-            terminal_font_family: codirigent_core::config::default_terminal_font_family()
-                .to_string(),
+            terminal_font_family: String::new(),
             base_font_size: DEFAULT_BASE_FONT_SIZE,
             terminal_font_size: DEFAULT_TERMINAL_FONT_SIZE,
             line_height: DEFAULT_TERMINAL_LINE_HEIGHT,
@@ -86,11 +85,11 @@ mod tests {
     }
 
     #[test]
-    fn light_theme_uses_runtime_terminal_font_family_default() {
+    fn theme_does_not_carry_terminal_font_family() {
         let theme = Theme::light();
-        assert_eq!(
-            theme.typography.terminal_font_family,
-            codirigent_core::config::default_terminal_font_family()
+        assert!(
+            theme.typography.terminal_font_family.is_empty(),
+            "themes must not dictate terminal font — that is a user setting"
         );
     }
 

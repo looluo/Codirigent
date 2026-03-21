@@ -1501,14 +1501,15 @@ pub fn compute_cell_dimensions(
     let cell_width = text_system
         .advance(font_id, font_size_px, 'm')
         .map(|adv| f32::from(adv.width))
-        .unwrap_or(font_size * FALLBACK_CELL_WIDTH_RATIO);
+        .unwrap_or(font_size * FALLBACK_CELL_WIDTH_RATIO)
+        .max(MIN_CELL_WIDTH_PX);
 
     // GPUI's ascent already includes room for accented characters, so natural
     // ascent + |descent| gives correct terminal row height without extra leading.
     // (The old 1.3x factor on font_size caused visible double-spacing.)
     let ascent: f32 = text_system.ascent(font_id, font_size_px).into();
     let descent: f32 = text_system.descent(font_id, font_size_px).into();
-    let cell_height = (ascent + descent.abs()) * line_height.max(1.0);
+    let cell_height = (ascent + descent.abs()).max(font_size) * line_height.max(1.0);
 
     (cell_width, cell_height)
 }
