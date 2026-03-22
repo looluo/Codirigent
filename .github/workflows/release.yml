@@ -267,7 +267,8 @@ jobs:
       - name: Generate checksums
         run: |
           cd artifacts
-          sha256sum * > checksums-sha256.txt
+          # Exclude MSI — it will be replaced by a locally signed version
+          sha256sum $(ls | grep -v '\.msi$') > checksums-sha256.txt
           cat checksums-sha256.txt
 
       - name: Create GitHub Release

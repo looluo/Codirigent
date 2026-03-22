@@ -1443,19 +1443,19 @@ impl WorkspaceView {
             let codex_started_at = plan.codex_started_at;
             if let Ok(manager) = self.session_manager.lock() {
                 manager.with_session_state_mut(bootstrapped.session_id, |state| {
-                    // session_uuid is set only inside this restore_cli-gated block;
-                    // the local session struct receives the same guard at the assignment below.
-                    state.session.session_uuid = plan.session_uuid.clone();
                     state.session.codex_execution_mode = codex_execution_mode;
                     state.session.codex_started_at = codex_started_at;
                 });
             }
         }
 
+        // NOTE: Do NOT overwrite session.session_uuid with plan.session_uuid here.
+        // The PTY was already spawned with the UUID from Session::new() as the
+        // CODIRIGENT_SESSION_UUID env var. Overwriting with the saved UUID from a
+        // previous app instance creates a mismatch: hook signals carry the PTY's
+        // UUID but the workspace session has the old one, causing routing to fail
+        // and status to stay stuck on Idle.
         let mut session = bootstrapped.session;
-        if restore_cli {
-            session.session_uuid = plan.session_uuid.clone();
-        }
         session.shell = bootstrapped.request.requested_shell.clone();
         session.group = plan.group.clone();
         session.color = plan.color.clone();

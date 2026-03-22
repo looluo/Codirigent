@@ -7,9 +7,13 @@
 # -----------------------------------------------------------------------------
 
 
+# Claude Code project instructions (local only)
+CLAUDE.md
+
 # Development plans
 plans/
 docs/superpowers/
+docs/specs/
 
 # Superpowers skill state
 .superpowers/

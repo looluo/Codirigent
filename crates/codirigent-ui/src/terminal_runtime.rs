@@ -199,10 +199,12 @@ impl TerminalRuntime {
     fn snapshot_from_damage(&mut self) -> TerminalRenderSnapshot {
         let rows = self.terminal.rows() as usize;
         let cols = self.terminal.cols() as usize;
-        let damage = if self
-            .cached_rows
-            .as_ref()
-            .is_some_and(|cached_rows| cached_rows.len() == rows)
+        let scrolled_back = self.terminal.term().grid().display_offset() > 0;
+        let damage = if !scrolled_back
+            && self
+                .cached_rows
+                .as_ref()
+                .is_some_and(|cached_rows| cached_rows.len() == rows)
         {
             let term = self.terminal.term_mut();
             let damage = match term.damage() {
