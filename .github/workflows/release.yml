@@ -276,7 +276,7 @@ jobs:
         with:
           artifacts: "artifacts/*"
           token: ${{ secrets.GITHUB_TOKEN }}
-          draft: false
+          draft: true
           generateReleaseNotes: true
           prerelease: ${{ contains(github.ref, 'alpha') || contains(github.ref, 'beta') || contains(github.ref, 'rc') }}
 
