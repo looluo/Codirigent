@@ -317,6 +317,10 @@ pub(super) struct SelectionState {
     pub session_menu_open: Option<SessionId>,
     /// Vertical anchor position for the session menu overlay, in window pixels.
     pub session_menu_anchor_y: Option<f32>,
+    /// Horizontal anchor position for the session menu overlay, in window pixels.
+    /// When `Some`, the menu is positioned at this X coordinate (e.g. tab right-click).
+    /// When `None`, the menu uses the default drawer-relative positioning.
+    pub session_menu_anchor_x: Option<f32>,
     /// Whether the user is actively dragging a text selection in a terminal.
     pub is_selecting: bool,
     /// Session ID that is currently being selected in (for mouse move events).
@@ -456,6 +460,7 @@ impl SelectionState {
             selected_session_id: None,
             session_menu_open: None,
             session_menu_anchor_y: None,
+            session_menu_anchor_x: None,
             is_selecting: false,
             selecting_session_id: None,
             file_tree_context_menu: None,
