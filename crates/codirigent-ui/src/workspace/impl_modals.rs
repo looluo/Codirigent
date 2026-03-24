@@ -34,10 +34,12 @@ impl WorkspaceView {
                 .unwrap_or_default(),
         };
 
+        let cursor_position = input.chars().count();
         self.modals.session_action = Some(SessionActionModal {
             session_id,
             kind,
             input,
+            cursor_position,
             error: None,
         });
     }
@@ -326,6 +328,7 @@ impl WorkspaceView {
         let Some(modal) = self.modals.session_action.as_mut() else {
             return false;
         };
+        modal.cursor_position = modal.cursor_position.min(Self::char_count(&modal.input));
 
         let key = event.keystroke.key.to_lowercase();
         match key.as_str() {
@@ -339,13 +342,41 @@ impl WorkspaceView {
                 return true;
             }
             "backspace" => {
-                modal.input.pop();
+                Self::backspace_at_cursor(&mut modal.input, &mut modal.cursor_position);
+                modal.error = None;
+                cx.notify();
+                return true;
+            }
+            "delete" => {
+                Self::delete_at_cursor(&mut modal.input, &mut modal.cursor_position);
+                modal.error = None;
+                cx.notify();
+                return true;
+            }
+            "left" | "arrowleft" => {
+                Self::move_cursor_left(&modal.input, &mut modal.cursor_position);
+                cx.notify();
+                return true;
+            }
+            "right" | "arrowright" => {
+                Self::move_cursor_right(&modal.input, &mut modal.cursor_position);
+                cx.notify();
+                return true;
+            }
+            "home" => {
+                Self::move_cursor_home(&mut modal.cursor_position);
+                cx.notify();
+                return true;
+            }
+            "end" => {
+                Self::move_cursor_end(&modal.input, &mut modal.cursor_position);
                 cx.notify();
                 return true;
             }
             "space" => {
                 // GPUI on Windows reports space as key="space" with key_char=None
-                modal.input.push(' ');
+                Self::insert_at_cursor(&mut modal.input, &mut modal.cursor_position, " ");
+                modal.error = None;
                 cx.notify();
                 return true;
             }
@@ -355,7 +386,22 @@ impl WorkspaceView {
         // Ctrl+A selects all (clears input for easy replacement)
         if (event.keystroke.modifiers.control || event.keystroke.modifiers.platform) && key == "a" {
             modal.input.clear();
+            modal.cursor_position = 0;
             cx.notify();
+            return true;
+        }
+
+        // Ctrl+V / Cmd+V — paste from system clipboard
+        if (event.keystroke.modifiers.control || event.keystroke.modifiers.platform) && key == "v" {
+            if let Ok(codirigent_core::ClipboardContent::Text(text)) =
+                self.clipboard.smart_clipboard.read_content()
+            {
+                if let Some(modal) = self.modals.session_action.as_mut() {
+                    Self::insert_at_cursor(&mut modal.input, &mut modal.cursor_position, &text);
+                    modal.error = None;
+                    cx.notify();
+                }
+            }
             return true;
         }
 
@@ -368,11 +414,10 @@ impl WorkspaceView {
         }
 
         if let Some(ref key_char) = event.keystroke.key_char {
-            if let Some(ch) = key_char.chars().next() {
-                if ch.is_ascii_graphic() || ch == ' ' {
-                    modal.input.push(ch);
-                    cx.notify();
-                }
+            if !key_char.is_empty() {
+                Self::insert_at_cursor(&mut modal.input, &mut modal.cursor_position, key_char);
+                modal.error = None;
+                cx.notify();
             }
         }
 

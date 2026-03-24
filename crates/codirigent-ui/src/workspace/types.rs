@@ -196,6 +196,8 @@ pub(super) struct SessionActionModal {
     pub(super) kind: SessionActionKind,
     /// User input value.
     pub(super) input: String,
+    /// Cursor position (char index) within `input`.
+    pub(super) cursor_position: usize,
     /// Optional error message if validation fails.
     pub(super) error: Option<String>,
 }
