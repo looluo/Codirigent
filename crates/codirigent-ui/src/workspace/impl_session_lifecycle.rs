@@ -34,7 +34,6 @@ use tracing::{info, warn};
 #[derive(Debug, Clone)]
 struct RestoreSessionPlan {
     original_session_id: SessionId,
-    session_uuid: String,
     session_name: String,
     working_dir: PathBuf,
     shell: Option<String>,
@@ -656,7 +655,6 @@ mod tests {
     fn restore_resume_commands_preserve_cli_order() {
         let plan = RestoreSessionPlan {
             original_session_id: SessionId(1),
-            session_uuid: "session-uuid-1".to_string(),
             session_name: "Session 1".to_string(),
             working_dir: sample_working_dir(),
             shell: None,
@@ -965,7 +963,6 @@ mod tests {
     fn restore_plan_cli_type_prefers_known_resume_metadata() {
         let base = RestoreSessionPlan {
             original_session_id: SessionId(1),
-            session_uuid: "session-uuid-1".to_string(),
             session_name: "Session 1".to_string(),
             working_dir: PathBuf::from("/tmp"),
             shell: None,
@@ -997,7 +994,6 @@ mod tests {
     fn restore_resume_commands_empty_for_plan_with_no_cli_fields() {
         let plan = RestoreSessionPlan {
             original_session_id: SessionId(1),
-            session_uuid: "uuid".to_string(),
             session_name: "Session 1".to_string(),
             working_dir: sample_working_dir(),
             shell: None,
@@ -1449,12 +1445,6 @@ impl WorkspaceView {
             }
         }
 
-        // NOTE: Do NOT overwrite session.session_uuid with plan.session_uuid here.
-        // The PTY was already spawned with the UUID from Session::new() as the
-        // CODIRIGENT_SESSION_UUID env var. Overwriting with the saved UUID from a
-        // previous app instance creates a mismatch: hook signals carry the PTY's
-        // UUID but the workspace session has the old one, causing routing to fail
-        // and status to stay stuck on Idle.
         let mut session = bootstrapped.session;
         session.shell = bootstrapped.request.requested_shell.clone();
         session.group = plan.group.clone();
@@ -1648,7 +1638,6 @@ impl WorkspaceView {
 
             sessions.push(RestoreSessionPlan {
                 original_session_id: saved.id,
-                session_uuid: saved.session_uuid.clone(),
                 session_name,
                 working_dir,
                 shell: saved.shell,
