@@ -2,9 +2,14 @@
 //!
 //! On Windows, GPUI 0.2.x has a timing issue where `WindowControlArea::Drag`
 //! doesn't reliably initiate window moves (stale `mouse_hit_test` in
-//! WM_NCHITTEST). This module provides a direct Win32 workaround that sends
-//! `WM_NCLBUTTONDOWN` with `HTCAPTION` to the window, telling Windows to
-//! start a native title-bar drag.
+//! WM_NCHITTEST). Worse, when WM_NCHITTEST *does* return HTCAPTION, Windows
+//! enters a modal drag loop inside `DefWindowProc` that re-enters the message
+//! pump while GPUI still holds `RefCell` borrows — causing a panic / freeze.
+//!
+//! This module provides a direct Win32 workaround: on mouse-down we post
+//! `WM_NCLBUTTONDOWN(HTCAPTION)` **asynchronously** via `PostMessageW`, so the
+//! modal drag loop begins on the *next* message-pump iteration, after GPUI's
+//! borrows are released.
 //!
 //! Remove this module after upgrading GPUI to a version that fixes the issue.
 
