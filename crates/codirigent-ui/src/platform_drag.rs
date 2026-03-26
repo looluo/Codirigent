@@ -20,6 +20,10 @@
 /// `SendMessageW` (sync) to avoid reentrancy — `SendMessageW` starts a
 /// modal drag loop that pumps messages while GPUI's `RefCell` is still
 /// borrowed by the event callback, causing a panic.
+///
+/// The `lparam` carries the current cursor screen coordinates packed as
+/// `MAKELPARAM(x, y)`. Passing 0 caused some Windows builds to silently
+/// ignore the message when the (0,0) position fell outside the window.
 #[cfg(target_os = "windows")]
 pub fn begin_title_bar_drag(hwnd: isize) {
     use std::ffi::c_int;
@@ -33,19 +37,31 @@ pub fn begin_title_bar_drag(hwnd: isize) {
     #[allow(clippy::upper_case_acronyms)]
     type BOOL = c_int;
 
+    #[repr(C)]
+    #[allow(clippy::upper_case_acronyms)]
+    struct POINT {
+        x: i32,
+        y: i32,
+    }
+
     const WM_NCLBUTTONDOWN: u32 = 0x00A1;
     const HTCAPTION: WPARAM = 2;
 
     extern "system" {
         fn ReleaseCapture() -> BOOL;
         fn PostMessageW(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> BOOL;
+        fn GetCursorPos(point: *mut POINT) -> BOOL;
     }
 
     // Safety: hwnd is obtained from raw_window_handle and the window is alive
     // during the mouse-down handler that calls this function.
     unsafe {
+        let mut pt = POINT { x: 0, y: 0 };
+        GetCursorPos(&mut pt);
+        // Pack screen coordinates as MAKELPARAM(x, y) = (y << 16) | (x & 0xFFFF)
+        let lparam = (((pt.y & 0xFFFF) as LPARAM) << 16) | ((pt.x & 0xFFFF) as LPARAM);
         ReleaseCapture();
-        PostMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, 0);
+        PostMessageW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, lparam);
     }
 }
 
