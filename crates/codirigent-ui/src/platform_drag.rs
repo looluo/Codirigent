@@ -125,6 +125,8 @@ const HTCLOSE: u32 = 20;
 #[cfg(target_os = "windows")]
 const HTCAPTION: usize = 2;
 #[cfg(target_os = "windows")]
+const VK_LBUTTON: i32 = 0x01;
+#[cfg(target_os = "windows")]
 const SUBCLASS_ID: usize = 0xC0D1; // Memorable constant for our subclass.
 
 // Imports from comctl32.dll (window subclass API).
@@ -148,6 +150,7 @@ extern "system" {
     fn ReleaseCapture() -> BOOL;
     fn PostMessageW(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> BOOL;
     fn GetCursorPos(point: *mut POINT) -> BOOL;
+    fn GetAsyncKeyState(vkey: i32) -> i16;
 }
 
 /// Pack screen coordinates as `MAKELPARAM(x, y)`.
@@ -173,9 +176,20 @@ unsafe extern "system" fn drag_subclass_proc(
         // Our custom drag message, posted by begin_title_bar_drag().
         // At this point no GPUI RefCell borrows are held, so the modal
         // drag loop started by DefWindowProc is safe.
+        //
+        // Guard: only start the drag if the left mouse button is still
+        // held. On a double-click the second click fires
+        // titlebar_double_click() synchronously, and by the time this
+        // stale message from the first click is dequeued the button may
+        // already be released — skip it to avoid a spurious drag on the
+        // now-maximised window.
         WM_APP_DRAG_WINDOW => {
-            ReleaseCapture();
-            DefWindowProcW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, lparam)
+            if GetAsyncKeyState(VK_LBUTTON) < 0 {
+                ReleaseCapture();
+                DefWindowProcW(hwnd, WM_NCLBUTTONDOWN, HTCAPTION, lparam)
+            } else {
+                0
+            }
         }
 
         // NC mouse-down (single or double click).
