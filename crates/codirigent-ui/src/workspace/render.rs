@@ -72,13 +72,17 @@ impl WorkspaceView {
         // macOS: Use GPUI's `WindowControlArea::Drag` — it returns HTCAPTION via
         //   the native hit-test and the OS handles drag + double-click-to-zoom.
         //
-        // Windows: Do NOT use `WindowControlArea::Drag`. GPUI 0.2.x has a timing
-        //   issue where WM_NCHITTEST returns HTCAPTION while GPUI still holds
-        //   `RefCell` borrows. Windows then enters a modal drag loop inside
-        //   `DefWindowProc` that re-enters the message pump — panic / freeze.
-        //   Instead, we post `WM_NCLBUTTONDOWN(HTCAPTION)` asynchronously from
-        //   an `on_mouse_down` handler so the modal loop starts *after* GPUI's
-        //   borrows are released. See `platform_drag.rs`.
+        // Windows: Do NOT use `WindowControlArea::Drag`. GPUI 0.2.x has two
+        //   issues: (1) WM_NCHITTEST returns HTCAPTION while GPUI holds RefCell
+        //   borrows, causing a freeze when DefWindowProc enters a modal drag
+        //   loop; (2) GPUI re-dispatches WM_NCLBUTTONDOWN through its element
+        //   tree, so on_mouse_down handlers eat resize events for the top edge
+        //   (which overlaps the title bar).
+        //
+        //   Fix: a Win32 window subclass (see `platform_drag.rs`) intercepts
+        //   NC messages before GPUI. Drag uses a custom WM_APP message that the
+        //   subclass routes to DefWindowProc(WM_NCLBUTTONDOWN, HTCAPTION).
+        //   Resize edges go straight to DefWindowProc, bypassing GPUI.
         let mut drag_region = div().flex().items_center().gap_2().flex_1().h_full();
 
         #[cfg(target_os = "macos")]
@@ -103,6 +107,12 @@ impl WorkspaceView {
                         _ => 0,
                     });
             if let Some(hwnd) = raw_handle {
+                // Install the window subclass that routes WM_NCLBUTTONDOWN
+                // for resize edges directly to DefWindowProc (bypassing
+                // GPUI's element dispatch) and handles our custom drag
+                // message. Safe to call every frame — only installs once.
+                crate::platform_drag::install_drag_subclass(hwnd);
+
                 drag_region = drag_region.on_mouse_down(
                     MouseButton::Left,
                     move |event: &MouseDownEvent, window, _cx| {
