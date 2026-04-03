@@ -532,6 +532,11 @@ pub(super) struct PollingState {
     pub last_legacy_fallback: Instant,
     /// Best-effort shell command line capture per session while the shell is idle.
     pub shell_input_buffers: HashMap<SessionId, String>,
+    /// CLI resume commands waiting for the shell to produce output before
+    /// being dispatched. Keyed by session ID; value is (enqueued_at, commands).
+    /// Commands are sent as soon as the first PTY output is received (the shell
+    /// is alive) or after `RESUME_COMMAND_FALLBACK_TIMEOUT` as a safety net.
+    pub pending_resume_commands: HashMap<SessionId, (Instant, Vec<String>)>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -568,6 +573,7 @@ impl PollingState {
             pending_session_bootstrap_slots: HashSet::new(),
             last_legacy_fallback: Instant::now(),
             shell_input_buffers: HashMap::new(),
+            pending_resume_commands: HashMap::new(),
         }
     }
 }

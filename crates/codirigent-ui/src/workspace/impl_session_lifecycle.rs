@@ -76,6 +76,11 @@ struct CompletedRestoreBootstrap {
     result: Result<SessionBootstrapResult, String>,
 }
 
+/// Safety-net timeout for prompt-aware resume dispatch. If a session's shell
+/// has not produced any PTY output within this window, the resume command is
+/// sent anyway (the shell may not emit OSC 133 or may be very slow to start).
+const RESUME_COMMAND_FALLBACK_TIMEOUT: Duration = Duration::from_secs(3);
+
 fn legacy_pane_stacks_from_groups(
     saved_sessions: &[Session],
     pane_tab_groups: &[PaneTabGroup],
@@ -1479,21 +1484,77 @@ impl WorkspaceView {
                 );
             });
         }
+    }
 
-        if restore_cli {
-            for command in restore_resume_commands(&plan) {
-                if let Ok(manager) = self.session_manager.lock() {
-                    if let Err(error) =
-                        manager.send_input(bootstrapped.session_id, command.as_bytes())
-                    {
-                        warn!(
-                            ?bootstrapped.session_id,
-                            %error,
-                            "Failed to send resume command"
-                        );
-                    }
+    /// Enqueue resume commands to be dispatched when each session's shell
+    /// produces its first output (prompt-aware dispatch).  The commands are
+    /// stored in `polling.pending_resume_commands` and flushed by
+    /// `dispatch_pending_resume_commands()` — either when the output pipeline
+    /// delivers the first real bytes for a session, or after a fallback timeout.
+    fn enqueue_restored_resume_commands(
+        &mut self,
+        pending_commands: Vec<(SessionId, Vec<String>)>,
+    ) {
+        let now = std::time::Instant::now();
+        for (session_id, commands) in pending_commands {
+            if !commands.is_empty() {
+                info!(
+                    ?session_id,
+                    command_count = commands.len(),
+                    "Enqueued resume commands (prompt-aware dispatch)"
+                );
+                self.polling
+                    .pending_resume_commands
+                    .insert(session_id, (now, commands));
+            }
+        }
+    }
+
+    /// Dispatch pending resume commands for a specific session.
+    ///
+    /// Called when the output pipeline delivers real bytes for this session
+    /// (the shell is alive and producing output) or when the fallback timeout
+    /// fires.
+    pub(super) fn dispatch_pending_resume_commands_for_session(&mut self, session_id: SessionId) {
+        let Some((_, commands)) = self.polling.pending_resume_commands.remove(&session_id) else {
+            return;
+        };
+        info!(
+            ?session_id,
+            command_count = commands.len(),
+            "Dispatching resume commands (shell produced output)"
+        );
+        if let Ok(manager) = self.session_manager.lock() {
+            for command in commands {
+                if let Err(error) = manager.send_input(session_id, command.as_bytes()) {
+                    warn!(?session_id, %error, "Failed to send resume command");
                 }
             }
+            manager.mark_output_pending(session_id);
+        }
+    }
+
+    /// Check for timed-out pending resume commands and dispatch them.
+    ///
+    /// This is the safety-net path: if a shell does not produce any PTY output
+    /// within `RESUME_COMMAND_FALLBACK_TIMEOUT`, the resume command is sent
+    /// anyway so the session does not remain stuck.
+    pub(super) fn dispatch_timed_out_resume_commands(&mut self) {
+        let expired: Vec<SessionId> = self
+            .polling
+            .pending_resume_commands
+            .iter()
+            .filter(|(_, (enqueued_at, _))| {
+                enqueued_at.elapsed() >= RESUME_COMMAND_FALLBACK_TIMEOUT
+            })
+            .map(|(session_id, _)| *session_id)
+            .collect();
+        for session_id in expired {
+            info!(
+                ?session_id,
+                "Resume command fallback timeout — dispatching without prompt"
+            );
+            self.dispatch_pending_resume_commands_for_session(session_id);
         }
     }
 
@@ -1703,6 +1764,7 @@ impl WorkspaceView {
         let session_manager = self.session_manager.clone();
         cx.spawn(async move |this: gpui::WeakEntity<Self>, cx| {
             let mut restored_session_ids = std::collections::HashMap::new();
+            let mut pending_resume_commands: Vec<(SessionId, Vec<String>)> = Vec::new();
             let total_batches = restore_batches.len();
             for (batch_index, batch) in restore_batches.into_iter().enumerate() {
                 let is_last_batch = batch_index + 1 == total_batches;
@@ -1728,6 +1790,20 @@ impl WorkspaceView {
                             Ok(bootstrapped) => {
                                 let restored_session_id = bootstrapped.session_id;
                                 let original_session_id = completion.plan.original_session_id;
+                                let restore_cli = this
+                                    .effective_user_settings()
+                                    .general
+                                    .restore_cli_on_startup;
+                                if restore_cli {
+                                    let commands = restore_resume_commands(&completion.plan)
+                                        .into_iter()
+                                        .map(str::to_owned)
+                                        .collect::<Vec<_>>();
+                                    if !commands.is_empty() {
+                                        pending_resume_commands
+                                            .push((restored_session_id, commands));
+                                    }
+                                }
                                 this.finalize_restored_session_bootstrap(
                                     bootstrapped,
                                     completion.plan,
@@ -1757,6 +1833,9 @@ impl WorkspaceView {
                             this.sync_layout_derived_state();
                             this.sync_file_tree_to_focused_session(cx);
                         }
+                        this.enqueue_restored_resume_commands(std::mem::take(
+                            &mut pending_resume_commands,
+                        ));
                         this.polling.restore_in_flight = false;
                         info!("Session restoration complete");
                         // Persist immediately so any session_uuids generated for

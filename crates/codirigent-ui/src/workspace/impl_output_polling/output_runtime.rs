@@ -60,6 +60,12 @@ impl WorkspaceView {
 
         let had_output_activity = self.schedule_output_preparation(cx);
 
+        // Safety-net: dispatch resume commands that have been waiting longer
+        // than the fallback timeout (shell never produced output).
+        if !self.polling.pending_resume_commands.is_empty() {
+            self.dispatch_timed_out_resume_commands();
+        }
+
         // Track output activity for adaptive polling
         //
         // Sessions that actually produced output are synchronized in
@@ -361,6 +367,14 @@ impl WorkspaceView {
             has_more,
             "apply_prepared_session_output"
         );
+
+        // Prompt-aware resume dispatch: the shell has produced real output,
+        // so it is alive and can accept input. Flush any queued resume
+        // commands for this session now.
+        if bytes_drained > 0 {
+            self.dispatch_pending_resume_commands_for_session(session_id);
+        }
+
         let mut any_dirty = false;
 
         if let Some(snapshot) = render_snapshot {
